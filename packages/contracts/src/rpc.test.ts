@@ -2,7 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 
-import { WsSubscribeServerConfigRpc } from "./rpc.ts";
+import { WS_METHODS, WsRpcGroup, WsSubscribeServerConfigRpc } from "./rpc.ts";
+
+const decodeSubscribeServerConfigPayload = Schema.decodeUnknownSync(
+  WsSubscribeServerConfigRpc.payloadSchema,
+);
 
 /**
  * The client always sends `environmentThemes`, including to servers built
@@ -18,14 +22,20 @@ describe("subscribeServerConfig payload compatibility", () => {
   });
 
   it("is carried by a server that declares it", () => {
-    const decoded = Schema.decodeUnknownSync(WsSubscribeServerConfigRpc.payloadSchema)({
+    const decoded = decodeSubscribeServerConfigPayload({
       environmentThemes: true,
     });
     expect(decoded).toEqual({ environmentThemes: true });
   });
 
   it("stays optional, so a client that never sends it still subscribes", () => {
-    const decoded = Schema.decodeUnknownSync(WsSubscribeServerConfigRpc.payloadSchema)({});
+    const decoded = decodeSubscribeServerConfigPayload({});
     expect(decoded).toEqual({});
+  });
+});
+
+describe("dispatcher route preview RPC", () => {
+  it("is registered as a bounded unary request", () => {
+    expect(WsRpcGroup.requests.has(WS_METHODS.dispatcherRoutePreview)).toBe(true);
   });
 });

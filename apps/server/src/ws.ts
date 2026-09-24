@@ -30,6 +30,7 @@ import {
   ClientWebDeployment,
   CommandId,
   type DiscoveredLocalServerList,
+  DispatcherPreviewError,
   EventId,
   type EditorId,
   type FileManagerRevealKind,
@@ -125,6 +126,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
+import * as Dispatcher from "./dispatcher/Dispatcher.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
@@ -2360,6 +2362,50 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.dispatcherRoutePreview]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.dispatcherRoutePreview,
+            Effect.gen(function* () {
+              const [environmentId, projected, providers, settings] = yield* Effect.all([
+                serverEnvironment.getEnvironmentId,
+                Dispatcher.readDispatcherProjectedState(
+                  input.threadId === undefined ? {} : { threadId: input.threadId },
+                ),
+                providerRegistry.getProviders,
+                serverSettings.getSettings,
+              ]);
+              let messageMetadata: Dispatcher.DispatcherMessageMetadata | null = null;
+              if (input.threadId !== undefined && input.messageId !== undefined) {
+                const message = yield* projectionSnapshotQuery.getTurnStartMessage({
+                  threadId: input.threadId,
+                  messageId: input.messageId,
+                });
+                if (Option.isSome(message)) {
+                  messageMetadata = Dispatcher.summarizeDispatcherMessage({
+                    threadId: input.threadId,
+                    message: message.value.message,
+                  });
+                }
+              }
+
+              return yield* Dispatcher.previewDispatcherRoute({
+                environmentId,
+                request: input,
+                projected,
+                message: messageMetadata,
+                providers,
+                environmentDefaultModelSelection: settings.defaultModelSelection,
+              });
+            }).pipe(
+              Effect.mapError(
+                () =>
+                  new DispatcherPreviewError({
+                    message: "Route preview is temporarily unavailable.",
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "dispatcher" },
           ),
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
