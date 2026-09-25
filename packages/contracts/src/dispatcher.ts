@@ -126,6 +126,13 @@ export const DispatcherTaskRouteBinding = Schema.Struct({
 });
 export type DispatcherTaskRouteBinding = typeof DispatcherTaskRouteBinding.Type;
 
+/** The latest persisted task binding projected onto a thread for client display. */
+export const DispatcherTaskRouteSnapshot = Schema.Struct({
+  messageId: MessageId,
+  binding: DispatcherTaskRouteBinding,
+});
+export type DispatcherTaskRouteSnapshot = typeof DispatcherTaskRouteSnapshot.Type;
+
 export const DispatcherRoutePreviewRequest = Schema.Struct({
   environmentId: BoundedEnvironmentId,
   threadId: Schema.optional(BoundedThreadId),

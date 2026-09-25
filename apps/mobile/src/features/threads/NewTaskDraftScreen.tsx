@@ -128,6 +128,7 @@ import { selectIncomingShareAttachmentsForServer } from "../sharing/incoming-sha
 import { appAtomRegistry } from "../../state/atom-registry";
 import { serverEnvironment } from "../../state/server";
 import { fileRoutePathSegments } from "../files/filePath";
+import { DispatcherRoutePreview } from "./DispatcherRouteStatus";
 
 function NewTaskWorkspaceIcon(props: {
   readonly workspaceMode: "local" | "worktree";
@@ -1588,6 +1589,19 @@ export function NewTaskDraftScreen(props: {
         </View>
       ) : null}
       <View className="pb-1">{workspaceControls}</View>
+
+      {selectedProject && flow.selectedModel ? (
+        <DispatcherRoutePreview
+          available={
+            selectedEnvironmentServerConfig?.environment.capabilities.dispatcherRoutePreview ===
+            true
+          }
+          environmentId={selectedProject.environmentId}
+          project={{ id: selectedProject.id, title: selectedProject.title }}
+          preferredRoute={flow.selectedModel}
+          providers={selectedEnvironmentServerConfig?.providers ?? []}
+        />
+      ) : null}
 
       {modelUnavailable ? (
         <Pressable
