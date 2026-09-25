@@ -149,6 +149,7 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  dispatcherEnabled: Config.Boolean("T3CODE_DISPATCHER_ENABLED").pipe(Config.withDefault(false)),
   tailscaleServeEnabled: Config.Boolean("T3CODE_TAILSCALE_SERVE").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -441,6 +442,7 @@ export const resolveServerConfig = (
       resourceMonitorPath,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
+      dispatcherEnabled: env.dispatcherEnabled,
       tailscaleServeEnabled,
       tailscaleServePort,
     };

@@ -1,4 +1,11 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  CommandId,
   ComposerContextId,
   EnvironmentId,
   MessageId,
@@ -12,18 +19,27 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import * as Tracer from "effect/Tracer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import {
+  makeSqlitePersistenceLive,
+  SqlitePersistenceMemory,
+} from "../persistence/Layers/Sqlite.ts";
 
 import {
+  bindDispatcherTurnStartCommand,
   evaluateActionGate,
+  persistDispatcherTaskRoute,
   previewDispatcherRoute,
+  readDispatcherTaskRoute,
   readDispatcherProjectedState,
   resolveDispatcherProject,
   resolveDispatcherRoute,
   summarizeDispatcherMessage,
+  taskRouteBindingFromDecision,
   type DispatcherProjectedState,
   type DispatcherResolutionInput,
 } from "./Dispatcher.ts";
@@ -159,6 +175,70 @@ it.effect("reads only dispatcher-approved project and thread projection columns"
         },
       ],
     });
+  }).pipe(Effect.provide(SqlitePersistenceMemory)),
+);
+
+it.effect("binds the deterministic fallback before any provider work", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO projection_projects
+      (project_id, title, workspace_root, default_model_selection_json, scripts_json, created_at, updated_at, deleted_at)
+      VALUES
+      ('project-a', 'Dispatcher', '/workspace/a', '{"instanceId":"project_provider","model":"project-model"}', '[]', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL)`;
+    yield* sql`INSERT INTO projection_threads
+      (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at, deleted_at)
+      VALUES ('thread-a', 'project-a', 'Thread', '{"instanceId":"thread_provider","model":"thread-model"}', 'full-access', 'default', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL)`;
+
+    const command = {
+      type: "thread.turn.start" as const,
+      commandId: CommandId.make("dispatcher-bind-turn"),
+      threadId: threadA,
+      message: {
+        messageId: MessageId.make("dispatcher-bind-message"),
+        role: "user" as const,
+        text: "This prose is not routing input.",
+        attachments: [],
+      },
+      modelSelection: selection("unavailable", "unavailable-model"),
+      runtimeMode: "full-access" as const,
+      interactionMode: "default" as const,
+      createdAt: "2026-09-24T00:00:00.000Z",
+    };
+    const dependencies = {
+      enabled: true,
+      environmentId: Effect.succeed(environmentId),
+      providers: Effect.succeed([
+        provider({
+          instanceId: "unavailable",
+          models: ["unavailable-model"],
+          availability: "unavailable",
+        }),
+        provider({ instanceId: "thread_provider", models: ["thread-model"] }),
+        provider({ instanceId: "project_provider", models: ["project-model"] }),
+      ]),
+      environmentDefaultModelSelection: Effect.succeed(null),
+      sql,
+    };
+
+    const bound = yield* bindDispatcherTurnStartCommand(command, dependencies);
+    expect(bound).toMatchObject({
+      routeBinding: {
+        target: { instanceId: "thread_provider", model: "thread-model" },
+        fallbackIndex: 1,
+        source: "thread",
+      },
+    });
+
+    const disabled = yield* bindDispatcherTurnStartCommand(command, {
+      ...dependencies,
+      enabled: false,
+      environmentId: Effect.die("disabled dispatcher must not read the environment"),
+      providers: Effect.die("disabled dispatcher must not read providers"),
+      environmentDefaultModelSelection: Effect.die(
+        "disabled dispatcher must not read server settings",
+      ),
+    });
+    expect(disabled).toEqual(command);
   }).pipe(Effect.provide(SqlitePersistenceMemory)),
 );
 
@@ -313,6 +393,36 @@ describe("deterministic route decisions", () => {
     expect(resolveDispatcherRoute(input)).toEqual(resolveDispatcherRoute(input));
   });
 
+  it("binds the first eligible deterministic fallback before provider work", () => {
+    const decision = resolveDispatcherRoute(
+      resolutionInput({
+        request: request({
+          threadId: threadA,
+          preferredRoute: {
+            instanceId: ProviderInstanceId.make("unavailable"),
+            model: "unavailable-model",
+          },
+        }),
+        providers: [
+          provider({
+            instanceId: "unavailable",
+            models: ["unavailable-model"],
+            availability: "unavailable",
+          }),
+          provider({ instanceId: "thread_provider", models: ["thread-model"] }),
+          provider({ instanceId: "project_provider", models: ["project-model"] }),
+        ],
+      }),
+    );
+
+    expect(taskRouteBindingFromDecision(decision)).toMatchObject({
+      target: { instanceId: "thread_provider", model: "thread-model" },
+      fallbackIndex: 1,
+      source: "thread",
+      gate: { decision: "ALLOW", reasonCodes: ["ACTION_ALLOWED"] },
+    });
+  });
+
   it("allows an eligible route and denies explicit structured failures", () => {
     const allowed = resolveDispatcherRoute(resolutionInput());
     expect(allowed.gate).toEqual({ decision: "ALLOW", reasonCodes: ["ACTION_ALLOWED"] });
@@ -427,5 +537,52 @@ describe("deterministic route decisions", () => {
       expect(attributeText).not.toContain(sensitivePath);
       expect(attributeText).not.toContain("customer-secret");
     }),
+  );
+});
+
+it.effect("keeps a task route immutable across a database reload", () => {
+  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-dispatcher-route-"));
+  const dbPath = NodePath.join(directory, "state.sqlite");
+  const binding = taskRouteBindingFromDecision(resolveDispatcherRoute(resolutionInput()));
+  if (binding === null) throw new Error("Expected an eligible dispatcher binding.");
+  const key = { threadId: threadA, messageId: MessageId.make("durable-task") };
+
+  return Effect.gen(function* () {
+    const firstLayer = makeSqlitePersistenceLive(dbPath);
+    yield* Effect.scoped(
+      persistDispatcherTaskRoute({
+        ...key,
+        binding,
+        createdAt: "2026-09-24T00:00:00.000Z",
+      }).pipe(Effect.provide(firstLayer)),
+    );
+
+    const reloadedLayer = makeSqlitePersistenceLive(dbPath);
+    const reloaded = yield* Effect.scoped(
+      readDispatcherTaskRoute(key).pipe(Effect.provide(reloadedLayer)),
+    );
+    expect(Option.getOrNull(reloaded)).toEqual(binding);
+
+    const conflicting = {
+      ...binding,
+      target: { instanceId: ProviderInstanceId.make("other"), model: "other-model" },
+    };
+    const conflict = yield* Effect.scoped(
+      Effect.exit(
+        persistDispatcherTaskRoute({
+          ...key,
+          binding: conflicting,
+          createdAt: "2026-09-24T00:01:00.000Z",
+        }).pipe(Effect.provide(reloadedLayer)),
+      ),
+    );
+    expect(Exit.isFailure(conflict)).toBe(true);
+  }).pipe(
+    Effect.provide(NodeServices.layer),
+    Effect.ensuring(
+      Effect.sync(() => {
+        NodeFS.rmSync(directory, { recursive: true, force: true });
+      }),
+    ),
   );
 });

@@ -10,9 +10,13 @@ import {
   type DispatcherRouteDecision,
   type DispatcherRoutePreviewRequest,
   type DispatcherRouteTarget,
+  DispatcherTaskRouteBinding,
+  type DispatcherTaskRouteBinding as DispatcherTaskRouteBindingType,
   type EnvironmentId,
   type MessageId,
   ModelSelection,
+  type OrchestrationCommand,
+  OrchestrationDispatchCommandError,
   type OrchestrationMessage,
   ProjectId,
   type ServerProvider,
@@ -20,8 +24,18 @@ import {
 } from "@t3tools/contracts";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+
+import {
+  PersistenceSqlError,
+  toPersistenceDecodeError,
+  toPersistenceSqlError,
+  type ProjectionRepositoryError,
+} from "../persistence/Errors.ts";
+
+const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 export interface DispatcherProjectState {
   readonly id: ProjectId;
@@ -61,6 +75,16 @@ const DispatcherThreadRows = Schema.Array(
 
 const decodeDispatcherProjectRows = Schema.decodeUnknownEffect(DispatcherProjectRows);
 const decodeDispatcherThreadRows = Schema.decodeUnknownEffect(DispatcherThreadRows);
+const DispatcherTaskRouteRows = Schema.Array(
+  Schema.Struct({
+    binding: Schema.fromJsonString(DispatcherTaskRouteBinding),
+    createdAt: Schema.String,
+  }),
+);
+const decodeDispatcherTaskRouteRows = Schema.decodeUnknownEffect(DispatcherTaskRouteRows);
+const encodeDispatcherTaskRoute = Schema.encodeEffect(
+  Schema.fromJsonString(DispatcherTaskRouteBinding),
+);
 
 /** Read only the projection columns the dispatcher is allowed to consider. */
 export const readDispatcherProjectedState = Effect.fn("Dispatcher.readDispatcherProjectedState")(
@@ -95,6 +119,104 @@ export const readDispatcherProjectedState = Effect.fn("Dispatcher.readDispatcher
     } satisfies DispatcherProjectedState;
   },
 );
+
+export const persistDispatcherTaskRoute = Effect.fn("Dispatcher.persistDispatcherTaskRoute")(
+  function* (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+    readonly binding: DispatcherTaskRouteBindingType;
+    readonly createdAt: string;
+  }): Effect.fn.Return<void, ProjectionRepositoryError, SqlClient.SqlClient> {
+    const sql = yield* SqlClient.SqlClient;
+    const bindingJson = yield* encodeDispatcherTaskRoute(input.binding).pipe(
+      Effect.mapError(toPersistenceDecodeError("Dispatcher.persistTaskRoute:encodeBinding")),
+    );
+
+    yield* sql`
+      INSERT INTO projection_dispatcher_task_routes (
+        thread_id,
+        message_id,
+        binding_json,
+        created_at
+      ) VALUES (
+        ${input.threadId},
+        ${input.messageId},
+        ${bindingJson},
+        ${input.createdAt}
+      )
+      ON CONFLICT (thread_id, message_id) DO NOTHING
+    `.pipe(Effect.mapError(toPersistenceSqlError("Dispatcher.persistTaskRoute:insert")));
+
+    const rows = yield* sql`
+      SELECT
+        binding_json AS "binding",
+        created_at AS "createdAt"
+      FROM projection_dispatcher_task_routes
+      WHERE thread_id = ${input.threadId}
+        AND message_id = ${input.messageId}
+      LIMIT 1
+    `.pipe(Effect.mapError(toPersistenceSqlError("Dispatcher.persistTaskRoute:readBack")));
+    const decoded = yield* decodeDispatcherTaskRouteRows(rows).pipe(
+      Effect.mapError(toPersistenceDecodeError("Dispatcher.persistTaskRoute:decodeReadBack")),
+    );
+    const existing = decoded[0];
+    if (existing === undefined) {
+      return yield* new PersistenceSqlError({
+        operation: "Dispatcher.persistTaskRoute:readBack",
+        detail: "inserted dispatcher task route was not found",
+        correlation: { threadId: input.threadId },
+      });
+    }
+    const existingJson = yield* encodeDispatcherTaskRoute(existing.binding).pipe(
+      Effect.mapError(toPersistenceDecodeError("Dispatcher.persistTaskRoute:encodeReadBack")),
+    );
+    if (existingJson !== bindingJson) {
+      return yield* new PersistenceSqlError({
+        operation: "Dispatcher.persistTaskRoute:immutableBinding",
+        detail: "dispatcher task route is already bound to a different target",
+        correlation: { threadId: input.threadId },
+      });
+    }
+  },
+);
+
+export const readDispatcherTaskRoute = Effect.fn("Dispatcher.readDispatcherTaskRoute")(
+  function* (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+  }): Effect.fn.Return<
+    Option.Option<DispatcherTaskRouteBindingType>,
+    ProjectionRepositoryError,
+    SqlClient.SqlClient
+  > {
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql`
+      SELECT
+        binding_json AS "binding",
+        created_at AS "createdAt"
+      FROM projection_dispatcher_task_routes
+      WHERE thread_id = ${input.threadId}
+        AND message_id = ${input.messageId}
+      LIMIT 1
+    `.pipe(Effect.mapError(toPersistenceSqlError("Dispatcher.readTaskRoute:query")));
+    const decoded = yield* decodeDispatcherTaskRouteRows(rows).pipe(
+      Effect.mapError(toPersistenceDecodeError("Dispatcher.readTaskRoute:decode")),
+    );
+    return Option.fromUndefinedOr(decoded[0]?.binding);
+  },
+);
+
+export const deleteDispatcherTaskRoutesByThread = Effect.fn(
+  "Dispatcher.deleteDispatcherTaskRoutesByThread",
+)(function* (input: {
+  readonly threadId: ThreadId;
+}): Effect.fn.Return<void, ProjectionRepositoryError, SqlClient.SqlClient> {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    DELETE FROM projection_dispatcher_task_routes
+    WHERE thread_id = ${input.threadId}
+  `.pipe(Effect.mapError(toPersistenceSqlError("Dispatcher.deleteTaskRoutesByThread:query")));
+});
 
 export interface DispatcherMessageMetadata {
   readonly id: MessageId;
@@ -407,7 +529,8 @@ export function resolveDispatcherRoute(input: DispatcherResolutionInput): Dispat
   };
 }
 
-export const previewDispatcherRoute = (
+const resolveDispatcherRouteObserved = (
+  spanName: "dispatcher.route_preview" | "dispatcher.task_route_binding",
   input: DispatcherResolutionInput,
 ): Effect.Effect<DispatcherRouteDecision> =>
   Effect.sync(() => resolveDispatcherRoute(input)).pipe(
@@ -424,8 +547,110 @@ export const previewDispatcherRoute = (
         "dispatcher.reason_codes": decision.gate.reasonCodes.join(","),
       });
     }),
-    Effect.withSpan("dispatcher.route_preview"),
+    Effect.withSpan(spanName),
   );
+
+export const previewDispatcherRoute = (
+  input: DispatcherResolutionInput,
+): Effect.Effect<DispatcherRouteDecision> =>
+  resolveDispatcherRouteObserved("dispatcher.route_preview", input);
+
+export function taskRouteBindingFromDecision(
+  decision: DispatcherRouteDecision,
+): DispatcherTaskRouteBindingType | null {
+  const selected = decision.selected;
+  if (decision.gate.decision !== "ALLOW" || selected === null || selected.driver === null) {
+    return null;
+  }
+  return {
+    policyVersion: decision.policyVersion,
+    target: selected.target,
+    driver: selected.driver,
+    modelFamily: selected.modelFamily,
+    fallbackIndex: selected.fallbackIndex,
+    source: selected.source,
+    gate: decision.gate,
+  };
+}
+
+/**
+ * Adds the server-owned route fact before the command enters the decider.
+ * Provider snapshots are cached presentation state; this function never asks
+ * an adapter to authenticate, refresh, create a session, or invoke a turn.
+ */
+export const bindDispatcherTurnStartCommand = Effect.fn(
+  "Dispatcher.bindDispatcherTurnStartCommand",
+)(
+  function* (
+    command: OrchestrationCommand,
+    dependencies: {
+      readonly enabled: boolean;
+      readonly environmentId: Effect.Effect<EnvironmentId, Error>;
+      readonly providers: Effect.Effect<ReadonlyArray<ServerProvider>, Error>;
+      readonly environmentDefaultModelSelection: Effect.Effect<ModelSelection | null, Error>;
+      readonly sql: SqlClient.SqlClient;
+    },
+  ): Effect.fn.Return<OrchestrationCommand, OrchestrationDispatchCommandError> {
+    if (command.type !== "thread.turn.start") return command;
+    if (!dependencies.enabled || command.routeBinding !== undefined) return command;
+
+    const createThread = command.bootstrap?.createThread;
+    const preferredModelSelection = command.modelSelection ?? createThread?.modelSelection;
+
+    const resolution = yield* Effect.all({
+      environmentId: dependencies.environmentId,
+      projected: readDispatcherProjectedState(
+        createThread === undefined ? { threadId: command.threadId } : {},
+      ).pipe(Effect.provideService(SqlClient.SqlClient, dependencies.sql)),
+      providers: dependencies.providers,
+      environmentDefaultModelSelection: dependencies.environmentDefaultModelSelection,
+    }).pipe(
+      Effect.mapError(
+        () =>
+          new OrchestrationDispatchCommandError({
+            message: "Dispatcher could not resolve a route for this turn.",
+          }),
+      ),
+    );
+
+    const decision = yield* resolveDispatcherRouteObserved("dispatcher.task_route_binding", {
+      environmentId: resolution.environmentId,
+      request: {
+        environmentId: resolution.environmentId,
+        ...(createThread === undefined
+          ? { threadId: command.threadId }
+          : { projectId: createThread.projectId }),
+        ...(preferredModelSelection === undefined
+          ? {}
+          : {
+              preferredRoute: {
+                instanceId: preferredModelSelection.instanceId,
+                model: preferredModelSelection.model,
+              },
+            }),
+        actionKind: "workspace-write",
+      },
+      projected: resolution.projected,
+      message: null,
+      providers: resolution.providers,
+      environmentDefaultModelSelection: resolution.environmentDefaultModelSelection,
+    });
+    const routeBinding = taskRouteBindingFromDecision(decision);
+    if (routeBinding === null) {
+      return yield* new OrchestrationDispatchCommandError({
+        message: `Dispatcher denied turn start (${decision.gate.reasonCodes.join(",")}).`,
+      });
+    }
+    return { ...command, routeBinding };
+  },
+  Effect.mapError((cause) =>
+    isOrchestrationDispatchCommandError(cause)
+      ? cause
+      : new OrchestrationDispatchCommandError({
+          message: "Dispatcher could not bind a route for this turn.",
+        }),
+  ),
+);
 
 export function summarizeDispatcherMessage(input: {
   readonly threadId: ThreadId;

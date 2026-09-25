@@ -932,6 +932,7 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
           Layer.provide(Layer.mock(VcsStatusBroadcaster)({})),
           Layer.provide(Layer.mock(TextGeneration)({})),
           Layer.provide(ServerSettingsService.layerTest()),
+          Layer.provide(SqlitePersistenceMemory),
         );
 
         yield* engine.dispatch({

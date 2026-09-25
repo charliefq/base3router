@@ -109,6 +109,23 @@ export const ActionGateResult = Schema.Struct({
 });
 export type ActionGateResult = typeof ActionGateResult.Type;
 
+/**
+ * The compact, non-sensitive route fact persisted for one turn-start task.
+ * The message id that owns the binding lives beside this value in the event
+ * and projection key, so the binding cannot be copied to another task by
+ * changing an embedded identifier.
+ */
+export const DispatcherTaskRouteBinding = Schema.Struct({
+  policyVersion: DispatcherPolicyVersion,
+  target: DispatcherRouteTarget,
+  driver: ProviderDriverKind,
+  modelFamily: BoundedModelFamily,
+  fallbackIndex: NonNegativeInt,
+  source: DispatcherRouteCandidateSource,
+  gate: ActionGateResult,
+});
+export type DispatcherTaskRouteBinding = typeof DispatcherTaskRouteBinding.Type;
+
 export const DispatcherRoutePreviewRequest = Schema.Struct({
   environmentId: BoundedEnvironmentId,
   threadId: Schema.optional(BoundedThreadId),

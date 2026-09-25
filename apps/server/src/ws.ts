@@ -1884,7 +1884,19 @@ const makeWsRpcLayer = (
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
               yield* ProjectCloneTracker.rejectCommandsDuringClone(projectCloneTracker, command);
-              const normalizedCommand = yield* normalizeDispatchCommand(command);
+              const normalizedCommand = yield* normalizeDispatchCommand(command).pipe(
+                Effect.flatMap((normalized) =>
+                  Dispatcher.bindDispatcherTurnStartCommand(normalized, {
+                    enabled: config.dispatcherEnabled === true,
+                    environmentId: serverEnvironment.getEnvironmentId,
+                    providers: providerRegistry.getProviders,
+                    environmentDefaultModelSelection: serverSettings.getSettings.pipe(
+                      Effect.map((settings) => settings.defaultModelSelection),
+                    ),
+                    sql,
+                  }),
+                ),
+              );
               // Archive removes the thread from the client, so this transport
               // closes its session and terminals after the command lands.
               // Settlement cleanup is driven by thread.settled events in the

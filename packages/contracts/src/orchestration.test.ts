@@ -37,7 +37,7 @@ import {
   isProviderSendTurnSupportedImageMimeType,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
 } from "./orchestration.ts";
-import { ProviderInstanceId } from "./providerInstance.ts";
+import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
 const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffInput);
 const decodeFullThreadDiffInput = Schema.decodeUnknownEffect(OrchestrationGetFullThreadDiffInput);
@@ -1296,7 +1296,45 @@ it.effect(
       assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
       assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
       assert.strictEqual(parsed.sourceProposedPlan, undefined);
+      assert.strictEqual(parsed.routeBinding, undefined);
     }),
+);
+
+it.effect("keeps dispatcher route bindings server-owned while replaying persisted bindings", () =>
+  Effect.gen(function* () {
+    const input = {
+      type: "thread.turn.start" as const,
+      commandId: "cmd-route-bound",
+      threadId: "thread-1",
+      message: {
+        messageId: "message-1",
+        role: "user" as const,
+        text: "Run the task",
+        attachments: [],
+      },
+      runtimeMode: "full-access" as const,
+      interactionMode: "default" as const,
+      routeBinding: {
+        policyVersion: "dispatcher.phase-1a.v1" as const,
+        target: { instanceId: ProviderInstanceId.make("codex_work"), model: "gpt-5.4" },
+        driver: ProviderDriverKind.make("codex"),
+        modelFamily: "openai",
+        fallbackIndex: 0,
+        source: "thread" as const,
+        gate: { decision: "ALLOW" as const, reasonCodes: ["ACTION_ALLOWED" as const] },
+      },
+      createdAt: "2026-09-24T00:00:00.000Z",
+    };
+
+    const serverCommand = yield* decodeThreadTurnStartCommand(input);
+    assert.deepStrictEqual(serverCommand.routeBinding, input.routeBinding);
+
+    const clientCommand = yield* decodeClientOrchestrationCommand(input);
+    assert.strictEqual(clientCommand.type, "thread.turn.start");
+    if (clientCommand.type === "thread.turn.start") {
+      assert.strictEqual("routeBinding" in clientCommand, false);
+    }
+  }),
 );
 
 it.effect("decodes thread.turn-start-requested source proposed plan metadata when present", () =>

@@ -6,9 +6,11 @@ import {
   DISPATCHER_POLICY_VERSION,
   DISPATCHER_REASON_CODES,
   DispatcherRoutePreviewRequest,
+  DispatcherTaskRouteBinding,
 } from "./dispatcher.ts";
 
 const decodeRequest = Schema.decodeUnknownExit(DispatcherRoutePreviewRequest);
+const decodeTaskRouteBinding = Schema.decodeUnknownExit(DispatcherTaskRouteBinding);
 
 describe("dispatcher contracts", () => {
   it("keeps policy and reason codes stable", () => {
@@ -81,5 +83,29 @@ describe("dispatcher contracts", () => {
         }),
       ),
     ).toBe(true);
+  });
+
+  it("decodes a compact task binding without sensitive context fields", () => {
+    const binding = decodeTaskRouteBinding({
+      policyVersion: DISPATCHER_POLICY_VERSION,
+      target: { instanceId: "codex_work", model: "gpt-5.4" },
+      driver: "codex",
+      modelFamily: "openai",
+      fallbackIndex: 1,
+      source: "provider-default",
+      gate: { decision: "ALLOW", reasonCodes: ["ACTION_ALLOWED"] },
+    });
+    expect(Exit.isSuccess(binding)).toBe(true);
+    if (Exit.isSuccess(binding)) {
+      expect(Object.keys(binding.value).sort()).toEqual([
+        "driver",
+        "fallbackIndex",
+        "gate",
+        "modelFamily",
+        "policyVersion",
+        "source",
+        "target",
+      ]);
+    }
   });
 });

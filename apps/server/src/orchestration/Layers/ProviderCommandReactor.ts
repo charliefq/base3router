@@ -65,6 +65,8 @@ import {
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { ServerConfig } from "../../config.ts";
+import * as Dispatcher from "../../dispatcher/Dispatcher.ts";
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
@@ -222,6 +224,7 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const serverConfig = yield* ServerConfig;
   /** Environment settings with the thread's project overrides applied. */
   const projectSettingsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const settings = yield* serverSettingsService.getSettings;
@@ -1284,11 +1287,81 @@ const make = Effect.gen(function* () {
         ),
       );
 
+    const routeBinding =
+      serverConfig.dispatcherEnabled === true && event.payload.routeBinding !== undefined
+        ? yield* Dispatcher.readDispatcherTaskRoute({
+            threadId: event.payload.threadId,
+            messageId: event.payload.messageId,
+          }).pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(
+                    new ProviderAdapterRequestError({
+                      provider: providerErrorLabel(
+                        String(event.payload.routeBinding?.target.instanceId),
+                      ),
+                      method: "thread.turn.start",
+                      detail: `Dispatcher route binding for task '${event.payload.messageId}' was not found.`,
+                    }),
+                  ),
+                onSome: Effect.succeed,
+              }),
+            ),
+            Effect.flatMap((binding) =>
+              binding.gate.decision !== "ALLOW"
+                ? Effect.fail(
+                    new ProviderAdapterRequestError({
+                      provider: providerErrorLabel(String(binding.target.instanceId)),
+                      method: "thread.turn.start",
+                      detail: "Dispatcher route binding did not contain an allowed gate result.",
+                    }),
+                  )
+                : providerService.getInstanceInfo(binding.target.instanceId).pipe(
+                    Effect.flatMap((instanceInfo) =>
+                      instanceInfo.driverKind === binding.driver
+                        ? Effect.succeed(binding)
+                        : Effect.fail(
+                            new ProviderAdapterRequestError({
+                              provider: providerErrorLabel(String(binding.target.instanceId)),
+                              method: "thread.turn.start",
+                              detail:
+                                "Dispatcher route binding no longer matches its provider instance driver.",
+                            }),
+                          ),
+                    ),
+                  ),
+            ),
+            Effect.map(Option.some),
+            Effect.catchCause((cause) =>
+              recoverTurnStartFailure(cause).pipe(Effect.as(Option.none())),
+            ),
+            Effect.map(Option.getOrNull),
+          )
+        : null;
+    if (serverConfig.dispatcherEnabled === true && event.payload.routeBinding !== undefined) {
+      if (routeBinding === null) return;
+    }
+    const routeBaseModelSelection = event.payload.modelSelection ?? thread.modelSelection;
+    const taskModelSelection: ModelSelection | undefined =
+      routeBinding === null
+        ? event.payload.modelSelection
+        : {
+            instanceId: routeBinding.target.instanceId,
+            model: routeBinding.target.model,
+            ...(routeBaseModelSelection.instanceId === routeBinding.target.instanceId &&
+            routeBaseModelSelection.model === routeBinding.target.model &&
+            routeBaseModelSelection.options !== undefined
+              ? { options: routeBaseModelSelection.options }
+              : {}),
+          };
+
     const authCommandHandled = yield* Effect.gen(function* () {
       // Native account commands belong to the thread's existing provider session.
       const instanceId =
+        routeBinding?.target.instanceId ??
         thread.session?.providerInstanceId ??
-        event.payload.modelSelection?.instanceId ??
+        taskModelSelection?.instanceId ??
         thread.modelSelection.instanceId;
       const handled = yield* providerAuthService.tryHandlePromptCommand({
         instanceId,
@@ -1441,17 +1514,17 @@ const make = Effect.gen(function* () {
         yield* ensureSessionForThread(
           event.payload.threadId,
           event.payload.createdAt,
-          event.payload.modelSelection !== undefined
-            ? { modelSelection: event.payload.modelSelection, pendingTurnStart: true }
+          taskModelSelection !== undefined
+            ? { modelSelection: taskModelSelection, pendingTurnStart: true }
             : { pendingTurnStart: true },
         );
         compactionSessionEnsured = true;
-        if (event.payload.modelSelection !== undefined) {
-          threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+        if (taskModelSelection !== undefined) {
+          threadModelSelections.set(event.payload.threadId, taskModelSelection);
         }
         yield* providerService.compactThread(
           event.payload.threadId,
-          event.payload.modelSelection,
+          taskModelSelection,
           event.payload.messageId,
         );
       }).pipe(
@@ -1490,9 +1563,7 @@ const make = Effect.gen(function* () {
         records: message.context?.records ?? [],
       }),
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
-      ...(event.payload.modelSelection !== undefined
-        ? { modelSelection: event.payload.modelSelection }
-        : {}),
+      ...(taskModelSelection !== undefined ? { modelSelection: taskModelSelection } : {}),
       interactionMode: event.payload.interactionMode,
       createdAt: event.payload.createdAt,
     }).pipe(
