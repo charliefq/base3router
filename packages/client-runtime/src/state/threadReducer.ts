@@ -124,6 +124,7 @@ export function applyThreadDetailEvent(
           worktreePath: event.payload.worktreePath,
           branchPullRequest: null,
           latestTurn: null,
+          latestRoute: null,
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
           archivedAt: null,
@@ -345,6 +346,13 @@ export function applyThreadDetailEvent(
           ...(event.payload.modelSelection !== undefined
             ? { modelSelection: event.payload.modelSelection }
             : {}),
+          latestRoute:
+            event.payload.routeBinding === undefined
+              ? null
+              : {
+                  messageId: event.payload.messageId,
+                  binding: event.payload.routeBinding,
+                },
           runtimeMode: event.payload.runtimeMode,
           interactionMode: event.payload.interactionMode,
           updatedAt: event.occurredAt,
@@ -660,6 +668,7 @@ export function applyThreadDetailEvent(
                   completedAt: latestCheckpoint.completedAt,
                   assistantMessageId: latestCheckpoint.assistantMessageId ?? null,
                 },
+          latestRoute: null,
           updatedAt: event.occurredAt,
         },
       };
