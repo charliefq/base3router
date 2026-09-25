@@ -65,7 +65,6 @@ import {
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
-import { ServerConfig } from "../../config.ts";
 import * as Dispatcher from "../../dispatcher/Dispatcher.ts";
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
@@ -224,7 +223,6 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
-  const serverConfig = yield* ServerConfig;
   /** Environment settings with the thread's project overrides applied. */
   const projectSettingsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const settings = yield* serverSettingsService.getSettings;
@@ -1288,7 +1286,7 @@ const make = Effect.gen(function* () {
       );
 
     const routeBinding =
-      serverConfig.dispatcherEnabled === true && event.payload.routeBinding !== undefined
+      event.payload.routeBinding !== undefined
         ? yield* Dispatcher.readDispatcherTaskRoute({
             threadId: event.payload.threadId,
             messageId: event.payload.messageId,
@@ -1339,7 +1337,7 @@ const make = Effect.gen(function* () {
             Effect.map(Option.getOrNull),
           )
         : null;
-    if (serverConfig.dispatcherEnabled === true && event.payload.routeBinding !== undefined) {
+    if (event.payload.routeBinding !== undefined) {
       if (routeBinding === null) return;
     }
     const routeBaseModelSelection = event.payload.modelSelection ?? thread.modelSelection;

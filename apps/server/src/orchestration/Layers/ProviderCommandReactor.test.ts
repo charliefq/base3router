@@ -913,8 +913,8 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.runtimeMode).toBe("approval-required");
   });
 
-  it("uses the persisted dispatcher route in the provider execution path", async () => {
-    const harness = await createHarness({ dispatcherEnabled: true });
+  it("uses the persisted dispatcher route after dispatcher binding is disabled", async () => {
+    const harness = await createHarness({ dispatcherEnabled: false });
     const routeBinding = dispatcherRouteBinding({
       instanceId: "claude_work",
       model: "claude-sonnet-4-6",
@@ -959,7 +959,7 @@ describe("ProviderCommandReactor", () => {
     );
   });
 
-  it("preserves the legacy thread route while dispatcher execution is disabled", async () => {
+  it("preserves the legacy thread route when dispatcher binding is disabled", async () => {
     const harness = await createHarness({ dispatcherEnabled: false });
 
     await Effect.runPromise(
@@ -973,10 +973,6 @@ describe("ProviderCommandReactor", () => {
           text: "Keep existing behavior",
           attachments: [],
         },
-        routeBinding: dispatcherRouteBinding({
-          instanceId: "claude_work",
-          model: "claude-sonnet-4-6",
-        }),
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:00.000Z",
