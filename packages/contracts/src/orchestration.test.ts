@@ -1297,6 +1297,7 @@ it.effect(
       assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
       assert.strictEqual(parsed.sourceProposedPlan, undefined);
       assert.strictEqual(parsed.routeBinding, undefined);
+      assert.strictEqual(parsed.handoff, undefined);
     }),
 );
 
@@ -1335,6 +1336,46 @@ it.effect("keeps dispatcher route bindings server-owned while replaying persiste
       assert.strictEqual("routeBinding" in clientCommand, false);
     }
   }),
+);
+
+it.effect(
+  "accepts a bounded handoff request while keeping the validated handoff server-owned",
+  () =>
+    Effect.gen(function* () {
+      const input = {
+        type: "thread.turn.start" as const,
+        commandId: "cmd-handoff",
+        threadId: "thread-1",
+        message: {
+          messageId: "message-2",
+          role: "user" as const,
+          text: "Reviewed packet",
+          attachments: [],
+        },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        handoffRequest: {
+          handoffId: "handoff-1",
+          sourceTurnId: "turn-1",
+          target: { instanceId: "claude-work", model: "claude-sonnet" },
+          packetText: "Reviewed packet",
+        },
+        handoff: {
+          handoffId: "injected-handoff",
+          sourceTurnId: "turn-1",
+          target: { instanceId: "untrusted", model: "untrusted" },
+          packetText: "Untrusted",
+        },
+        createdAt: "2026-09-26T00:00:00.000Z",
+      };
+
+      const clientCommand = yield* decodeClientOrchestrationCommand(input);
+      assert.strictEqual(clientCommand.type, "thread.turn.start");
+      if (clientCommand.type === "thread.turn.start") {
+        assert.deepStrictEqual(clientCommand.handoffRequest, input.handoffRequest);
+        assert.strictEqual("handoff" in clientCommand, false);
+      }
+    }),
 );
 
 it.effect("decodes thread.turn-start-requested source proposed plan metadata when present", () =>

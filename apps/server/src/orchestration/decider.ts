@@ -1454,6 +1454,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: targetThread.interactionMode,
           ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
           ...(command.routeBinding !== undefined ? { routeBinding: command.routeBinding } : {}),
+          ...(command.handoff !== undefined ? { handoff: command.handoff } : {}),
           createdAt: command.createdAt,
         },
       };

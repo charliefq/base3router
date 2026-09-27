@@ -5,21 +5,31 @@ import {
   MessageId,
   NonNegativeInt,
   ProjectId,
+  TaskHandoffId,
   ThreadId,
   TrimmedNonEmptyString,
+  TurnId,
 } from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
 export const DISPATCHER_POLICY_VERSION = "dispatcher.phase-1a.v1" as const;
 export const DISPATCHER_MAX_CANDIDATES = 32;
+export const DISPATCHER_HANDOFF_MAX_PACKET_CHARS = 16_000;
+export const DISPATCHER_HANDOFF_MAX_REFERENCES = 32;
 
 const BoundedEnvironmentId = EnvironmentId.check(Schema.isMaxLength(256));
 const BoundedProjectId = ProjectId.check(Schema.isMaxLength(256));
 const BoundedThreadId = ThreadId.check(Schema.isMaxLength(256));
 const BoundedMessageId = MessageId.check(Schema.isMaxLength(256));
+const BoundedTurnId = TurnId.check(Schema.isMaxLength(256));
+const BoundedTaskHandoffId = TaskHandoffId.check(Schema.isMaxLength(256));
 const BoundedWorkspaceRoot = TrimmedNonEmptyString.check(Schema.isMaxLength(2_048));
 const BoundedModel = TrimmedNonEmptyString.check(Schema.isMaxLength(256));
 const BoundedModelFamily = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
+const BoundedHandoffFact = Schema.String.check(Schema.isMaxLength(4_000));
+const BoundedHandoffPacketText = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(DISPATCHER_HANDOFF_MAX_PACKET_CHARS),
+);
 
 export const DispatcherPolicyVersion = Schema.Literal(DISPATCHER_POLICY_VERSION);
 export type DispatcherPolicyVersion = typeof DispatcherPolicyVersion.Type;
@@ -133,6 +143,100 @@ export const DispatcherTaskRouteSnapshot = Schema.Struct({
 });
 export type DispatcherTaskRouteSnapshot = typeof DispatcherTaskRouteSnapshot.Type;
 
+export const DispatcherHandoffReference = Schema.Struct({
+  kind: Schema.Literals(["message", "file"]),
+  value: TrimmedNonEmptyString.check(Schema.isMaxLength(1_024)),
+});
+export type DispatcherHandoffReference = typeof DispatcherHandoffReference.Type;
+
+export const DispatcherHandoffPacket = Schema.Struct({
+  originalObjective: BoundedHandoffFact,
+  latestUserInstruction: BoundedHandoffFact,
+  branch: BoundedHandoffFact,
+  commit: BoundedHandoffFact,
+  completedWork: BoundedHandoffFact,
+  remainingSteps: BoundedHandoffFact,
+  testResults: BoundedHandoffFact,
+  references: Schema.Array(DispatcherHandoffReference).check(
+    Schema.isMaxLength(DISPATCHER_HANDOFF_MAX_REFERENCES),
+  ),
+});
+export type DispatcherHandoffPacket = typeof DispatcherHandoffPacket.Type;
+
+export const DISPATCHER_HANDOFF_UNAVAILABLE_REASON_CODES = [
+  "DISPATCHER_DISABLED",
+  "SOURCE_TURN_NOT_FOUND",
+  "SOURCE_TURN_NOT_SETTLED",
+  "SOURCE_SESSION_ACTIVE",
+  "SOURCE_ROUTE_NOT_FOUND",
+  "TARGET_SAME_AS_SOURCE",
+  "TARGET_RUNNER_UNAVAILABLE",
+  "HANDOFF_ALREADY_EXISTS",
+] as const;
+export const DispatcherHandoffUnavailableReasonCode = Schema.Literals(
+  DISPATCHER_HANDOFF_UNAVAILABLE_REASON_CODES,
+);
+export type DispatcherHandoffUnavailableReasonCode =
+  typeof DispatcherHandoffUnavailableReasonCode.Type;
+
+export const DispatcherHandoffAvailability = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("ready") }),
+  Schema.Struct({
+    status: Schema.Literal("unavailable"),
+    reasonCode: DispatcherHandoffUnavailableReasonCode,
+    reason: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  }),
+]);
+export type DispatcherHandoffAvailability = typeof DispatcherHandoffAvailability.Type;
+
+export const DispatcherHandoffPreviewRequest = Schema.Struct({
+  environmentId: BoundedEnvironmentId,
+  threadId: BoundedThreadId,
+  sourceTurnId: BoundedTurnId,
+  target: DispatcherRouteTarget,
+});
+export type DispatcherHandoffPreviewRequest = typeof DispatcherHandoffPreviewRequest.Type;
+
+export const DispatcherHandoffPreview = Schema.Struct({
+  handoffId: BoundedTaskHandoffId,
+  packet: DispatcherHandoffPacket,
+  packetText: BoundedHandoffPacketText,
+  route: Schema.NullOr(Schema.suspend(() => DispatcherRouteDecision)),
+  availability: DispatcherHandoffAvailability,
+});
+export type DispatcherHandoffPreview = typeof DispatcherHandoffPreview.Type;
+
+export const DispatcherHandoffTurnStartRequest = Schema.Struct({
+  handoffId: BoundedTaskHandoffId,
+  sourceTurnId: BoundedTurnId,
+  target: DispatcherRouteTarget,
+  packetText: BoundedHandoffPacketText,
+});
+export type DispatcherHandoffTurnStartRequest = typeof DispatcherHandoffTurnStartRequest.Type;
+
+export const DispatcherTaskHandoff = Schema.Struct({
+  handoffId: TaskHandoffId,
+  sourceTurnId: TurnId,
+  target: DispatcherRouteTarget,
+});
+export type DispatcherTaskHandoff = typeof DispatcherTaskHandoff.Type;
+
+export const DispatcherTaskHandoffStatus = Schema.Literals(["creating", "failed", "continued"]);
+export type DispatcherTaskHandoffStatus = typeof DispatcherTaskHandoffStatus.Type;
+
+export const DispatcherTaskHandoffSnapshot = Schema.Struct({
+  handoffId: TaskHandoffId,
+  sourceTurnId: TurnId,
+  destinationMessageId: MessageId,
+  destinationTurnId: Schema.NullOr(TurnId),
+  target: DispatcherRouteTarget,
+  status: DispatcherTaskHandoffStatus,
+  failureReason: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+export type DispatcherTaskHandoffSnapshot = typeof DispatcherTaskHandoffSnapshot.Type;
+
 export const DispatcherRoutePreviewRequest = Schema.Struct({
   environmentId: BoundedEnvironmentId,
   threadId: Schema.optional(BoundedThreadId),
@@ -171,6 +275,13 @@ export type DispatcherRouteDecision = typeof DispatcherRouteDecision.Type;
 
 export class DispatcherPreviewError extends Schema.TaggedError<DispatcherPreviewError>()(
   "DispatcherPreviewError",
+  {
+    message: TrimmedNonEmptyString.check(Schema.isMaxLength(1_024)),
+  },
+) {}
+
+export class DispatcherHandoffPreviewError extends Schema.TaggedError<DispatcherHandoffPreviewError>()(
+  "DispatcherHandoffPreviewError",
   {
     message: TrimmedNonEmptyString.check(Schema.isMaxLength(1_024)),
   },

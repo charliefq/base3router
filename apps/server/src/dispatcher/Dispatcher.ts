@@ -233,6 +233,8 @@ export interface DispatcherResolutionInput {
   readonly message: DispatcherMessageMetadata | null;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly environmentDefaultModelSelection: ModelSelection | null;
+  /** Explicit handoffs validate exactly one user-selected target and never fall through. */
+  readonly candidateMode?: "ordered-fallback" | "explicit-only";
 }
 
 interface ResolvedProject {
@@ -394,6 +396,7 @@ function buildCandidates(input: {
   readonly resolved: ResolvedProject;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly environmentDefaultModelSelection: ModelSelection | null;
+  readonly candidateMode?: "ordered-fallback" | "explicit-only";
 }): ReadonlyArray<DispatcherRouteCandidate> {
   if (input.resolved.project === null) return [];
 
@@ -409,6 +412,24 @@ function buildCandidates(input: {
   };
 
   append("explicit", input.request.preferredRoute);
+  if (input.candidateMode === "explicit-only") {
+    const providersByInstance = new Map(
+      input.providers.map((provider) => [provider.instanceId, provider] as const),
+    );
+    return orderedTargets.map((item, fallbackIndex) => {
+      const provider = providersByInstance.get(item.target.instanceId);
+      const reasonCodes = candidateReasons(item.target, provider);
+      return {
+        fallbackIndex,
+        target: item.target,
+        driver: provider?.driver ?? null,
+        modelFamily: normalizeModelFamily(item.target.model),
+        source: item.source,
+        eligible: reasonCodes.length === 0,
+        reasonCodes,
+      };
+    });
+  }
   append(
     "thread",
     input.resolved.thread === null ? null : routeTarget(input.resolved.thread.modelSelection),
@@ -509,6 +530,7 @@ export function resolveDispatcherRoute(input: DispatcherResolutionInput): Dispat
     resolved,
     providers: input.providers,
     environmentDefaultModelSelection: input.environmentDefaultModelSelection,
+    ...(input.candidateMode === undefined ? {} : { candidateMode: input.candidateMode }),
   });
   const gate = evaluateActionGate({
     resolution: resolved.resolution,

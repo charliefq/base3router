@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
+  DispatcherTaskRouteBinding,
   ModelSelection,
   ProviderRuntimeEvent,
   ProviderSession,
@@ -22,6 +23,7 @@ import {
   MessageId,
   ProjectId,
   ThreadId,
+  TaskHandoffId,
   TurnId,
 } from "@t3tools/contracts";
 import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
@@ -33,6 +35,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { it as effectIt } from "@effect/vitest";
@@ -79,6 +82,9 @@ const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
+const decodeDispatcherTaskRouteBinding = Schema.decodeSync(
+  Schema.fromJsonString(DispatcherTaskRouteBinding),
+);
 const dispatcherRouteBinding = (input: {
   readonly instanceId: string;
   readonly model: string;
@@ -525,6 +531,25 @@ describe("ProviderCommandReactor", () => {
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
     const runEffect = <A, E>(effect: Effect.Effect<A, E>) => runtime!.runPromise(effect);
+    const readDispatcherTaskRoutes = () =>
+      runtime!.runPromise(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          return yield* sql<{ readonly messageId: string; readonly binding: string }>`
+            SELECT message_id AS "messageId", binding_json AS binding
+            FROM projection_dispatcher_task_routes
+            WHERE thread_id = 'thread-1'
+            ORDER BY created_at ASC
+          `;
+        }),
+      );
+    const deleteTaskHandoffs = () =>
+      runtime!.runPromise(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`DELETE FROM projection_task_handoffs`;
+        }),
+      );
 
     await Effect.runPromise(
       engine.dispatch({
@@ -653,6 +678,8 @@ describe("ProviderCommandReactor", () => {
       drain,
       startReactor,
       runEffect,
+      readDispatcherTaskRoutes,
+      deleteTaskHandoffs,
       get titleRegenerationCompletionDispatchAttempts() {
         return titleRegenerationCompletionDispatchAttempts;
       },
@@ -1111,6 +1138,220 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startSession).toHaveBeenCalledTimes(1);
     expect(harness.sendTurn).toHaveBeenCalledTimes(1);
   });
+
+  effectIt.effect(
+    "continues one task on a different supported runner only through its persisted handoff",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            dispatcherEnabled: true,
+            requiresNewThreadForModelChange: true,
+          }),
+        );
+        const sourceBinding = dispatcherRouteBinding({
+          instanceId: "codex",
+          model: "gpt-5-codex",
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-handoff-source"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("message-handoff-source"),
+            role: "user",
+            text: "Start on Codex",
+            attachments: [],
+          },
+          routeBinding: sourceBinding,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        });
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+
+        const targetBinding = dispatcherRouteBinding({
+          instanceId: "claude_work",
+          model: "claude-sonnet-4-6",
+        });
+        const handoff = {
+          handoffId: TaskHandoffId.make("handoff-codex-to-claude"),
+          sourceTurnId: asTurnId("turn-1"),
+          target: targetBinding.target,
+        };
+        const handoffPacket = "# Task handoff\n\nReviewed continuation context";
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-handoff-destination"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("message-handoff-destination"),
+            role: "user",
+            text: handoffPacket,
+            attachments: [],
+          },
+          modelSelection: targetBinding.target,
+          routeBinding: targetBinding,
+          handoff,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:01:00.000Z",
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
+        yield* Effect.promise(() => harness.drain());
+        expect(harness.stopSession).toHaveBeenCalledTimes(1);
+        expect(harness.startSession).toHaveBeenCalledTimes(2);
+        expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+          provider: ProviderDriverKind.make("claudeAgent"),
+          providerInstanceId: ProviderInstanceId.make("claude_work"),
+          modelSelection: targetBinding.target,
+        });
+        expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
+          input: handoffPacket,
+          modelSelection: targetBinding.target,
+        });
+        const persisted = yield* Effect.promise(() => harness.readDispatcherTaskRoutes());
+        expect(
+          decodeDispatcherTaskRouteBinding(
+            persisted.find((row) => row.messageId === "message-handoff-source")!.binding,
+          ),
+        ).toEqual(sourceBinding);
+        expect(
+          decodeDispatcherTaskRouteBinding(
+            persisted.find((row) => row.messageId === "message-handoff-destination")!.binding,
+          ),
+        ).toEqual(targetBinding);
+      }),
+  );
+
+  effectIt.effect(
+    "marks a handoff failed without trying another provider after target startup begins",
+    () =>
+      Effect.gen(function* () {
+        let startCount = 0;
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            dispatcherEnabled: true,
+            startSessionEffect: (session) => {
+              startCount += 1;
+              return startCount === 1
+                ? Effect.succeed(session)
+                : Effect.fail(
+                    new ProviderAdapterRequestError({
+                      provider: "claudeAgent",
+                      method: "startSession",
+                      detail: "Injected destination startup failure",
+                    }),
+                  );
+            },
+          }),
+        );
+        const sourceBinding = dispatcherRouteBinding({
+          instanceId: "codex",
+          model: "gpt-5-codex",
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-handoff-failure-source"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("message-handoff-failure-source"),
+            role: "user",
+            text: "Start on Codex",
+            attachments: [],
+          },
+          routeBinding: sourceBinding,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        });
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+
+        const targetBinding = dispatcherRouteBinding({
+          instanceId: "claude_work",
+          model: "claude-sonnet-4-6",
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-handoff-failure-destination"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("message-handoff-failure-destination"),
+            role: "user",
+            text: "Reviewed handoff packet",
+            attachments: [],
+          },
+          modelSelection: targetBinding.target,
+          routeBinding: targetBinding,
+          handoff: {
+            handoffId: TaskHandoffId.make("handoff-failure"),
+            sourceTurnId: asTurnId("turn-1"),
+            target: targetBinding.target,
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:01:00.000Z",
+        });
+
+        yield* Effect.promise(() => harness.drain());
+        expect(harness.startSession).toHaveBeenCalledTimes(2);
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+        const readModel = yield* Effect.promise(() => harness.readModel());
+        expect(
+          readModel.threads.find((thread) => thread.id === "thread-1")?.latestHandoff,
+        ).toMatchObject({
+          handoffId: "handoff-failure",
+          target: targetBinding.target,
+          status: "failed",
+        });
+      }),
+  );
+
+  effectIt.effect("does not invoke any runner when a handoff record is missing", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({ dispatcherEnabled: true, deferReactorStart: true }),
+      );
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-unpersisted-handoff"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("message-unpersisted-handoff"),
+          role: "user",
+          text: "Unpersisted handoff",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claude_work"),
+          model: "claude-sonnet-4-6",
+        },
+        routeBinding: dispatcherRouteBinding({
+          instanceId: "claude_work",
+          model: "claude-sonnet-4-6",
+        }),
+        handoff: {
+          handoffId: TaskHandoffId.make("handoff-missing"),
+          sourceTurnId: asTurnId("turn-missing"),
+          target: {
+            instanceId: ProviderInstanceId.make("claude_work"),
+            model: "claude-sonnet-4-6",
+          },
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+      // The projector persists handoffs before the reactor sees the event. This
+      // regression guard removes that row to simulate corruption/replay skew.
+      yield* Effect.promise(() => harness.deleteTaskHandoffs());
+      yield* Effect.promise(() => harness.startReactor());
+      yield* Effect.promise(() => harness.drain());
+      expect(harness.startSession).not.toHaveBeenCalled();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+    }),
+  );
 
   effectIt.effect("projects inline context before sending the provider turn", () =>
     Effect.gen(function* () {

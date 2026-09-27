@@ -5,12 +5,16 @@ import * as Schema from "effect/Schema";
 import {
   DISPATCHER_POLICY_VERSION,
   DISPATCHER_REASON_CODES,
+  DISPATCHER_HANDOFF_MAX_PACKET_CHARS,
+  DISPATCHER_HANDOFF_UNAVAILABLE_REASON_CODES,
+  DispatcherHandoffTurnStartRequest,
   DispatcherRoutePreviewRequest,
   DispatcherTaskRouteBinding,
 } from "./dispatcher.ts";
 
 const decodeRequest = Schema.decodeUnknownExit(DispatcherRoutePreviewRequest);
 const decodeTaskRouteBinding = Schema.decodeUnknownExit(DispatcherTaskRouteBinding);
+const decodeHandoffRequest = Schema.decodeUnknownExit(DispatcherHandoffTurnStartRequest);
 
 describe("dispatcher contracts", () => {
   it("keeps policy and reason codes stable", () => {
@@ -107,5 +111,39 @@ describe("dispatcher contracts", () => {
         "target",
       ]);
     }
+  });
+
+  it("keeps handoff unavailability codes stable and bounds reviewed packet text", () => {
+    expect(DISPATCHER_HANDOFF_UNAVAILABLE_REASON_CODES).toEqual([
+      "DISPATCHER_DISABLED",
+      "SOURCE_TURN_NOT_FOUND",
+      "SOURCE_TURN_NOT_SETTLED",
+      "SOURCE_SESSION_ACTIVE",
+      "SOURCE_ROUTE_NOT_FOUND",
+      "TARGET_SAME_AS_SOURCE",
+      "TARGET_RUNNER_UNAVAILABLE",
+      "HANDOFF_ALREADY_EXISTS",
+    ]);
+    const valid = {
+      handoffId: "handoff-1",
+      sourceTurnId: "turn-1",
+      target: { instanceId: "claude-work", model: "claude-sonnet" },
+      packetText: "Reviewed context",
+    };
+    expect(Exit.isSuccess(decodeHandoffRequest(valid))).toBe(true);
+    expect(
+      Exit.isFailure(
+        decodeHandoffRequest({
+          ...valid,
+          packetText: "x".repeat(DISPATCHER_HANDOFF_MAX_PACKET_CHARS + 1),
+        }),
+      ),
+    ).toBe(true);
+    expect(Exit.isFailure(decodeHandoffRequest({ ...valid, handoffId: "x".repeat(257) }))).toBe(
+      true,
+    );
+    expect(Exit.isFailure(decodeHandoffRequest({ ...valid, sourceTurnId: "x".repeat(257) }))).toBe(
+      true,
+    );
   });
 });

@@ -9,6 +9,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  TaskHandoffId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -96,6 +97,121 @@ describe("applyThreadDetailEvent", () => {
     });
     expect(legacy.kind).toBe("updated");
     if (legacy.kind === "updated") expect(legacy.thread.latestRoute).toBeNull();
+  });
+
+  it("projects handoff status only from events for its destination message", () => {
+    const destinationMessageId = MessageId.make("message-handoff");
+    const target = {
+      instanceId: ProviderInstanceId.make("claude"),
+      model: "claude-sonnet-4-6",
+    };
+    const started = applyThreadDetailEvent(baseThread, {
+      ...baseEventFields,
+      sequence: 1,
+      occurredAt: "2026-04-01T01:00:00.000Z",
+      aggregateKind: "thread",
+      aggregateId: baseThread.id,
+      type: "thread.turn-start-requested",
+      payload: {
+        threadId: baseThread.id,
+        messageId: destinationMessageId,
+        handoff: {
+          handoffId: TaskHandoffId.make("handoff-1"),
+          sourceTurnId: TurnId.make("turn-source"),
+          target,
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdAt: "2026-04-01T01:00:00.000Z",
+      },
+    });
+    expect(started.kind).toBe("updated");
+    if (started.kind !== "updated") return;
+    expect(started.thread.latestHandoff?.status).toBe("creating");
+
+    const continued = applyThreadDetailEvent(started.thread, {
+      ...baseEventFields,
+      eventId: EventId.make("event-running"),
+      sequence: 2,
+      occurredAt: "2026-04-01T01:00:00.500Z",
+      aggregateKind: "thread",
+      aggregateId: baseThread.id,
+      type: "thread.session-set",
+      payload: {
+        threadId: baseThread.id,
+        session: {
+          threadId: baseThread.id,
+          status: "running",
+          providerName: "claude",
+          providerInstanceId: target.instanceId,
+          runtimeMode: "full-access",
+          activeTurnId: TurnId.make("turn-destination"),
+          lastError: null,
+          updatedAt: "2026-04-01T01:00:00.500Z",
+        },
+      },
+    });
+    expect(continued.kind).toBe("updated");
+    if (continued.kind === "updated") {
+      expect(continued.thread.latestHandoff).toMatchObject({
+        status: "continued",
+        destinationTurnId: "turn-destination",
+      });
+    }
+
+    const unrelatedFailure = applyThreadDetailEvent(started.thread, {
+      ...baseEventFields,
+      eventId: EventId.make("event-2"),
+      sequence: 2,
+      occurredAt: "2026-04-01T01:00:01.000Z",
+      aggregateKind: "thread",
+      aggregateId: baseThread.id,
+      type: "thread.activity-appended",
+      payload: {
+        threadId: baseThread.id,
+        activity: {
+          id: EventId.make("activity-unrelated"),
+          tone: "error",
+          kind: "provider.turn.start.failed",
+          summary: "Another turn failed",
+          payload: { requestId: "another-message" },
+          turnId: null,
+          createdAt: "2026-04-01T01:00:01.000Z",
+        },
+      },
+    });
+    expect(unrelatedFailure.kind).toBe("updated");
+    if (unrelatedFailure.kind !== "updated") return;
+    expect(unrelatedFailure.thread.latestHandoff?.status).toBe("creating");
+
+    const matchingFailure = applyThreadDetailEvent(unrelatedFailure.thread, {
+      ...baseEventFields,
+      eventId: EventId.make("event-3"),
+      sequence: 3,
+      occurredAt: "2026-04-01T01:00:02.000Z",
+      aggregateKind: "thread",
+      aggregateId: baseThread.id,
+      type: "thread.activity-appended",
+      payload: {
+        threadId: baseThread.id,
+        activity: {
+          id: EventId.make("activity-matching"),
+          tone: "error",
+          kind: "provider.turn.start.failed",
+          summary: "Handoff failed",
+          payload: { requestId: destinationMessageId },
+          turnId: null,
+          createdAt: "2026-04-01T01:00:02.000Z",
+        },
+      },
+    });
+    expect(matchingFailure.kind).toBe("updated");
+    if (matchingFailure.kind === "updated") {
+      expect(matchingFailure.thread.latestHandoff).toMatchObject({
+        status: "failed",
+        target,
+      });
+    }
   });
 
   describe("project events", () => {

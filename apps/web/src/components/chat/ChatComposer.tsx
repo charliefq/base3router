@@ -1321,6 +1321,7 @@ export interface ChatComposerProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
   dispatcherRoutePreviewAvailable: boolean;
+  dispatcherTaskHandoffAvailable: boolean;
   dispatcherProject: { readonly id: ProjectId; readonly title: string } | null;
   attachmentUploadsCapabilityKnown: boolean;
   supportsAttachmentUploads: boolean;
@@ -1489,6 +1490,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerDraftTarget,
     environmentId,
     dispatcherRoutePreviewAvailable,
+    dispatcherTaskHandoffAvailable,
     dispatcherProject,
     attachmentUploadsCapabilityKnown,
     supportsAttachmentUploads,
@@ -6199,6 +6201,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               preferredRoute={selectedModelSelection}
               providers={providerStatuses}
               boundRoute={routeKind === "draft" ? null : activeThread?.latestRoute}
+              handoffAvailable={routeKind === "server" && dispatcherTaskHandoffAvailable}
+              thread={routeKind === "server" ? (activeThread ?? null) : null}
             />
           ) : null}
           {!activityStackItem && (props.threadSyncPhase || inlineTasksBadge) ? (

@@ -3,6 +3,7 @@ import {
   ApprovalRequestId,
   ChatAttachment,
   DispatcherTaskRouteBinding,
+  DispatcherTaskHandoffSnapshot,
   OrchestrationMessageContext,
   CheckpointRef,
   IsoDateTime,
@@ -135,6 +136,7 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
     latestRouteMessageId: Schema.NullOr(MessageId),
     latestRouteBinding: Schema.NullOr(Schema.fromJsonString(DispatcherTaskRouteBinding)),
+    latestHandoff: Schema.NullOr(Schema.fromJsonString(DispatcherTaskHandoffSnapshot)),
   }),
 );
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
@@ -385,6 +387,10 @@ function mapLatestRoute(row: Schema.Schema.Type<typeof ProjectionThreadDbRowSche
     : { messageId: row.latestRouteMessageId, binding: row.latestRouteBinding };
 }
 
+function mapLatestHandoff(row: Schema.Schema.Type<typeof ProjectionThreadDbRowSchema>) {
+  return row.latestHandoff;
+}
+
 function mapSessionRow(
   row: Schema.Schema.Type<typeof ProjectionThreadSessionDbRowSchema>,
 ): OrchestrationSession {
@@ -599,6 +605,23 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ORDER BY route.created_at DESC, route.message_id DESC
             LIMIT 1
           ) AS "latestRouteBinding",
+          (
+            SELECT json_object(
+              'handoffId', handoff.handoff_id,
+              'sourceTurnId', handoff.source_turn_id,
+              'destinationMessageId', handoff.destination_message_id,
+              'destinationTurnId', handoff.destination_turn_id,
+              'target', json(handoff.target_json),
+              'status', handoff.status,
+              'failureReason', handoff.failure_reason,
+              'createdAt', handoff.created_at,
+              'updatedAt', handoff.updated_at
+            )
+            FROM projection_task_handoffs AS handoff
+            WHERE handoff.thread_id = projection_threads.thread_id
+            ORDER BY handoff.created_at DESC, handoff.handoff_id DESC
+            LIMIT 1
+          ) AS "latestHandoff",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
@@ -654,6 +677,23 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ORDER BY route.created_at DESC, route.message_id DESC
             LIMIT 1
           ) AS "latestRouteBinding",
+          (
+            SELECT json_object(
+              'handoffId', handoff.handoff_id,
+              'sourceTurnId', handoff.source_turn_id,
+              'destinationMessageId', handoff.destination_message_id,
+              'destinationTurnId', handoff.destination_turn_id,
+              'target', json(handoff.target_json),
+              'status', handoff.status,
+              'failureReason', handoff.failure_reason,
+              'createdAt', handoff.created_at,
+              'updatedAt', handoff.updated_at
+            )
+            FROM projection_task_handoffs AS handoff
+            WHERE handoff.thread_id = projection_threads.thread_id
+            ORDER BY handoff.created_at DESC, handoff.handoff_id DESC
+            LIMIT 1
+          ) AS "latestHandoff",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
@@ -741,6 +781,23 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ORDER BY route.created_at DESC, route.message_id DESC
             LIMIT 1
           ) AS "latestRouteBinding",
+          (
+            SELECT json_object(
+              'handoffId', handoff.handoff_id,
+              'sourceTurnId', handoff.source_turn_id,
+              'destinationMessageId', handoff.destination_message_id,
+              'destinationTurnId', handoff.destination_turn_id,
+              'target', json(handoff.target_json),
+              'status', handoff.status,
+              'failureReason', handoff.failure_reason,
+              'createdAt', handoff.created_at,
+              'updatedAt', handoff.updated_at
+            )
+            FROM projection_task_handoffs AS handoff
+            WHERE handoff.thread_id = projection_threads.thread_id
+            ORDER BY handoff.created_at DESC, handoff.handoff_id DESC
+            LIMIT 1
+          ) AS "latestHandoff",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
@@ -1320,6 +1377,23 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ORDER BY route.created_at DESC, route.message_id DESC
             LIMIT 1
           ) AS "latestRouteBinding",
+          (
+            SELECT json_object(
+              'handoffId', handoff.handoff_id,
+              'sourceTurnId', handoff.source_turn_id,
+              'destinationMessageId', handoff.destination_message_id,
+              'destinationTurnId', handoff.destination_turn_id,
+              'target', json(handoff.target_json),
+              'status', handoff.status,
+              'failureReason', handoff.failure_reason,
+              'createdAt', handoff.created_at,
+              'updatedAt', handoff.updated_at
+            )
+            FROM projection_task_handoffs AS handoff
+            WHERE handoff.thread_id = projection_threads.thread_id
+            ORDER BY handoff.created_at DESC, handoff.handoff_id DESC
+            LIMIT 1
+          ) AS "latestHandoff",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
@@ -2396,6 +2470,7 @@ pending_approval_requests AS (
                 branchPullRequest: row.branchPullRequest,
                 latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                 latestRoute: mapLatestRoute(row),
+                latestHandoff: mapLatestHandoff(row),
                 createdAt: row.createdAt,
                 updatedAt: row.updatedAt,
                 archivedAt: row.archivedAt,
@@ -2642,6 +2717,7 @@ pending_approval_requests AS (
                   branchPullRequest: row.branchPullRequest,
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   latestRoute: mapLatestRoute(row),
+                  latestHandoff: mapLatestHandoff(row),
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
                   archivedAt: row.archivedAt,
@@ -2799,6 +2875,7 @@ pending_approval_requests AS (
                         ),
                         latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                         latestRoute: mapLatestRoute(row),
+                        latestHandoff: mapLatestHandoff(row),
                         createdAt: row.createdAt,
                         updatedAt: row.updatedAt,
                         archivedAt: row.archivedAt,
@@ -2963,6 +3040,7 @@ pending_approval_requests AS (
                   ),
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   latestRoute: mapLatestRoute(row),
+                  latestHandoff: mapLatestHandoff(row),
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
                   archivedAt: row.archivedAt,
@@ -3320,6 +3398,7 @@ pending_approval_requests AS (
         branchPullRequest: threadRow.value.branchPullRequest,
         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
         latestRoute: mapLatestRoute(threadRow.value),
+        latestHandoff: mapLatestHandoff(threadRow.value),
         createdAt: threadRow.value.createdAt,
         updatedAt: threadRow.value.updatedAt,
         archivedAt: threadRow.value.archivedAt,
@@ -3622,6 +3701,7 @@ pending_approval_requests AS (
         branchPullRequest: threadRow.value.branchPullRequest,
         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
         latestRoute: mapLatestRoute(threadRow.value),
+        latestHandoff: mapLatestHandoff(threadRow.value),
         createdAt: threadRow.value.createdAt,
         updatedAt: threadRow.value.updatedAt,
         archivedAt: threadRow.value.archivedAt,

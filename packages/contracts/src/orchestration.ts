@@ -24,7 +24,13 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
-import { DispatcherTaskRouteBinding, DispatcherTaskRouteSnapshot } from "./dispatcher.ts";
+import {
+  DispatcherHandoffTurnStartRequest,
+  DispatcherTaskHandoff,
+  DispatcherTaskHandoffSnapshot,
+  DispatcherTaskRouteBinding,
+  DispatcherTaskRouteSnapshot,
+} from "./dispatcher.ts";
 import {
   PullRequestActor,
   PullRequestChecksState,
@@ -811,6 +817,7 @@ export const OrchestrationThread = Schema.Struct({
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   // Optional so snapshots cached from servers before dispatcher UI support remain valid.
   latestRoute: Schema.optional(Schema.NullOr(DispatcherTaskRouteSnapshot)),
+  latestHandoff: Schema.optional(Schema.NullOr(DispatcherTaskHandoffSnapshot)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -898,6 +905,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   latestRoute: Schema.optional(Schema.NullOr(DispatcherTaskRouteSnapshot)),
+  latestHandoff: Schema.optional(Schema.NullOr(DispatcherTaskHandoffSnapshot)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -1326,8 +1334,12 @@ export const ThreadTurnStartCommand = Schema.Struct({
   ),
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  // Client request consumed by the server before the command reaches the decider.
+  handoffRequest: Schema.optional(DispatcherHandoffTurnStartRequest),
   // Server-owned. ClientThreadTurnStartCommand intentionally omits this field.
   routeBinding: Schema.optional(DispatcherTaskRouteBinding),
+  // Server-owned after validating a client handoff request.
+  handoff: Schema.optional(DispatcherTaskHandoff),
   createdAt: IsoDateTime,
 });
 
@@ -1348,6 +1360,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  handoffRequest: Schema.optional(DispatcherHandoffTurnStartRequest),
   createdAt: IsoDateTime,
 });
 
@@ -1918,6 +1931,8 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   // Optional so pre-dispatcher events remain replayable.
   routeBinding: Schema.optional(DispatcherTaskRouteBinding),
+  // Optional so events written before explicit handoff support remain replayable.
+  handoff: Schema.optional(DispatcherTaskHandoff),
   createdAt: IsoDateTime,
 });
 

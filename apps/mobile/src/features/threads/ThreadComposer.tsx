@@ -682,6 +682,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             preferredRoute={currentModelSelection}
             providers={props.serverConfig?.providers ?? []}
             boundRoute={props.selectedThread.latestRoute}
+            handoffAvailable={
+              props.serverConfig?.environment.capabilities.dispatcherTaskHandoff === true
+            }
+            thread={props.selectedThread}
           />
         ) : null}
 

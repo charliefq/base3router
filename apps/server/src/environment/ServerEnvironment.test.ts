@@ -178,6 +178,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.requiredWorktreeBootstrap).toBe(true);
       expect(second.capabilities.usagePriceOverrides).toBe(true);
       expect(second.capabilities.dispatcherRoutePreview).toBe(false);
+      expect(second.capabilities.dispatcherTaskHandoff).toBe(false);
       expect(second.capabilities.threadActiveReorder).toBe(true);
       expect(second.capabilities.threadTitleRegeneration).toBe(true);
       expect(second.capabilities.threadPullRequests).toBe(true);
@@ -261,6 +262,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
 
       const dispatcherEnabled = yield* describeWith({ dispatcherEnabled: true });
       expect(dispatcherEnabled.capabilities.dispatcherRoutePreview).toBe(true);
+      expect(dispatcherEnabled.capabilities.dispatcherTaskHandoff).toBe(true);
       expect(withFd.capabilities.serverUpdateThreadContinuation).toBe(true);
 
       const withoutFd = yield* describeWith({ mode: "desktop" });

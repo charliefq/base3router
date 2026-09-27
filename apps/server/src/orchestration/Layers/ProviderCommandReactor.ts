@@ -11,6 +11,7 @@ import {
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
+  type DispatcherTaskHandoff,
   type TurnId,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
@@ -31,6 +32,7 @@ import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
@@ -66,6 +68,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import * as Dispatcher from "../../dispatcher/Dispatcher.ts";
+import * as DispatcherHandoff from "../../dispatcher/Handoff.ts";
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
@@ -211,6 +214,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 }
 
 const make = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
@@ -574,6 +578,7 @@ const make = Effect.gen(function* () {
     options?: {
       readonly modelSelection?: ModelSelection;
       readonly pendingTurnStart?: boolean;
+      readonly handoff?: DispatcherTaskHandoff;
     },
   ) {
     const thread = yield* resolveThreadShell(threadId);
@@ -613,20 +618,35 @@ const make = Effect.gen(function* () {
         : thread.modelSelection.instanceId;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
     const desiredInstanceId = desiredModelSelection.instanceId;
-    const currentInfo = yield* providerService.getInstanceInfo(currentInstanceId).pipe(
-      Effect.mapError(
-        () =>
-          new ProviderAdapterRequestError({
-            provider: providerErrorLabelFromInstanceHint({
-              instanceId: String(currentInstanceId),
-              modelSelectionInstanceId: String(thread.modelSelection.instanceId),
-              sessionProvider: thread.session?.providerName ?? undefined,
-            }),
-            method: "thread.turn.start",
-            detail: `Thread '${threadId}' references unknown provider instance '${currentInstanceId}'. The instance is not configured in this build.`,
-          }),
-      ),
-    );
+    const explicitHandoff = options?.handoff;
+    if (
+      explicitHandoff !== undefined &&
+      (explicitHandoff.target.instanceId !== desiredInstanceId ||
+        explicitHandoff.target.model !== desiredModelSelection.model)
+    ) {
+      return yield* new ProviderAdapterRequestError({
+        provider: providerErrorLabel(String(desiredInstanceId)),
+        method: "thread.turn.start",
+        detail: "The handoff target does not match its immutable route binding.",
+      });
+    }
+    const currentInfo =
+      explicitHandoff === undefined
+        ? yield* providerService.getInstanceInfo(currentInstanceId).pipe(
+            Effect.mapError(
+              () =>
+                new ProviderAdapterRequestError({
+                  provider: providerErrorLabelFromInstanceHint({
+                    instanceId: String(currentInstanceId),
+                    modelSelectionInstanceId: String(thread.modelSelection.instanceId),
+                    sessionProvider: thread.session?.providerName ?? undefined,
+                  }),
+                  method: "thread.turn.start",
+                  detail: `Thread '${threadId}' references unknown provider instance '${currentInstanceId}'. The instance is not configured in this build.`,
+                }),
+            ),
+          )
+        : null;
     const desiredInfo = yield* providerService.getInstanceInfo(desiredInstanceId).pipe(
       Effect.mapError(
         () =>
@@ -664,7 +684,7 @@ const make = Effect.gen(function* () {
         createdAt,
       });
     }
-    if (thread.session !== null) {
+    if (thread.session !== null && explicitHandoff === undefined) {
       yield* rejectStartedThreadModelChangeIfRequired({
         threadId,
         currentModelSelection:
@@ -683,7 +703,11 @@ const make = Effect.gen(function* () {
       requestedModelSelection !== undefined &&
       requestedModelSelection.instanceId !== currentInstanceId
     ) {
-      if (currentInfo.driverKind !== desiredInfo.driverKind) {
+      if (
+        explicitHandoff === undefined &&
+        currentInfo !== null &&
+        currentInfo.driverKind !== desiredInfo.driverKind
+      ) {
         return yield* new ProviderAdapterRequestError({
           provider: preferredProvider,
           method: "thread.turn.start",
@@ -691,8 +715,10 @@ const make = Effect.gen(function* () {
         });
       }
       if (
+        explicitHandoff === undefined &&
+        currentInfo !== null &&
         currentInfo.continuationIdentity.continuationKey !==
-        desiredInfo.continuationIdentity.continuationKey
+          desiredInfo.continuationIdentity.continuationKey
       ) {
         return yield* new ProviderAdapterRequestError({
           provider: preferredProvider,
@@ -759,7 +785,15 @@ const make = Effect.gen(function* () {
       });
 
     const existingSessionThreadId =
-      thread.session && thread.session.status !== "stopped" && activeSession ? thread.id : null;
+      explicitHandoff === undefined &&
+      thread.session &&
+      thread.session.status !== "stopped" &&
+      activeSession
+        ? thread.id
+        : null;
+    if (explicitHandoff !== undefined && activeSession !== undefined) {
+      yield* providerService.stopSession({ threadId });
+    }
     if (existingSessionThreadId) {
       const runtimeModeChanged = thread.runtimeMode !== thread.session?.runtimeMode;
       const cwdChanged = effectiveCwd !== activeSession?.cwd;
@@ -836,6 +870,7 @@ const make = Effect.gen(function* () {
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
+    readonly handoff?: DispatcherTaskHandoff;
     readonly interactionMode?: "default" | "plan";
     readonly createdAt: string;
   }) {
@@ -848,6 +883,7 @@ const make = Effect.gen(function* () {
     yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       pendingTurnStart: true,
+      ...(input.handoff !== undefined ? { handoff: input.handoff } : {}),
     });
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
@@ -1340,6 +1376,34 @@ const make = Effect.gen(function* () {
     if (event.payload.routeBinding !== undefined) {
       if (routeBinding === null) return;
     }
+    if (event.payload.handoff !== undefined) {
+      const persistedHandoff = yield* DispatcherHandoff.readTaskHandoffByDestinationMessage({
+        threadId: event.payload.threadId,
+        destinationMessageId: event.payload.messageId,
+      }).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+        Effect.catchCause((cause) => recoverTurnStartFailure(cause).pipe(Effect.as(null))),
+      );
+      if (
+        persistedHandoff === null ||
+        persistedHandoff.handoffId !== event.payload.handoff.handoffId ||
+        persistedHandoff.destinationMessageId !== event.payload.messageId ||
+        persistedHandoff.status !== "creating" ||
+        persistedHandoff.target.instanceId !== event.payload.handoff.target.instanceId ||
+        persistedHandoff.target.model !== event.payload.handoff.target.model
+      ) {
+        yield* recoverTurnStartFailure(
+          Cause.fail(
+            new ProviderAdapterRequestError({
+              provider: providerErrorLabel(String(event.payload.handoff.target.instanceId)),
+              method: "thread.turn.start",
+              detail: "The persisted handoff record does not match this destination turn.",
+            }),
+          ),
+        );
+        return;
+      }
+    }
     const routeBaseModelSelection = event.payload.modelSelection ?? thread.modelSelection;
     const taskModelSelection: ModelSelection | undefined =
       routeBinding === null
@@ -1562,6 +1626,7 @@ const make = Effect.gen(function* () {
       }),
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
       ...(taskModelSelection !== undefined ? { modelSelection: taskModelSelection } : {}),
+      ...(event.payload.handoff !== undefined ? { handoff: event.payload.handoff } : {}),
       interactionMode: event.payload.interactionMode,
       createdAt: event.payload.createdAt,
     }).pipe(

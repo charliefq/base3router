@@ -10065,6 +10065,9 @@ export default function ChatView(props: ChatViewProps) {
                             dispatcherRoutePreviewAvailable={
                               serverConfig?.environment.capabilities.dispatcherRoutePreview === true
                             }
+                            dispatcherTaskHandoffAvailable={
+                              serverConfig?.environment.capabilities.dispatcherTaskHandoff === true
+                            }
                             dispatcherProject={
                               activeProject === null
                                 ? null

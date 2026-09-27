@@ -64,6 +64,7 @@ import {
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
 import * as Dispatcher from "../../dispatcher/Dispatcher.ts";
+import * as DispatcherHandoff from "../../dispatcher/Handoff.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -1368,6 +1369,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* Dispatcher.deleteDispatcherTaskRoutesByThread({
             threadId: event.payload.threadId,
           }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+          yield* DispatcherHandoff.deleteTaskHandoffsByThread(event.payload.threadId).pipe(
+            Effect.provideService(SqlClient.SqlClient, sql),
+          );
           yield* projectionTurnRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
@@ -1379,6 +1383,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               threadId: event.payload.threadId,
               messageId: event.payload.messageId,
               binding: event.payload.routeBinding,
+              createdAt: event.payload.createdAt,
+            }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+          }
+          if (event.payload.handoff !== undefined) {
+            yield* DispatcherHandoff.persistTaskHandoff({
+              handoffId: event.payload.handoff.handoffId,
+              threadId: event.payload.threadId,
+              sourceTurnId: event.payload.handoff.sourceTurnId,
+              destinationMessageId: event.payload.messageId,
+              target: event.payload.handoff.target,
               createdAt: event.payload.createdAt,
             }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
           }
@@ -1434,6 +1448,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           ) {
             return;
           }
+          yield* DispatcherHandoff.markTaskHandoffFailed({
+            threadId: event.payload.threadId,
+            destinationMessageId: pendingTurnStart.value.messageId,
+            updatedAt: event.payload.activity.createdAt,
+          }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
           yield* projectionTurnRepository.deletePendingTurnStartByThreadId(event.payload);
           return;
         }
@@ -1448,6 +1467,21 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               event.payload.session.status === "stopped" ||
               event.payload.session.status === "interrupted"
             ) {
+              const failedPending = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+                threadId: event.payload.threadId,
+              });
+              if (
+                Option.isSome(failedPending) &&
+                (event.payload.session.status === "error" ||
+                  event.payload.session.status === "stopped" ||
+                  event.payload.session.status === "interrupted")
+              ) {
+                yield* DispatcherHandoff.markTaskHandoffFailed({
+                  threadId: event.payload.threadId,
+                  destinationMessageId: failedPending.value.messageId,
+                  updatedAt: event.payload.session.updatedAt,
+                }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+              }
               yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
                 threadId: event.payload.threadId,
               });
@@ -1510,6 +1544,14 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
             threadId: event.payload.threadId,
           });
+          if (Option.isSome(pendingTurnStart)) {
+            yield* DispatcherHandoff.markTaskHandoffContinued({
+              threadId: event.payload.threadId,
+              destinationMessageId: pendingTurnStart.value.messageId,
+              destinationTurnId: turnId,
+              updatedAt: event.payload.session.updatedAt,
+            }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+          }
           if (Option.isSome(existingTurn)) {
             const nextState =
               existingTurn.value.state === "completed" || existingTurn.value.state === "error"
