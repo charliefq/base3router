@@ -124,6 +124,25 @@ const seed = Effect.gen(function* () {
     ) VALUES (${sourceMessageId}, ${threadId}, ${sourceTurnId}, 'user', 'Build the feature', 0, ${now}, ${now})
   `;
   yield* sql`
+    INSERT INTO projection_thread_messages (
+      message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at
+    ) VALUES (
+      'assistant-1', ${threadId}, ${sourceTurnId}, 'assistant',
+      ${`## Completed work
+
+Implemented [handoff](/workspace/project/src/handoff.ts). A private file at /private/secret was not used.
+
+## Remaining steps
+
+Add the destination validation tests.
+
+## Test results
+
+The focused handoff test passed.`},
+      0, ${now}, ${now}
+    )
+  `;
+  yield* sql`
     INSERT INTO projection_turns (
       thread_id, turn_id, pending_message_id, assistant_message_id, state,
       requested_at, started_at, completed_at, checkpoint_files_json
@@ -166,12 +185,64 @@ describe("explicit task handoff", () => {
         latestUserInstruction: "Build the feature",
         branch: "feature/handoff",
         commit: "abc123",
+        completedWork:
+          "Implemented [handoff](src/handoff.ts). A private file at [path omitted] was not used.",
+        remainingSteps: "Add the destination validation tests.",
+        testResults: "The focused handoff test passed.",
+      });
+      expect(result.packet.references).toContainEqual({ kind: "file", value: "src/handoff.ts" });
+      expect(result.packetText).not.toContain("/private/secret");
+      expect(result.packetText).not.toContain("/workspace/project");
+    }).pipe(Effect.provide(SqlitePersistenceMemory)),
+  );
+
+  it.effect("leaves unverified summary fields unknown when explicit headings are absent", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE projection_thread_messages SET text = 'Phase A is done.' WHERE message_id = 'assistant-1'`;
+      const result = yield* preview();
+      expect(result.packet).toMatchObject({
         completedWork: "Unknown",
         remainingSteps: "Unknown",
         testResults: "Unknown",
       });
-      expect(result.packet.references).toContainEqual({ kind: "file", value: "src/handoff.ts" });
-      expect(result.packetText).not.toContain("/private/secret");
+    }).pipe(Effect.provide(SqlitePersistenceMemory)),
+  );
+
+  it.effect("redacts sensitive values from projected summary sections", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        UPDATE projection_thread_messages
+        SET text = ${`## Completed work
+
+Used Bearer secret-bearer-value and sk-secretvalue1234 while reviewing https://example.test/private.
+
+The runner reported API_TOKEN=secret-environment-value before cleanup.
+
+## Remaining steps
+
+Inspect /home/example/private and [the workspace file](/workspace/project/src/handoff.ts).
+
+## Test results
+
+Unknown`}
+        WHERE message_id = 'assistant-1'
+      `;
+      const result = yield* preview();
+      const serialized = JSON.stringify(result.packet);
+      expect(serialized).not.toContain("secret-bearer-value");
+      expect(serialized).not.toContain("sk-secretvalue1234");
+      expect(serialized).not.toContain("example.test");
+      expect(serialized).not.toContain("secret-environment-value");
+      expect(serialized).not.toContain("/home/example/private");
+      expect(result.packet.completedWork).toContain("[credential omitted]");
+      expect(result.packet.completedWork).toContain("[link omitted]");
+      expect(result.packet.completedWork).toContain("[environment value omitted]");
+      expect(result.packet.remainingSteps).toContain("[path omitted]");
+      expect(result.packet.remainingSteps).toContain("[the workspace file](src/handoff.ts)");
     }).pipe(Effect.provide(SqlitePersistenceMemory)),
   );
 
