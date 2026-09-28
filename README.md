@@ -1,125 +1,82 @@
-# T3 Code
+# Base3Router
 
-T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
+Base3Router is an experimental, server-first dispatcher for coding agents. It extends [T3 Code](https://github.com/pingdotgg/t3code) with explicit task routing, immutable provider bindings, and reviewable cross-provider handoffs.
 
-Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, and Google Antigravity. If they're set up on your computer, T3 Code can control them.
+The goal is simple: start work with the best available coding agent, preserve what happened, and deliberately continue the same task with another provider when needed.
 
-## "Wait, what are you selling me?"
+## What is implemented
 
-Nothing. We built T3 Code because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
+- **Route preview** — proposes a project, provider, model, reason, and bounded fallbacks before submission.
+- **Immutable route binding** — persists the selected provider instance and model for each turn.
+- **Server-authoritative execution** — the backend validates runner availability and consumes the bound route.
+- **Explicit provider handoff** — a settled task can continue with another configured provider without rewriting the source turn.
+- **Structured handoff packets** — carries the objective, latest instruction, branch, commit, completed work, remaining steps, tests, and bounded references.
+- **Durable lineage** — records source turn, destination turn, provider/model, and handoff status.
+- **Web and mobile workflow** — exposes provisional routes, authoritative bound routes, and handoff states.
+- **Privacy controls** — redacts credential-shaped values, environment assignments, URLs, and external absolute paths from generated handoff summaries.
 
-We wanted something performant, remote-ready, and truly open. If we ever go the wrong direction, we want you to have everything you need to fork and build the editor that you want.
+There is no silent cross-provider retry. A handoff is an explicit user decision and creates a separately bound destination turn.
 
-## Installation
+## Verified execution path
 
-> [!WARNING]
-> T3 Code currently supports Codex, Claude, Cursor, Grok Build, OpenCode, and Antigravity. Install and authenticate at least one provider before use:
->
-> - Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`
-> - Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`
-> - Cursor: install [Cursor CLI](https://cursor.com/cli) and run `agent login`
-> - Grok Build: install [Grok Build CLI](https://x.ai/cli) and run `grok login`
-> - OpenCode: install [OpenCode](https://opencode.ai) and run `opencode auth login`
-> - Antigravity: enable it in Settings, then use **Install Antigravity** and **Sign in with Google**. No CLI is required.
+An isolated operational acceptance run completed a real sequential handoff:
 
-### Command line
+| Stage | Runner | Model | Result |
+|---|---|---|---|
+| Source | Codex CLI | `gpt-6-sol` | Completed Phase A and focused tests |
+| Continuation | Claude Code CLI | `claude-sonnet-4-6` | Inspected the repository, completed Phase B, and passed the final tests |
 
-```bash
-curl -fsSL https://t3.codes/install.sh | sh
+The runners were authenticated independently and were never active concurrently. The acceptance fixture finished with four passing tests and one persisted source-to-destination handoff.
+
+## Architecture
+
+```text
+Task request
+  -> deterministic route preview
+  -> authenticated command ingress
+  -> immutable turn binding
+  -> provider runner
+  -> projected final state
+  -> reviewable handoff packet
+  -> separately bound continuation turn
 ```
 
-On Windows, in PowerShell:
+Routing decisions and handoff records are server-owned. Clients display provisional and projected state but do not duplicate routing logic.
 
-```powershell
-irm https://t3.codes/install.ps1 | iex
-```
+## Safety boundaries
 
-Then run `t3` to start the server and open the local web app. `t3 service install` keeps it running in the background, `t3 update` moves to a newer release, and `t3 --help` has the full reference.
+- Existing tasks remain compatible because dispatcher fields are additive.
+- Identical binding replays are idempotent; conflicting rewrites fail.
+- Once a route is bound, execution does not silently switch providers.
+- Provider availability comes from configured server runners, not an API model name.
+- Handoff summaries are bounded and deterministic; they do not require an additional LLM call.
+- Legacy behavior remains available when dispatcher support is disabled or unavailable.
 
-To try it once without installing, run `npx t3@latest` instead.
+## Current status
 
-### Desktop app
+The dispatcher is an experimental fork under active development. Core routing and Codex-to-Claude continuation have passed focused tests and isolated runtime acceptance. Broader rollout, automatic limit detection, automatic retry, long-term preference memory, and final narrow/mobile visual acceptance remain future work.
 
-Install the latest version of the desktop app from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), or from your favorite package registry:
+Implementation is organized as stacked pull requests so each layer can be reviewed independently:
 
-#### Windows (`winget`)
+1. Server routing foundation
+2. Route preview workflow
+3. Explicit provider handoff
+4. Verified handoff-summary extraction
 
-```bash
-winget install T3Tools.T3Code
-```
+## Development
 
-#### macOS (Homebrew)
-
-```bash
-brew install --cask t3-code
-```
-
-#### Arch Linux (AUR)
-
-Stable:
-
-```bash
-yay -S t3code-bin
-```
-
-Nightly:
-
-```bash
-yay -S t3code-nightly-bin
-```
-
-The AUR packaging is maintained in this repository under [`packaging/aur`](./packaging/aur).
-
-## Some notes
-
-We are very very early in this project. Expect bugs.
-
-We are (mostly) not accepting contributions yet. Small fixes may be considered. Big features will not be.
-
-## Documentation
-
-Full docs live in [docs/](./docs). There's no docs site yet.
-
-- [Install and first run](./docs/user/install.md)
-- [Permission modes](./docs/user/permission-modes.md)
-- [Keyboard shortcuts](./docs/user/keybindings.md)
-- [Project settings](./docs/user/project-settings.md)
-- [Remote access from a phone or another machine](./docs/user/remote-access.md)
-- [Keeping app and server in sync](./docs/user/updating.md)
-- [Source control integrations](./docs/user/source-control.md)
-- Multiple accounts: [Codex](./docs/user/providers-codex.md) · [Claude](./docs/user/providers-claude.md)
-- [Run T3 Code as a background service](./docs/user/background-service.md)
-
-Building from source? Start at [docs/internals/overview.md](./docs/internals/overview.md).
-
-## If you REALLY want to contribute still.... read this first
-
-### Install `vp`
-
-T3 Code uses Vite+ so you'll need to install the global `vp` command-line tool.
-
-#### macOS / Linux
-
-```bash
-curl -fsSL https://vite.plus | bash
-```
-
-#### Windows
-
-```bash
-irm https://vite.plus/ps1 | iex
-```
-
-Checkout their getting started guide for more information: https://viteplus.dev/guide/
-
-### Install dependencies
+This repository retains T3 Code's monorepo tooling.
 
 ```bash
 vp i
+vp run -r test
+vp run -r --concurrency-limit 2 typecheck
+vp lint --report-unused-disable-directives
+vp fmt --check
 ```
 
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) before reporting a bug or opening a PR.
+See the upstream [T3 Code documentation](https://github.com/pingdotgg/t3code/tree/main/docs) for platform installation, supported runners, and local development prerequisites.
 
-Have a feature request? Start an [Ideas discussion](https://github.com/pingdotgg/t3code/discussions/categories/ideas).
+## Attribution and license
 
-Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
+Base3Router is built on the open-source T3 Code project and preserves its MIT license and copyright notice. The dispatcher-specific work in this fork focuses on routing, persistence, handoff semantics, and cross-provider workflow.
