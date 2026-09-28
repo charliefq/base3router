@@ -29,6 +29,7 @@ import {
   ClientSurface,
   ClientWebDeployment,
   CommandId,
+  MessageId,
   type DiscoveredLocalServerList,
   DispatcherPreviewError,
   DispatcherHandoffPreviewError,
@@ -71,6 +72,7 @@ import {
   RpcClientId,
   EnvironmentAuthorizationError,
   ThreadId,
+  WorkflowOperationError,
   TaskHandoffId,
   type TerminalAttachStreamEvent,
   type TerminalError,
@@ -130,6 +132,7 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as Dispatcher from "./dispatcher/Dispatcher.ts";
 import * as DispatcherHandoff from "./dispatcher/Handoff.ts";
+import * as Workflow from "./workflow/Workflow.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
@@ -2441,6 +2444,235 @@ const makeWsRpcLayer = (
               ),
             ),
             { "rpc.aggregate": "dispatcher" },
+          ),
+        [WS_METHODS.workflowCatalog]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workflowCatalog,
+            config.dispatcherEnabled === true
+              ? Workflow.workflowCatalogForProject(input.projectId).pipe(
+                  Effect.catchCause(() =>
+                    Effect.fail(
+                      new WorkflowOperationError({ message: "Workflow catalog is unavailable." }),
+                    ),
+                  ),
+                )
+              : Effect.fail(
+                  new WorkflowOperationError({ message: "Workflows are disabled on this server." }),
+                ),
+            { "rpc.aggregate": "workflow" },
+          ),
+        [WS_METHODS.workflowReadRun]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workflowReadRun,
+            Effect.gen(function* () {
+              if (config.dispatcherEnabled !== true)
+                return yield* new WorkflowOperationError({
+                  message: "Workflows are disabled on this server.",
+                });
+              const catalog = yield* Workflow.workflowCatalogForProject(input.projectId);
+              return catalog.runs.find((run) => run.id === input.runId) ?? null;
+            }).pipe(
+              Effect.catchCause(() =>
+                Effect.fail(
+                  new WorkflowOperationError({ message: "Workflow run is unavailable." }),
+                ),
+              ),
+            ),
+            { "rpc.aggregate": "workflow" },
+          ),
+        [WS_METHODS.workflowAction]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workflowAction,
+            config.dispatcherEnabled === true
+              ? Workflow.performWorkflowAction(input, dispatchNormalizedCommand).pipe(
+                  Effect.catchCause(() =>
+                    Effect.fail(
+                      new WorkflowOperationError({
+                        message: "Workflow action was rejected or is stale.",
+                      }),
+                    ),
+                  ),
+                )
+              : Effect.fail(
+                  new WorkflowOperationError({ message: "Workflows are disabled on this server." }),
+                ),
+            { "rpc.aggregate": "workflow" },
+          ),
+        [WS_METHODS.workflowStagePreview]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workflowStagePreview,
+            Effect.gen(function* () {
+              if (config.dispatcherEnabled !== true)
+                return yield* new WorkflowOperationError({
+                  message: "Workflows are disabled on this server.",
+                });
+              const [environmentId, providers, settings] = yield* Effect.all([
+                serverEnvironment.getEnvironmentId,
+                providerRegistry.getProviders,
+                serverSettings.getSettings,
+              ]);
+              return yield* Workflow.previewWorkflowStage(input, {
+                environmentId,
+                providers,
+                environmentDefaultModelSelection: settings.defaultModelSelection,
+              });
+            }).pipe(
+              Effect.catchCause(() =>
+                Effect.fail(
+                  new WorkflowOperationError({ message: "Workflow stage preview is unavailable." }),
+                ),
+              ),
+            ),
+            { "rpc.aggregate": "workflow" },
+          ),
+        [WS_METHODS.workflowDispatchStage]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workflowDispatchStage,
+            Effect.gen(function* () {
+              if (config.dispatcherEnabled !== true)
+                return yield* new WorkflowOperationError({
+                  message: "Workflows are disabled on this server.",
+                });
+              yield* Workflow.requireWorkflowProject(input.projectId);
+              const threadId = ThreadId.make(`workflow-${input.dispatchId}`);
+              const messageId = MessageId.make(`workflow-message-${input.dispatchId}`);
+              const existing = yield* Workflow.workflowCatalogForProject(input.projectId);
+              const existingRun = existing.runs.find((run) => run.id === input.runId);
+              const existingAttempt = existingRun?.attempts.find(
+                (attempt) => attempt.stageId === input.stageId && attempt.attempt === input.attempt,
+              );
+              if (
+                existingAttempt?.destinationThreadId !== null &&
+                existingAttempt?.destinationThreadId !== undefined
+              ) {
+                if (
+                  existingAttempt.destinationThreadId !== threadId ||
+                  existingAttempt.destinationMessageId !== messageId ||
+                  existingAttempt.routeBinding?.target.instanceId !== input.target.instanceId ||
+                  existingAttempt.routeBinding?.target.model !== input.target.model
+                )
+                  return yield* new WorkflowOperationError({
+                    message: "Stage was already dispatched with another route.",
+                  });
+                return { run: existingRun!, threadId, messageId };
+              }
+              const { run, stage, attempt, packetText } = Workflow.buildWorkflowTaskPacket(
+                existing,
+                input.projectId,
+                input.runId,
+              );
+              if (stage.id !== input.stageId || attempt.attempt !== input.attempt)
+                return yield* new WorkflowOperationError({ message: "Stage preview is stale." });
+              const [environmentId, providers, settings] = yield* Effect.all([
+                serverEnvironment.getEnvironmentId,
+                providerRegistry.getProviders,
+                serverSettings.getSettings,
+              ]);
+              const projected = yield* Dispatcher.readDispatcherProjectedState({});
+              const route = Dispatcher.resolveDispatcherRoute({
+                environmentId,
+                request: {
+                  environmentId: input.environmentId,
+                  projectId: input.projectId,
+                  preferredRoute: input.target,
+                  actionKind: "workspace-write",
+                },
+                projected,
+                message: null,
+                providers,
+                environmentDefaultModelSelection: settings.defaultModelSelection,
+                candidateMode: "explicit-only",
+              });
+              const routeBinding = Dispatcher.taskRouteBindingFromDecision(route);
+              if (
+                routeBinding === null ||
+                routeBinding.target.instanceId !== input.target.instanceId ||
+                routeBinding.target.model !== input.target.model
+              )
+                return yield* new WorkflowOperationError({
+                  message: "The selected provider runner is unavailable.",
+                });
+              const createdAt = DateTime.formatIso(yield* DateTime.now);
+              yield* dispatchNormalizedCommand({
+                type: "thread.create",
+                commandId: CommandId.make(`workflow-create-${input.dispatchId}`),
+                threadId,
+                projectId: input.projectId,
+                title: `Workflow: ${stage.label}`,
+                modelSelection: input.target,
+                runtimeMode: "approval-required",
+                interactionMode: "default",
+                branch: null,
+                worktreePath: null,
+                createdAt,
+              });
+              yield* dispatchNormalizedCommand({
+                type: "thread.turn.start",
+                commandId: CommandId.make(`workflow-turn-${input.dispatchId}`),
+                threadId,
+                message: {
+                  messageId,
+                  role: "user",
+                  text: `${packetText}\n\n## User instruction\n${input.additionalInstruction || "Continue with the bounded stage task."}`,
+                  attachments: [],
+                },
+                modelSelection: input.target,
+                runtimeMode: "approval-required",
+                interactionMode: "default",
+                routeBinding,
+                workflowStage: {
+                  type: "stage.dispatch",
+                  runId: run.id,
+                  stageId: stage.id,
+                  attempt: attempt.attempt,
+                  threadId,
+                  messageId,
+                  routeBinding,
+                  at: createdAt,
+                },
+                createdAt,
+              });
+              const latest = yield* Workflow.workflowCatalogForProject(input.projectId);
+              const persisted = latest.runs.find((candidate) => candidate.id === run.id);
+              if (
+                !persisted?.attempts.some(
+                  (candidate) =>
+                    candidate.stageId === stage.id &&
+                    candidate.attempt === attempt.attempt &&
+                    candidate.destinationThreadId === threadId &&
+                    candidate.destinationMessageId === messageId,
+                )
+              )
+                return yield* new WorkflowOperationError({
+                  message: "Stage binding was not persisted.",
+                });
+              return { run: persisted, threadId, messageId };
+            }).pipe(
+              Effect.catchCause(() =>
+                Effect.fail(
+                  new WorkflowOperationError({ message: "Workflow dispatch failed or is stale." }),
+                ),
+              ),
+            ),
+            { "rpc.aggregate": "workflow" },
+          ),
+        [WS_METHODS.workflowProposeArtifact]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workflowProposeArtifact,
+            config.dispatcherEnabled === true
+              ? Workflow.proposeWorkflowArtifact(input, dispatchNormalizedCommand).pipe(
+                  Effect.catchCause(() =>
+                    Effect.fail(
+                      new WorkflowOperationError({
+                        message: "Workflow artifact could not be proposed.",
+                      }),
+                    ),
+                  ),
+                )
+              : Effect.fail(
+                  new WorkflowOperationError({ message: "Workflows are disabled on this server." }),
+                ),
+            { "rpc.aggregate": "workflow" },
           ),
         [WS_METHODS.dispatcherHandoffPreview]: (input) =>
           observeRpcEffect(

@@ -9,6 +9,7 @@ import {
   ThreadId,
   TurnId,
   DispatcherTaskRouteBinding,
+  DispatcherHandoffPacket,
   type ServerProvider,
 } from "@t3tools/contracts";
 import { assert, describe, expect, it } from "@effect/vitest";
@@ -41,6 +42,7 @@ const encodeCheckpointFiles = Schema.encodeSync(
   Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
 );
 const encodeRouteBinding = Schema.encodeSync(Schema.fromJsonString(DispatcherTaskRouteBinding));
+const encodeHandoffPacket = Schema.encodeSync(Schema.fromJsonString(DispatcherHandoffPacket));
 const decodeRouteBinding = Schema.decodeSync(Schema.fromJsonString(DispatcherTaskRouteBinding));
 
 const sourceBinding: DispatcherTaskRouteBinding = {
@@ -232,7 +234,7 @@ Unknown`}
         WHERE message_id = 'assistant-1'
       `;
       const result = yield* preview();
-      const serialized = JSON.stringify(result.packet);
+      const serialized = encodeHandoffPacket(result.packet);
       expect(serialized).not.toContain("secret-bearer-value");
       expect(serialized).not.toContain("sk-secretvalue1234");
       expect(serialized).not.toContain("example.test");

@@ -183,7 +183,10 @@ const sourceUnavailable = (source: Source | null) => {
 
 const normalizePath = (value: string): string => value.replaceAll("\\", "/").replace(/\/+$/, "");
 
-const projectRelativePath = (value: string, source: Source): string | null => {
+const projectRelativePath = (
+  value: string,
+  source: Pick<Source, "worktreePath" | "workspaceRoot">,
+): string | null => {
   const candidate = normalizePath(value);
   const workspace = normalizePath(source.worktreePath ?? source.workspaceRoot);
   const caseInsensitive = /^[a-z]:\//i.test(workspace);
@@ -194,15 +197,39 @@ const projectRelativePath = (value: string, source: Source): string | null => {
   return safeProjectRelativePath(candidate.slice(workspace.length + 1));
 };
 
-const sanitizeProjectedSummary = (value: string, source: Source): string => {
+export const sanitizeProjectedSummary = (
+  value: string,
+  source: Pick<Source, "worktreePath" | "workspaceRoot">,
+  options: { readonly allowPublicUrls?: boolean } = {},
+): string => {
   const withoutCredentials = value
     .replace(/\bBearer\s+\S+/gi, "[credential omitted]")
     .replace(/\b(?:sk-[a-z0-9_-]{8,}|gh[pousr]_[a-z0-9_]{8,})\b/gi, "[credential omitted]")
     .replace(/\b[A-Z][A-Z0-9_]{2,}=(?:"[^"]*"|'[^']*'|\S+)/g, "[environment value omitted]")
-    .replace(/https?:\/\/\S+/gi, "[link omitted]");
+    .replace(/https?:\/\/[^\s<>"'`)\]]+/gi, (rawUrl) => {
+      if (options.allowPublicUrls !== true) return "[link omitted]";
+      try {
+        const url = new URL(rawUrl);
+        if (
+          url.protocol !== "https:" ||
+          url.username !== "" ||
+          url.password !== "" ||
+          url.hostname === "localhost" ||
+          url.hostname.endsWith(".local") ||
+          /^(?:127\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(url.hostname)
+        )
+          return "[link omitted]";
+        return `${url.origin}${url.pathname}`;
+      } catch {
+        return "[link omitted]";
+      }
+    });
   const withSafeLinks = withoutCredentials.replace(
     /\[([^\]\r\n]{1,200})\]\(([^)\r\n]+)\)/g,
     (_match, label: string, target: string) => {
+      if (options.allowPublicUrls === true && target.startsWith("https://")) {
+        return `[${label}](${target})`;
+      }
       const relative = projectRelativePath(target.trim(), source);
       return relative === null ? label : `[${label}](${relative})`;
     },
@@ -217,9 +244,10 @@ const sanitizeProjectedSummary = (value: string, source: Source): string => {
   );
 };
 
-const projectedSummarySection = (
-  source: Source | null,
-  heading: "Completed work" | "Remaining steps" | "Test results",
+export const projectedSummarySection = (
+  source: Pick<Source, "assistantText" | "worktreePath" | "workspaceRoot"> | null,
+  heading: string,
+  options: { readonly allowPublicUrls?: boolean } = {},
 ): string => {
   if (source?.assistantText === null || source?.assistantText === undefined) return UNKNOWN;
   const lines = source.assistantText.split(/\r?\n/);
@@ -234,7 +262,7 @@ const projectedSummarySection = (
     .slice(0, end < 0 ? undefined : end)
     .join("\n")
     .trim();
-  return bounded(section.length === 0 ? null : sanitizeProjectedSummary(section, source));
+  return bounded(section.length === 0 ? null : sanitizeProjectedSummary(section, source, options));
 };
 
 function candidateUnavailable(

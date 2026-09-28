@@ -263,6 +263,8 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       const dispatcherEnabled = yield* describeWith({ dispatcherEnabled: true });
       expect(dispatcherEnabled.capabilities.dispatcherRoutePreview).toBe(true);
       expect(dispatcherEnabled.capabilities.dispatcherTaskHandoff).toBe(true);
+      expect(dispatcherEnabled.capabilities.workflowOs).toBe(true);
+      expect(withFd.capabilities.workflowOs).toBe(false);
       expect(withFd.capabilities.serverUpdateThreadContinuation).toBe(true);
 
       const withoutFd = yield* describeWith({ mode: "desktop" });

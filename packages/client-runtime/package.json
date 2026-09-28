@@ -163,6 +163,10 @@
       "types": "./src/state/dispatcher.ts",
       "default": "./src/state/dispatcher.ts"
     },
+    "./state/workflow": {
+      "types": "./src/state/workflow.ts",
+      "default": "./src/state/workflow.ts"
+    },
     "./state/deviceHubAccess": {
       "types": "./src/state/deviceHubAccess.ts",
       "default": "./src/state/deviceHubAccess.ts"

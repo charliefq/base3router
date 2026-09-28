@@ -364,6 +364,7 @@ import {
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import { WorkflowControl } from "./chat/WorkflowControl";
 import { createPageScrollController, type PageScrollKey } from "./chat/pageScrollController";
 import { isTimelineScrollTarget } from "./chat/timelineScrollTarget";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
@@ -10049,6 +10050,23 @@ export default function ChatView(props: ChatViewProps) {
                         : undefined
                     }
                   >
+                    <div className="mb-2 flex justify-end">
+                      <WorkflowControl
+                        available={serverConfig?.environment.capabilities.workflowOs === true}
+                        environmentId={environmentId}
+                        project={
+                          activeProject === null
+                            ? null
+                            : { id: activeProject.id, title: activeProject.title }
+                        }
+                        onOpenThread={(threadId) => {
+                          void navigate({
+                            to: "/$environmentId/$threadId",
+                            params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
+                          });
+                        }}
+                      />
+                    </div>
                     <ComposerSurface.Shell contextStrip={showComposerContextStrip}>
                       <ComposerSurface.Host>
                         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">

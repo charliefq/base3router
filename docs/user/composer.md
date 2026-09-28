@@ -81,6 +81,20 @@ provider and model become authoritative only after submission.
 The continuation stays in the same thread and keeps the earlier turn and its route unchanged.
 T3 Code does not silently switch providers or retry a failed handoff on another runner.
 
+## Use a workflow
+
+When the environment enables workflow routing, open **Workflow** beside the web or desktop composer.
+Choose a built-in or custom template, then start a run in the current project. Agent profiles define
+roles and expected output; they do not grant access to a provider. You can create, version, archive,
+and restore custom profiles and linear templates in the same panel.
+
+Review a stage packet and its provisional route before confirming a provider task. After its turn
+settles, propose an artifact from the final response, inspect missing sections, and explicitly
+accept, request revision, or reject. Human gates require a separate decision. A confirmed task's
+provider and model are bound to that task; a later stage gets its own route. Pausing or cancelling
+a workflow does not stop a provider turn already in progress. Mobile shows workflow state and
+artifacts for a workflow task but does not yet offer stage controls.
+
 ## Quote an assistant response
 
 On web and desktop, select text within one assistant response and choose
