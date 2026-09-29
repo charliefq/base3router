@@ -51,6 +51,20 @@ export type CursorCloudModel = {
   readonly displayName: string | null;
 };
 
+export const CURSOR_CLOUD_RUN_LIST_LIMIT = 20;
+export const CURSOR_CLOUD_RUN_LIST_MAX_PAGES = 10;
+const RUN_LIST_CLAIMED_AT_SKEW_MS = 60_000;
+
+export type CursorCloudRunListBoundary = {
+  readonly previousRunId?: string;
+  readonly claimedAt?: string;
+};
+
+export type CursorCloudRunListScan = {
+  readonly items: ReadonlyArray<CursorCloudBetaRun>;
+  readonly reachedBoundary: boolean;
+};
+
 export type CursorCloudAdapter = {
   verifyIdentity(): Promise<CursorCloudIdentity>;
   listModels(): Promise<ReadonlyArray<CursorCloudModel>>;
@@ -72,6 +86,10 @@ export type CursorCloudAdapter = {
   }): Promise<CursorCloudRunnerBinding>;
   getRun(agentId: string, runId: string): Promise<CursorCloudBetaRun>;
   listRuns(agentId: string): Promise<ReadonlyArray<CursorCloudBetaRun>>;
+  listRunsUntil(
+    agentId: string,
+    boundary: CursorCloudRunListBoundary,
+  ): Promise<CursorCloudRunListScan>;
   applyObservedRun(input: {
     readonly binding: CursorCloudRunnerBinding;
     readonly run: CursorCloudBetaRun;
@@ -85,6 +103,31 @@ export type CursorCloudAdapter = {
     readonly binding: CursorCloudRunnerBinding;
     readonly at: string;
   }): Promise<CursorCloudRunnerBinding>;
+};
+
+const runListPath = (agentId: string, cursor: string | undefined): string => {
+  const query = new URLSearchParams({ limit: String(CURSOR_CLOUD_RUN_LIST_LIMIT) });
+  if (cursor !== undefined) query.set("cursor", cursor);
+  return `/v1/agents/${agentId}/runs?${query.toString()}`;
+};
+
+const pageReachedBoundary = (
+  items: ReadonlyArray<CursorCloudBetaRun>,
+  nextCursor: string | undefined,
+  boundary: CursorCloudRunListBoundary,
+): boolean => {
+  if (nextCursor === undefined || items.length === 0) return true;
+  if (
+    boundary.previousRunId !== undefined &&
+    items.some((run) => run.id === boundary.previousRunId)
+  ) {
+    return true;
+  }
+  const claimedMs = boundary.claimedAt === undefined ? Number.NaN : Date.parse(boundary.claimedAt);
+  const last = items[items.length - 1];
+  if (!Number.isFinite(claimedMs) || last?.createdAt === undefined) return false;
+  const createdMs = Date.parse(last.createdAt);
+  return Number.isFinite(createdMs) && createdMs < claimedMs - RUN_LIST_CLAIMED_AT_SKEW_MS;
 };
 
 const parseJson = (bodyText: string): unknown => {
@@ -229,6 +272,28 @@ export const makeCursorCloudAdapter = (input: {
     return decodeOrThrow(decoded, "Get run response was malformed.");
   };
 
+  const listRunsUntil = async (
+    agentId: string,
+    boundary: CursorCloudRunListBoundary,
+  ): Promise<CursorCloudRunListScan> => {
+    // Bounded lookup: stop at previousRunId, a createdAt older than claimedAt,
+    // or the last page. Incomplete scans are not treated as proof of absence.
+    const items: CursorCloudBetaRun[] = [];
+    let cursor: string | undefined;
+    let reachedBoundary = false;
+    for (let page = 0; page < CURSOR_CLOUD_RUN_LIST_MAX_PAGES; page += 1) {
+      const decoded = decodeBetaRunList(
+        await readJson({ method: "GET", path: runListPath(agentId, cursor) }, "List runs failed."),
+      );
+      const value = decodeOrThrow(decoded, "List runs response was malformed.");
+      items.push(...value.items);
+      reachedBoundary = pageReachedBoundary(value.items, value.nextCursor, boundary);
+      if (reachedBoundary) break;
+      cursor = value.nextCursor;
+    }
+    return { items, reachedBoundary };
+  };
+
   return {
     async verifyIdentity() {
       const decoded = decodeBetaMe(
@@ -335,14 +400,10 @@ export const makeCursorCloudAdapter = (input: {
     getRun,
 
     async listRuns(agentId) {
-      const decoded = decodeBetaRunList(
-        await readJson(
-          { method: "GET", path: `/v1/agents/${agentId}/runs?limit=20` },
-          "List runs failed.",
-        ),
-      );
-      return decodeOrThrow(decoded, "List runs response was malformed.").items;
+      return (await listRunsUntil(agentId, {})).items;
     },
+
+    listRunsUntil,
 
     applyObservedRun(input) {
       return applyRunToBinding(withoutSanitizedError(input.binding), input.run, input.at, {

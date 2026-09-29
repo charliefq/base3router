@@ -487,6 +487,34 @@ describe("Cursor Cloud adapter", () => {
     expect(items.map((item) => item.id)).toEqual([newer.id, run.id]);
   });
 
+  it("pages run lists until previousRunId before reconciling", async () => {
+    const page1 = Array.from({ length: 20 }, (_, index) => ({
+      ...run,
+      id: `run-page1-${String(index).padStart(2, "0")}`,
+      status: "FINISHED",
+    }));
+    const { transport, requests } = recordTransport((request) => {
+      if (request.method !== "GET" || !request.path.includes("/runs?")) {
+        return jsonResponse(500, { message: "unexpected" });
+      }
+      if (request.path.includes("cursor=page-2")) {
+        return jsonResponse(200, { items: [run] });
+      }
+      return jsonResponse(200, { items: page1, nextCursor: "page-2" });
+    });
+    const scan = await adapterFor(transport).listRunsUntil(agent.id, {
+      previousRunId: run.id,
+      claimedAt: at,
+    });
+    expect(requests.map((request) => request.path)).toEqual([
+      `/v1/agents/${agent.id}/runs?limit=20`,
+      `/v1/agents/${agent.id}/runs?limit=20&cursor=page-2`,
+    ]);
+    expect(scan.reachedBoundary).toBe(true);
+    expect(scan.items).toHaveLength(21);
+    expect(scan.items.at(-1)?.id).toBe(run.id);
+  });
+
   it("GETs the run after 409 run_not_cancellable and persists CANCELLED", async () => {
     const { transport, requests } = recordTransport((request) => {
       if (request.path.endsWith("/cancel")) {

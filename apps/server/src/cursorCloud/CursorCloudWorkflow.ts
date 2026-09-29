@@ -299,20 +299,22 @@ export const followUpCursorCloudStage = async (input: {
     executeAccepted,
     reconcilePending: async (stored) => {
       try {
-        const runs = await input.adapter.listRuns(cursorAgentId);
-        const match = reconcileFollowUpRun(runs, {
+        const listed = await input.adapter.listRunsUntil(cursorAgentId, {
           ...(stored.previousRunId === undefined ? {} : { previousRunId: stored.previousRunId }),
           ...(stored.claimedAt === undefined ? {} : { claimedAt: stored.claimedAt }),
         });
-        if (match.outcome === "unique") {
+        const match = reconcileFollowUpRun(listed.items, {
+          ...(stored.previousRunId === undefined ? {} : { previousRunId: stored.previousRunId }),
+          ...(stored.claimedAt === undefined ? {} : { claimedAt: stored.claimedAt }),
+        });
+        if (match.outcome === "unique" && listed.reachedBoundary) {
           return input.adapter.applyObservedRun({
             binding: input.binding,
             run: match.run,
             at: input.at,
           });
         }
-        if (match.outcome === "ambiguous") return markIndeterminate(input.outbox, intent);
-        return "retry";
+        return markIndeterminate(input.outbox, intent);
       } catch (cause) {
         if (isCursorCloudError(cause) && cause.code === "indeterminate") throw cause;
         return markIndeterminate(input.outbox, intent);

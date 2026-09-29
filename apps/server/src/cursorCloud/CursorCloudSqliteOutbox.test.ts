@@ -334,4 +334,146 @@ describe("Cursor Cloud sqlite restart crash window", () => {
       expect(recovered.cursorRunId).toBe(agent.latestRunId);
     });
   });
+
+  it("marks a pending follow-up indeterminate when the run list is empty after restart", async () => {
+    const dispatchId = "dispatch-sqlite-follow-empty";
+    const agentId = cursorCloudAgentIdFromDispatch({ ...identity, dispatchId });
+    const previous = "run-00000000-0000-0000-0000-000000000001";
+    const prompt = "Also add tests";
+    const commandId = "follow-sqlite-empty";
+    const intent: CursorCloudOperationIntent = {
+      commandId,
+      kind: "follow-up",
+      ...identity,
+      cursorAgentId: agentId,
+      requestFingerprint: cursorCloudRequestFingerprint({
+        kind: "follow-up",
+        cursorAgentId: agentId,
+        prompt,
+        previousRunId: previous,
+      }),
+      previousRunId: previous,
+      claimedAt: at,
+    };
+    await withSqliteDb(async (dbPath) => {
+      const { transport, requests } = recordTransport((request) => {
+        if (request.method === "GET" && request.path.includes("/runs?")) {
+          return jsonResponse(200, { items: [] });
+        }
+        return jsonResponse(500, { message: "unexpected" });
+      });
+      const outboxA = sqliteOutbox(dbPath);
+      expect((await outboxA.claim(intent)).state).toBe("accepted");
+      const outboxB = sqliteOutbox(dbPath);
+      await expect(
+        followUpCursorCloudStage({
+          adapter: adapterFor(transport),
+          outbox: outboxB,
+          gate: allow,
+          binding: finishedBinding(agentId, previous),
+          prompt,
+          at,
+          ...identity,
+          commandId,
+        }),
+      ).rejects.toMatchObject({ code: "indeterminate" });
+      expect(
+        requests.filter((request) => request.method === "POST" && request.path.endsWith("/runs")),
+      ).toHaveLength(0);
+    });
+  });
+
+  it("does not POST when more than 20 newer runs hide the pending follow-up target", async () => {
+    const dispatchId = "dispatch-sqlite-follow-page";
+    const agentId = cursorCloudAgentIdFromDispatch({ ...identity, dispatchId });
+    const previous = "run-00000000-0000-0000-0000-000000000001";
+    const prompt = "Also add tests";
+    const commandId = "follow-sqlite-page";
+    const newer = Array.from({ length: 20 }, (_, index) =>
+      runBody(agentId, `run-newer-${String(index).padStart(2, "0")}`, "FINISHED"),
+    );
+    const intent: CursorCloudOperationIntent = {
+      commandId,
+      kind: "follow-up",
+      ...identity,
+      cursorAgentId: agentId,
+      requestFingerprint: cursorCloudRequestFingerprint({
+        kind: "follow-up",
+        cursorAgentId: agentId,
+        prompt,
+        previousRunId: previous,
+      }),
+      previousRunId: previous,
+      claimedAt: at,
+    };
+    await withSqliteDb(async (dbPath) => {
+      const { transport, requests } = recordTransport((request) => {
+        if (request.method !== "GET" || !request.path.includes("/runs?")) {
+          return jsonResponse(500, { message: "unexpected" });
+        }
+        if (request.path.includes("cursor=")) {
+          return jsonResponse(200, {
+            items: [
+              { ...runBody(agentId, previous, "FINISHED"), createdAt: "2026-09-29T11:00:00.000Z" },
+            ],
+          });
+        }
+        return jsonResponse(200, { items: newer, nextCursor: "page-2" });
+      });
+      const outboxA = sqliteOutbox(dbPath);
+      expect((await outboxA.claim(intent)).state).toBe("accepted");
+      const outboxB = sqliteOutbox(dbPath);
+      await expect(
+        followUpCursorCloudStage({
+          adapter: adapterFor(transport),
+          outbox: outboxB,
+          gate: allow,
+          binding: finishedBinding(agentId, previous),
+          prompt,
+          at,
+          ...identity,
+          commandId,
+        }),
+      ).rejects.toMatchObject({ code: "indeterminate" });
+      expect(
+        requests.filter((request) => request.method === "POST" && request.path.endsWith("/runs")),
+      ).toHaveLength(0);
+      expect(
+        requests.filter((request) => request.method === "GET" && request.path.includes("/runs?")),
+      ).toHaveLength(2);
+    });
+  });
+
+  it("posts exactly once for a freshly accepted follow-up", async () => {
+    const dispatchId = "dispatch-sqlite-follow-accepted";
+    const agentId = cursorCloudAgentIdFromDispatch({ ...identity, dispatchId });
+    const previous = "run-00000000-0000-0000-0000-000000000001";
+    const followUpId = "run-00000000-0000-0000-0000-000000000002";
+    const prompt = "Also add tests";
+    await withSqliteDb(async (dbPath) => {
+      const { transport, requests } = recordTransport((request) => {
+        if (request.method === "POST" && request.path.endsWith("/runs")) {
+          return jsonResponse(200, { run: runBody(agentId, followUpId) });
+        }
+        return jsonResponse(500, { message: "unexpected" });
+      });
+      const binding = await followUpCursorCloudStage({
+        adapter: adapterFor(transport),
+        outbox: sqliteOutbox(dbPath),
+        gate: allow,
+        binding: finishedBinding(agentId, previous),
+        prompt,
+        at,
+        ...identity,
+        commandId: "follow-sqlite-accepted",
+      });
+      expect(
+        requests.filter((request) => request.method === "POST" && request.path.endsWith("/runs")),
+      ).toHaveLength(1);
+      expect(
+        requests.filter((request) => request.method === "GET" && request.path.includes("/runs?")),
+      ).toHaveLength(0);
+      expect(binding.cursorRunId).toBe(followUpId);
+    });
+  });
 });
