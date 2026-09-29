@@ -1,0 +1,50 @@
+name: Phase 6 Cursor Cloud
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase-6-cursor-cloud-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Phase 6 targeted tests
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Phase 6 targeted tests
+        run: |
+          vp test run packages/contracts/src/cloudRunner.test.ts \
+            packages/contracts/src/rpc.test.ts \
+            packages/contracts/src/workflow.test.ts \
+            packages/contracts/src/environment.test.ts \
+            packages/client-runtime/src/cursorCloud.test.ts \
+            packages/client-runtime/src/operations/workflow.test.ts \
+            apps/server/src/cursorCloud/CursorCloudAdapter.test.ts \
+            apps/server/src/cursorCloud/CursorCloudCredentials.test.ts \
+            apps/server/src/cursorCloud/CursorCloudWorkflow.test.ts \
+            apps/server/src/cursorCloud/CursorCloudAgentId.test.ts \
+            apps/server/src/cursorCloud/CursorCloudErrors.test.ts \
+            apps/server/src/persistence/Migrations/057_CursorCloudOperations.test.ts \
+            apps/server/src/environment/ServerEnvironment.test.ts \
+            apps/server/src/workflow/Preview.test.ts \
+            apps/web/src/components/chat/WorkflowControl.test.tsx
