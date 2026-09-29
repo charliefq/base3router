@@ -1,0 +1,337 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ActionGateResult,
+  type DispatcherTaskRouteBinding,
+} from "@t3tools/contracts";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import { runMigrations } from "../persistence/Migrations.ts";
+import { cursorCloudAgentIdFromDispatch } from "./CursorCloudAgentId.ts";
+import { makeCursorCloudAdapter } from "./CursorCloudAdapter.ts";
+import { staticCursorCloudCredentialProvider } from "./CursorCloudCredentials.ts";
+import {
+  type CursorCloudHttpRequest,
+  type CursorCloudHttpResponse,
+  type CursorCloudHttpTransport,
+} from "./CursorCloudHttp.ts";
+import {
+  cursorCloudRequestFingerprint,
+  type CursorCloudOperationIntent,
+} from "./CursorCloudOutbox.ts";
+import { makeSqliteCursorCloudOutbox } from "./CursorCloudSqliteOutbox.ts";
+import {
+  cancelCursorCloudStage,
+  createCursorCloudStageBinding,
+  followUpCursorCloudStage,
+} from "./CursorCloudWorkflow.ts";
+
+const sha = "9d5f2d8e41823acf518e7761a5b916defd5e4b2f";
+const at = "2026-09-29T12:00:00.000Z";
+const allow: ActionGateResult = { decision: "ALLOW", reasonCodes: ["ACTION_ALLOWED"] };
+const route: DispatcherTaskRouteBinding = {
+  policyVersion: "dispatcher.phase-1a.v1",
+  target: { instanceId: ProviderInstanceId.make("cursor"), model: "composer-2" },
+  driver: ProviderDriverKind.make("cursor"),
+  modelFamily: "cursor",
+  fallbackIndex: 0,
+  source: "explicit",
+  gate: allow,
+};
+const target = {
+  mode: "repository" as const,
+  repositoryUrl: "https://github.com/charliefq/base3router",
+  startingRef: sha,
+};
+const identity = {
+  environmentId: "environment-1",
+  projectId: "project-1",
+  runId: "run-one",
+  stageId: "research",
+  attempt: 1,
+};
+
+const jsonResponse = (status: number, body: unknown): CursorCloudHttpResponse => ({
+  status,
+  headers: {},
+  bodyText: JSON.stringify(body),
+});
+
+const recordTransport = (
+  handler: (
+    request: CursorCloudHttpRequest,
+  ) => CursorCloudHttpResponse | Promise<CursorCloudHttpResponse>,
+) => {
+  const requests: CursorCloudHttpRequest[] = [];
+  const transport: CursorCloudHttpTransport = async (request) => {
+    requests.push(request);
+    return handler(request);
+  };
+  return { transport, requests };
+};
+
+const adapterFor = (transport: CursorCloudHttpTransport) =>
+  makeCursorCloudAdapter({
+    transport,
+    credentials: staticCursorCloudCredentialProvider("test-cursor-token"),
+  });
+
+const runBody = (agentId: string, runId: string, status = "CREATING") => ({
+  id: runId,
+  agentId,
+  status,
+  createdAt: at,
+  updatedAt: at,
+});
+
+const finishedBinding = (agentId: string, runId = "run-00000000-0000-0000-0000-000000000001") => ({
+  provider: ProviderDriverKind.make("cursor"),
+  model: "composer-2",
+  runnerKind: "cursor-cloud" as const,
+  target,
+  cursorAgentId: agentId,
+  cursorRunId: runId,
+  cursorRunStatus: "FINISHED" as const,
+  status: "finished" as const,
+  createdAt: at,
+  updatedAt: at,
+  credentialRef: { kind: "env" as const, name: "CURSOR_API_KEY" },
+});
+
+const sqliteOutbox = (dbPath: string) => {
+  const layer = NodeSqliteClient.layer({ filename: dbPath });
+  return makeSqliteCursorCloudOutbox((effect) =>
+    // The outbox API is Promise-based and this restart test must open a fresh
+    // SQLite connection after discarding the first instance.
+    // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests
+    Effect.runPromise(effect.pipe(Effect.provide(layer))),
+  );
+};
+
+const withSqliteDb = async (run: (dbPath: string) => Promise<void>) => {
+  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-cursor-cloud-outbox-"));
+  const dbPath = NodePath.join(directory, "state.sqlite");
+  try {
+    // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests
+    await Effect.runPromise(
+      runMigrations().pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath }))),
+    );
+    await run(dbPath);
+  } finally {
+    NodeFS.rmSync(directory, { recursive: true, force: true });
+  }
+};
+
+describe("Cursor Cloud sqlite restart crash window", () => {
+  it("reconciles a follow-up after HTTP success without posting a duplicate", async () => {
+    const dispatchId = "dispatch-sqlite-follow-1";
+    const agentId = cursorCloudAgentIdFromDispatch({ ...identity, dispatchId });
+    const previous = "run-00000000-0000-0000-0000-000000000001";
+    const followUpId = "run-00000000-0000-0000-0000-000000000002";
+    const prompt = "Also add tests";
+    const commandId = "follow-sqlite-1";
+    const intent: CursorCloudOperationIntent = {
+      commandId,
+      kind: "follow-up",
+      ...identity,
+      cursorAgentId: agentId,
+      requestFingerprint: cursorCloudRequestFingerprint({
+        kind: "follow-up",
+        cursorAgentId: agentId,
+        prompt,
+        previousRunId: previous,
+      }),
+      previousRunId: previous,
+      claimedAt: at,
+    };
+    await withSqliteDb(async (dbPath) => {
+      const { transport, requests } = recordTransport((request) => {
+        if (request.method === "POST" && request.path.endsWith("/runs")) {
+          return jsonResponse(200, { run: runBody(agentId, followUpId) });
+        }
+        if (request.method === "GET" && request.path.includes("/runs?")) {
+          return jsonResponse(200, {
+            items: [
+              runBody(agentId, followUpId),
+              { ...runBody(agentId, previous, "FINISHED"), createdAt: "2026-09-29T11:00:00.000Z" },
+            ],
+          });
+        }
+        return jsonResponse(500, { message: "unexpected" });
+      });
+      const adapter = adapterFor(transport);
+      const outboxA = sqliteOutbox(dbPath);
+      const claimed = await outboxA.claim(intent);
+      expect(claimed.state).toBe("accepted");
+      await adapter.createFollowUpRun({
+        binding: finishedBinding(agentId, previous),
+        prompt,
+        at,
+      });
+      const outboxB = sqliteOutbox(dbPath);
+      const recovered = await followUpCursorCloudStage({
+        adapter,
+        outbox: outboxB,
+        gate: allow,
+        binding: finishedBinding(agentId, previous),
+        prompt,
+        at,
+        ...identity,
+        commandId,
+      });
+      expect(
+        requests.filter((request) => request.method === "POST" && request.path.endsWith("/runs")),
+      ).toHaveLength(1);
+      expect(
+        requests.filter((request) => request.method === "GET" && request.path.includes("/runs?")),
+      ).toHaveLength(1);
+      expect(recovered.cursorRunId).toBe(followUpId);
+    });
+  });
+
+  it("reconciles a cancel after HTTP success without posting a duplicate", async () => {
+    const dispatchId = "dispatch-sqlite-cancel-1";
+    const agentId = cursorCloudAgentIdFromDispatch({ ...identity, dispatchId });
+    const runId = "run-00000000-0000-0000-0000-000000000001";
+    const commandId = "cancel-sqlite-1";
+    const intent: CursorCloudOperationIntent = {
+      commandId,
+      kind: "cancel",
+      ...identity,
+      cursorAgentId: agentId,
+      requestFingerprint: cursorCloudRequestFingerprint({
+        kind: "cancel",
+        cursorAgentId: agentId,
+        previousRunId: runId,
+      }),
+      previousRunId: runId,
+      claimedAt: at,
+    };
+    await withSqliteDb(async (dbPath) => {
+      const { transport, requests } = recordTransport((request) => {
+        if (request.path.endsWith("/cancel")) {
+          return jsonResponse(200, { id: runId });
+        }
+        if (request.method === "GET" && request.path.endsWith(`/runs/${runId}`)) {
+          return jsonResponse(200, runBody(agentId, runId, "CANCELLED"));
+        }
+        return jsonResponse(500, { message: "unexpected" });
+      });
+      const adapter = adapterFor(transport);
+      const outboxA = sqliteOutbox(dbPath);
+      const claimed = await outboxA.claim(intent);
+      expect(claimed.state).toBe("accepted");
+      await adapter.cancelRun({
+        binding: {
+          ...finishedBinding(agentId, runId),
+          cursorRunStatus: "RUNNING",
+          status: "running",
+        },
+        at,
+      });
+      const outboxB = sqliteOutbox(dbPath);
+      const recovered = await cancelCursorCloudStage({
+        adapter,
+        outbox: outboxB,
+        gate: allow,
+        binding: {
+          ...finishedBinding(agentId, runId),
+          cursorRunStatus: "RUNNING",
+          status: "running",
+        },
+        at,
+        ...identity,
+        commandId,
+      });
+      expect(
+        requests.filter((request) => request.method === "POST" && request.path.endsWith("/cancel")),
+      ).toHaveLength(1);
+      expect(
+        requests.filter(
+          (request) => request.method === "GET" && request.path.endsWith(`/runs/${runId}`),
+        ),
+      ).toHaveLength(1);
+      expect(recovered.status).toBe("cancelled");
+      expect(recovered.cursorRunStatus).toBe("CANCELLED");
+    });
+  });
+
+  it("reconciles a create after HTTP success without posting a duplicate agent", async () => {
+    const dispatchId = "dispatch-sqlite-create-1";
+    const agentId = cursorCloudAgentIdFromDispatch({ ...identity, dispatchId });
+    const agent = {
+      id: agentId,
+      name: "Stage",
+      status: "ACTIVE" as const,
+      url: `https://cursor.com/agents/${agentId}`,
+      createdAt: at,
+      updatedAt: at,
+      latestRunId: "run-00000000-0000-0000-0000-000000000001",
+    };
+    const prompt = "Add the adapter";
+    const intent: CursorCloudOperationIntent = {
+      commandId: `cursor-create-${dispatchId}`,
+      kind: "create",
+      ...identity,
+      cursorAgentId: agentId,
+      requestFingerprint: cursorCloudRequestFingerprint({
+        kind: "create",
+        cursorAgentId: agentId,
+        prompt,
+      }),
+      dispatchId,
+      claimedAt: at,
+    };
+    await withSqliteDb(async (dbPath) => {
+      const { transport, requests } = recordTransport((request) => {
+        if (request.method === "POST" && request.path === "/v1/agents") {
+          return jsonResponse(200, { agent, run: runBody(agentId, agent.latestRunId) });
+        }
+        if (request.method === "GET" && request.path === `/v1/agents/${agentId}`) {
+          return jsonResponse(200, agent);
+        }
+        if (request.method === "GET" && request.path.endsWith(`/runs/${agent.latestRunId}`)) {
+          return jsonResponse(200, runBody(agentId, agent.latestRunId, "RUNNING"));
+        }
+        return jsonResponse(500, { message: "unexpected" });
+      });
+      const adapter = adapterFor(transport);
+      const outboxA = sqliteOutbox(dbPath);
+      const claimed = await outboxA.claim(intent);
+      expect(claimed.state).toBe("accepted");
+      await adapter.createAgent({
+        prompt,
+        agentId,
+        target,
+        provider: ProviderDriverKind.make("cursor"),
+        dispatcherModel: "composer-2",
+        at,
+      });
+      const outboxB = sqliteOutbox(dbPath);
+      const recovered = await createCursorCloudStageBinding({
+        adapter,
+        outbox: outboxB,
+        configured: true,
+        gate: allow,
+        routeBinding: route,
+        target,
+        prompt,
+        at,
+        ...identity,
+        dispatchId,
+      });
+      expect(
+        requests.filter((request) => request.method === "POST" && request.path === "/v1/agents"),
+      ).toHaveLength(1);
+      expect(recovered.cursorAgentId).toBe(agentId);
+      expect(recovered.cursorRunId).toBe(agent.latestRunId);
+    });
+  });
+});

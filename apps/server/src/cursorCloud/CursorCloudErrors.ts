@@ -5,6 +5,8 @@ export const CURSOR_CLOUD_ERROR_CODES = [
   "agent_busy",
   "agent_id_conflict",
   "run_not_cancellable",
+  "command_conflict",
+  "indeterminate",
   "malformed_response",
   "unauthorized",
   "not_found",

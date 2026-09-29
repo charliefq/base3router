@@ -283,6 +283,9 @@ export const mapCursorAgentStatus = (
 export const isCursorCloudRunActive = (status: CursorCloudRunStatus | undefined): boolean =>
   status === "CREATING" || status === "RUNNING";
 
+export const isCursorCloudRunTerminal = (status: CursorCloudRunStatus | undefined): boolean =>
+  status === "FINISHED" || status === "ERROR" || status === "CANCELLED" || status === "EXPIRED";
+
 export const cursorCloudCreateRequestFromTarget = (input: {
   readonly prompt: string;
   readonly agentId: string;

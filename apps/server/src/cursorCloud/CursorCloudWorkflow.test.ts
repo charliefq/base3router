@@ -15,7 +15,14 @@ import {
   type CursorCloudHttpResponse,
   type CursorCloudHttpTransport,
 } from "./CursorCloudHttp.ts";
-import { makeMemoryCursorCloudOutbox } from "./CursorCloudOutbox.ts";
+import { isCursorCloudError } from "./CursorCloudErrors.ts";
+import {
+  cursorCloudOperationKey,
+  cursorCloudRequestFingerprint,
+  makeMemoryCursorCloudOutbox,
+  type CursorCloudOperationIntent,
+  type CursorCloudOutbox,
+} from "./CursorCloudOutbox.ts";
 import {
   assertCursorCloudDispatch,
   cancelCursorCloudStage,
@@ -79,6 +86,8 @@ const adapterFor = (transport: CursorCloudHttpTransport) =>
   });
 
 const identity = {
+  environmentId: "environment-1",
+  projectId: "project-1",
   runId: "run-one",
   stageId: "research",
   attempt: 1,
@@ -111,6 +120,12 @@ const createPosts = (requests: ReadonlyArray<CursorCloudHttpRequest>) =>
 
 const followUpPosts = (requests: ReadonlyArray<CursorCloudHttpRequest>) =>
   requests.filter((request) => request.method === "POST" && request.path.endsWith("/runs"));
+
+const listRunGets = (requests: ReadonlyArray<CursorCloudHttpRequest>) =>
+  requests.filter((request) => request.method === "GET" && request.path.includes("/runs?"));
+
+const getRunGets = (requests: ReadonlyArray<CursorCloudHttpRequest>, runId: string) =>
+  requests.filter((request) => request.method === "GET" && request.path.endsWith(`/runs/${runId}`));
 
 const cancelPosts = (requests: ReadonlyArray<CursorCloudHttpRequest>) =>
   requests.filter((request) => request.method === "POST" && request.path.endsWith("/cancel"));
@@ -320,6 +335,8 @@ describe("Cursor Cloud durable dispatch", () => {
       binding: finishedBinding(agentId),
       prompt: "Also add tests",
       at,
+      environmentId: identity.environmentId,
+      projectId: identity.projectId,
       runId: identity.runId,
       stageId: identity.stageId,
       attempt: identity.attempt,
@@ -350,6 +367,8 @@ describe("Cursor Cloud durable dispatch", () => {
         status: "running" as const,
       },
       at,
+      environmentId: identity.environmentId,
+      projectId: identity.projectId,
       runId: identity.runId,
       stageId: identity.stageId,
       attempt: identity.attempt,
@@ -361,5 +380,465 @@ describe("Cursor Cloud durable dispatch", () => {
     expect(first.status).toBe("cancelled");
     expect(second.status).toBe("cancelled");
     expect(second.cursorRunStatus).toBe("CANCELLED");
+  });
+});
+
+const skipComplete = (inner: CursorCloudOutbox): CursorCloudOutbox => ({
+  claim: (intent) => inner.claim(intent),
+  complete: async () => {
+    throw new Error("simulated crash before outbox.complete");
+  },
+  markIndeterminate: (intent) => inner.markIndeterminate(intent),
+});
+
+const followUpIntent = (
+  agentId: string,
+  commandId: string,
+  prompt: string,
+  overrides: Partial<CursorCloudOperationIntent> = {},
+): CursorCloudOperationIntent => ({
+  commandId,
+  kind: "follow-up",
+  environmentId: identity.environmentId,
+  projectId: identity.projectId,
+  runId: identity.runId,
+  stageId: identity.stageId,
+  attempt: identity.attempt,
+  cursorAgentId: agentId,
+  requestFingerprint: cursorCloudRequestFingerprint({
+    kind: "follow-up",
+    cursorAgentId: agentId,
+    prompt,
+    previousRunId: "run-00000000-0000-0000-0000-000000000001",
+  }),
+  previousRunId: "run-00000000-0000-0000-0000-000000000001",
+  claimedAt: at,
+  ...overrides,
+});
+
+describe("Cursor Cloud operation identity", () => {
+  it("does not use only cursor-create-${dispatchId} as the durable key", () => {
+    const dispatchId = "dispatch-shared";
+    const base = {
+      commandId: `cursor-create-${dispatchId}`,
+      kind: "create" as const,
+      environmentId: identity.environmentId,
+      projectId: identity.projectId,
+      runId: "run-one",
+      stageId: identity.stageId,
+      attempt: identity.attempt,
+      cursorAgentId: "bc-agent",
+      requestFingerprint: "fp",
+      dispatchId,
+    };
+    const first = cursorCloudOperationKey(base);
+    const second = cursorCloudOperationKey({ ...base, runId: "run-two" });
+    expect(first).not.toBe(`cursor-create-${dispatchId}`);
+    expect(first).toContain("create");
+    expect(first).toContain(identity.projectId);
+    expect(first).toContain("run-one");
+    expect(first).not.toBe(second);
+  });
+
+  it("does not replay a binding when the same commandId is used on another workflow run", async () => {
+    const agentId = agentFor("dispatch-follow-run").id;
+    const firstRun = runBody(agentId, "run-00000000-0000-0000-0000-000000000002");
+    const secondRun = runBody(agentId, "run-00000000-0000-0000-0000-000000000003");
+    let followUps = 0;
+    const { transport, requests } = recordTransport((request) => {
+      if (request.method === "POST" && request.path.endsWith("/runs")) {
+        followUps += 1;
+        return jsonResponse(200, { run: followUps === 1 ? firstRun : secondRun });
+      }
+      return jsonResponse(500, { message: "unexpected" });
+    });
+    const outbox = makeMemoryCursorCloudOutbox();
+    const base = {
+      adapter: adapterFor(transport),
+      outbox,
+      gate: allow,
+      binding: finishedBinding(agentId),
+      prompt: "Also add tests",
+      at,
+      environmentId: identity.environmentId,
+      projectId: identity.projectId,
+      stageId: identity.stageId,
+      attempt: identity.attempt,
+      commandId: "shared-cmd",
+    };
+    const first = await followUpCursorCloudStage({ ...base, runId: "run-one" });
+    const second = await followUpCursorCloudStage({ ...base, runId: "run-two" });
+    expect(followUpPosts(requests)).toHaveLength(2);
+    expect(first.cursorRunId).toBe(firstRun.id);
+    expect(second.cursorRunId).toBe(secondRun.id);
+  });
+
+  it("does not replay a binding when the same commandId is used on another stage or attempt", async () => {
+    const agentId = agentFor("dispatch-follow-stage").id;
+    const firstRun = runBody(agentId, "run-00000000-0000-0000-0000-000000000002");
+    const secondRun = runBody(agentId, "run-00000000-0000-0000-0000-000000000003");
+    let followUps = 0;
+    const { transport, requests } = recordTransport((request) => {
+      if (request.method === "POST" && request.path.endsWith("/runs")) {
+        followUps += 1;
+        return jsonResponse(200, { run: followUps === 1 ? firstRun : secondRun });
+      }
+      return jsonResponse(500, { message: "unexpected" });
+    });
+    const outbox = makeMemoryCursorCloudOutbox();
+    const base = {
+      adapter: adapterFor(transport),
+      outbox,
+      gate: allow,
+      binding: finishedBinding(agentId),
+      prompt: "Also add tests",
+      at,
+      environmentId: identity.environmentId,
+      projectId: identity.projectId,
+      runId: identity.runId,
+      commandId: "shared-cmd",
+    };
+    const first = await followUpCursorCloudStage({ ...base, stageId: "research", attempt: 1 });
+    const second = await followUpCursorCloudStage({ ...base, stageId: "implement", attempt: 2 });
+    expect(followUpPosts(requests)).toHaveLength(2);
+    expect(first.cursorRunId).toBe(firstRun.id);
+    expect(second.cursorRunId).toBe(secondRun.id);
+  });
+
+  it("does not reuse a follow-up binding when the same commandId is later used to cancel", async () => {
+    const agentId = agentFor("dispatch-follow-cancel").id;
+    const followUp = runBody(agentId, "run-00000000-0000-0000-0000-000000000002");
+    const { transport, requests } = recordTransport((request) => {
+      if (request.method === "POST" && request.path.endsWith("/runs")) {
+        return jsonResponse(200, { run: followUp });
+      }
+      if (request.path.endsWith("/cancel")) {
+        return jsonResponse(200, { id: followUp.id });
+      }
+      return jsonResponse(500, { message: "unexpected" });
+    });
+    const outbox = makeMemoryCursorCloudOutbox();
+    const followed = await followUpCursorCloudStage({
+      adapter: adapterFor(transport),
+      outbox,
+      gate: allow,
+      binding: finishedBinding(agentId),
+      prompt: "Also add tests",
+      at,
+      environmentId: identity.environmentId,
+      projectId: identity.projectId,
+      runId: identity.runId,
+      stageId: identity.stageId,
+      attempt: identity.attempt,
+      commandId: "shared-cmd",
+    });
+    const cancelled = await cancelCursorCloudStage({
+      adapter: adapterFor(transport),
+      outbox,
+      gate: allow,
+      binding: {
+        ...followed,
+        cursorRunStatus: "RUNNING",
+        status: "running",
+      },
+      at,
+      environmentId: identity.environmentId,
+      projectId: identity.projectId,
+      runId: identity.runId,
+      stageId: identity.stageId,
+      attempt: identity.attempt,
+      commandId: "shared-cmd",
+    });
+    expect(followUpPosts(requests)).toHaveLength(1);
+    expect(cancelPosts(requests)).toHaveLength(1);
+    expect(followed.cursorRunId).toBe(followUp.id);
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.cursorRunStatus).toBe("CANCELLED");
+  });
+
+  it("rejects the same commandId when the prompt fingerprint differs", async () => {
+    const agentId = agentFor("dispatch-follow-prompt").id;
+    const followUp = runBody(agentId, "run-00000000-0000-0000-0000-000000000002");
+    const { transport, requests } = recordTransport((request) => {
+      if (request.method === "POST" && request.path.endsWith("/runs")) {
+        return jsonResponse(200, { run: followUp });
+      }
+      return jsonResponse(500, { message: "unexpected" });
+    });
+    const outbox = makeMemoryCursorCloudOutbox();
+    const args = {
+      adapter: adapterFor(transport),
+      outbox,
+      gate: allow,
+      binding: finishedBinding(agentId),
+      at,
+      environmentId: identity.environmentId,
+      projectId: identity.projectId,
+      runId: identity.runId,
+      stageId: identity.stageId,
+      attempt: identity.attempt,
+      commandId: "shared-cmd",
+    };
+    const first = await followUpCursorCloudStage({ ...args, prompt: "Also add tests" });
+    await expect(
+      followUpCursorCloudStage({ ...args, prompt: "A different prompt" }),
+    ).rejects.toMatchObject({ code: "command_conflict" });
+    expect(followUpPosts(requests)).toHaveLength(1);
+    expect(first.cursorRunId).toBe(followUp.id);
+  });
+
+  it("creates distinct agents when two workflow runs share a dispatchId", async () => {
+    const firstAgent = agentFor("dispatch-shared");
+    const secondAgent = cursorCloudAgentIdFromDispatch({
+      runId: "run-two",
+      stageId: identity.stageId,
+      attempt: identity.attempt,
+      dispatchId: "dispatch-shared",
+    });
+    const { transport, requests } = recordTransport((request) => {
+      const body = request.body as { agentId?: string } | undefined;
+      const agentId = body?.agentId ?? firstAgent.id;
+      const agent = {
+        ...firstAgent,
+        id: agentId,
+        url: `https://cursor.com/agents/${agentId}`,
+      };
+      return jsonResponse(200, { agent, run: runBody(agentId) });
+    });
+    const outbox = makeMemoryCursorCloudOutbox();
+    const base = {
+      adapter: adapterFor(transport),
+      outbox,
+      configured: true,
+      gate: allow,
+      routeBinding: route,
+      target,
+      prompt: "Add the adapter",
+      at,
+      environmentId: identity.environmentId,
+      projectId: identity.projectId,
+      stageId: identity.stageId,
+      attempt: identity.attempt,
+      dispatchId: "dispatch-shared",
+    };
+    const first = await createCursorCloudStageBinding({ ...base, runId: "run-one" });
+    const second = await createCursorCloudStageBinding({ ...base, runId: "run-two" });
+    expect(createPosts(requests)).toHaveLength(2);
+    expect(first.cursorAgentId).toBe(firstAgent.id);
+    expect(second.cursorAgentId).toBe(secondAgent);
+    expect(second.cursorAgentId).not.toBe(first.cursorAgentId);
+  });
+
+  it("never returns another operation's completed binding on a command conflict", async () => {
+    const agentId = agentFor("dispatch-conflict-binding").id;
+    const outbox = makeMemoryCursorCloudOutbox();
+    const stored = followUpIntent(agentId, "shared-cmd", "Also add tests");
+    await outbox.claim(stored);
+    await outbox.complete(stored, finishedBinding(agentId));
+    try {
+      await outbox.claim(followUpIntent(agentId, "shared-cmd", "A different prompt"));
+      throw new Error("expected command_conflict");
+    } catch (error) {
+      expect(isCursorCloudError(error)).toBe(true);
+      if (isCursorCloudError(error)) {
+        expect(error.code).toBe("command_conflict");
+        expect(JSON.stringify(error)).not.toContain(agentId);
+      }
+    }
+  });
+});
+
+describe("Cursor Cloud crash window before outbox.complete", () => {
+  it("reconciles a follow-up after complete crashes without posting a second run", async () => {
+    const agentId = agentFor("dispatch-follow-crash").id;
+    const previous = "run-00000000-0000-0000-0000-000000000001";
+    const followUp = {
+      ...runBody(agentId, "run-00000000-0000-0000-0000-000000000002"),
+      createdAt: at,
+    };
+    const inner = makeMemoryCursorCloudOutbox();
+    const { transport, requests } = recordTransport((request) => {
+      if (request.method === "POST" && request.path.endsWith("/runs")) {
+        return jsonResponse(200, { run: followUp });
+      }
+      if (request.method === "GET" && request.path.includes("/runs?")) {
+        return jsonResponse(200, {
+          items: [followUp, { ...runBody(agentId, previous), status: "FINISHED" }],
+        });
+      }
+      return jsonResponse(500, { message: "unexpected" });
+    });
+    const args = {
+      adapter: adapterFor(transport),
+      gate: allow,
+      binding: finishedBinding(agentId),
+      prompt: "Also add tests",
+      at,
+      environmentId: identity.environmentId,
+      projectId: identity.projectId,
+      runId: identity.runId,
+      stageId: identity.stageId,
+      attempt: identity.attempt,
+      commandId: "follow-crash-1",
+    };
+    await expect(
+      followUpCursorCloudStage({ ...args, outbox: skipComplete(inner) }),
+    ).rejects.toThrow(/simulated crash before outbox.complete/);
+    const recovered = await followUpCursorCloudStage({ ...args, outbox: inner });
+    expect(followUpPosts(requests)).toHaveLength(1);
+    expect(listRunGets(requests)).toHaveLength(1);
+    expect(recovered.cursorRunId).toBe(followUp.id);
+  });
+
+  it("marks follow-up indeterminate when multiple new runs match the pending operation", async () => {
+    const agentId = agentFor("dispatch-follow-ambiguous").id;
+    const previous = "run-00000000-0000-0000-0000-000000000001";
+    const inner = makeMemoryCursorCloudOutbox();
+    const { transport, requests } = recordTransport((request) => {
+      if (request.method === "GET" && request.path.includes("/runs?")) {
+        return jsonResponse(200, {
+          items: [
+            { ...runBody(agentId, "run-00000000-0000-0000-0000-000000000003"), createdAt: at },
+            { ...runBody(agentId, "run-00000000-0000-0000-0000-000000000002"), createdAt: at },
+            { ...runBody(agentId, previous), status: "FINISHED" },
+          ],
+        });
+      }
+      return jsonResponse(500, { message: "unexpected" });
+    });
+    await inner.claim(followUpIntent(agentId, "follow-ambiguous-1", "Also add tests"));
+    await expect(
+      followUpCursorCloudStage({
+        adapter: adapterFor(transport),
+        outbox: inner,
+        gate: allow,
+        binding: finishedBinding(agentId),
+        prompt: "Also add tests",
+        at,
+        environmentId: identity.environmentId,
+        projectId: identity.projectId,
+        runId: identity.runId,
+        stageId: identity.stageId,
+        attempt: identity.attempt,
+        commandId: "follow-ambiguous-1",
+      }),
+    ).rejects.toMatchObject({ code: "indeterminate" });
+    expect(followUpPosts(requests)).toHaveLength(0);
+  });
+
+  it("completes cancel from the observed CANCELLED run without a second cancel POST", async () => {
+    const agentId = agentFor("dispatch-cancel-crash").id;
+    const runId = "run-00000000-0000-0000-0000-000000000001";
+    const inner = makeMemoryCursorCloudOutbox();
+    const { transport, requests } = recordTransport((request) => {
+      if (request.path.endsWith("/cancel")) {
+        return jsonResponse(200, { id: runId });
+      }
+      if (request.method === "GET" && request.path.endsWith(`/runs/${runId}`)) {
+        return jsonResponse(200, {
+          ...runBody(agentId, runId),
+          status: "CANCELLED",
+        });
+      }
+      return jsonResponse(500, { message: "unexpected" });
+    });
+    const args = {
+      adapter: adapterFor(transport),
+      gate: allow,
+      binding: {
+        ...finishedBinding(agentId),
+        cursorRunStatus: "RUNNING" as const,
+        status: "running" as const,
+      },
+      at,
+      environmentId: identity.environmentId,
+      projectId: identity.projectId,
+      runId: identity.runId,
+      stageId: identity.stageId,
+      attempt: identity.attempt,
+      commandId: "cancel-crash-1",
+    };
+    await expect(cancelCursorCloudStage({ ...args, outbox: skipComplete(inner) })).rejects.toThrow(
+      /simulated crash before outbox.complete/,
+    );
+    const recovered = await cancelCursorCloudStage({ ...args, outbox: inner });
+    expect(cancelPosts(requests)).toHaveLength(1);
+    expect(getRunGets(requests, runId)).toHaveLength(1);
+    expect(recovered.status).toBe("cancelled");
+    expect(recovered.cursorRunStatus).toBe("CANCELLED");
+  });
+
+  it("persists another observed terminal cancel status without leaving the operation pending", async () => {
+    const agentId = agentFor("dispatch-cancel-finished").id;
+    const runId = "run-00000000-0000-0000-0000-000000000001";
+    const inner = makeMemoryCursorCloudOutbox();
+    const { transport, requests } = recordTransport((request) => {
+      if (request.method === "GET" && request.path.endsWith(`/runs/${runId}`)) {
+        return jsonResponse(200, {
+          ...runBody(agentId, runId),
+          status: "FINISHED",
+          result: "Already finished.",
+        });
+      }
+      return jsonResponse(500, { message: "unexpected" });
+    });
+    const intent: CursorCloudOperationIntent = {
+      commandId: "cancel-finished-1",
+      kind: "cancel",
+      environmentId: identity.environmentId,
+      projectId: identity.projectId,
+      runId: identity.runId,
+      stageId: identity.stageId,
+      attempt: identity.attempt,
+      cursorAgentId: agentId,
+      requestFingerprint: cursorCloudRequestFingerprint({
+        kind: "cancel",
+        cursorAgentId: agentId,
+        previousRunId: runId,
+      }),
+      previousRunId: runId,
+      claimedAt: at,
+    };
+    await inner.claim(intent);
+    const recovered = await cancelCursorCloudStage({
+      adapter: adapterFor(transport),
+      outbox: inner,
+      gate: allow,
+      binding: {
+        ...finishedBinding(agentId),
+        cursorRunStatus: "RUNNING",
+        status: "running",
+      },
+      at,
+      environmentId: identity.environmentId,
+      projectId: identity.projectId,
+      runId: identity.runId,
+      stageId: identity.stageId,
+      attempt: identity.attempt,
+      commandId: "cancel-finished-1",
+    });
+    expect(cancelPosts(requests)).toHaveLength(0);
+    expect(getRunGets(requests, runId)).toHaveLength(1);
+    expect(recovered.status).toBe("finished");
+    expect(recovered.cursorRunStatus).toBe("FINISHED");
+    const replay = await cancelCursorCloudStage({
+      adapter: adapterFor(transport),
+      outbox: inner,
+      gate: allow,
+      binding: {
+        ...finishedBinding(agentId),
+        cursorRunStatus: "RUNNING",
+        status: "running",
+      },
+      at,
+      environmentId: identity.environmentId,
+      projectId: identity.projectId,
+      runId: identity.runId,
+      stageId: identity.stageId,
+      attempt: identity.attempt,
+      commandId: "cancel-finished-1",
+    });
+    expect(cancelPosts(requests)).toHaveLength(0);
+    expect(replay.cursorRunStatus).toBe("FINISHED");
   });
 });

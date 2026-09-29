@@ -23,6 +23,7 @@ import {
   decodeBetaMe,
   decodeBetaModels,
   decodeBetaRun,
+  decodeBetaRunList,
   type CursorCloudBetaAgent,
   type CursorCloudBetaRun,
 } from "./beta/schemas.ts";
@@ -70,6 +71,12 @@ export type CursorCloudAdapter = {
     readonly at: string;
   }): Promise<CursorCloudRunnerBinding>;
   getRun(agentId: string, runId: string): Promise<CursorCloudBetaRun>;
+  listRuns(agentId: string): Promise<ReadonlyArray<CursorCloudBetaRun>>;
+  applyObservedRun(input: {
+    readonly binding: CursorCloudRunnerBinding;
+    readonly run: CursorCloudBetaRun;
+    readonly at: string;
+  }): CursorCloudRunnerBinding;
   cancelRun(input: {
     readonly binding: CursorCloudRunnerBinding;
     readonly at: string;
@@ -327,25 +334,49 @@ export const makeCursorCloudAdapter = (input: {
 
     getRun,
 
+    async listRuns(agentId) {
+      const decoded = decodeBetaRunList(
+        await readJson(
+          { method: "GET", path: `/v1/agents/${agentId}/runs?limit=20` },
+          "List runs failed.",
+        ),
+      );
+      return decodeOrThrow(decoded, "List runs response was malformed.").items;
+    },
+
+    applyObservedRun(input) {
+      return applyRunToBinding(withoutSanitizedError(input.binding), input.run, input.at, {
+        cursorAgentId: input.run.agentId,
+      });
+    },
+
     async cancelRun(cancelInput) {
       const agentId = cancelInput.binding.cursorAgentId;
       const runId = cancelInput.binding.cursorRunId;
       if (agentId === undefined || runId === undefined) {
         throw cursorCloudError("rejected", "A Cursor run is required before cancellation.");
       }
-      const decoded = decodeBetaCancel(
-        await readJson(
-          { method: "POST", path: `/v1/agents/${agentId}/runs/${runId}/cancel` },
-          "Cancel run failed.",
-        ),
-      );
-      decodeOrThrow(decoded, "Cancel run response was malformed.");
-      return {
-        ...withoutSanitizedError(cancelInput.binding),
-        cursorRunStatus: "CANCELLED",
-        status: "cancelled",
-        updatedAt: cancelInput.at,
-      };
+      try {
+        const decoded = decodeBetaCancel(
+          await readJson(
+            { method: "POST", path: `/v1/agents/${agentId}/runs/${runId}/cancel` },
+            "Cancel run failed.",
+          ),
+        );
+        decodeOrThrow(decoded, "Cancel run response was malformed.");
+        return {
+          ...withoutSanitizedError(cancelInput.binding),
+          cursorRunStatus: "CANCELLED",
+          status: "cancelled",
+          updatedAt: cancelInput.at,
+        };
+      } catch (cause) {
+        if (!isCursorCloudError(cause) || cause.code !== "run_not_cancellable") throw cause;
+        const run = await getRun(agentId, runId);
+        return applyRunToBinding(withoutSanitizedError(cancelInput.binding), run, cancelInput.at, {
+          cursorAgentId: agentId,
+        });
+      }
     },
 
     async refreshBinding(refreshInput) {

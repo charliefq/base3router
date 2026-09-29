@@ -101,6 +101,11 @@ export const toCursorCloudHttpError = (
         httpStatus: 409,
       });
     }
+    if (/run_not_cancellable/i.test(response.bodyText)) {
+      return cursorCloudError("run_not_cancellable", "The Cursor run cannot be cancelled.", {
+        httpStatus: 409,
+      });
+    }
     const busy = /agent_busy/i.test(response.bodyText);
     return cursorCloudError(
       busy ? "agent_busy" : "rejected",

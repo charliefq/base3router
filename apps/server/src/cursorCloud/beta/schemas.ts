@@ -83,6 +83,11 @@ export const CursorCloudBetaCancelResponse = Schema.Struct({
   id: BoundedId,
 });
 
+export const CursorCloudBetaRunList = Schema.Struct({
+  items: Schema.Array(CursorCloudBetaRun).check(Schema.isMaxLength(100)),
+  nextCursor: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(256))),
+});
+
 export const CursorCloudBetaErrorBody = Schema.Struct({
   error: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(256))),
   message: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(1_024))),
@@ -101,4 +106,5 @@ export const decodeBetaRun = Schema.decodeUnknownExit(CursorCloudBetaRun);
 export const decodeBetaCreateAgent = Schema.decodeUnknownExit(CursorCloudBetaCreateAgentResponse);
 export const decodeBetaCreateRun = Schema.decodeUnknownExit(CursorCloudBetaCreateRunResponse);
 export const decodeBetaCancel = Schema.decodeUnknownExit(CursorCloudBetaCancelResponse);
+export const decodeBetaRunList = Schema.decodeUnknownExit(CursorCloudBetaRunList);
 export const decodeBetaError = Schema.decodeUnknownExit(CursorCloudBetaErrorBody);

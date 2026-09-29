@@ -42,9 +42,11 @@ jobs:
             apps/server/src/cursorCloud/CursorCloudAdapter.test.ts \
             apps/server/src/cursorCloud/CursorCloudCredentials.test.ts \
             apps/server/src/cursorCloud/CursorCloudWorkflow.test.ts \
+            apps/server/src/cursorCloud/CursorCloudSqliteOutbox.test.ts \
             apps/server/src/cursorCloud/CursorCloudAgentId.test.ts \
             apps/server/src/cursorCloud/CursorCloudErrors.test.ts \
             apps/server/src/persistence/Migrations/057_CursorCloudOperations.test.ts \
+            apps/server/src/persistence/Migrations/058_CursorCloudOperationScope.test.ts \
             apps/server/src/environment/ServerEnvironment.test.ts \
             apps/server/src/workflow/Preview.test.ts \
             apps/web/src/components/chat/WorkflowControl.test.tsx

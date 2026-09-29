@@ -16,6 +16,7 @@ import {
   decodeCursorCloudRunnerBinding,
   emptyCursorCloudBinding,
   isCursorCloudRunActive,
+  isCursorCloudRunTerminal,
   mapCursorAgentStatus,
   mapCursorRunStatus,
   runnerBindingOmitsCredentialValue,
@@ -239,6 +240,9 @@ describe("cursor-cloud runner contracts", () => {
     expect(mapCursorRunStatus("EXPIRED")).toBe("expired");
     expect(isCursorCloudRunActive("RUNNING")).toBe(true);
     expect(isCursorCloudRunActive("FINISHED")).toBe(false);
+    expect(isCursorCloudRunTerminal("FINISHED")).toBe(true);
+    expect(isCursorCloudRunTerminal("CANCELLED")).toBe(true);
+    expect(isCursorCloudRunTerminal("RUNNING")).toBe(false);
   });
 
   it("rejects a credential value on the persisted binding", () => {

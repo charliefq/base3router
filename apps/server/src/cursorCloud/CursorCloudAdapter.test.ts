@@ -469,4 +469,86 @@ describe("Cursor Cloud adapter", () => {
     ).rejects.toMatchObject({ code: "agent_busy" });
     expect(requests).toHaveLength(0);
   });
+
+  it("lists runs newest-first from the durable agent", async () => {
+    const newer = {
+      ...run,
+      id: "run-00000000-0000-0000-0000-000000000002",
+      status: "RUNNING",
+    };
+    const { transport, requests } = recordTransport((request) => {
+      if (request.method === "GET" && request.path === `/v1/agents/${agent.id}/runs?limit=20`) {
+        return jsonResponse(200, { items: [newer, run] });
+      }
+      return jsonResponse(500, { message: "unexpected" });
+    });
+    const items = await adapterFor(transport).listRuns(agent.id);
+    expect(requests[0]?.path).toBe(`/v1/agents/${agent.id}/runs?limit=20`);
+    expect(items.map((item) => item.id)).toEqual([newer.id, run.id]);
+  });
+
+  it("GETs the run after 409 run_not_cancellable and persists CANCELLED", async () => {
+    const { transport, requests } = recordTransport((request) => {
+      if (request.path.endsWith("/cancel")) {
+        return jsonResponse(409, { code: "run_not_cancellable", message: "run_not_cancellable" });
+      }
+      if (request.method === "GET" && request.path.endsWith(`/runs/${run.id}`)) {
+        return jsonResponse(200, { ...run, status: "CANCELLED" });
+      }
+      return jsonResponse(500, { message: "unexpected" });
+    });
+    const binding = await adapterFor(transport).cancelRun({
+      binding: {
+        provider,
+        model: "composer-2",
+        runnerKind: "cursor-cloud",
+        target: repositoryTarget,
+        cursorAgentId: agent.id,
+        cursorRunId: run.id,
+        cursorRunStatus: "RUNNING",
+        status: "running",
+        createdAt: at,
+        updatedAt: at,
+        credentialRef: { kind: "env", name: "CURSOR_API_KEY" },
+      },
+      at,
+    });
+    expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
+      `POST /v1/agents/${agent.id}/runs/${run.id}/cancel`,
+      `GET /v1/agents/${agent.id}/runs/${run.id}`,
+    ]);
+    expect(binding.status).toBe("cancelled");
+    expect(binding.cursorRunStatus).toBe("CANCELLED");
+  });
+
+  it("persists another observed terminal status after 409 run_not_cancellable", async () => {
+    const { transport } = recordTransport((request) => {
+      if (request.path.endsWith("/cancel")) {
+        return jsonResponse(409, { code: "run_not_cancellable", message: "run_not_cancellable" });
+      }
+      if (request.method === "GET" && request.path.endsWith(`/runs/${run.id}`)) {
+        return jsonResponse(200, { ...run, status: "FINISHED", result: "Already done." });
+      }
+      return jsonResponse(500, { message: "unexpected" });
+    });
+    const binding = await adapterFor(transport).cancelRun({
+      binding: {
+        provider,
+        model: "composer-2",
+        runnerKind: "cursor-cloud",
+        target: repositoryTarget,
+        cursorAgentId: agent.id,
+        cursorRunId: run.id,
+        cursorRunStatus: "RUNNING",
+        status: "running",
+        createdAt: at,
+        updatedAt: at,
+        credentialRef: { kind: "env", name: "CURSOR_API_KEY" },
+      },
+      at,
+    });
+    expect(binding.status).toBe("finished");
+    expect(binding.cursorRunStatus).toBe("FINISHED");
+    expect(binding.sanitizedResult).toBe("Already done.");
+  });
 });
