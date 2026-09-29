@@ -264,6 +264,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(dispatcherEnabled.capabilities.dispatcherRoutePreview).toBe(true);
       expect(dispatcherEnabled.capabilities.dispatcherTaskHandoff).toBe(true);
       expect(dispatcherEnabled.capabilities.workflowOs).toBe(true);
+      expect(dispatcherEnabled.capabilities.cursorCloudRunner).toBe(false);
       expect(withFd.capabilities.workflowOs).toBe(false);
       expect(withFd.capabilities.serverUpdateThreadContinuation).toBe(true);
 

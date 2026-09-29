@@ -40,3 +40,11 @@ describe("dispatcher route preview RPC", () => {
     expect(WsRpcGroup.requests.has(WS_METHODS.dispatcherHandoffPreview)).toBe(true);
   });
 });
+
+describe("cursor-cloud workflow RPC", () => {
+  it("registers follow-up, cancel, and refresh as bounded unary requests", () => {
+    expect(WsRpcGroup.requests.has(WS_METHODS.workflowCursorCloudFollowUp)).toBe(true);
+    expect(WsRpcGroup.requests.has(WS_METHODS.workflowCursorCloudCancel)).toBe(true);
+    expect(WsRpcGroup.requests.has(WS_METHODS.workflowCursorCloudRefresh)).toBe(true);
+  });
+});

@@ -287,6 +287,7 @@ export const WorkflowStagePreviewInput = Schema.Struct({
   projectId: ProjectId,
   runId: WorkflowRunId,
   preferredRoute: Schema.optional(DispatcherRouteTarget),
+  cursorCloudTarget: Schema.optionalKey(CursorCloudExecutionTarget),
 });
 export const WorkflowStagePreview = Schema.Struct({
   stage: WorkflowStage,
@@ -315,6 +316,12 @@ export const WorkflowDispatchStageResult = Schema.Struct({
   messageId: MessageId,
   runnerBinding: Schema.optionalKey(CursorCloudRunnerBinding),
 });
+export const WorkflowCursorCloudCommandResult = Schema.Struct({
+  run: WorkflowRun,
+  runnerBinding: CursorCloudRunnerBinding,
+});
+export type WorkflowCursorCloudCommandResult = typeof WorkflowCursorCloudCommandResult.Type;
+
 export const WorkflowProposeArtifactInput = Schema.Struct({
   projectId: ProjectId,
   runId: WorkflowRunId,

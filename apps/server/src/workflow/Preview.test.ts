@@ -83,6 +83,7 @@ layer("workflow route preview", (it) => {
       assert.equal(ready.route.gate.decision, "ALLOW");
       assert.equal(ready.route.selected?.target.instanceId, input.preferredRoute.instanceId);
       assert.equal(ready.route.candidates.length, 1);
+      assert.equal(ready.cursorCloud, undefined);
       const unavailable = yield* previewWorkflowStage(input, {
         environmentId,
         providers: [provider(false)],

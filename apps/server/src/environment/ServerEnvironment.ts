@@ -18,6 +18,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { readAgentActivityPublishingActive } from "../cloud/config.ts";
 import { resolveServerSelfUpdateCapability } from "../cloud/selfUpdate.ts";
 import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
+import { isCursorCloudConfigured } from "../cursorCloud/CursorCloudCredentials.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
@@ -236,6 +237,7 @@ export const make = Effect.gen(function* () {
       dispatcherRoutePreview: serverConfig.dispatcherEnabled === true,
       dispatcherTaskHandoff: serverConfig.dispatcherEnabled === true,
       workflowOs: serverConfig.dispatcherEnabled === true,
+      cursorCloudRunner: serverConfig.dispatcherEnabled === true && isCursorCloudConfigured(),
       threadPinning: true,
       threadPinReorder: true,
       threadActiveReorder: true,

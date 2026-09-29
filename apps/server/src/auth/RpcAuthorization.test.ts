@@ -61,6 +61,7 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.workflowCatalog,
       WS_METHODS.workflowReadRun,
       WS_METHODS.workflowStagePreview,
+      WS_METHODS.workflowCursorCloudRefresh,
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
     }
@@ -68,6 +69,8 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.workflowAction,
       WS_METHODS.workflowDispatchStage,
       WS_METHODS.workflowProposeArtifact,
+      WS_METHODS.workflowCursorCloudFollowUp,
+      WS_METHODS.workflowCursorCloudCancel,
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
     }
