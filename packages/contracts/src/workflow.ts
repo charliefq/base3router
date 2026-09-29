@@ -9,6 +9,11 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import {
+  CursorCloudDispatchPreview,
+  CursorCloudExecutionTarget,
+  CursorCloudRunnerBinding,
+} from "./cloudRunner.ts";
+import {
   DispatcherRouteDecision,
   DispatcherRouteTarget,
   DispatcherTaskRouteBinding,
@@ -116,6 +121,7 @@ export const WorkflowStageAttempt = Schema.Struct({
   destinationMessageId: Schema.NullOr(MessageId),
   destinationTurnId: Schema.NullOr(TurnId),
   routeBinding: Schema.NullOr(DispatcherTaskRouteBinding),
+  runnerBinding: Schema.optionalKey(CursorCloudRunnerBinding),
   status: Schema.Literals(["pending", "dispatched", "proposed", "accepted", "rejected"]),
   createdAt: IsoDateTime,
 });
@@ -288,6 +294,7 @@ export const WorkflowStagePreview = Schema.Struct({
   attempt: Attempt,
   packetText: TrimmedNonEmptyString.check(Schema.isMaxLength(16_000)),
   route: DispatcherRouteDecision,
+  cursorCloud: Schema.optionalKey(CursorCloudDispatchPreview),
 });
 export type WorkflowStagePreview = typeof WorkflowStagePreview.Type;
 export const WorkflowDispatchStageInput = Schema.Struct({
@@ -299,11 +306,14 @@ export const WorkflowDispatchStageInput = Schema.Struct({
   dispatchId: RecordId.check(Schema.isMaxLength(100)),
   target: DispatcherRouteTarget,
   additionalInstruction: Schema.String.check(Schema.isMaxLength(2_000)),
+  runnerKind: Schema.optionalKey(Schema.Literal("cursor-cloud")),
+  cursorCloudTarget: Schema.optionalKey(CursorCloudExecutionTarget),
 });
 export const WorkflowDispatchStageResult = Schema.Struct({
   run: WorkflowRun,
   threadId: ThreadId,
   messageId: MessageId,
+  runnerBinding: Schema.optionalKey(CursorCloudRunnerBinding),
 });
 export const WorkflowProposeArtifactInput = Schema.Struct({
   projectId: ProjectId,
@@ -320,6 +330,7 @@ export const WorkflowStageDispatchMutation = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
   routeBinding: DispatcherTaskRouteBinding,
+  runnerBinding: Schema.optionalKey(CursorCloudRunnerBinding),
   at: IsoDateTime,
 });
 export type WorkflowStageDispatchMutation = typeof WorkflowStageDispatchMutation.Type;
@@ -349,6 +360,14 @@ export const WorkflowMutation = Schema.Union([
   }),
   Schema.Struct({ type: Schema.Literal("run.start"), run: WorkflowRun }),
   WorkflowStageDispatchMutation,
+  Schema.Struct({
+    type: Schema.Literal("runner.update"),
+    runId: WorkflowRunId,
+    stageId: WorkflowStageId,
+    attempt: Attempt,
+    runnerBinding: CursorCloudRunnerBinding,
+    at: IsoDateTime,
+  }),
   Schema.Struct({ type: Schema.Literal("artifact.propose"), artifact: WorkflowArtifact }),
   Schema.Struct({ type: Schema.Literal("decision.record"), decision: WorkflowDecision }),
   Schema.Struct({ type: Schema.Literal("run.cancel"), runId: WorkflowRunId, at: IsoDateTime }),

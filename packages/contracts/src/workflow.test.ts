@@ -5,6 +5,7 @@ import {
   AgentProfile,
   WorkflowActionInput,
   WorkflowArtifact,
+  WorkflowDispatchStageInput,
   WorkflowRun,
   WorkflowTemplate,
 } from "./workflow.ts";
@@ -153,6 +154,21 @@ describe("workflow contracts", () => {
         commandId: "command-1",
       }),
     ).toThrow();
+  });
+
+  it("decodes a Phase 5 dispatch payload without cursor-cloud runner fields", () => {
+    const decoded = Schema.decodeUnknownSync(WorkflowDispatchStageInput)({
+      environmentId: "environment-1",
+      projectId: "project-1",
+      runId: "run-1",
+      stageId: "research",
+      attempt: 1,
+      dispatchId: "dispatch-1",
+      target: { instanceId: "codex_work", model: "gpt-5.4" },
+      additionalInstruction: "",
+    });
+    expect(decoded.runnerKind).toBeUndefined();
+    expect(decoded.cursorCloudTarget).toBeUndefined();
   });
 
   it("decodes a legacy read model with no workflow projection", () => {

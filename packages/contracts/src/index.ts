@@ -39,6 +39,7 @@ export * from "./browserImport.ts";
 export * from "./browserProfile.ts";
 export * from "./device.ts";
 export * from "./dispatcher.ts";
+export * from "./cloudRunner.ts";
 export * from "./workflow.ts";
 export * from "./preview.ts";
 export * from "./previewAutomation.ts";
