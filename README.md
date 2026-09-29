@@ -21,9 +21,9 @@ There is no silent cross-provider retry. A handoff is an explicit user decision 
 
 An isolated operational acceptance run completed a real sequential handoff:
 
-| Stage | Runner | Model | Result |
-|---|---|---|---|
-| Source | Codex CLI | `gpt-6-sol` | Completed Phase A and focused tests |
+| Stage        | Runner          | Model               | Result                                                                  |
+| ------------ | --------------- | ------------------- | ----------------------------------------------------------------------- |
+| Source       | Codex CLI       | `gpt-6-sol`         | Completed Phase A and focused tests                                     |
 | Continuation | Claude Code CLI | `claude-sonnet-4-6` | Inspected the repository, completed Phase B, and passed the final tests |
 
 The runners were authenticated independently and were never active concurrently. The acceptance fixture finished with four passing tests and one persisted source-to-destination handoff.
