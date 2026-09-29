@@ -12,7 +12,7 @@ import {
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
-import { catalog, readRun } from "./workflow.ts";
+import { catalog, cursorCloudFollowUp, readRun } from "./workflow.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
 const projectId = ProjectId.make("project-1");
@@ -37,6 +37,11 @@ it.effect("reads server-owned workflow state through typed runtime operations", 
         Effect.sync(() => {
           observed.push(`run:${input.projectId}:${input.runId}`);
           return null;
+        }),
+      [WS_METHODS.workflowCursorCloudFollowUp]: (input: { runId: string; prompt: string }) =>
+        Effect.sync(() => {
+          observed.push(`follow-up:${input.runId}:${input.prompt}`);
+          return { run: { id: input.runId }, runnerBinding: { runnerKind: "cursor-cloud" } };
         }),
     } as unknown as WsRpcProtocolClient;
     const session: RpcSession = {
@@ -66,6 +71,21 @@ it.effect("reads server-owned workflow state through typed runtime operations", 
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
       ),
     ).toBeNull();
-    expect(observed).toEqual(["catalog:project-1", "run:project-1:run-1"]);
+    expect(
+      yield* cursorCloudFollowUp({
+        environmentId,
+        projectId,
+        runId: "run-1",
+        stageId: "research",
+        attempt: 1,
+        commandId: "cmd-1",
+        prompt: "Continue",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor)),
+    ).toEqual({ run: { id: "run-1" }, runnerBinding: { runnerKind: "cursor-cloud" } });
+    expect(observed).toEqual([
+      "catalog:project-1",
+      "run:project-1:run-1",
+      "follow-up:run-1:Continue",
+    ]);
   }),
 );
