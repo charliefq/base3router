@@ -75,6 +75,8 @@ export function CursorCloudTargetFields(props: {
 export function CursorCloudDispatchReview(props: {
   readonly preview: CursorCloudDispatchPreview | undefined;
   readonly target: CursorCloudExecutionTarget | null;
+  readonly provider: string | null;
+  readonly model: string | null;
 }) {
   const payload = props.preview?.payload;
   const presented = payload
@@ -82,21 +84,21 @@ export function CursorCloudDispatchReview(props: {
     : props.target
       ? presentCursorCloudTarget(props.target)
       : null;
+  const routeLabel =
+    props.provider !== null && props.model !== null ? `${props.provider} · ${props.model}` : null;
   return (
     <div className="space-y-1 rounded-md border border-border p-2">
       <div className="font-medium">Cursor Cloud dispatch</div>
       {presented ? (
         <>
           <Field label="Runner" value={presented.runner} />
-          {"provider" in presented ? (
-            <Field label="Provider / model" value={`${presented.provider} · ${presented.model}`} />
-          ) : null}
+          <Field label="Provider / model" value={routeLabel} />
           <Field label="Repository" value={presented.repository} />
           <Field label="Starting ref" value={presented.startingRef} />
           <Field label="Expected environment" value={presented.expectedEnvironment} />
           <Field label="Expected build" value={presented.expectedBuild} />
           <Field label="Named environment" value={presented.environmentName} />
-          {"workOnCurrentBranch" in presented ? (
+          {payload ? (
             <>
               <Field label="workOnCurrentBranch" value="false" />
               <Field label="autoCreatePR" value="false" />

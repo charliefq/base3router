@@ -396,34 +396,24 @@ export function WorkflowControl(props: {
     );
     props.onOpenThread(result.value.threadId);
   };
-  const cursorCommand = async (
-    runCommand: (input: {
-      environmentId: EnvironmentId;
-      input:
-        | Parameters<typeof runFollowUp>[0]["input"]
-        | Parameters<typeof runCancelCursor>[0]["input"]
-        | Parameters<typeof runRefreshCursor>[0]["input"];
-    }) => Promise<
-      | { readonly _tag: "Success"; readonly value: WorkflowCursorCloudCommandResult }
-      | { readonly _tag: "Failure"; readonly cause: unknown }
-    >,
-    extra: Record<string, unknown> = {},
-  ) => {
-    if (busyRef.current || !projectId || !run || !stage || !attempt) return;
+  const beginCursorCloud = () => {
+    if (busyRef.current || projectId === null || !run || !stage || !attempt) return null;
     busyRef.current = true;
     setBusy(true);
     setError(null);
-    const result = await runCommand({
+    return {
       environmentId: props.environmentId,
-      input: {
-        environmentId: props.environmentId,
-        projectId,
-        runId: run.id,
-        stageId: stage.id,
-        attempt: attempt.attempt,
-        ...extra,
-      } as never,
-    });
+      projectId,
+      runId: run.id,
+      stageId: stage.id,
+      attempt: attempt.attempt,
+    };
+  };
+  const finishCursorCloud = (
+    result:
+      | { readonly _tag: "Success"; readonly value: WorkflowCursorCloudCommandResult }
+      | { readonly _tag: "Failure"; readonly cause: unknown },
+  ) => {
     busyRef.current = false;
     setBusy(false);
     if (result._tag === "Failure") {
@@ -643,16 +633,37 @@ export function WorkflowControl(props: {
                           followUp={followUp}
                           busy={busy}
                           onFollowUpChange={setFollowUp}
-                          onFollowUp={() =>
-                            void cursorCommand(runFollowUp, {
-                              commandId: randomUUID(),
-                              prompt: followUp.slice(0, 16_000),
-                            })
-                          }
-                          onCancel={() =>
-                            void cursorCommand(runCancelCursor, { commandId: randomUUID() })
-                          }
-                          onRefresh={() => void cursorCommand(runRefreshCursor)}
+                          onFollowUp={() => {
+                            const shared = beginCursorCloud();
+                            if (shared === null) return;
+                            void runFollowUp({
+                              environmentId: props.environmentId,
+                              input: {
+                                ...shared,
+                                commandId: randomUUID(),
+                                prompt: followUp.slice(0, 16_000),
+                              },
+                            }).then(finishCursorCloud);
+                          }}
+                          onCancel={() => {
+                            const shared = beginCursorCloud();
+                            if (shared === null) return;
+                            void runCancelCursor({
+                              environmentId: props.environmentId,
+                              input: {
+                                ...shared,
+                                commandId: randomUUID(),
+                              },
+                            }).then(finishCursorCloud);
+                          }}
+                          onRefresh={() => {
+                            const shared = beginCursorCloud();
+                            if (shared === null) return;
+                            void runRefreshCursor({
+                              environmentId: props.environmentId,
+                              input: shared,
+                            }).then(finishCursorCloud);
+                          }}
                         />
                       ) : null}
                       {stage.type === "agent" && attempt.status === "dispatched" ? (
@@ -700,6 +711,8 @@ export function WorkflowControl(props: {
                               <CursorCloudDispatchReview
                                 preview={preview?.cursorCloud}
                                 target={cursorCloudTarget}
+                                provider={preview?.route.selected?.driver ?? null}
+                                model={preview?.route.selected?.target.model ?? null}
                               />
                             </>
                           ) : null}
