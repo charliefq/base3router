@@ -20,8 +20,8 @@ import {
 } from "./dispatcher.ts";
 import { EnvironmentId } from "./baseSchemas.ts";
 
-export const WORKFLOW_MAX_STAGES = 12;
-export const WORKFLOW_MAX_ATTEMPTS = 5;
+const WORKFLOW_MAX_STAGES = 12;
+const WORKFLOW_MAX_ATTEMPTS = 5;
 export const WORKFLOW_MAX_ARTIFACT_CHARS = 12_000;
 export const WORKFLOW_MAX_RECORDS = 1_024;
 

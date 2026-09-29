@@ -1,4 +1,4 @@
-export const CURSOR_CLOUD_ERROR_CODES = [
+const CURSOR_CLOUD_ERROR_CODES = [
   "unconfigured",
   "timeout",
   "rate_limited",

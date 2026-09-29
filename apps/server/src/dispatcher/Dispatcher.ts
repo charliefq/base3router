@@ -350,7 +350,7 @@ export function resolveDispatcherProject(input: {
   return rejectedProject("none", "PROJECT_SELECTOR_REQUIRED");
 }
 
-export function normalizeModelFamily(model: string): string {
+function normalizeModelFamily(model: string): string {
   const normalized = model.trim().toLowerCase();
   if (normalized.includes("claude")) return "claude";
   if (normalized.includes("gemini")) return "gemini";

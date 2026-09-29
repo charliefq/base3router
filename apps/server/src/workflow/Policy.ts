@@ -22,7 +22,7 @@ export const emptyWorkflowCatalog = (): WorkflowCatalog => ({
   runs: [],
 });
 
-export class WorkflowPolicyError extends Error {}
+class WorkflowPolicyError extends Error {}
 
 const runEquivalent = Schema.toEquivalence(WorkflowRunSchema);
 

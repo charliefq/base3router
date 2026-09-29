@@ -106,7 +106,7 @@ export const CursorCloudRunStatus = Schema.Literals([
 ]);
 export type CursorCloudRunStatus = typeof CursorCloudRunStatus.Type;
 
-export const CLOUD_RUNNER_CANONICAL_STATUSES = [
+const CLOUD_RUNNER_CANONICAL_STATUSES = [
   "creating",
   "running",
   "idle",
@@ -346,8 +346,6 @@ export const decodeCursorCloudExecutionTarget = Schema.decodeUnknownExit(
 export const decodeCursorCloudRunnerBinding = Schema.decodeUnknownExit(
   CursorCloudRunnerBindingCodec,
 );
-
-export const encodeCursorCloudCreateRequest = Schema.encodeUnknownSync(CursorCloudCreateRequest);
 
 const decodeBindingUnknown = Schema.decodeUnknownOption(CursorCloudRunnerBinding);
 

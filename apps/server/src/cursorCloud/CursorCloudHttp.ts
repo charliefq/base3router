@@ -7,7 +7,7 @@ import {
   type CursorCloudError,
 } from "./CursorCloudErrors.ts";
 
-export const CURSOR_CLOUD_API_BASE_URL = "https://api.cursor.com";
+const CURSOR_CLOUD_API_BASE_URL = "https://api.cursor.com";
 export const CURSOR_CLOUD_DEFAULT_TIMEOUT_MS = 15_000;
 export const CURSOR_CLOUD_CREATE_TIMEOUT_MS = 30_000;
 

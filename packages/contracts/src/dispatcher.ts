@@ -15,7 +15,7 @@ import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 export const DISPATCHER_POLICY_VERSION = "dispatcher.phase-1a.v1" as const;
 export const DISPATCHER_MAX_CANDIDATES = 32;
 export const DISPATCHER_HANDOFF_MAX_PACKET_CHARS = 16_000;
-export const DISPATCHER_HANDOFF_MAX_REFERENCES = 32;
+const DISPATCHER_HANDOFF_MAX_REFERENCES = 32;
 
 const BoundedEnvironmentId = EnvironmentId.check(Schema.isMaxLength(256));
 const BoundedProjectId = ProjectId.check(Schema.isMaxLength(256));

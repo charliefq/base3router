@@ -39,7 +39,7 @@ export type CursorCloudOutbox = {
 
 const SEPARATOR = "\u001f";
 
-export const cursorCloudIdempotencyToken = (intent: CursorCloudOperationIntent): string =>
+const cursorCloudIdempotencyToken = (intent: CursorCloudOperationIntent): string =>
   intent.kind === "create" ? (intent.dispatchId ?? intent.commandId) : intent.commandId;
 
 export const cursorCloudOperationKey = (intent: CursorCloudOperationIntent): string =>

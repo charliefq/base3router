@@ -51,8 +51,8 @@ export type CursorCloudModel = {
   readonly displayName: string | null;
 };
 
-export const CURSOR_CLOUD_RUN_LIST_LIMIT = 20;
-export const CURSOR_CLOUD_RUN_LIST_MAX_PAGES = 10;
+const CURSOR_CLOUD_RUN_LIST_LIMIT = 20;
+const CURSOR_CLOUD_RUN_LIST_MAX_PAGES = 10;
 const RUN_LIST_CLAIMED_AT_SKEW_MS = 60_000;
 
 export type CursorCloudRunListBoundary = {

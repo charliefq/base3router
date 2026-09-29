@@ -17,9 +17,7 @@ export type CursorCloudCredentialProvider = {
 export const isCursorCloudFeatureEnabled = (env: NodeJS.ProcessEnv = process.env): boolean =>
   env.T3CODE_CURSOR_CLOUD_ENABLED === "true";
 
-export const isCursorCloudCredentialConfigured = (
-  env: NodeJS.ProcessEnv = process.env,
-): boolean => {
+const isCursorCloudCredentialConfigured = (env: NodeJS.ProcessEnv = process.env): boolean => {
   const value = env[CURSOR_CLOUD_CREDENTIAL_ENV_NAME];
   return typeof value === "string" && value.length > 0;
 };

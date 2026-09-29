@@ -104,7 +104,7 @@ export type FollowUpReconciliation =
   | { readonly outcome: "none" }
   | { readonly outcome: "ambiguous" };
 
-export const reconcileFollowUpRun = (
+const reconcileFollowUpRun = (
   runs: ReadonlyArray<CursorCloudBetaRun>,
   input: {
     readonly previousRunId?: string;
