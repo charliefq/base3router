@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
+  CURSOR_CLOUD_CREDENTIAL_REFERENCE,
   ProviderDriverKind,
   ProviderInstanceId,
   type ActionGateResult,
@@ -102,7 +103,7 @@ const finishedBinding = (agentId: string, runId = "run-00000000-0000-0000-0000-0
   status: "finished" as const,
   createdAt: at,
   updatedAt: at,
-  credentialRef: { kind: "env" as const, name: "CURSOR_API_KEY" },
+  credentialRef: CURSOR_CLOUD_CREDENTIAL_REFERENCE,
 });
 
 const sqliteOutbox = (dbPath: string) => {
