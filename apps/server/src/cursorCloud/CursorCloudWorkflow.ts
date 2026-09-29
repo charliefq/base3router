@@ -10,7 +10,9 @@ import {
 } from "@t3tools/contracts";
 
 import type { CursorCloudAdapter } from "./CursorCloudAdapter.ts";
+import { cursorCloudAgentIdFromDispatch } from "./CursorCloudAgentId.ts";
 import { cursorCloudError, type CursorCloudError } from "./CursorCloudErrors.ts";
+import { runCursorCloudCommandOnce, type CursorCloudOutbox } from "./CursorCloudOutbox.ts";
 
 export const requireActionGateAllow = (gate: ActionGateResult): void => {
   if (gate.decision !== "ALLOW") {
@@ -80,51 +82,136 @@ export const assertCursorCloudDispatch = (input: {
   };
 };
 
+const runRemoteOnce = async (
+  outbox: CursorCloudOutbox,
+  commandId: string,
+  intent: Parameters<CursorCloudOutbox["claim"]>[0],
+  remote: () => Promise<CursorCloudRunnerBinding>,
+): Promise<CursorCloudRunnerBinding> =>
+  runCursorCloudCommandOnce(commandId, async () => {
+    const claimed = await outbox.claim(intent);
+    if (claimed.state === "completed") return claimed.binding;
+    const binding = await remote();
+    await outbox.complete(commandId, binding);
+    return binding;
+  });
+
 export const createCursorCloudStageBinding = async (input: {
   readonly adapter: CursorCloudAdapter;
+  readonly outbox: CursorCloudOutbox;
   readonly configured: boolean;
   readonly gate: ActionGateResult;
   readonly routeBinding: DispatcherTaskRouteBinding | null;
   readonly target: CursorCloudExecutionTarget | undefined;
   readonly prompt: string;
   readonly at: string;
+  readonly runId: string;
+  readonly stageId: string;
+  readonly attempt: number;
+  readonly dispatchId: string;
 }): Promise<CursorCloudRunnerBinding> => {
   const payload = assertCursorCloudDispatch(input);
-  return input.adapter.createAgent({
-    prompt: input.prompt,
-    model: payload.model,
-    target: payload.target,
-    provider: payload.provider,
-    at: input.at,
+  const commandId = `cursor-create-${input.dispatchId}`;
+  const cursorAgentId = cursorCloudAgentIdFromDispatch({
+    runId: input.runId,
+    stageId: input.stageId,
+    attempt: input.attempt,
+    dispatchId: input.dispatchId,
   });
+  return runRemoteOnce(
+    input.outbox,
+    commandId,
+    {
+      commandId,
+      kind: "create",
+      cursorAgentId,
+      runId: input.runId,
+      stageId: input.stageId,
+      attempt: input.attempt,
+      dispatchId: input.dispatchId,
+    },
+    () =>
+      input.adapter.createAgent({
+        prompt: input.prompt,
+        agentId: cursorAgentId,
+        target: payload.target,
+        provider: payload.provider,
+        dispatcherModel: payload.model,
+        at: input.at,
+      }),
+  );
 };
 
 export const followUpCursorCloudStage = async (input: {
   readonly adapter: CursorCloudAdapter;
+  readonly outbox: CursorCloudOutbox;
   readonly gate: ActionGateResult;
   readonly binding: CursorCloudRunnerBinding;
   readonly prompt: string;
   readonly at: string;
+  readonly runId: string;
+  readonly stageId: string;
+  readonly attempt: number;
+  readonly commandId: string;
 }): Promise<CursorCloudRunnerBinding> => {
   requireActionGateAllow(input.gate);
-  return input.adapter.createFollowUpRun({
-    binding: input.binding,
-    prompt: input.prompt,
-    at: input.at,
-  });
+  const cursorAgentId = input.binding.cursorAgentId;
+  if (cursorAgentId === undefined) {
+    throw cursorCloudError("rejected", "A durable Cursor agent is required before a follow-up.");
+  }
+  return runRemoteOnce(
+    input.outbox,
+    input.commandId,
+    {
+      commandId: input.commandId,
+      kind: "follow-up",
+      cursorAgentId,
+      runId: input.runId,
+      stageId: input.stageId,
+      attempt: input.attempt,
+    },
+    () =>
+      input.adapter.createFollowUpRun({
+        binding: input.binding,
+        prompt: input.prompt,
+        at: input.at,
+      }),
+  );
 };
 
 export const cancelCursorCloudStage = async (input: {
   readonly adapter: CursorCloudAdapter;
+  readonly outbox: CursorCloudOutbox;
   readonly gate: ActionGateResult;
   readonly binding: CursorCloudRunnerBinding;
   readonly at: string;
+  readonly runId: string;
+  readonly stageId: string;
+  readonly attempt: number;
+  readonly commandId: string;
 }): Promise<CursorCloudRunnerBinding> => {
   requireActionGateAllow(input.gate);
-  return input.adapter.cancelRun({
-    binding: input.binding,
-    at: input.at,
-  });
+  const cursorAgentId = input.binding.cursorAgentId;
+  if (cursorAgentId === undefined) {
+    throw cursorCloudError("rejected", "A Cursor run is required before cancellation.");
+  }
+  return runRemoteOnce(
+    input.outbox,
+    input.commandId,
+    {
+      commandId: input.commandId,
+      kind: "cancel",
+      cursorAgentId,
+      runId: input.runId,
+      stageId: input.stageId,
+      attempt: input.attempt,
+    },
+    () =>
+      input.adapter.cancelRun({
+        binding: input.binding,
+        at: input.at,
+      }),
+  );
 };
 
 export const toWorkflowCursorCloudErrorMessage = (error: unknown): string => {

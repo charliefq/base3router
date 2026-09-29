@@ -3,6 +3,7 @@ export const CURSOR_CLOUD_ERROR_CODES = [
   "timeout",
   "rate_limited",
   "agent_busy",
+  "agent_id_conflict",
   "run_not_cancellable",
   "malformed_response",
   "unauthorized",
@@ -22,7 +23,7 @@ export type CursorCloudError = {
 };
 
 const CREDENTIAL_SHAPED =
-  /Bearer\s+[A-Za-z0-9._~+/=-]+|crsr_[A-Za-z0-9]+|sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,}|CURSOR_API_KEY\s*=\s*\S+/gi;
+  /Bearer\s+\S+|crsr[_-][A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,}|CURSOR_API_KEY\s*=\s*\S+/gi;
 
 export const sanitizeCursorCloudText = (value: string): string =>
   value

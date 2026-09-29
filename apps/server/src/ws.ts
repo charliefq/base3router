@@ -138,6 +138,7 @@ import {
   isCursorCloudConfigured,
 } from "./cursorCloud/CursorCloudCredentials.ts";
 import { makeFetchCursorCloudTransport } from "./cursorCloud/CursorCloudHttp.ts";
+import { makeSqliteCursorCloudOutbox } from "./cursorCloud/CursorCloudSqliteOutbox.ts";
 import {
   cancelCursorCloudStage,
   createCursorCloudStageBinding,
@@ -598,6 +599,9 @@ const makeWsRpcLayer = (
         transport: makeFetchCursorCloudTransport(),
         credentials: envCursorCloudCredentialProvider(),
       });
+      const cursorCloudOutbox = makeSqliteCursorCloudOutbox((effect) =>
+        Effect.runPromise(effect.pipe(Effect.provideService(SqlClient.SqlClient, sql))),
+      );
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
@@ -2617,12 +2621,17 @@ const makeWsRpcLayer = (
                       try: () =>
                         createCursorCloudStageBinding({
                           adapter: cursorCloudAdapter,
+                          outbox: cursorCloudOutbox,
                           configured: isCursorCloudConfigured(),
                           gate: route.gate,
                           routeBinding,
                           target: input.cursorCloudTarget,
                           prompt,
                           at: createdAt,
+                          runId: input.runId,
+                          stageId: input.stageId,
+                          attempt: input.attempt,
+                          dispatchId: input.dispatchId,
                         }),
                       catch: (cause) =>
                         new WorkflowOperationError({
@@ -2789,10 +2798,15 @@ const makeWsRpcLayer = (
                 try: () =>
                   followUpCursorCloudStage({
                     adapter: cursorCloudAdapter,
+                    outbox: cursorCloudOutbox,
                     gate: route.gate,
                     binding,
                     prompt: input.prompt,
                     at,
+                    runId: run.id,
+                    stageId: input.stageId,
+                    attempt: input.attempt,
+                    commandId: input.commandId,
                   }),
                 catch: (cause) =>
                   new WorkflowOperationError({
@@ -2882,9 +2896,14 @@ const makeWsRpcLayer = (
                 try: () =>
                   cancelCursorCloudStage({
                     adapter: cursorCloudAdapter,
+                    outbox: cursorCloudOutbox,
                     gate: route.gate,
                     binding,
                     at,
+                    runId: run.id,
+                    stageId: input.stageId,
+                    attempt: input.attempt,
+                    commandId: input.commandId,
                   }),
                 catch: (cause) =>
                   new WorkflowOperationError({

@@ -139,8 +139,7 @@ export const presentCursorCloudBinding = (
   updatedAt: binding.updatedAt,
 });
 
-const SECRET_SHAPED =
-  /Bearer\s+[A-Za-z0-9._~+/=-]+|crsr_[A-Za-z0-9]+|sk-[A-Za-z0-9]+|CURSOR_API_KEY\s*=/i;
+const SECRET_SHAPED = /Bearer\s+\S+|crsr[_-][A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]+|CURSOR_API_KEY\s*=/i;
 
 export const textOmitsCursorSecrets = (value: string): boolean => !SECRET_SHAPED.test(value);
 

@@ -8,7 +8,6 @@ import {
   CURSOR_CLOUD_CREDENTIAL_ENV_NAME,
   CURSOR_CLOUD_CREDENTIAL_REFERENCE,
   CursorCloudCreateRequest,
-  CursorCloudExecutionTarget,
   CursorCloudImmutableDispatchPayload,
   CursorCloudRunnerBinding,
   cursorCloudCreateRequestFromTarget,
@@ -95,28 +94,56 @@ describe("cursor-cloud runner contracts", () => {
     ).toBe(true);
   });
 
-  it("builds a repository create payload with safe defaults and no env", () => {
+  it("builds a repository create payload with safe defaults, agentId, and no env", () => {
     const request = cursorCloudCreateRequestFromTarget({
       prompt: "Add the Cursor Cloud adapter",
-      model: "composer-2",
+      agentId: "bc-11111111-1111-5111-8111-111111111111",
       target: repositoryTarget,
     });
     const decoded = decodeCreate(request);
     expect(Exit.isSuccess(decoded)).toBe(true);
     if (Exit.isSuccess(decoded)) {
+      expect(decoded.value.agentId).toBe("bc-11111111-1111-5111-8111-111111111111");
       expect(decoded.value.repos).toEqual([
         { url: repositoryTarget.repositoryUrl, startingRef: sha },
       ]);
       expect(decoded.value.workOnCurrentBranch).toBe(false);
       expect(decoded.value.autoCreatePR).toBe(false);
       expect(decoded.value.env).toBeUndefined();
+      expect(decoded.value.model).toBeUndefined();
       expect(decoded.value.repos?.[0]?.startingRef).toBe(sha);
     }
+  });
+
+  it("omits dispatcher model names from the Cursor create request", () => {
+    const request = cursorCloudCreateRequestFromTarget({
+      prompt: "Do not forward the dispatcher model",
+      agentId: "bc-11111111-1111-5111-8111-111111111111",
+      target: repositoryTarget,
+    });
+    expect(request).not.toHaveProperty("model");
+    expect(JSON.stringify(request)).not.toContain("gpt-5.4");
+    expect(JSON.stringify(request)).not.toContain("codex");
+  });
+
+  it("rejects a non-v5 client agent id on the create-request boundary", () => {
+    expect(
+      Exit.isFailure(
+        decodeCreate({
+          prompt: { text: "Invalid agent id" },
+          agentId: "bc-00000000-0000-0000-0000-000000000001",
+          repos: [{ url: repositoryTarget.repositoryUrl, startingRef: sha }],
+          workOnCurrentBranch: false,
+          autoCreatePR: false,
+        }),
+      ),
+    ).toBe(true);
   });
 
   it("builds a named-environment create payload without repos", () => {
     const request = cursorCloudCreateRequestFromTarget({
       prompt: "Continue in the named environment",
+      agentId: "bc-11111111-1111-5111-8111-111111111111",
       target: namedEnvironmentTarget,
     });
     const decoded = decodeCreate(request);
@@ -132,6 +159,7 @@ describe("cursor-cloud runner contracts", () => {
   it("rejects env plus explicit repos on the create-request boundary", () => {
     const mixed = decodeCursorCloudCreateRequest({
       prompt: { text: "Do not mix targets" },
+      agentId: "bc-11111111-1111-5111-8111-111111111111",
       env: { type: "cloud", name: "production-cloud" },
       repos: [{ url: repositoryTarget.repositoryUrl, startingRef: sha }],
       workOnCurrentBranch: false,
@@ -145,6 +173,7 @@ describe("cursor-cloud runner contracts", () => {
       Exit.isFailure(
         decodeCreate({
           prompt: { text: "Unsafe branch" },
+          agentId: "bc-11111111-1111-5111-8111-111111111111",
           repos: [{ url: repositoryTarget.repositoryUrl, startingRef: sha }],
           workOnCurrentBranch: true,
           autoCreatePR: false,
@@ -155,6 +184,7 @@ describe("cursor-cloud runner contracts", () => {
       Exit.isFailure(
         decodeCreate({
           prompt: { text: "Unsafe PR" },
+          agentId: "bc-11111111-1111-5111-8111-111111111111",
           repos: [{ url: repositoryTarget.repositoryUrl, startingRef: sha }],
           workOnCurrentBranch: false,
           autoCreatePR: true,

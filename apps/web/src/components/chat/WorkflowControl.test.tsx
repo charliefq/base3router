@@ -458,7 +458,7 @@ it("previews Cursor Cloud as a distinct runner with an exact starting SHA", asyn
 
 it("requires ActionGate approval and a valid target before Cursor Cloud dispatch", async () => {
   mock.preview.mockResolvedValue(
-    success(cursorPreview("DENIED", { decision: "DENY", reasonCodes: ["ACTION_DENIED"] })),
+    success(cursorPreview("DENIED", { decision: "DENY", reasonCodes: ["PROVIDER_UNAVAILABLE"] })),
   );
   await mount(true, true);
   await open();

@@ -29,8 +29,8 @@ import {
 import type { CursorCloudCredentialProvider } from "./CursorCloudCredentials.ts";
 import {
   cursorCloudError,
+  isCursorCloudError,
   sanitizeCursorCloudText,
-  type CursorCloudError,
 } from "./CursorCloudErrors.ts";
 import {
   CURSOR_CLOUD_CREATE_TIMEOUT_MS,
@@ -55,10 +55,12 @@ export type CursorCloudAdapter = {
   listModels(): Promise<ReadonlyArray<CursorCloudModel>>;
   createAgent(input: {
     readonly prompt: string;
-    readonly model?: string;
+    readonly agentId: string;
+    readonly cursorModelId?: string;
     readonly name?: string;
     readonly target: CursorCloudExecutionTarget;
     readonly provider: ProviderDriverKind;
+    readonly dispatcherModel: string;
     readonly at: string;
   }): Promise<CursorCloudRunnerBinding>;
   getAgent(agentId: string): Promise<CursorCloudBetaAgent>;
@@ -113,28 +115,44 @@ const combinedStatus = (
   return "creating";
 };
 
+type RunBindingPatch = {
+  readonly cursorAgentId?: string;
+  readonly cursorAgentUrl?: string;
+  readonly cursorAgentStatus?: CursorCloudBetaAgent["status"];
+  readonly status?: CloudRunnerCanonicalStatus;
+};
+
+const withoutSanitizedError = (binding: CursorCloudRunnerBinding): CursorCloudRunnerBinding => {
+  const { sanitizedError: _cleared, ...rest } = binding;
+  return rest;
+};
+
 const applyRunToBinding = (
   binding: CursorCloudRunnerBinding,
   run: CursorCloudBetaRun,
   at: string,
-  extras: Partial<CursorCloudRunnerBinding> = {},
-): CursorCloudRunnerBinding => ({
-  ...binding,
-  cursorAgentId: run.agentId,
-  cursorRunId: run.id,
-  cursorRunStatus: run.status,
-  status:
-    extras.status ??
-    combinedStatus(extras.cursorAgentStatus ?? binding.cursorAgentStatus, run.status),
-  output: gitOutput(run) ?? binding.output,
-  sanitizedResult:
+  extras: RunBindingPatch = {},
+): CursorCloudRunnerBinding => {
+  const output = gitOutput(run) ?? binding.output;
+  const sanitizedResult =
     run.result === undefined
       ? binding.sanitizedResult
-      : sanitizeCursorCloudText(run.result).slice(0, 2_000),
-  updatedAt: at,
-  ...extras,
-  credentialRef: binding.credentialRef,
-});
+      : sanitizeCursorCloudText(run.result).slice(0, 2_000);
+  return {
+    ...binding,
+    cursorAgentId: run.agentId,
+    cursorRunId: run.id,
+    cursorRunStatus: run.status,
+    status:
+      extras.status ??
+      combinedStatus(extras.cursorAgentStatus ?? binding.cursorAgentStatus, run.status),
+    updatedAt: at,
+    ...extras,
+    credentialRef: binding.credentialRef,
+    ...(output === undefined ? {} : { output }),
+    ...(sanitizedResult === undefined ? {} : { sanitizedResult }),
+  };
+};
 
 export const makeCursorCloudAdapter = (input: {
   readonly transport: CursorCloudHttpTransport;
@@ -187,6 +205,23 @@ export const makeCursorCloudAdapter = (input: {
     return parseJson(response.bodyText);
   };
 
+  const getAgent = async (agentId: string) => {
+    const decoded = decodeBetaAgent(
+      await readJson({ method: "GET", path: `/v1/agents/${agentId}` }, "Get agent failed."),
+    );
+    return decodeOrThrow(decoded, "Get agent response was malformed.");
+  };
+
+  const getRun = async (agentId: string, runId: string) => {
+    const decoded = decodeBetaRun(
+      await readJson(
+        { method: "GET", path: `/v1/agents/${agentId}/runs/${runId}` },
+        "Get run failed.",
+      ),
+    );
+    return decodeOrThrow(decoded, "Get run response was malformed.");
+  };
+
   return {
     async verifyIdentity() {
       const decoded = decodeBetaMe(
@@ -210,37 +245,59 @@ export const makeCursorCloudAdapter = (input: {
     async createAgent(createInput) {
       const body: CursorCloudCreateRequest = cursorCloudCreateRequestFromTarget({
         prompt: createInput.prompt,
-        model: createInput.model,
-        name: createInput.name,
+        agentId: createInput.agentId,
         target: createInput.target,
+        ...(createInput.cursorModelId === undefined
+          ? {}
+          : { cursorModelId: createInput.cursorModelId }),
+        ...(createInput.name === undefined ? {} : { name: createInput.name }),
       });
-      const decoded = decodeBetaCreateAgent(
-        await readJson(
-          { method: "POST", path: "/v1/agents", body, timeoutMs: createTimeoutMs },
-          "Create agent failed.",
-        ),
-      );
-      const value = decodeOrThrow(decoded, "Create agent response was malformed.");
       const binding = emptyCursorCloudBinding({
         provider: createInput.provider,
-        model: createInput.model ?? value.agent.name ?? "default",
+        model: createInput.dispatcherModel,
         target: createInput.target,
         at: createInput.at,
       });
-      return applyRunToBinding(binding, value.run, createInput.at, {
-        cursorAgentId: value.agent.id,
-        cursorAgentUrl: value.agent.url,
-        cursorAgentStatus: value.agent.status,
-        status: combinedStatus(value.agent.status, value.run.status),
-      });
+      try {
+        const decoded = decodeBetaCreateAgent(
+          await readJson(
+            { method: "POST", path: "/v1/agents", body, timeoutMs: createTimeoutMs },
+            "Create agent failed.",
+          ),
+        );
+        const value = decodeOrThrow(decoded, "Create agent response was malformed.");
+        return applyRunToBinding(binding, value.run, createInput.at, {
+          cursorAgentId: value.agent.id,
+          cursorAgentStatus: value.agent.status,
+          status: combinedStatus(value.agent.status, value.run.status),
+          ...(value.agent.url === undefined ? {} : { cursorAgentUrl: value.agent.url }),
+        });
+      } catch (cause) {
+        if (!isCursorCloudError(cause) || cause.code !== "agent_id_conflict") throw cause;
+        const agent = await getAgent(createInput.agentId);
+        const run =
+          agent.latestRunId === undefined
+            ? undefined
+            : await getRun(createInput.agentId, agent.latestRunId);
+        if (run === undefined) {
+          return {
+            ...binding,
+            cursorAgentId: agent.id,
+            cursorAgentStatus: agent.status,
+            status: mapCursorAgentStatus(agent.status),
+            updatedAt: createInput.at,
+            ...(agent.url === undefined ? {} : { cursorAgentUrl: agent.url }),
+          };
+        }
+        return applyRunToBinding(binding, run, createInput.at, {
+          cursorAgentId: agent.id,
+          cursorAgentStatus: agent.status,
+          ...(agent.url === undefined ? {} : { cursorAgentUrl: agent.url }),
+        });
+      }
     },
 
-    async getAgent(agentId) {
-      const decoded = decodeBetaAgent(
-        await readJson({ method: "GET", path: `/v1/agents/${agentId}` }, "Get agent failed."),
-      );
-      return decodeOrThrow(decoded, "Get agent response was malformed.");
-    },
+    getAgent,
 
     async createFollowUpRun(followUp) {
       const agentId = followUp.binding.cursorAgentId;
@@ -263,21 +320,12 @@ export const makeCursorCloudAdapter = (input: {
         ),
       );
       const value = decodeOrThrow(decoded, "Follow-up run response was malformed.");
-      return applyRunToBinding(followUp.binding, value.run, followUp.at, {
+      return applyRunToBinding(withoutSanitizedError(followUp.binding), value.run, followUp.at, {
         cursorAgentId: agentId,
-        sanitizedError: undefined,
       });
     },
 
-    async getRun(agentId, runId) {
-      const decoded = decodeBetaRun(
-        await readJson(
-          { method: "GET", path: `/v1/agents/${agentId}/runs/${runId}` },
-          "Get run failed.",
-        ),
-      );
-      return decodeOrThrow(decoded, "Get run response was malformed.");
-    },
+    getRun,
 
     async cancelRun(cancelInput) {
       const agentId = cancelInput.binding.cursorAgentId;
@@ -293,11 +341,10 @@ export const makeCursorCloudAdapter = (input: {
       );
       decodeOrThrow(decoded, "Cancel run response was malformed.");
       return {
-        ...cancelInput.binding,
+        ...withoutSanitizedError(cancelInput.binding),
         cursorRunStatus: "CANCELLED",
         status: "cancelled",
         updatedAt: cancelInput.at,
-        sanitizedError: undefined,
       };
     },
 
@@ -305,26 +352,27 @@ export const makeCursorCloudAdapter = (input: {
       const agentId = refreshInput.binding.cursorAgentId;
       const runId = refreshInput.binding.cursorRunId;
       if (agentId === undefined) return refreshInput.binding;
-      const agent = await this.getAgent(agentId);
+      const agent = await getAgent(agentId);
       const run =
         runId === undefined
           ? agent.latestRunId === undefined
             ? undefined
-            : await this.getRun(agentId, agent.latestRunId)
-          : await this.getRun(agentId, runId);
+            : await getRun(agentId, agent.latestRunId)
+          : await getRun(agentId, runId);
+      const cursorAgentUrl = agent.url ?? refreshInput.binding.cursorAgentUrl;
       if (run === undefined) {
         return {
           ...refreshInput.binding,
           cursorAgentStatus: agent.status,
-          cursorAgentUrl: agent.url ?? refreshInput.binding.cursorAgentUrl,
           status: mapCursorAgentStatus(agent.status),
           updatedAt: refreshInput.at,
+          ...(cursorAgentUrl === undefined ? {} : { cursorAgentUrl }),
         };
       }
       return applyRunToBinding(refreshInput.binding, run, refreshInput.at, {
         cursorAgentId: agent.id,
-        cursorAgentUrl: agent.url ?? refreshInput.binding.cursorAgentUrl,
         cursorAgentStatus: agent.status,
+        ...(cursorAgentUrl === undefined ? {} : { cursorAgentUrl }),
       });
     },
   };

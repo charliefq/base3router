@@ -16,6 +16,9 @@ const sha = "9d5f2d8e41823acf518e7761a5b916defd5e4b2f";
 const at = "2026-09-29T12:00:00.000Z";
 const provider = ProviderDriverKind.make("cursor");
 const fakeToken = "test-cursor-token";
+const underscoreToken = "crsr_test_secret_value";
+const hyphenToken = "crsr-live-secret-value";
+const clientAgentId = "bc-11111111-1111-5111-8111-111111111111";
 const repositoryTarget = {
   mode: "repository" as const,
   repositoryUrl: "https://github.com/charliefq/base3router",
@@ -27,10 +30,10 @@ const namedTarget = {
 };
 
 const agent = {
-  id: "bc-00000000-0000-0000-0000-000000000001",
+  id: clientAgentId,
   name: "Add adapter",
   status: "ACTIVE",
-  url: "https://cursor.com/agents/bc-00000000-0000-0000-0000-000000000001",
+  url: `https://cursor.com/agents/${clientAgentId}`,
   createdAt: at,
   updatedAt: at,
   latestRunId: "run-00000000-0000-0000-0000-000000000001",
@@ -72,54 +75,84 @@ const adapterFor = (transport: CursorCloudHttpTransport, token = fakeToken) =>
     credentials: staticCursorCloudCredentialProvider(token),
   });
 
+const createInput = (
+  overrides: Partial<Parameters<ReturnType<typeof adapterFor>["createAgent"]>[0]> = {},
+) => ({
+  prompt: "Add the adapter",
+  agentId: clientAgentId,
+  target: repositoryTarget,
+  provider,
+  dispatcherModel: "composer-2",
+  at,
+  ...overrides,
+});
+
+const createPosts = (requests: ReadonlyArray<CursorCloudHttpRequest>) =>
+  requests.filter((request) => request.method === "POST" && request.path === "/v1/agents");
+
 describe("Cursor Cloud adapter", () => {
   it("sends a repository-target create payload with safe defaults and the exact SHA", async () => {
     const { transport, requests } = recordTransport(() => jsonResponse(200, { agent, run }));
-    const binding = await adapterFor(transport).createAgent({
-      prompt: "Add the adapter",
-      model: "composer-2",
-      target: repositoryTarget,
-      provider,
-      at,
-    });
+    const binding = await adapterFor(transport).createAgent(createInput());
     expect(requests[0]?.method).toBe("POST");
     expect(requests[0]?.path).toBe("/v1/agents");
     expect(requests[0]?.authorization).toBe(fakeToken);
     expect(requests[0]?.body).toEqual(
       cursorCloudCreateRequestFromTarget({
         prompt: "Add the adapter",
-        model: "composer-2",
+        agentId: clientAgentId,
         target: repositoryTarget,
       }),
     );
     expect(requests[0]?.body).toMatchObject({
+      agentId: clientAgentId,
       repos: [{ url: repositoryTarget.repositoryUrl, startingRef: sha }],
       workOnCurrentBranch: false,
       autoCreatePR: false,
     });
     expect(requests[0]?.body).not.toHaveProperty("env");
+    expect(requests[0]?.body).not.toHaveProperty("model");
     expect(binding.cursorAgentId).toBe(agent.id);
     expect(binding.cursorRunId).toBe(run.id);
     expect(binding.runnerKind).toBe("cursor-cloud");
+    expect(binding.model).toBe("composer-2");
     expect(binding.credentialRef).toEqual({ kind: "env", name: "CURSOR_API_KEY" });
     expect(JSON.stringify(binding)).not.toContain(fakeToken);
   });
 
+  it("omits dispatcher model names from the Cursor create body", async () => {
+    const { transport, requests } = recordTransport(() => jsonResponse(200, { agent, run }));
+    const binding = await adapterFor(transport).createAgent(
+      createInput({
+        prompt: "Do not forward the dispatcher model",
+        provider: ProviderDriverKind.make("codex"),
+        dispatcherModel: "gpt-5.4",
+      }),
+    );
+    expect(requests[0]?.body).not.toHaveProperty("model");
+    expect(JSON.stringify(requests[0]?.body)).not.toContain("gpt-5.4");
+    expect(JSON.stringify(requests[0]?.body)).not.toContain("codex");
+    expect(binding.provider).toBe("codex");
+    expect(binding.model).toBe("gpt-5.4");
+  });
+
   it("sends a named-environment create payload without repos", async () => {
     const { transport, requests } = recordTransport(() => jsonResponse(200, { agent, run }));
-    await adapterFor(transport).createAgent({
-      prompt: "Use the named environment",
-      target: namedTarget,
-      provider,
-      at,
-    });
+    await adapterFor(transport).createAgent(
+      createInput({
+        prompt: "Use the named environment",
+        target: namedTarget,
+      }),
+    );
     expect(requests[0]?.body).toEqual({
       prompt: { text: "Use the named environment" },
+      agentId: clientAgentId,
       env: { type: "cloud", name: "t3-verify" },
       workOnCurrentBranch: false,
       autoCreatePR: false,
     });
     expect(requests[0]?.body).not.toHaveProperty("repos");
+    expect(requests[0]?.body).not.toHaveProperty("model");
   });
 
   it("rejects env plus explicit repos before any HTTP call", async () => {
@@ -127,11 +160,13 @@ describe("Cursor Cloud adapter", () => {
     expect(() =>
       cursorCloudCreateRequestFromTarget({
         prompt: "mixed",
+        agentId: clientAgentId,
         target: repositoryTarget,
       }),
     ).not.toThrow();
     const mixed = {
       prompt: { text: "mixed" },
+      agentId: clientAgentId,
       env: { type: "cloud", name: "t3-verify" },
       repos: [{ url: repositoryTarget.repositoryUrl, startingRef: sha }],
       workOnCurrentBranch: false,
@@ -150,17 +185,33 @@ describe("Cursor Cloud adapter", () => {
         run: { ...run, status: "RUNNING" },
       }),
     );
-    const binding = await adapterFor(transport).createAgent({
-      prompt: "Create",
-      target: repositoryTarget,
-      provider,
-      at,
-    });
+    const binding = await adapterFor(transport).createAgent(createInput({ prompt: "Create" }));
     expect(binding.cursorAgentId).toBe(agent.id);
     expect(binding.cursorRunId).toBe(run.id);
     expect(binding.cursorAgentStatus).toBe("ACTIVE");
     expect(binding.cursorRunStatus).toBe("RUNNING");
     expect(binding.status).toBe("running");
+  });
+
+  it("reconciles the existing agent and latest run on 409 agent_id_conflict", async () => {
+    const { transport, requests } = recordTransport((request) => {
+      if (request.method === "POST" && request.path === "/v1/agents") {
+        return jsonResponse(409, { code: "agent_id_conflict", message: "agent_id_conflict" });
+      }
+      if (request.path === `/v1/agents/${clientAgentId}`) {
+        return jsonResponse(200, { ...agent, latestRunId: run.id, status: "IDLE" });
+      }
+      if (request.path === `/v1/agents/${clientAgentId}/runs/${run.id}`) {
+        return jsonResponse(200, { ...run, status: "FINISHED", result: "Already created." });
+      }
+      return jsonResponse(500, { message: "unexpected" });
+    });
+    const binding = await adapterFor(transport).createAgent(createInput());
+    expect(createPosts(requests)).toHaveLength(1);
+    expect(binding.cursorAgentId).toBe(agent.id);
+    expect(binding.cursorRunId).toBe(run.id);
+    expect(binding.cursorRunStatus).toBe("FINISHED");
+    expect(binding.model).toBe("composer-2");
   });
 
   it("creates a follow-up run on the durable agent", async () => {
@@ -333,48 +384,66 @@ describe("Cursor Cloud adapter", () => {
   it("rejects a malformed create response", async () => {
     const { transport } = recordTransport(() => jsonResponse(200, { agent: { id: agent.id } }));
     await expect(
-      adapterFor(transport).createAgent({
-        prompt: "Bad payload",
-        target: repositoryTarget,
-        provider,
-        at,
-      }),
+      adapterFor(transport).createAgent(createInput({ prompt: "Bad payload" })),
     ).rejects.toMatchObject({ code: "malformed_response" });
   });
 
-  it("redacts credential-shaped strings from errors and persisted bindings", async () => {
-    expect(sanitizeCursorCloudText(`Authorization: Bearer ${fakeToken} crsr_abc123`)).toBe(
-      "authorization=[redacted] [redacted]",
+  it("redacts credential-shaped strings from errors, logs, and persisted bindings", async () => {
+    expect(sanitizeCursorCloudText(`Authorization: Bearer ${underscoreToken}`)).not.toContain(
+      "secret_value",
     );
+    expect(sanitizeCursorCloudText(`log line token=${hyphenToken}`)).not.toContain("secret-value");
+    expect(sanitizeCursorCloudText(underscoreToken)).not.toContain(underscoreToken);
+    expect(sanitizeCursorCloudText(hyphenToken)).not.toContain(hyphenToken);
     const { transport } = recordTransport(() =>
       jsonResponse(401, {
-        message: `Invalid key Bearer ${fakeToken}`,
+        error: {
+          message: `Invalid key Bearer ${underscoreToken}`,
+          nested: { token: hyphenToken },
+        },
       }),
     );
     try {
-      await adapterFor(transport).verifyIdentity();
+      await adapterFor(transport, underscoreToken).verifyIdentity();
       throw new Error("expected failure");
     } catch (error) {
       expect(isCursorCloudError(error)).toBe(true);
       if (isCursorCloudError(error)) {
-        expect(error.message).not.toContain(fakeToken);
+        expect(error.message).not.toContain("secret_value");
+        expect(error.message).not.toContain("secret-value");
+        expect(error.message).not.toContain(underscoreToken);
         expect(error.message).not.toMatch(/Bearer /);
       }
     }
   });
 
   it("never persists a secret value on the runner binding", async () => {
-    const { transport } = recordTransport(() => jsonResponse(200, { agent, run }));
-    const binding = await adapterFor(transport).createAgent({
-      prompt: "Persist only a reference",
-      target: namedTarget,
-      provider,
-      at,
-    });
+    const { transport } = recordTransport(() =>
+      jsonResponse(200, {
+        agent,
+        run: {
+          ...run,
+          status: "FINISHED",
+          result: `Done with ${underscoreToken} and ${hyphenToken}`,
+        },
+      }),
+    );
+    const binding = await adapterFor(transport, hyphenToken).createAgent(
+      createInput({
+        prompt: "Persist only a reference",
+        target: namedTarget,
+      }),
+    );
+    const persisted = JSON.stringify(binding);
     expect(binding.credentialRef).toEqual({ kind: "env", name: "CURSOR_API_KEY" });
-    expect(JSON.stringify(binding)).not.toContain(fakeToken);
-    expect(JSON.stringify(binding)).not.toMatch(/crsr_/);
+    expect(persisted).not.toContain(hyphenToken);
+    expect(persisted).not.toContain(underscoreToken);
+    expect(persisted).not.toContain("secret_value");
+    expect(persisted).not.toContain("secret-value");
+    expect(persisted).not.toMatch(/crsr_/);
     expect("value" in binding.credentialRef).toBe(false);
+    expect(binding.sanitizedResult).not.toContain("secret_value");
+    expect(binding.sanitizedResult).not.toContain("secret-value");
   });
 
   it("refuses to follow up while the current run is still active", async () => {

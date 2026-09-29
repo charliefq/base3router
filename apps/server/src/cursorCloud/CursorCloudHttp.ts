@@ -1,3 +1,6 @@
+// The injectable fetch transport owns its abort deadline and clears it on every
+// completion path; Effect timers do not wrap the raw fetch AbortController.
+// @effect-diagnostics globalTimers:off
 import {
   cursorCloudError,
   sanitizeCursorCloudText,
@@ -66,8 +69,8 @@ export const makeFetchCursorCloudTransport = (
           accept: "application/json",
           ...(request.body === undefined ? {} : { "content-type": "application/json" }),
         },
-        body: request.body === undefined ? undefined : JSON.stringify(request.body),
         signal: controller.signal,
+        ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }),
       });
       return {
         status: response.status,
@@ -93,6 +96,11 @@ export const toCursorCloudHttpError = (
   fallback: string,
 ): CursorCloudError => {
   if (response.status === 409) {
+    if (/agent_id_conflict/i.test(response.bodyText)) {
+      return cursorCloudError("agent_id_conflict", "A Cursor agent with this id already exists.", {
+        httpStatus: 409,
+      });
+    }
     const busy = /agent_busy/i.test(response.bodyText);
     return cursorCloudError(
       busy ? "agent_busy" : "rejected",
@@ -101,9 +109,10 @@ export const toCursorCloudHttpError = (
     );
   }
   if (response.status === 429) {
+    const retryAfterMs = parseRetryAfterMs(response.headers);
     return cursorCloudError("rate_limited", "Cursor Cloud rate-limited the request.", {
       httpStatus: 429,
-      retryAfterMs: parseRetryAfterMs(response.headers),
+      ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
     });
   }
   if (response.status === 401 || response.status === 403) {

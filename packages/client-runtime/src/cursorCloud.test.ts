@@ -80,7 +80,7 @@ it("requires ActionGate ALLOW plus an immutable payload before dispatch", () => 
   expect(
     cursorCloudDispatchAllowed({
       ...allow,
-      gate: { decision: "DENY", reasonCodes: ["ACTION_DENIED"] },
+      gate: { decision: "DENY", reasonCodes: ["PROVIDER_UNAVAILABLE"] },
     }),
   ).toBe(false);
 });
@@ -121,4 +121,7 @@ it("presents sanitized binding metadata without secret-shaped fields", () => {
   expect(valueOmitsCursorSecrets(presented)).toBe(true);
   expect(textOmitsCursorSecrets("Authorization: Bearer crsr_live_secret")).toBe(false);
   expect(textOmitsCursorSecrets("CURSOR_API_KEY=secret")).toBe(false);
+  expect(textOmitsCursorSecrets("crsr_test_secret_value")).toBe(false);
+  expect(textOmitsCursorSecrets("crsr-live-secret-value")).toBe(false);
+  expect(textOmitsCursorSecrets('{"token":"crsr_test_secret_value"}')).toBe(false);
 });

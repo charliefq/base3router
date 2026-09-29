@@ -20,6 +20,12 @@ const BoundedCursorId = TrimmedNonEmptyString.check(
   Schema.isMaxLength(128),
   Schema.isPattern(/^[A-Za-z0-9_-]+$/),
 );
+/** Client-supplied Cursor agent id: `bc-` plus a UUID v5. */
+export const CursorCloudAgentId = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(39),
+  Schema.isPattern(/^bc-[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+);
+export type CursorCloudAgentId = typeof CursorCloudAgentId.Type;
 const BoundedHttpsUrl = TrimmedNonEmptyString.check(
   Schema.isMaxLength(1_024),
   Schema.isPattern(/^https:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:\/[\w.~:/?#@!$&'()*+,;=%[\]-]*)?$/),
@@ -187,6 +193,8 @@ const CursorCloudRepoEntry = Schema.Struct({
  */
 export const CursorCloudCreateRequest = Schema.Struct({
   prompt: CursorCloudPrompt,
+  agentId: CursorCloudAgentId,
+  /** Cursor model id from GET /v1/models only. Never a dispatcher/Codex/Claude model name. */
   model: Schema.optionalKey(CursorCloudModelSelection),
   name: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(100))),
   env: Schema.optionalKey(CursorCloudNamedEnv),
@@ -277,15 +285,17 @@ export const isCursorCloudRunActive = (status: CursorCloudRunStatus | undefined)
 
 export const cursorCloudCreateRequestFromTarget = (input: {
   readonly prompt: string;
-  readonly model?: string;
+  readonly agentId: string;
+  readonly cursorModelId?: string;
   readonly name?: string;
   readonly target: CursorCloudExecutionTarget;
 }): CursorCloudCreateRequest => {
   const base = {
     prompt: { text: input.prompt },
+    agentId: input.agentId,
     workOnCurrentBranch: false as const,
     autoCreatePR: false as const,
-    ...(input.model === undefined ? {} : { model: { id: input.model } }),
+    ...(input.cursorModelId === undefined ? {} : { model: { id: input.cursorModelId } }),
     ...(input.name === undefined ? {} : { name: input.name }),
   };
   if (input.target.mode === "repository") {
