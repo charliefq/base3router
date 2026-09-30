@@ -7,6 +7,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
   TurnId,
@@ -33,6 +34,7 @@ const baseThread: OrchestrationThread = {
   branch: null,
   worktreePath: null,
   latestTurn: null,
+  latestRoute: null,
   createdAt: "2026-04-01T00:00:00.000Z",
   updatedAt: "2026-04-01T00:00:00.000Z",
   archivedAt: null,
@@ -48,6 +50,54 @@ const baseThread: OrchestrationThread = {
 };
 
 describe("applyThreadDetailEvent", () => {
+  it("projects a bound route from the turn-start event and clears it for legacy starts", () => {
+    const routeBinding = {
+      policyVersion: "dispatcher.phase-1a.v1" as const,
+      target: { instanceId: ProviderInstanceId.make("claude"), model: "claude-sonnet-4-6" },
+      driver: ProviderDriverKind.make("claude"),
+      modelFamily: "anthropic",
+      fallbackIndex: 1,
+      source: "provider-default" as const,
+      gate: { decision: "ALLOW" as const, reasonCodes: ["ACTION_ALLOWED" as const] },
+    };
+    const event = {
+      ...baseEventFields,
+      sequence: 1,
+      occurredAt: "2026-04-01T01:00:00.000Z",
+      aggregateKind: "thread" as const,
+      aggregateId: baseThread.id,
+      type: "thread.turn-start-requested" as const,
+      payload: {
+        threadId: baseThread.id,
+        messageId: MessageId.make("message-bound"),
+        routeBinding,
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        createdAt: "2026-04-01T01:00:00.000Z",
+      },
+    };
+
+    const bound = applyThreadDetailEvent(baseThread, event);
+    expect(bound.kind).toBe("updated");
+    if (bound.kind !== "updated") return;
+    expect(bound.thread.latestRoute).toEqual({
+      messageId: MessageId.make("message-bound"),
+      binding: routeBinding,
+    });
+
+    const legacy = applyThreadDetailEvent(bound.thread, {
+      ...event,
+      sequence: 2,
+      payload: {
+        ...event.payload,
+        messageId: MessageId.make("message-legacy"),
+        routeBinding: undefined,
+      },
+    });
+    expect(legacy.kind).toBe("updated");
+    if (legacy.kind === "updated") expect(legacy.thread.latestRoute).toBeNull();
+  });
+
   describe("project events", () => {
     it("returns unchanged for project.created", () => {
       const result = applyThreadDetailEvent(baseThread, {

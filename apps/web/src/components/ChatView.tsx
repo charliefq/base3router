@@ -10062,6 +10062,14 @@ export default function ChatView(props: ChatViewProps) {
                             composerRef={composerRef}
                             composerDraftTarget={composerDraftTarget}
                             environmentId={environmentId}
+                            dispatcherRoutePreviewAvailable={
+                              serverConfig?.environment.capabilities.dispatcherRoutePreview === true
+                            }
+                            dispatcherProject={
+                              activeProject === null
+                                ? null
+                                : { id: activeProject.id, title: activeProject.title }
+                            }
                             attachmentUploadsCapabilityKnown={attachmentUploadsCapabilityKnown}
                             supportsAttachmentUploads={supportsAttachmentUploads}
                             supportsQuestionAttachments={supportsQuestionAttachments}

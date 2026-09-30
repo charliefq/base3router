@@ -367,6 +367,20 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
       `;
 
+      yield* sql`
+        INSERT INTO projection_dispatcher_task_routes (
+          thread_id,
+          message_id,
+          binding_json,
+          created_at
+        ) VALUES (
+          'thread-1',
+          'message-1',
+          '{"policyVersion":"dispatcher.phase-1a.v1","target":{"instanceId":"codex","model":"gpt-5-codex"},"driver":"codex","modelFamily":"openai","fallbackIndex":0,"source":"explicit","gate":{"decision":"ALLOW","reasonCodes":["ACTION_ALLOWED"]}}',
+          '2026-02-24T00:00:08.000Z'
+        )
+      `;
+
       let sequence = 5;
       for (const projector of Object.values(ORCHESTRATION_PROJECTOR_NAMES)) {
         yield* sql`
@@ -472,6 +486,21 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             sourceProposedPlan: {
               threadId: ThreadId.make("thread-1"),
               planId: "plan-1",
+            },
+          },
+          latestRoute: {
+            messageId: asMessageId("message-1"),
+            binding: {
+              policyVersion: "dispatcher.phase-1a.v1",
+              target: {
+                instanceId: ProviderInstanceId.make("codex"),
+                model: "gpt-5-codex",
+              },
+              driver: "codex",
+              modelFamily: "openai",
+              fallbackIndex: 0,
+              source: "explicit",
+              gate: { decision: "ALLOW", reasonCodes: ["ACTION_ALLOWED"] },
             },
           },
           createdAt: "2026-02-24T00:00:02.000Z",
@@ -598,6 +627,21 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             sourceProposedPlan: {
               threadId: ThreadId.make("thread-1"),
               planId: "plan-1",
+            },
+          },
+          latestRoute: {
+            messageId: asMessageId("message-1"),
+            binding: {
+              policyVersion: "dispatcher.phase-1a.v1",
+              target: {
+                instanceId: ProviderInstanceId.make("codex"),
+                model: "gpt-5-codex",
+              },
+              driver: "codex",
+              modelFamily: "openai",
+              fallbackIndex: 0,
+              source: "explicit",
+              gate: { decision: "ALLOW", reasonCodes: ["ACTION_ALLOWED"] },
             },
           },
           createdAt: "2026-02-24T00:00:02.000Z",

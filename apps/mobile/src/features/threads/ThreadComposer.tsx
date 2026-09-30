@@ -109,6 +109,7 @@ import {
   useThreadSettingsSheetPresentation,
   type NavigationWithFinishTransitioning,
 } from "./use-thread-settings-sheet-presentation";
+import { DispatcherRoutePreview } from "./DispatcherRouteStatus";
 
 /**
  * Height of the collapsed composer (pill + vertical padding, excluding safe-area inset).
@@ -672,6 +673,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           <Pressable accessibilityRole="button" className="px-3 py-2" onPress={openSettings}>
             <Text className="text-xs text-foreground">Model unavailable. Open model settings.</Text>
           </Pressable>
+        ) : null}
+        {props.selectedThread.latestRoute && project ? (
+          <DispatcherRoutePreview
+            available={props.serverConfig?.environment.capabilities.dispatcherRoutePreview === true}
+            environmentId={props.environmentId}
+            project={{ id: project.id, title: project.title }}
+            preferredRoute={currentModelSelection}
+            providers={props.serverConfig?.providers ?? []}
+            boundRoute={props.selectedThread.latestRoute}
+          />
         ) : null}
 
         <ComposerSurface

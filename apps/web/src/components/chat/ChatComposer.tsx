@@ -140,6 +140,7 @@ import {
 } from "./composerContextUndo";
 import type { ThreadSyncPhase } from "../../threadSync";
 import { ComposerBanner } from "./ComposerBanner";
+import { DispatcherRoutePreview } from "./DispatcherRouteStatus";
 import { ComposerSurface } from "./ComposerSurface";
 import {
   ComposerBannerStack,
@@ -1319,6 +1320,8 @@ export interface ChatComposerHandle {
 export interface ChatComposerProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
+  dispatcherRoutePreviewAvailable: boolean;
+  dispatcherProject: { readonly id: ProjectId; readonly title: string } | null;
   attachmentUploadsCapabilityKnown: boolean;
   supportsAttachmentUploads: boolean;
   supportsQuestionAttachments: boolean;
@@ -1485,6 +1488,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const {
     composerDraftTarget,
     environmentId,
+    dispatcherRoutePreviewAvailable,
+    dispatcherProject,
     attachmentUploadsCapabilityKnown,
     supportsAttachmentUploads,
     supportsQuestionAttachments,
@@ -6186,6 +6191,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             className="relative z-0"
             items={bannerStackItems}
           />
+          {(routeKind === "draft" || activeThread?.latestRoute) && dispatcherProject ? (
+            <DispatcherRoutePreview
+              available={dispatcherRoutePreviewAvailable}
+              environmentId={environmentId}
+              project={dispatcherProject}
+              preferredRoute={selectedModelSelection}
+              providers={providerStatuses}
+              boundRoute={routeKind === "draft" ? null : activeThread?.latestRoute}
+            />
+          ) : null}
           {!activityStackItem && (props.threadSyncPhase || inlineTasksBadge) ? (
             <ComposerBanner.Attachment>
               <ComposerBanner.Root data-chat-composer-activity-strip="true">

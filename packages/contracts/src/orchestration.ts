@@ -24,7 +24,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
-import { DispatcherTaskRouteBinding } from "./dispatcher.ts";
+import { DispatcherTaskRouteBinding, DispatcherTaskRouteSnapshot } from "./dispatcher.ts";
 import {
   PullRequestActor,
   PullRequestChecksState,
@@ -809,6 +809,8 @@ export const OrchestrationThread = Schema.Struct({
   ),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
+  // Optional so snapshots cached from servers before dispatcher UI support remain valid.
+  latestRoute: Schema.optional(Schema.NullOr(DispatcherTaskRouteSnapshot)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -895,6 +897,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   ),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
+  latestRoute: Schema.optional(Schema.NullOr(DispatcherTaskRouteSnapshot)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),

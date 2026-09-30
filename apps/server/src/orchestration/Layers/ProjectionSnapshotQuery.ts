@@ -2,6 +2,7 @@ import {
   AgentSessionImportSource,
   ApprovalRequestId,
   ChatAttachment,
+  DispatcherTaskRouteBinding,
   OrchestrationMessageContext,
   CheckpointRef,
   IsoDateTime,
@@ -132,6 +133,8 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     titleState: Schema.NullOr(Schema.fromJsonString(ThreadTitleState)),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
+    latestRouteMessageId: Schema.NullOr(MessageId),
+    latestRouteBinding: Schema.NullOr(Schema.fromJsonString(DispatcherTaskRouteBinding)),
   }),
 );
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
@@ -376,6 +379,12 @@ function mapTitleRegeneration(row: Schema.Schema.Type<typeof ProjectionThreadDbR
     : null;
 }
 
+function mapLatestRoute(row: Schema.Schema.Type<typeof ProjectionThreadDbRowSchema>) {
+  return row.latestRouteMessageId === null || row.latestRouteBinding === null
+    ? null
+    : { messageId: row.latestRouteMessageId, binding: row.latestRouteBinding };
+}
+
 function mapSessionRow(
   row: Schema.Schema.Type<typeof ProjectionThreadSessionDbRowSchema>,
 ): OrchestrationSession {
@@ -576,6 +585,20 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           linked_pull_request_json AS "linkedPullRequest",
           branch_pull_request_json AS "branchPullRequest",
           latest_turn_id AS "latestTurnId",
+          (
+            SELECT route.message_id
+            FROM projection_dispatcher_task_routes AS route
+            WHERE route.thread_id = projection_threads.thread_id
+            ORDER BY route.created_at DESC, route.message_id DESC
+            LIMIT 1
+          ) AS "latestRouteMessageId",
+          (
+            SELECT route.binding_json
+            FROM projection_dispatcher_task_routes AS route
+            WHERE route.thread_id = projection_threads.thread_id
+            ORDER BY route.created_at DESC, route.message_id DESC
+            LIMIT 1
+          ) AS "latestRouteBinding",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
@@ -617,6 +640,20 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           linked_pull_request_json AS "linkedPullRequest",
           branch_pull_request_json AS "branchPullRequest",
           latest_turn_id AS "latestTurnId",
+          (
+            SELECT route.message_id
+            FROM projection_dispatcher_task_routes AS route
+            WHERE route.thread_id = projection_threads.thread_id
+            ORDER BY route.created_at DESC, route.message_id DESC
+            LIMIT 1
+          ) AS "latestRouteMessageId",
+          (
+            SELECT route.binding_json
+            FROM projection_dispatcher_task_routes AS route
+            WHERE route.thread_id = projection_threads.thread_id
+            ORDER BY route.created_at DESC, route.message_id DESC
+            LIMIT 1
+          ) AS "latestRouteBinding",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
@@ -690,6 +727,20 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           linked_pull_request_json AS "linkedPullRequest",
           branch_pull_request_json AS "branchPullRequest",
           latest_turn_id AS "latestTurnId",
+          (
+            SELECT route.message_id
+            FROM projection_dispatcher_task_routes AS route
+            WHERE route.thread_id = projection_threads.thread_id
+            ORDER BY route.created_at DESC, route.message_id DESC
+            LIMIT 1
+          ) AS "latestRouteMessageId",
+          (
+            SELECT route.binding_json
+            FROM projection_dispatcher_task_routes AS route
+            WHERE route.thread_id = projection_threads.thread_id
+            ORDER BY route.created_at DESC, route.message_id DESC
+            LIMIT 1
+          ) AS "latestRouteBinding",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
@@ -1255,6 +1306,20 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           linked_pull_request_json AS "linkedPullRequest",
           branch_pull_request_json AS "branchPullRequest",
           latest_turn_id AS "latestTurnId",
+          (
+            SELECT route.message_id
+            FROM projection_dispatcher_task_routes AS route
+            WHERE route.thread_id = projection_threads.thread_id
+            ORDER BY route.created_at DESC, route.message_id DESC
+            LIMIT 1
+          ) AS "latestRouteMessageId",
+          (
+            SELECT route.binding_json
+            FROM projection_dispatcher_task_routes AS route
+            WHERE route.thread_id = projection_threads.thread_id
+            ORDER BY route.created_at DESC, route.message_id DESC
+            LIMIT 1
+          ) AS "latestRouteBinding",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
@@ -2330,6 +2395,7 @@ pending_approval_requests AS (
                 ),
                 branchPullRequest: row.branchPullRequest,
                 latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+                latestRoute: mapLatestRoute(row),
                 createdAt: row.createdAt,
                 updatedAt: row.updatedAt,
                 archivedAt: row.archivedAt,
@@ -2575,6 +2641,7 @@ pending_approval_requests AS (
                   ),
                   branchPullRequest: row.branchPullRequest,
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+                  latestRoute: mapLatestRoute(row),
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
                   archivedAt: row.archivedAt,
@@ -2731,6 +2798,7 @@ pending_approval_requests AS (
                           repositoryIdentities.get(row.projectId),
                         ),
                         latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+                        latestRoute: mapLatestRoute(row),
                         createdAt: row.createdAt,
                         updatedAt: row.updatedAt,
                         archivedAt: row.archivedAt,
@@ -2894,6 +2962,7 @@ pending_approval_requests AS (
                     repositoryIdentities.get(row.projectId),
                   ),
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+                  latestRoute: mapLatestRoute(row),
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
                   archivedAt: row.archivedAt,
@@ -3250,6 +3319,7 @@ pending_approval_requests AS (
         ),
         branchPullRequest: threadRow.value.branchPullRequest,
         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
+        latestRoute: mapLatestRoute(threadRow.value),
         createdAt: threadRow.value.createdAt,
         updatedAt: threadRow.value.updatedAt,
         archivedAt: threadRow.value.archivedAt,
@@ -3551,6 +3621,7 @@ pending_approval_requests AS (
         ),
         branchPullRequest: threadRow.value.branchPullRequest,
         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
+        latestRoute: mapLatestRoute(threadRow.value),
         createdAt: threadRow.value.createdAt,
         updatedAt: threadRow.value.updatedAt,
         archivedAt: threadRow.value.archivedAt,
