@@ -11,6 +11,10 @@ import {
 import type {
   CursorCloudRunnerBinding,
   DispatcherTaskRouteBinding,
+  ModelRouterDecision,
+  ModelRouterExecutionStatus,
+  ModelRouterMetricValue,
+  ModelRouterMode,
   ServerProvider,
   WorkflowRun,
   WorkflowTemplate,
@@ -45,6 +49,13 @@ export type InspectorRouteModel = {
   readonly fallbacks: ReadonlyArray<{ readonly provider: string; readonly model: string }>;
   readonly gateDecision: InspectorGateDecision;
   readonly gateReasons: ReadonlyArray<string>;
+  readonly policyVersion: string | null;
+  readonly mode: ModelRouterMode | null;
+  readonly reasonCodes: ReadonlyArray<string>;
+  readonly estimatedCostUsd: ModelRouterMetricValue | null;
+  readonly estimatedLatencyMs: ModelRouterMetricValue | null;
+  readonly estimatedQuality: ModelRouterMetricValue | null;
+  readonly executionStatus: ModelRouterExecutionStatus | null;
 };
 
 export type InspectorCursorCloudModel = {
@@ -104,20 +115,82 @@ const EMPTY_ROUTE: InspectorRouteModel = {
   fallbacks: [],
   gateDecision: "unavailable",
   gateReasons: [],
+  policyVersion: null,
+  mode: null,
+  reasonCodes: [],
+  estimatedCostUsd: null,
+  estimatedLatencyMs: null,
+  estimatedQuality: null,
+  executionStatus: null,
 };
+
+function executionStatusFromSession(
+  sessionStatus: string | null,
+  bound: boolean,
+): ModelRouterExecutionStatus | null {
+  if (sessionStatus === "error") return "failed";
+  if (sessionStatus === "running" || sessionStatus === "starting") return "running";
+  if (sessionStatus === "ready" || sessionStatus === "stopped" || sessionStatus === "interrupted") {
+    return "completed";
+  }
+  if (bound) return "bound";
+  return null;
+}
+
+function presentModelRouteTrace(
+  modelRoute: ModelRouterDecision | undefined,
+  sessionStatus: string | null,
+  bound: boolean,
+): Pick<
+  InspectorRouteModel,
+  | "policyVersion"
+  | "mode"
+  | "reasonCodes"
+  | "estimatedCostUsd"
+  | "estimatedLatencyMs"
+  | "estimatedQuality"
+  | "executionStatus"
+> {
+  if (modelRoute === undefined) {
+    return {
+      policyVersion: null,
+      mode: null,
+      reasonCodes: [],
+      estimatedCostUsd: null,
+      estimatedLatencyMs: null,
+      estimatedQuality: null,
+      executionStatus: executionStatusFromSession(sessionStatus, bound),
+    };
+  }
+  return {
+    policyVersion: modelRoute.policyVersion,
+    mode: modelRoute.mode,
+    reasonCodes: modelRoute.reasonCodes,
+    estimatedCostUsd: modelRoute.estimatedCostUsd,
+    estimatedLatencyMs: modelRoute.estimatedLatencyMs,
+    estimatedQuality: modelRoute.estimatedQuality,
+    executionStatus: executionStatusFromSession(sessionStatus, bound) ?? modelRoute.executionStatus,
+  };
+}
 
 function presentRoute(input: OperationalInspectorInput): InspectorRouteModel {
   if (input.boundRoute) {
     const presented = presentBoundDispatcherRoute(input.boundRoute, input.providers);
+    const fallbacks =
+      input.boundRoute.modelRoute?.fallbacks.map((candidate) => ({
+        provider: candidate.target.instanceId,
+        model: candidate.target.model,
+      })) ?? [];
     return {
       kind: "bound",
       provider: presented.provider,
       model: presented.model,
       source: input.boundRoute.source,
-      reason: presented.reason,
-      fallbacks: [],
+      reason: sanitizeDisplayText(input.boundRoute.modelRoute?.explanation) ?? presented.reason,
+      fallbacks,
       gateDecision: input.boundRoute.gate.decision,
       gateReasons: input.boundRoute.gate.reasonCodes,
+      ...presentModelRouteTrace(input.boundRoute.modelRoute, input.sessionStatus, true),
     };
   }
 
@@ -141,6 +214,7 @@ function presentRoute(input: OperationalInspectorInput): InspectorRouteModel {
       fallbacks: presented?.fallbacks ?? [],
       gateDecision: preview.decision.gate.decision,
       gateReasons: preview.decision.gate.reasonCodes,
+      ...presentModelRouteTrace(undefined, input.sessionStatus, false),
     };
   }
 

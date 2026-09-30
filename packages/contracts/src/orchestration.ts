@@ -31,6 +31,7 @@ import {
   DispatcherTaskRouteBinding,
   DispatcherTaskRouteSnapshot,
 } from "./dispatcher.ts";
+import { ModelRouterConstraints, ModelRouterMode } from "./modelRouter.ts";
 import { WorkflowCatalog, WorkflowMutation, WorkflowStageDispatchMutation } from "./workflow.ts";
 import {
   PullRequestActor,
@@ -1329,6 +1330,8 @@ export const ThreadTurnStartCommand = Schema.Struct({
     context: Schema.optional(OrchestrationMessageContext),
   }),
   modelSelection: Schema.optional(ModelSelection),
+  routingMode: Schema.optional(ModelRouterMode),
+  modelRouteConstraints: Schema.optional(ModelRouterConstraints),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
   interactionMode: ProviderInteractionMode.pipe(
@@ -1359,6 +1362,8 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     context: Schema.optional(OrchestrationMessageContext),
   }),
   modelSelection: Schema.optional(ModelSelection),
+  routingMode: Schema.optional(ModelRouterMode),
+  modelRouteConstraints: Schema.optional(ModelRouterConstraints),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,

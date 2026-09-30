@@ -122,14 +122,46 @@ function InspectorBody(props: {
         }
       >
         <p className="mt-1 text-2xs text-muted-foreground">{model.route.reason}</p>
+        {model.route.mode ? (
+          <p className="text-2xs text-muted-foreground">
+            Mode: {model.route.mode === "auto" ? "Auto Route" : "Manual"}
+          </p>
+        ) : null}
+        {model.route.policyVersion ? (
+          <p className="text-2xs text-muted-foreground">Policy: {model.route.policyVersion}</p>
+        ) : null}
         {model.route.source ? (
           <p className="text-2xs text-muted-foreground">Source: {model.route.source}</p>
+        ) : null}
+        {model.route.reasonCodes.length > 0 ? (
+          <p className="text-2xs text-muted-foreground">
+            Reasons: {model.route.reasonCodes.join(", ")}
+          </p>
         ) : null}
         {model.route.fallbacks.length > 0 ? (
           <p className="text-2xs text-muted-foreground">
             Fallbacks:{" "}
             {model.route.fallbacks.map((entry) => `${entry.provider} · ${entry.model}`).join(", ")}
           </p>
+        ) : null}
+        <p className="text-2xs text-muted-foreground">
+          Cost:{" "}
+          {model.route.estimatedCostUsd?.status === "known"
+            ? model.route.estimatedCostUsd.value
+            : "unknown"}
+          {" · "}
+          Latency:{" "}
+          {model.route.estimatedLatencyMs?.status === "known"
+            ? model.route.estimatedLatencyMs.value
+            : "unknown"}
+          {" · "}
+          Quality:{" "}
+          {model.route.estimatedQuality?.status === "known"
+            ? model.route.estimatedQuality.value
+            : "unknown"}
+        </p>
+        {model.route.executionStatus ? (
+          <p className="text-2xs text-muted-foreground">Execution: {model.route.executionStatus}</p>
         ) : null}
       </OperationalStatusCard>
       <OperationalStatusCard

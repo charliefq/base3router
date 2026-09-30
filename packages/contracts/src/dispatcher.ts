@@ -11,6 +11,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { ModelRouterDecision } from "./modelRouter.ts";
 
 export const DISPATCHER_POLICY_VERSION = "dispatcher.phase-1a.v1" as const;
 export const DISPATCHER_MAX_CANDIDATES = 32;
@@ -133,6 +134,7 @@ export const DispatcherTaskRouteBinding = Schema.Struct({
   fallbackIndex: NonNegativeInt,
   source: DispatcherRouteCandidateSource,
   gate: ActionGateResult,
+  modelRoute: Schema.optional(ModelRouterDecision),
 });
 export type DispatcherTaskRouteBinding = typeof DispatcherTaskRouteBinding.Type;
 

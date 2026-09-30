@@ -119,6 +119,68 @@ it("shows an immutable bound route after submission", () => {
   expect(model.route.fallbacks).toEqual([]);
 });
 
+it("presents a bound Auto Route trace without secret-shaped values", () => {
+  const model = presentOperationalInspector({
+    selected: true,
+    projectTitle: "Portfolio",
+    taskObjective: "Draft the dispatcher note",
+    gitBranch: "cursor/phase-8",
+    sessionStatus: "running",
+    sessionError: null,
+    capabilities: { dispatcher: false, workflow: true, cursorCloud: false },
+    providers: [],
+    preview: { status: "idle" },
+    boundRoute: {
+      ...boundRoute,
+      modelRoute: {
+        policyVersion: "model-router.v0",
+        mode: "auto",
+        task: { attachmentCount: 0, composerContextKinds: [], requiredCapabilities: [] },
+        policy: {
+          version: "model-router.v0",
+          qualityWeight: 1,
+          costWeight: 1,
+          latencyWeight: 1,
+        },
+        selected: {
+          fallbackIndex: 0,
+          target: { instanceId: ProviderInstanceId.make("claude"), model: "claude-sonnet-4-6" },
+          driver: ProviderDriverKind.make("claudeAgent"),
+          capabilities: ["code", "tools"],
+          eligible: true,
+          reasonCodes: ["SELECTED", "METRICS_UNKNOWN"],
+          preferredDefault: true,
+          metrics: {
+            quality: { status: "unknown" },
+            costUsd: { status: "unknown" },
+            latencyMs: { status: "unknown" },
+          },
+        },
+        fallbacks: [],
+        candidates: [],
+        reasonCodes: ["SELECTED", "PREFERRED_DEFAULT", "METRICS_UNKNOWN"],
+        explanation:
+          "Auto Route selected claude · claude-sonnet-4-6 because it is the configured default.",
+        estimatedCostUsd: { status: "unknown" },
+        estimatedLatencyMs: { status: "unknown" },
+        estimatedQuality: { status: "unknown" },
+        executionStatus: "bound",
+      },
+    },
+    workflowRun: null,
+    workflowTemplate: null,
+    cursorCloudBinding: null,
+  });
+
+  expect(model.route.mode).toBe("auto");
+  expect(model.route.policyVersion).toBe("model-router.v0");
+  expect(model.route.reasonCodes).toContain("SELECTED");
+  expect(model.route.estimatedCostUsd).toEqual({ status: "unknown" });
+  expect(model.route.executionStatus).toBe("running");
+  expect(JSON.stringify(model)).not.toContain("sk-");
+  expect(JSON.stringify(model)).not.toContain("Bearer ");
+});
+
 it("labels Cursor Cloud as a runner, not a provider", () => {
   const model = presentOperationalInspector({
     selected: true,

@@ -31,6 +31,10 @@
       "types": "./src/model.ts",
       "import": "./src/model.ts"
     },
+    "./modelRouter": {
+      "types": "./src/modelRouter.ts",
+      "import": "./src/modelRouter.ts"
+    },
     "./advertisedEndpoint": {
       "types": "./src/advertisedEndpoint.ts",
       "import": "./src/advertisedEndpoint.ts"

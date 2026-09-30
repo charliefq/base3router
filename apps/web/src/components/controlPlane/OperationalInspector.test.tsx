@@ -36,6 +36,13 @@ function model(overrides: Partial<OperationalInspectorModel> = {}): OperationalI
       fallbacks: [{ provider: "claude", model: "claude-sonnet-4-6" }],
       gateDecision: "ALLOW",
       gateReasons: ["ACTION_ALLOWED"],
+      policyVersion: "model-router.v0",
+      mode: "auto",
+      reasonCodes: ["SELECTED", "METRICS_UNKNOWN"],
+      estimatedCostUsd: { status: "unknown" },
+      estimatedLatencyMs: { status: "unknown" },
+      estimatedQuality: { status: "unknown" },
+      executionStatus: "not-started",
     },
     runnerKind: "local",
     workflowName: null,
@@ -60,6 +67,10 @@ it("renders a provisional local route", async () => {
   expect(renderedText()).toContain("ActionGate");
   expect(renderedText()).toContain("ALLOW");
   expect(renderedText()).toContain("local");
+  expect(renderedText()).toContain("Auto Route");
+  expect(renderedText()).toContain("model-router.v0");
+  expect(renderedText()).toContain("Cost:");
+  expect(renderedText()).toContain("unknown");
   expect(renderedText()).not.toContain("sk-");
 });
 
@@ -78,6 +89,13 @@ it("renders a bound Cursor Cloud workflow and approval state", async () => {
             fallbacks: [],
             gateDecision: "DENY",
             gateReasons: ["PROVIDER_UNAVAILABLE"],
+            policyVersion: "model-router.v0",
+            mode: "manual",
+            reasonCodes: ["MANUAL_OVERRIDE"],
+            estimatedCostUsd: { status: "unknown" },
+            estimatedLatencyMs: { status: "unknown" },
+            estimatedQuality: { status: "unknown" },
+            executionStatus: "failed",
           },
           runnerKind: "cursor-cloud",
           workflowName: "Review",
