@@ -1,6 +1,5 @@
-import { act } from "react";
-import { create, type ReactTestRenderer } from "react-test-renderer";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { renderToStaticMarkup } from "react-dom/server";
+import { expect, it } from "vite-plus/test";
 import {
   MODEL_ROUTER_DEFAULT_POLICY,
   MODEL_ROUTER_UNKNOWN_METRICS,
@@ -10,18 +9,6 @@ import {
 } from "@t3tools/contracts";
 
 import { ModelRouterControl } from "./ModelRouterControl";
-
-let renderer: ReactTestRenderer | null = null;
-beforeEach(() => vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true));
-afterEach(async () => {
-  await act(async () => renderer?.unmount());
-  renderer = null;
-  vi.unstubAllGlobals();
-});
-
-function renderedText(): string {
-  return JSON.stringify(renderer?.toJSON());
-}
 
 const decision: ModelRouterDecision = {
   policyVersion: "model-router.v0",
@@ -60,15 +47,13 @@ const decision: ModelRouterDecision = {
   executionStatus: "not-started",
 };
 
-it("renders Auto Route with the selected model and why-this-model control", async () => {
-  await act(async () => {
-    renderer = create(
-      <ModelRouterControl decision={decision} mode="auto" onModeChange={() => {}} />,
-    );
-  });
-  expect(renderedText()).toContain("Auto Route");
-  expect(renderedText()).toContain("gpt-5.4");
-  expect(renderedText()).toContain("Why this model?");
-  expect(renderedText()).toContain("fallback");
-  expect(renderedText()).not.toContain("sk-");
+it("renders Auto Route with the selected model and why-this-model control", () => {
+  const markup = renderToStaticMarkup(
+    <ModelRouterControl decision={decision} mode="auto" onModeChange={() => {}} />,
+  );
+  expect(markup).toContain("Auto Route");
+  expect(markup).toContain("gpt-5.4");
+  expect(markup).toContain("Why this model?");
+  expect(markup).toContain("fallback");
+  expect(markup).not.toContain("sk-");
 });

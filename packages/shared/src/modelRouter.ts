@@ -122,6 +122,7 @@ export function modelRouterCatalogFromProviders(
     );
     for (const model of models) {
       const key = `${provider.instanceId}\u0000${model.slug}`;
+      const metrics = declaredMetrics?.get(key);
       catalog.push({
         instanceId: provider.instanceId,
         driver: provider.driver,
@@ -129,7 +130,7 @@ export function modelRouterCatalogFromProviders(
         isDefault: model.isDefault === true,
         capabilities: structuralModelRouterCapabilities(declaredCapabilities?.get(key)),
         availabilityReasons: modelRouterAvailabilityReasons(provider, model.slug),
-        ...(declaredMetrics?.has(key) ? { metrics: declaredMetrics.get(key) } : {}),
+        ...(metrics === undefined ? {} : { metrics }),
       });
     }
   }
