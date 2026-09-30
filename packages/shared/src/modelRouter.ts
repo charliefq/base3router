@@ -75,7 +75,7 @@ const cloneMetrics = (metrics: ModelRouterMetrics | undefined): ModelRouterMetri
   latencyMs: metricOrUnknown(metrics?.latencyMs),
 });
 
-export function modelRouterAvailabilityReasons(
+function modelRouterAvailabilityReasons(
   provider: ServerProvider | undefined,
   model: string,
 ): ReadonlyArray<ModelRouterReasonCode> {
@@ -93,7 +93,7 @@ export function modelRouterAvailabilityReasons(
  * Coding-agent CLIs expose tools and code. Vision and long-context stay
  * unknown unless a catalog entry declares them — never inferred from names.
  */
-export function structuralModelRouterCapabilities(
+function structuralModelRouterCapabilities(
   declared?: ReadonlyArray<ModelRouterCapability> | null,
 ): ReadonlyArray<ModelRouterCapability> {
   if (declared) {

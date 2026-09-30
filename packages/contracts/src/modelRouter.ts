@@ -5,7 +5,7 @@ import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
 export const MODEL_ROUTER_POLICY_VERSION = "model-router.v0" as const;
 export const MODEL_ROUTER_MAX_CANDIDATES = 32;
-export const MODEL_ROUTER_MAX_REASON_CODES = 16;
+const MODEL_ROUTER_MAX_REASON_CODES = 16;
 
 /**
  * Documented Auto Route tie-break after preferred defaults. Unknown drivers
@@ -27,11 +27,11 @@ export const MODEL_ROUTER_FUTURE_API_DRIVERS = ["qwen", "deepseek", "kimi"] as c
 export const ModelRouterPolicyVersion = Schema.Literal(MODEL_ROUTER_POLICY_VERSION);
 export type ModelRouterPolicyVersion = typeof ModelRouterPolicyVersion.Type;
 
-export const MODEL_ROUTER_MODES = ["auto", "manual"] as const;
+const MODEL_ROUTER_MODES = ["auto", "manual"] as const;
 export const ModelRouterMode = Schema.Literals(MODEL_ROUTER_MODES);
 export type ModelRouterMode = typeof ModelRouterMode.Type;
 
-export const MODEL_ROUTER_CAPABILITIES = ["code", "tools", "vision", "long-context"] as const;
+const MODEL_ROUTER_CAPABILITIES = ["code", "tools", "vision", "long-context"] as const;
 export const ModelRouterCapability = Schema.Literals(MODEL_ROUTER_CAPABILITIES);
 export type ModelRouterCapability = typeof ModelRouterCapability.Type;
 
@@ -128,7 +128,7 @@ export const ModelRouterTarget = Schema.Struct({
 });
 export type ModelRouterTarget = typeof ModelRouterTarget.Type;
 
-export const MODEL_ROUTER_EXECUTION_STATUSES = [
+const MODEL_ROUTER_EXECUTION_STATUSES = [
   "not-started",
   "bound",
   "running",

@@ -622,7 +622,7 @@ function modelRouterBindingSource(input: {
   return "provider-default";
 }
 
-export function taskRouteBindingFromModelRoute(input: {
+function taskRouteBindingFromModelRoute(input: {
   readonly decision: ModelRouterDecision;
   readonly projectDefault: ModelSelection | null;
   readonly environmentDefault: ModelSelection | null;
