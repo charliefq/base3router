@@ -79,6 +79,24 @@ Workstream 6 owns mobile read-only workflow presentation, desktop visible
 branding that does not migrate user-data paths, and packaging notes. It does
 not redesign the desktop shell.
 
+## Internal Alpha desktop artifacts
+
+Unsigned packages are built by `.github/workflows/internal-alpha-desktop.yml`
+through the existing `vp run dist:desktop:artifact` path. Supported targets:
+
+- macOS arm64 on `macos-14` (`Base3Router-Internal-Alpha-mac-arm64`)
+- macOS x64 on `macos-14` via `--arch x64` (`Base3Router-Internal-Alpha-mac-x64`),
+  matching `release.yml` rather than a retired Intel image
+- Windows x64 on `windows-2022` (`Base3Router-Internal-Alpha-windows-x64`)
+
+Linux installers, Windows arm64, and macOS universal binaries remain supported
+by `scripts/build-desktop-artifact.ts` but are not produced by this Internal
+Alpha workflow. The workflow never signs, notarizes, or publishes.
+
+iPhone EAS preview is a separate labeled workflow (`mobile-eas-preview.yml`)
+that requires `EXPO_TOKEN`. This Alpha does not claim an iPhone build unless
+that token and label are present.
+
 ## Explicit non-goals
 
 - No parallel side application
