@@ -1,7 +1,10 @@
 import { ProviderDriverKind, type CursorCloudRunnerBinding } from "@t3tools/contracts";
 import { expect, it } from "vite-plus/test";
 
-import { resolveCursorCloudInspectorActions } from "./inspectorActions";
+import {
+  pickDefinedInspectorHandlers,
+  resolveCursorCloudInspectorActions,
+} from "./inspectorActions";
 
 const running: CursorCloudRunnerBinding = {
   runnerKind: "cursor-cloud",
@@ -104,4 +107,13 @@ it("never enables an action whose handler is missing", () => {
   expect(actions.followUp.enabled).toBe(false);
   expect(actions.cancel.enabled).toBe(false);
   expect(actions.refresh.enabled).toBe(true);
+});
+
+it("omits undefined handler keys instead of passing no-ops", () => {
+  const picked = pickDefinedInspectorHandlers({
+    onRefresh: handlers.onRefresh,
+  });
+  expect(Object.keys(picked)).toEqual(["onRefresh"]);
+  expect(picked.onRefresh).toBe(handlers.onRefresh);
+  expect(pickDefinedInspectorHandlers({})).toEqual({});
 });

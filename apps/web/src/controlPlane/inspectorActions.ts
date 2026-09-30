@@ -24,6 +24,18 @@ export type CursorCloudInspectorActionHandlers = {
   readonly onFollowUpChange?: (value: string) => void;
 };
 
+/** Drop undefined handler keys so exactOptionalPropertyTypes stays honest. */
+export function pickDefinedInspectorHandlers(
+  handlers: CursorCloudInspectorActionHandlers,
+): CursorCloudInspectorActionHandlers {
+  return {
+    ...(handlers.onCancel ? { onCancel: handlers.onCancel } : {}),
+    ...(handlers.onFollowUp ? { onFollowUp: handlers.onFollowUp } : {}),
+    ...(handlers.onFollowUpChange ? { onFollowUpChange: handlers.onFollowUpChange } : {}),
+    ...(handlers.onRefresh ? { onRefresh: handlers.onRefresh } : {}),
+  };
+}
+
 /**
  * Mutation controls are available only when a real handler exists. Missing
  * handlers produce a read-only inspector; they never become enabled no-ops.

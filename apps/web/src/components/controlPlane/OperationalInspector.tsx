@@ -2,6 +2,7 @@ import type { CursorCloudRunnerBinding } from "@t3tools/contracts";
 import { PanelRightCloseIcon, PanelRightIcon } from "lucide-react";
 
 import {
+  pickDefinedInspectorHandlers,
   resolveCursorCloudInspectorActions,
   type CursorCloudInspectorActionHandlers,
 } from "~/controlPlane/inspectorActions";
@@ -222,10 +223,7 @@ function InspectorBody(props: {
               binding={props.binding}
               busy={props.busy === true}
               followUp={props.followUp ?? ""}
-              onCancel={props.onCancel}
-              onFollowUp={props.onFollowUp}
-              onFollowUpChange={props.onFollowUpChange}
-              onRefresh={props.onRefresh}
+              {...pickDefinedInspectorHandlers(props)}
             />
           ) : (
             <p className="mt-2 text-2xs text-muted-foreground">
