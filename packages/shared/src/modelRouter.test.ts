@@ -2,7 +2,6 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ProviderDriverKind,
   ProviderInstanceId,
-  type ModelRouterCatalogEntry,
   type ModelRouterMetrics,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -12,14 +11,21 @@ import {
   modelRouterCatalogFromProviders,
   modelRouterDecisionOmitsSecrets,
   routeModel,
+  type ModelRouterCatalogEntry,
 } from "./modelRouter.ts";
 
 const instance = (id: string) => ProviderInstanceId.make(id);
 const driver = (id: string) => ProviderDriverKind.make(id);
 
-const entry = (
-  input: Partial<ModelRouterCatalogEntry> & { readonly instanceId: string; readonly model: string },
-): ModelRouterCatalogEntry => ({
+const entry = (input: {
+  readonly instanceId: string;
+  readonly model: string;
+  readonly driver?: ModelRouterCatalogEntry["driver"];
+  readonly isDefault?: boolean;
+  readonly capabilities?: ModelRouterCatalogEntry["capabilities"];
+  readonly availabilityReasons?: ModelRouterCatalogEntry["availabilityReasons"];
+  readonly metrics?: ModelRouterMetrics;
+}): ModelRouterCatalogEntry => ({
   instanceId: instance(input.instanceId),
   driver: input.driver ?? driver(input.instanceId),
   model: input.model,

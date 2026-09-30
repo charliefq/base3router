@@ -17,6 +17,7 @@ import {
   type ModelSelection,
   type ServerProvider,
 } from "@t3tools/contracts";
+import { modelRouterDecisionOmitsSecrets } from "@t3tools/shared/modelRouter";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -298,7 +299,7 @@ it.effect("Auto Route rewrites turn start to the selected eligible model", () =>
         },
       },
     });
-    expect(JSON.stringify(bound)).not.toMatch(/sk-|Bearer |CURSOR_API_KEY=/);
+    expect(modelRouterDecisionOmitsSecrets(bound)).toBe(true);
   }).pipe(Effect.provide(SqlitePersistenceMemory)),
 );
 
