@@ -100,7 +100,7 @@ jobs:
 
       - name: Build unsigned macOS arm64 artifact
         run: |
-          vp run dist:desktop:artifact -- \
+          vp run dist:desktop:artifact \
             --platform mac \
             --target dmg \
             --arch arm64 \
@@ -155,7 +155,7 @@ jobs:
 
       - name: Build unsigned macOS x64 artifact
         run: |
-          vp run dist:desktop:artifact -- \
+          vp run dist:desktop:artifact \
             --platform mac \
             --target dmg \
             --arch x64 \
@@ -211,7 +211,7 @@ jobs:
       - name: Build unsigned Windows x64 artifact
         shell: bash
         run: |
-          vp run dist:desktop:artifact -- \
+          vp run dist:desktop:artifact \
             --platform win \
             --target nsis \
             --arch x64 \
