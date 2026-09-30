@@ -46,6 +46,7 @@ const SourceRows = Schema.Array(
     sourceMessageId: Schema.NullOr(MessageId),
     assistantMessageId: Schema.NullOr(MessageId),
     sourceText: Schema.NullOr(Schema.String),
+    assistantText: Schema.NullOr(Schema.String),
     state: Schema.String,
     checkpointFiles: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
     branch: Schema.NullOr(Schema.String),
@@ -115,6 +116,7 @@ const readSource = Effect.fn("DispatcherHandoff.readSource")(function* (input: {
       t.pending_message_id AS "sourceMessageId",
       t.assistant_message_id AS "assistantMessageId",
       m.text AS "sourceText",
+      am.text AS "assistantText",
       t.state AS "state",
       t.checkpoint_files_json AS "checkpointFiles",
       th.branch AS "branch",
@@ -125,6 +127,7 @@ const readSource = Effect.fn("DispatcherHandoff.readSource")(function* (input: {
     JOIN projection_threads th ON th.thread_id = t.thread_id
     JOIN projection_projects p ON p.project_id = th.project_id
     LEFT JOIN projection_thread_messages m ON m.message_id = t.pending_message_id
+    LEFT JOIN projection_thread_messages am ON am.message_id = t.assistant_message_id
     LEFT JOIN projection_thread_sessions s ON s.thread_id = t.thread_id
     WHERE t.thread_id = ${input.threadId}
       AND t.turn_id = ${input.sourceTurnId}
@@ -176,6 +179,62 @@ const sourceUnavailable = (source: Source | null) => {
     return unavailable("SOURCE_SESSION_ACTIVE", "Wait for the active provider turn to stop first.");
   }
   return null;
+};
+
+const normalizePath = (value: string): string => value.replaceAll("\\", "/").replace(/\/+$/, "");
+
+const projectRelativePath = (value: string, source: Source): string | null => {
+  const candidate = normalizePath(value);
+  const workspace = normalizePath(source.worktreePath ?? source.workspaceRoot);
+  const caseInsensitive = /^[a-z]:\//i.test(workspace);
+  const comparableCandidate = caseInsensitive ? candidate.toLowerCase() : candidate;
+  const comparableWorkspace = caseInsensitive ? workspace.toLowerCase() : workspace;
+  if (comparableCandidate === comparableWorkspace) return ".";
+  if (!comparableCandidate.startsWith(`${comparableWorkspace}/`)) return null;
+  return safeProjectRelativePath(candidate.slice(workspace.length + 1));
+};
+
+const sanitizeProjectedSummary = (value: string, source: Source): string => {
+  const withoutCredentials = value
+    .replace(/\bBearer\s+\S+/gi, "[credential omitted]")
+    .replace(/\b(?:sk-[a-z0-9_-]{8,}|gh[pousr]_[a-z0-9_]{8,})\b/gi, "[credential omitted]")
+    .replace(/\b[A-Z][A-Z0-9_]{2,}=(?:"[^"]*"|'[^']*'|\S+)/g, "[environment value omitted]")
+    .replace(/https?:\/\/\S+/gi, "[link omitted]");
+  const withSafeLinks = withoutCredentials.replace(
+    /\[([^\]\r\n]{1,200})\]\(([^)\r\n]+)\)/g,
+    (_match, label: string, target: string) => {
+      const relative = projectRelativePath(target.trim(), source);
+      return relative === null ? label : `[${label}](${relative})`;
+    },
+  );
+  return withSafeLinks.replace(
+    /(^|[\s("'=])((?:[a-z]:[\\/]|\/)[^\s<>"'`]+)/gi,
+    (_match, prefix, path) => {
+      const trailing = /[),.;:\]]+$/.exec(path)?.[0] ?? "";
+      const candidate = trailing.length === 0 ? path : path.slice(0, -trailing.length);
+      return `${prefix}${projectRelativePath(candidate, source) ?? "[path omitted]"}${trailing}`;
+    },
+  );
+};
+
+const projectedSummarySection = (
+  source: Source | null,
+  heading: "Completed work" | "Remaining steps" | "Test results",
+): string => {
+  if (source?.assistantText === null || source?.assistantText === undefined) return UNKNOWN;
+  const lines = source.assistantText.split(/\r?\n/);
+  const start = lines.findIndex((line) => {
+    const match = /^\s{0,3}#{1,6}\s+(.+?)\s*$/.exec(line);
+    return match?.[1]?.replace(/:$/, "").trim().toLowerCase() === heading.toLowerCase();
+  });
+  if (start < 0) return UNKNOWN;
+  const following = lines.slice(start + 1);
+  const end = following.findIndex((line) => /^\s{0,3}#{1,6}\s+\S/.test(line));
+  const section = following
+    .slice(0, end < 0 ? undefined : end)
+    .join("\n")
+    .trim();
+  return bounded(section.length === 0 ? null : sanitizeProjectedSummary(section, source));
 };
 
 function candidateUnavailable(
@@ -279,9 +338,9 @@ export const previewTaskHandoff = Effect.fn("DispatcherHandoff.preview")(functio
     latestUserInstruction: bounded(source?.sourceText),
     branch: bounded(gitFacts.branch),
     commit: bounded(gitFacts.commit),
-    completedWork: UNKNOWN,
-    remainingSteps: UNKNOWN,
-    testResults: UNKNOWN,
+    completedWork: projectedSummarySection(source, "Completed work"),
+    remainingSteps: projectedSummarySection(source, "Remaining steps"),
+    testResults: projectedSummarySection(source, "Test results"),
     references,
   } satisfies typeof DispatcherHandoffPacket.Type;
 
