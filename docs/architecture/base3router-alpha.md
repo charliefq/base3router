@@ -91,7 +91,9 @@ through the existing `vp run dist:desktop:artifact` path. Supported targets:
 
 Linux installers, Windows arm64, and macOS universal binaries remain supported
 by `scripts/build-desktop-artifact.ts` but are not produced by this Internal
-Alpha workflow. The workflow never signs, notarizes, or publishes.
+Alpha workflow. Same-repository pull requests and `workflow_dispatch` both
+build the unsigned Mac/Windows packages. Fork pull requests run identity
+validation only. The workflow never signs, notarizes, or publishes.
 
 iPhone EAS preview is a separate labeled workflow (`mobile-eas-preview.yml`)
 that requires `EXPO_TOKEN` and the `🚀 Mobile Continuous Deployment` label.

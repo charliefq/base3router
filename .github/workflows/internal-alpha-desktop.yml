@@ -3,6 +3,10 @@ name: Internal Alpha desktop artifacts
 # Unsigned Base3Router Internal Alpha packages. Reuses
 # `vp run dist:desktop:artifact` from the existing release pipeline.
 # Never signs, notarizes, publishes, or reads repository secrets.
+#
+# workflow_dispatch stays available once this file exists on the default
+# branch. Until then, same-repository pull_request builds the unsigned
+# Mac/Windows packages. Fork PRs validate identity only.
 
 on:
   workflow_dispatch:
@@ -65,7 +69,10 @@ jobs:
 
   build-macos-arm64:
     name: Base3Router-Internal-Alpha-mac-arm64
-    if: github.event_name == 'workflow_dispatch'
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository)
     needs: validate
     runs-on: macos-14
     timeout-minutes: 75
@@ -115,7 +122,10 @@ jobs:
 
   build-macos-x64:
     name: Base3Router-Internal-Alpha-mac-x64
-    if: github.event_name == 'workflow_dispatch' && inputs.include_macos_x64
+    if: >
+      (github.event_name == 'workflow_dispatch' && inputs.include_macos_x64) ||
+      (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository)
     needs: validate
     # Same approach as release.yml: Apple Silicon host, electron-builder --arch x64.
     # GitHub-hosted Intel macOS images are not used here.
@@ -167,7 +177,10 @@ jobs:
 
   build-windows-x64:
     name: Base3Router-Internal-Alpha-windows-x64
-    if: github.event_name == 'workflow_dispatch'
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository)
     needs: validate
     runs-on: windows-2022
     timeout-minutes: 75
