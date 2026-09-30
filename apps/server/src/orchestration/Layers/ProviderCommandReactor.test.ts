@@ -1195,12 +1195,77 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn).toHaveBeenCalledTimes(1);
   });
 
-  it("fails over Auto Route to another provider after a Codex usage-limit start failure", async () => {
-    const harness = await createHarness({
-      dispatcherEnabled: true,
-      sendTurnEffect: (request) =>
-        request.modelSelection?.instanceId === "codex"
-          ? Effect.fail(
+  effectIt.effect(
+    "fails over Auto Route to another provider after a Codex usage-limit start failure",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            dispatcherEnabled: true,
+            sendTurnEffect: (request) =>
+              request.modelSelection?.instanceId === "codex"
+                ? Effect.fail(
+                    new ProviderAdapterRequestError({
+                      provider: "codex",
+                      method: "sendTurn",
+                      detail:
+                        "Codex usage limit reached. Send the message again once the limit resets.",
+                      failureCategory: "usage_quota_exhausted",
+                      failureScope: "provider_instance",
+                    }),
+                  )
+                : Effect.succeed({
+                    threadId: ThreadId.make("thread-1"),
+                    turnId: asTurnId("turn-failover"),
+                  }),
+          }),
+        );
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-auto-route-failover"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("message-auto-route-failover"),
+            role: "user",
+            text: "Reply with exactly: ROUTER_SMOKE_OK.",
+            attachments: [],
+          },
+          routeBinding: dispatcherRouteBinding({
+            instanceId: "codex",
+            model: "gpt-5.5",
+            modelRoute: autoRouteDecision(),
+          }),
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length >= 2));
+        yield* Effect.promise(() => harness.drain());
+        expect(harness.sendTurn.mock.calls.length).toBe(2);
+        expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.5" },
+        });
+        expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claude"),
+            model: "claude-sonnet-4-6",
+          },
+        });
+        const routes = yield* Effect.promise(() => harness.readDispatcherTaskRoutes());
+        expect(JSON.stringify(routes)).toContain("usage_quota_exhausted");
+        expect(JSON.stringify(routes)).not.toMatch(/sk-|Bearer /);
+      }),
+  );
+
+  effectIt.effect("does not retry other Codex models after usage-limit exhaustion", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          dispatcherEnabled: true,
+          sendTurnEffect: () =>
+            Effect.fail(
               new ProviderAdapterRequestError({
                 provider: "codex",
                 method: "sendTurn",
@@ -1208,69 +1273,11 @@ describe("ProviderCommandReactor", () => {
                 failureCategory: "usage_quota_exhausted",
                 failureScope: "provider_instance",
               }),
-            )
-          : Effect.succeed({
-              threadId: ThreadId.make("thread-1"),
-              turnId: asTurnId("turn-failover"),
-            }),
-    });
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-auto-route-failover"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("message-auto-route-failover"),
-          role: "user",
-          text: "Reply with exactly: ROUTER_SMOKE_OK.",
-          attachments: [],
-        },
-        routeBinding: dispatcherRouteBinding({
-          instanceId: "codex",
-          model: "gpt-5.5",
-          modelRoute: autoRouteDecision(),
+            ),
         }),
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: "2026-01-01T00:00:00.000Z",
-      }),
-    );
+      );
 
-    await waitFor(() => harness.sendTurn.mock.calls.length >= 2);
-    await harness.drain();
-    expect(harness.sendTurn.mock.calls.length).toBe(2);
-    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
-      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.5" },
-    });
-    expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
-      modelSelection: {
-        instanceId: ProviderInstanceId.make("claude"),
-        model: "claude-sonnet-4-6",
-      },
-    });
-    const routes = await harness.readDispatcherTaskRoutes();
-    expect(JSON.stringify(routes)).toContain("usage_quota_exhausted");
-    expect(JSON.stringify(routes)).not.toMatch(/sk-|Bearer /);
-  });
-
-  it("does not retry other Codex models after usage-limit exhaustion", async () => {
-    const harness = await createHarness({
-      dispatcherEnabled: true,
-      sendTurnEffect: () =>
-        Effect.fail(
-          new ProviderAdapterRequestError({
-            provider: "codex",
-            method: "sendTurn",
-            detail: "Codex usage limit reached. Send the message again once the limit resets.",
-            failureCategory: "usage_quota_exhausted",
-            failureScope: "provider_instance",
-          }),
-        ),
-    });
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
+      yield* harness.engine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.make("cmd-auto-route-no-same-account"),
         threadId: ThreadId.make("thread-1"),
@@ -1288,46 +1295,52 @@ describe("ProviderCommandReactor", () => {
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:00.000Z",
-      }),
-    );
+      });
 
-    await waitFor(async () => {
-      const readModel = await harness.readModel();
-      return (
-        readModel.threads
-          .find((thread) => thread.id === ThreadId.make("thread-1"))
-          ?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ?? false
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const readModel = await harness.readModel();
+          return (
+            readModel.threads
+              .find((thread) => thread.id === ThreadId.make("thread-1"))
+              ?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+            false
+          );
+        }),
       );
-    });
-    await harness.drain();
-    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
-    const readModel = await harness.readModel();
-    const detail = readModel.threads
-      .find((thread) => thread.id === ThreadId.make("thread-1"))
-      ?.activities.find((activity) => activity.kind === "provider.turn.start.failed")?.payload as {
-      detail?: string;
-    };
-    expect(detail.detail).toContain("No eligible alternate provider is currently configured");
-  });
+      yield* Effect.promise(() => harness.drain());
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const detail = readModel.threads
+        .find((thread) => thread.id === ThreadId.make("thread-1"))
+        ?.activities.find((activity) => activity.kind === "provider.turn.start.failed")
+        ?.payload as {
+        detail?: string;
+      };
+      expect(detail.detail).toContain("No eligible alternate provider is currently configured");
+    }),
+  );
 
-  it("keeps Manual selection instead of silently switching providers", async () => {
-    const harness = await createHarness({
-      dispatcherEnabled: true,
-      sendTurnEffect: () =>
-        Effect.fail(
-          new ProviderAdapterRequestError({
-            provider: "codex",
-            method: "sendTurn",
-            detail: "Codex usage limit reached. Send the message again once the limit resets.",
-            failureCategory: "usage_quota_exhausted",
-            failureScope: "provider_instance",
-          }),
-        ),
-    });
-    const manualRoute = { ...autoRouteDecision(), mode: "manual" as const };
+  effectIt.effect("keeps Manual selection instead of silently switching providers", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          dispatcherEnabled: true,
+          sendTurnEffect: () =>
+            Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: "codex",
+                method: "sendTurn",
+                detail: "Codex usage limit reached. Send the message again once the limit resets.",
+                failureCategory: "usage_quota_exhausted",
+                failureScope: "provider_instance",
+              }),
+            ),
+        }),
+      );
+      const manualRoute = { ...autoRouteDecision(), mode: "manual" as const };
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
+      yield* harness.engine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.make("cmd-manual-no-failover"),
         threadId: ThreadId.make("thread-1"),
@@ -1345,46 +1358,52 @@ describe("ProviderCommandReactor", () => {
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:00.000Z",
-      }),
-    );
+      });
 
-    await waitFor(async () => {
-      const readModel = await harness.readModel();
-      return (
-        readModel.threads
-          .find((thread) => thread.id === ThreadId.make("thread-1"))
-          ?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ?? false
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const readModel = await harness.readModel();
+          return (
+            readModel.threads
+              .find((thread) => thread.id === ThreadId.make("thread-1"))
+              ?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+            false
+          );
+        }),
       );
-    });
-    await harness.drain();
-    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
-    const readModel = await harness.readModel();
-    const detail = readModel.threads
-      .find((thread) => thread.id === ThreadId.make("thread-1"))
-      ?.activities.find((activity) => activity.kind === "provider.turn.start.failed")?.payload as {
-      detail?: string;
-    };
-    expect(detail.detail).toContain("Manual selection was kept");
-  });
+      yield* Effect.promise(() => harness.drain());
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const detail = readModel.threads
+        .find((thread) => thread.id === ThreadId.make("thread-1"))
+        ?.activities.find((activity) => activity.kind === "provider.turn.start.failed")
+        ?.payload as {
+        detail?: string;
+      };
+      expect(detail.detail).toContain("Manual selection was kept");
+    }),
+  );
 
-  it("does not automatically replay after a side-effect has started", async () => {
-    const harness = await createHarness({
-      dispatcherEnabled: true,
-      sendTurnEffect: () =>
-        Effect.fail(
-          new ProviderAdapterRequestError({
-            provider: "codex",
-            method: "sendTurn",
-            detail: "Codex usage limit reached. Send the message again once the limit resets.",
-            failureCategory: "usage_quota_exhausted",
-            failureScope: "provider_instance",
-            sideEffectsStarted: true,
-          }),
-        ),
-    });
+  effectIt.effect("does not automatically replay after a side-effect has started", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          dispatcherEnabled: true,
+          sendTurnEffect: () =>
+            Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: "codex",
+                method: "sendTurn",
+                detail: "Codex usage limit reached. Send the message again once the limit resets.",
+                failureCategory: "usage_quota_exhausted",
+                failureScope: "provider_instance",
+                sideEffectsStarted: true,
+              }),
+            ),
+        }),
+      );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
+      yield* harness.engine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.make("cmd-side-effect-no-failover"),
         threadId: ThreadId.make("thread-1"),
@@ -1402,27 +1421,31 @@ describe("ProviderCommandReactor", () => {
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:00.000Z",
-      }),
-    );
+      });
 
-    await waitFor(async () => {
-      const readModel = await harness.readModel();
-      return (
-        readModel.threads
-          .find((thread) => thread.id === ThreadId.make("thread-1"))
-          ?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ?? false
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const readModel = await harness.readModel();
+          return (
+            readModel.threads
+              .find((thread) => thread.id === ThreadId.make("thread-1"))
+              ?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+            false
+          );
+        }),
       );
-    });
-    await harness.drain();
-    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
-    const readModel = await harness.readModel();
-    const detail = readModel.threads
-      .find((thread) => thread.id === ThreadId.make("thread-1"))
-      ?.activities.find((activity) => activity.kind === "provider.turn.start.failed")?.payload as {
-      detail?: string;
-    };
-    expect(detail.detail).toContain("Automatic replay was skipped");
-  });
+      yield* Effect.promise(() => harness.drain());
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const detail = readModel.threads
+        .find((thread) => thread.id === ThreadId.make("thread-1"))
+        ?.activities.find((activity) => activity.kind === "provider.turn.start.failed")
+        ?.payload as {
+        detail?: string;
+      };
+      expect(detail.detail).toContain("Automatic replay was skipped");
+    }),
+  );
 
   effectIt.effect(
     "continues one task on a different supported runner only through its persisted handoff",

@@ -35,7 +35,6 @@ import { formatTokens } from "@t3tools/shared/usageFormat";
 import {
   classifyModelRouterFailure,
   formatModelRouterTerminalFailure,
-  planModelRouterFailover,
 } from "@t3tools/shared/modelRouterFailover";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
