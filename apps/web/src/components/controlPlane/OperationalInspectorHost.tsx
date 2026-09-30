@@ -63,11 +63,11 @@ export function OperationalInspectorHost(props: {
   const environment = useEnvironment(props.environmentId);
   const projectRef =
     props.environmentId && props.projectId
-      ? scopeProjectRef({ environmentId: props.environmentId, projectId: props.projectId })
+      ? scopeProjectRef(props.environmentId, props.projectId)
       : null;
   const threadRef =
     props.environmentId && props.threadId
-      ? scopeThreadRef({ environmentId: props.environmentId, threadId: props.threadId })
+      ? scopeThreadRef(props.environmentId, props.threadId)
       : null;
   const project = useProject(projectRef);
   const thread = useThreadShell(threadRef);

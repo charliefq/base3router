@@ -29,7 +29,7 @@ export function ControlCenterPage(props: {
     <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh">
       <div className="flex h-full min-w-0">
         <div className="min-w-0 flex-1">
-          <ControlCenter model={model} section={props.section} />
+          <ControlCenter model={model} section={props.section ?? "overview"} />
         </div>
         <OperationalInspectorHost environmentId={null} projectId={null} threadId={null} />
       </div>

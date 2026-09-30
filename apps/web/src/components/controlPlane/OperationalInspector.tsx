@@ -110,7 +110,7 @@ function InspectorBody(props: {
       <OperationalStatusCard
         title={model.route.kind === "bound" ? "Bound route" : "Provisional route"}
         tone={statusTone(model.route.gateDecision)}
-        value={model.route.kind === "none" ? undefined : model.route.kind}
+        value={model.route.kind === "none" ? null : model.route.kind}
         detail={
           model.route.provider && model.route.model
             ? `${model.route.provider} · ${model.route.model}`
@@ -165,7 +165,7 @@ function InspectorBody(props: {
       {model.stages.length > 0 ? (
         <OperationalStatusCard
           title="Workflow"
-          value={model.workflowStatus ?? undefined}
+          value={model.workflowStatus ?? null}
           tone={statusTone(model.workflowStatus)}
           detail={model.workflowName}
         >
@@ -222,10 +222,10 @@ function InspectorBody(props: {
               binding={props.binding}
               busy={props.busy === true}
               followUp={props.followUp ?? ""}
-              onCancel={props.onCancel}
-              onFollowUp={props.onFollowUp}
-              onFollowUpChange={props.onFollowUpChange}
-              onRefresh={props.onRefresh}
+              onCancel={props.onCancel ?? (() => {})}
+              onFollowUp={props.onFollowUp ?? (() => {})}
+              onFollowUpChange={props.onFollowUpChange ?? (() => {})}
+              onRefresh={props.onRefresh ?? (() => {})}
             />
           ) : (
             <p className="mt-2 text-2xs text-muted-foreground">
@@ -244,10 +244,10 @@ function CursorCloudInspectorControls(props: {
   readonly binding: CursorCloudRunnerBinding;
   readonly followUp: string;
   readonly busy: boolean;
-  readonly onFollowUpChange?: (value: string) => void;
-  readonly onFollowUp?: () => void;
-  readonly onCancel?: () => void;
-  readonly onRefresh?: () => void;
+  readonly onFollowUpChange: (value: string) => void;
+  readonly onFollowUp: () => void;
+  readonly onCancel: () => void;
+  readonly onRefresh: () => void;
 }) {
   return (
     <div className="mt-2 space-y-2">
@@ -255,7 +255,7 @@ function CursorCloudInspectorControls(props: {
         aria-label="Cursor Cloud follow-up"
         maxLength={16_000}
         value={props.followUp}
-        onChange={(event) => props.onFollowUpChange?.(event.target.value)}
+        onChange={(event) => props.onFollowUpChange(event.target.value)}
       />
       <div className="flex flex-wrap gap-2">
         <Button

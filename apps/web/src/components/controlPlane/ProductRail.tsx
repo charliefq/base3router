@@ -43,7 +43,7 @@ export function ProductRail(props: {
 }) {
   const active = resolveProductSection({
     pathname: props.pathname,
-    searchSection: props.searchSection,
+    searchSection: props.searchSection ?? null,
   });
 
   return (
@@ -66,24 +66,33 @@ export function ProductRail(props: {
           const Icon = SECTION_ICON[section];
           const target = productSectionTarget(section);
           const selected = active === section;
+          const className = cn(
+            "flex size-9 items-center justify-center rounded-md text-muted-foreground outline-hidden ring-ring hover:bg-muted/60 hover:text-foreground focus-visible:ring-2",
+            selected && "bg-muted text-foreground",
+          );
+          const link = target.search ? (
+            <Link
+              aria-current={selected ? "page" : undefined}
+              aria-label={productSectionLabel(section)}
+              className={className}
+              search={target.search}
+              to={target.to}
+            >
+              <Icon className="size-4" />
+            </Link>
+          ) : (
+            <Link
+              aria-current={selected ? "page" : undefined}
+              aria-label={productSectionLabel(section)}
+              className={className}
+              to={target.to}
+            >
+              <Icon className="size-4" />
+            </Link>
+          );
           return (
             <Tooltip key={section}>
-              <TooltipTrigger
-                render={
-                  <Link
-                    aria-current={selected ? "page" : undefined}
-                    aria-label={productSectionLabel(section)}
-                    className={cn(
-                      "flex size-9 items-center justify-center rounded-md text-muted-foreground outline-hidden ring-ring hover:bg-muted/60 hover:text-foreground focus-visible:ring-2",
-                      selected && "bg-muted text-foreground",
-                    )}
-                    search={target.search}
-                    to={target.to}
-                  >
-                    <Icon className="size-4" />
-                  </Link>
-                }
-              />
+              <TooltipTrigger render={link} />
               <TooltipPopup side="right">{productSectionLabel(section)}</TooltipPopup>
             </Tooltip>
           );

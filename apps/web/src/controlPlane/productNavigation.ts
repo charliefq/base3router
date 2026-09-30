@@ -17,7 +17,7 @@ export type ProductSectionTarget = {
 
 export function resolveProductSection(input: {
   readonly pathname: string;
-  readonly searchSection?: string | null;
+  readonly searchSection?: string | null | undefined;
 }): ProductSection {
   if (input.pathname === "/settings" || input.pathname.startsWith("/settings/")) {
     return "settings";

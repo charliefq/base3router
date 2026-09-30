@@ -61,7 +61,7 @@ it("classifies active, approval, completed, failed, and cancelled tasks", () => 
             policyVersion: "dispatcher.phase-1a.v1",
             target: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
           },
-        } as EnvironmentThreadShell["latestRoute"],
+        } as unknown as EnvironmentThreadShell["latestRoute"],
       }),
       thread({
         id: ThreadId.make("approval"),
