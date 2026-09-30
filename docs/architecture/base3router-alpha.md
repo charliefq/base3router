@@ -89,3 +89,5 @@ not redesign the desktop shell.
 - No removal of the upstream MIT license or T3 attribution
 - Packaged Electron `productName` and user-data directory names stay on the
   existing T3 Code identity so this alpha does not migrate installs
+- Desktop IPC `stageLabel` remains `Alpha` | `Dev` | `Nightly`; the web shell
+  can show Internal Alpha when desktop branding is not injected
