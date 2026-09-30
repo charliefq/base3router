@@ -157,7 +157,7 @@ export function classifyModelRouterFailure(input: {
   };
 }
 
-export function cooldownFromFailure(input: {
+function cooldownFromFailure(input: {
   readonly instanceId: ModelRouterTarget["instanceId"];
   readonly model: string;
   readonly classification: ModelRouterFailureClassification;

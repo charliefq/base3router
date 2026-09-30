@@ -160,7 +160,7 @@ export const ModelRouterCandidate = Schema.Struct({
 });
 export type ModelRouterCandidate = typeof ModelRouterCandidate.Type;
 
-export const MODEL_ROUTER_FAILURE_CATEGORIES = [
+const MODEL_ROUTER_FAILURE_CATEGORIES = [
   "model_unavailable",
   "provider_instance_unavailable",
   "usage_quota_exhausted",
@@ -173,7 +173,7 @@ export const MODEL_ROUTER_FAILURE_CATEGORIES = [
 export const ModelRouterFailureCategory = Schema.Literals(MODEL_ROUTER_FAILURE_CATEGORIES);
 export type ModelRouterFailureCategory = typeof ModelRouterFailureCategory.Type;
 
-export const MODEL_ROUTER_FAILURE_SCOPES = ["model", "provider_instance", "global"] as const;
+const MODEL_ROUTER_FAILURE_SCOPES = ["model", "provider_instance", "global"] as const;
 export const ModelRouterFailureScope = Schema.Literals(MODEL_ROUTER_FAILURE_SCOPES);
 export type ModelRouterFailureScope = typeof ModelRouterFailureScope.Type;
 
