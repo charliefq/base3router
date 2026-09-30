@@ -135,6 +135,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   usagePriceOverrides: Schema.optionalKey(Schema.Boolean),
   /** Server exposes deterministic, read-only dispatcher route previews. */
   dispatcherRoutePreview: Schema.optionalKey(Schema.Boolean),
+  /** Server supports explicit, user-approved task handoff to another provider. */
+  dispatcherTaskHandoff: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.pin / thread.unpin commands. Same
       version-skew contract as threadSettlement. */
   threadPinning: Schema.optionalKey(Schema.Boolean),

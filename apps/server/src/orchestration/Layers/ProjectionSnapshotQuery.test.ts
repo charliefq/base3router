@@ -6,6 +6,8 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  ProviderDriverKind,
+  TaskHandoffId,
   ThreadId,
   type ThreadPullRequestLink,
   ThreadLinkedPullRequest,
@@ -381,6 +383,32 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
       `;
 
+      yield* sql`
+        INSERT INTO projection_task_handoffs (
+          handoff_id,
+          thread_id,
+          source_turn_id,
+          destination_message_id,
+          destination_turn_id,
+          target_json,
+          status,
+          failure_reason,
+          created_at,
+          updated_at
+        ) VALUES (
+          'handoff-1',
+          'thread-1',
+          'turn-1',
+          'message-1',
+          'turn-1',
+          '{"instanceId":"claude","model":"claude-sonnet"}',
+          'continued',
+          NULL,
+          '2026-02-24T00:00:08.500Z',
+          '2026-02-24T00:00:08.750Z'
+        )
+      `;
+
       let sequence = 5;
       for (const projector of Object.values(ORCHESTRATION_PROJECTOR_NAMES)) {
         yield* sql`
@@ -496,12 +524,26 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
                 instanceId: ProviderInstanceId.make("codex"),
                 model: "gpt-5-codex",
               },
-              driver: "codex",
+              driver: ProviderDriverKind.make("codex"),
               modelFamily: "openai",
               fallbackIndex: 0,
               source: "explicit",
               gate: { decision: "ALLOW", reasonCodes: ["ACTION_ALLOWED"] },
             },
+          },
+          latestHandoff: {
+            handoffId: TaskHandoffId.make("handoff-1"),
+            sourceTurnId: asTurnId("turn-1"),
+            destinationMessageId: asMessageId("message-1"),
+            destinationTurnId: asTurnId("turn-1"),
+            target: {
+              instanceId: ProviderInstanceId.make("claude"),
+              model: "claude-sonnet",
+            },
+            status: "continued",
+            failureReason: null,
+            createdAt: "2026-02-24T00:00:08.500Z",
+            updatedAt: "2026-02-24T00:00:08.750Z",
           },
           createdAt: "2026-02-24T00:00:02.000Z",
           updatedAt: "2026-02-24T00:00:03.000Z",
@@ -637,12 +679,26 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
                 instanceId: ProviderInstanceId.make("codex"),
                 model: "gpt-5-codex",
               },
-              driver: "codex",
+              driver: ProviderDriverKind.make("codex"),
               modelFamily: "openai",
               fallbackIndex: 0,
               source: "explicit",
               gate: { decision: "ALLOW", reasonCodes: ["ACTION_ALLOWED"] },
             },
+          },
+          latestHandoff: {
+            handoffId: TaskHandoffId.make("handoff-1"),
+            sourceTurnId: asTurnId("turn-1"),
+            destinationMessageId: asMessageId("message-1"),
+            destinationTurnId: asTurnId("turn-1"),
+            target: {
+              instanceId: ProviderInstanceId.make("claude"),
+              model: "claude-sonnet",
+            },
+            status: "continued",
+            failureReason: null,
+            createdAt: "2026-02-24T00:00:08.500Z",
+            updatedAt: "2026-02-24T00:00:08.750Z",
           },
           createdAt: "2026-02-24T00:00:02.000Z",
           updatedAt: "2026-02-24T00:00:03.000Z",

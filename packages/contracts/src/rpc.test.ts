@@ -37,5 +37,6 @@ describe("subscribeServerConfig payload compatibility", () => {
 describe("dispatcher route preview RPC", () => {
   it("is registered as a bounded unary request", () => {
     expect(WsRpcGroup.requests.has(WS_METHODS.dispatcherRoutePreview)).toBe(true);
+    expect(WsRpcGroup.requests.has(WS_METHODS.dispatcherHandoffPreview)).toBe(true);
   });
 });

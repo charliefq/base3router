@@ -22,6 +22,28 @@ export type ThreadDetailReducerResult =
   | { readonly kind: "deleted" }
   | { readonly kind: "unchanged" };
 
+function failedHandoffFromActivity(
+  handoff: OrchestrationThread["latestHandoff"],
+  activity: OrchestrationThreadActivity,
+): OrchestrationThread["latestHandoff"] {
+  if (
+    activity.kind !== "provider.turn.start.failed" ||
+    handoff?.status !== "creating" ||
+    typeof activity.payload !== "object" ||
+    activity.payload === null ||
+    !("requestId" in activity.payload) ||
+    activity.payload.requestId !== handoff.destinationMessageId
+  ) {
+    return handoff;
+  }
+  return {
+    ...handoff,
+    status: "failed",
+    failureReason: "The selected provider could not start this handoff.",
+    updatedAt: activity.createdAt,
+  };
+}
+
 /** Keep only a legacy route supplied by the server; detail events cannot resolve project hosts. */
 function withPullRequests(
   thread: OrchestrationThread,
@@ -125,6 +147,7 @@ export function applyThreadDetailEvent(
           branchPullRequest: null,
           latestTurn: null,
           latestRoute: null,
+          latestHandoff: null,
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
           archivedAt: null,
@@ -353,6 +376,20 @@ export function applyThreadDetailEvent(
                   messageId: event.payload.messageId,
                   binding: event.payload.routeBinding,
                 },
+          latestHandoff:
+            event.payload.handoff === undefined
+              ? thread.latestHandoff
+              : {
+                  handoffId: event.payload.handoff.handoffId,
+                  sourceTurnId: event.payload.handoff.sourceTurnId,
+                  destinationMessageId: event.payload.messageId,
+                  destinationTurnId: null,
+                  target: event.payload.handoff.target,
+                  status: "creating",
+                  failureReason: null,
+                  createdAt: event.payload.createdAt,
+                  updatedAt: event.payload.createdAt,
+                },
           runtimeMode: event.payload.runtimeMode,
           interactionMode: event.payload.interactionMode,
           updatedAt: event.occurredAt,
@@ -528,6 +565,17 @@ export function applyThreadDetailEvent(
           ...thread,
           session: event.payload.session,
           latestTurn,
+          latestHandoff:
+            event.payload.session.status === "running" &&
+            event.payload.session.activeTurnId !== null &&
+            thread.latestHandoff?.status === "creating"
+              ? {
+                  ...thread.latestHandoff,
+                  destinationTurnId: event.payload.session.activeTurnId,
+                  status: "continued",
+                  updatedAt: event.payload.session.updatedAt,
+                }
+              : thread.latestHandoff,
           updatedAt: event.occurredAt,
         },
       };
@@ -707,6 +755,7 @@ export function applyThreadDetailEvent(
           thread: {
             ...thread,
             activities,
+            latestHandoff: failedHandoffFromActivity(thread.latestHandoff, activity),
             updatedAt: event.occurredAt,
           },
         };
@@ -729,7 +778,12 @@ export function applyThreadDetailEvent(
 
       return {
         kind: "updated",
-        thread: { ...thread, activities, updatedAt: event.occurredAt },
+        thread: {
+          ...thread,
+          activities,
+          latestHandoff: failedHandoffFromActivity(thread.latestHandoff, activity),
+          updatedAt: event.occurredAt,
+        },
       };
     }
 

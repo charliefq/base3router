@@ -31,6 +31,7 @@ import {
   CommandId,
   type DiscoveredLocalServerList,
   DispatcherPreviewError,
+  DispatcherHandoffPreviewError,
   EventId,
   type EditorId,
   type FileManagerRevealKind,
@@ -70,6 +71,7 @@ import {
   RpcClientId,
   EnvironmentAuthorizationError,
   ThreadId,
+  TaskHandoffId,
   type TerminalAttachStreamEvent,
   type TerminalError,
   type TerminalEvent,
@@ -127,6 +129,7 @@ import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as Dispatcher from "./dispatcher/Dispatcher.ts";
+import * as DispatcherHandoff from "./dispatcher/Handoff.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
@@ -555,6 +558,7 @@ const makeWsRpcLayer = (
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
+      const git = yield* GitVcsDriver.GitVcsDriver;
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
@@ -1886,7 +1890,26 @@ const makeWsRpcLayer = (
               yield* ProjectCloneTracker.rejectCommandsDuringClone(projectCloneTracker, command);
               const normalizedCommand = yield* normalizeDispatchCommand(command).pipe(
                 Effect.flatMap((normalized) =>
-                  Dispatcher.bindDispatcherTurnStartCommand(normalized, {
+                  normalized.type === "thread.turn.start" && normalized.handoffRequest !== undefined
+                    ? Effect.all({
+                        environmentId: serverEnvironment.getEnvironmentId,
+                        providers: providerRegistry.getProviders,
+                        settings: serverSettings.getSettings,
+                      }).pipe(
+                        Effect.flatMap((dependencies) =>
+                          DispatcherHandoff.bindTaskHandoffTurnStart(normalized, {
+                            enabled: config.dispatcherEnabled === true,
+                            environmentId: dependencies.environmentId,
+                            providers: dependencies.providers,
+                            environmentDefaultModelSelection:
+                              dependencies.settings.defaultModelSelection,
+                          }),
+                        ),
+                      )
+                    : Effect.succeed(normalized),
+                ),
+                Effect.flatMap((handoffBound) =>
+                  Dispatcher.bindDispatcherTurnStartCommand(handoffBound, {
                     enabled: config.dispatcherEnabled === true,
                     environmentId: serverEnvironment.getEnvironmentId,
                     providers: providerRegistry.getProviders,
@@ -2414,6 +2437,35 @@ const makeWsRpcLayer = (
                 () =>
                   new DispatcherPreviewError({
                     message: "Route preview is temporarily unavailable.",
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "dispatcher" },
+          ),
+        [WS_METHODS.dispatcherHandoffPreview]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.dispatcherHandoffPreview,
+            Effect.gen(function* () {
+              const [environmentId, providers, settings, uuid] = yield* Effect.all([
+                serverEnvironment.getEnvironmentId,
+                providerRegistry.getProviders,
+                serverSettings.getSettings,
+                crypto.randomUUIDv4,
+              ]);
+              return yield* DispatcherHandoff.previewTaskHandoff({
+                enabled: config.dispatcherEnabled === true,
+                handoffId: TaskHandoffId.make(uuid),
+                request: input,
+                environmentId,
+                providers,
+                environmentDefaultModelSelection: settings.defaultModelSelection,
+                git,
+              });
+            }).pipe(
+              Effect.mapError(
+                () =>
+                  new DispatcherHandoffPreviewError({
+                    message: "Handoff preview is temporarily unavailable.",
                   }),
               ),
             ),

@@ -3,6 +3,9 @@ import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
+  DispatcherHandoffPreview,
+  DispatcherHandoffPreviewError,
+  DispatcherHandoffPreviewRequest,
   DispatcherPreviewError,
   DispatcherRouteDecision,
   DispatcherRoutePreviewRequest,
@@ -317,6 +320,7 @@ export const WS_METHODS = {
 
   // Dispatcher methods
   dispatcherRoutePreview: "dispatcher.routePreview",
+  dispatcherHandoffPreview: "dispatcher.handoffPreview",
 
   // VCS methods
   vcsPull: "vcs.pull",
@@ -475,6 +479,12 @@ const WsDispatcherRoutePreviewRpc = Rpc.make(WS_METHODS.dispatcherRoutePreview, 
   payload: DispatcherRoutePreviewRequest,
   success: DispatcherRouteDecision,
   error: Schema.Union([DispatcherPreviewError, EnvironmentAuthorizationError]),
+});
+
+const WsDispatcherHandoffPreviewRpc = Rpc.make(WS_METHODS.dispatcherHandoffPreview, {
+  payload: DispatcherHandoffPreviewRequest,
+  success: DispatcherHandoffPreview,
+  error: Schema.Union([DispatcherHandoffPreviewError, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
@@ -1408,6 +1418,7 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsDispatcherRoutePreviewRpc,
+  WsDispatcherHandoffPreviewRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,

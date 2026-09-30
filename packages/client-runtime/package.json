@@ -91,6 +91,10 @@
       "types": "./src/dispatcher.ts",
       "default": "./src/dispatcher.ts"
     },
+    "./handoff": {
+      "types": "./src/handoff.ts",
+      "default": "./src/handoff.ts"
+    },
     "./platform": {
       "types": "./src/platform/index.ts",
       "default": "./src/platform/index.ts"

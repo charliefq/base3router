@@ -234,6 +234,7 @@ export const make = Effect.gen(function* () {
       usageLimitSources: true,
       usagePriceOverrides: true,
       dispatcherRoutePreview: serverConfig.dispatcherEnabled === true,
+      dispatcherTaskHandoff: serverConfig.dispatcherEnabled === true,
       threadPinning: true,
       threadPinReorder: true,
       threadActiveReorder: true,

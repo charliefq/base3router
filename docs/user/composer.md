@@ -71,6 +71,16 @@ returns to the remembered selection.
 
 Leaving reasoning level or service tier unset uses the provider's own configuration.
 
+## Continue with another provider
+
+When dispatcher routing is enabled, a settled routed thread can continue on another configured
+provider. Choose **Continue with another provider**, select an available runner and model, then
+review or edit the handoff text before continuing. The preview is provisional; the new turn's
+provider and model become authoritative only after submission.
+
+The continuation stays in the same thread and keeps the earlier turn and its route unchanged.
+T3 Code does not silently switch providers or retry a failed handoff on another runner.
+
 ## Quote an assistant response
 
 On web and desktop, select text within one assistant response and choose
