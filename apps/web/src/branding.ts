@@ -1,5 +1,5 @@
 import type { DesktopAppBranding } from "@t3tools/contracts";
-import { formatAppDisplayName } from "./branding.logic";
+import { formatAppDisplayName, visibleAppStageLabel } from "./branding.logic";
 
 function readInjectedDesktopAppBranding(): DesktopAppBranding | null {
   if (typeof window === "undefined") {
@@ -17,10 +17,11 @@ export const HOSTED_APP_CHANNEL =
 export const HOSTED_APP_CHANNEL_LABEL =
   HOSTED_APP_CHANNEL === "nightly" ? "Nightly" : HOSTED_APP_CHANNEL === "latest" ? "Latest" : null;
 export const APP_BASE_NAME = injectedDesktopAppBranding?.baseName ?? "Base3Router";
-export const APP_STAGE_LABEL =
+export const APP_STAGE_LABEL = visibleAppStageLabel(
   injectedDesktopAppBranding?.stageLabel ??
-  HOSTED_APP_CHANNEL_LABEL ??
-  (import.meta.env.DEV ? "Dev" : "Internal Alpha");
+    HOSTED_APP_CHANNEL_LABEL ??
+    (import.meta.env.DEV ? "Dev" : "Internal Alpha"),
+);
 export const APP_DISPLAY_NAME =
   injectedDesktopAppBranding?.displayName ??
   formatAppDisplayName({ baseName: APP_BASE_NAME, stageLabel: APP_STAGE_LABEL });

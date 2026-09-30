@@ -54,7 +54,7 @@ Routing decisions and handoff records are server-owned. Clients display provisio
 
 ## Current status
 
-The dispatcher is an experimental fork under active development. Core routing and Codex-to-Claude continuation have passed focused tests and isolated runtime acceptance. Phase 7A adds the Base3Router Internal Alpha product shell on the existing T3 clients. Packaged Electron `productName` and user-data directory names stay on the T3 Code identity so this alpha does not migrate installs.
+The dispatcher is an experimental fork under active development. Core routing and Codex-to-Claude continuation have passed focused tests and isolated runtime acceptance. Phase 7B packages the Internal Alpha as Base3Router. User-data directories stay on the legacy T3 Code paths so existing installs are not migrated or deleted.
 
 Implementation is organized as stacked pull requests so each layer can be reviewed independently:
 

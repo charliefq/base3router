@@ -87,7 +87,12 @@ not redesign the desktop shell.
 - No client-side credentials or secret-shaped values
 - No fake production data
 - No removal of the upstream MIT license or T3 attribution
-- Packaged Electron `productName` and user-data directory names stay on the
-  existing T3 Code identity so this alpha does not migrate installs
-- Desktop IPC `stageLabel` remains `Alpha` | `Dev` | `Nightly`; the web shell
-  can show Internal Alpha when desktop branding is not injected
+- Packaged Electron `productName` is Base3Router. Installer and artifact
+  filenames use `Base3Router-Internal-Alpha`. Visible stage is Internal Alpha.
+- Desktop IPC `stageLabel` remains `Alpha` | `Dev` | `Nightly`. Clients map
+  `Alpha` to Internal Alpha for display only.
+- User-data paths stay on the legacy T3 Code directories
+  (`T3 Code (Alpha)` / `t3code`, plus `T3 Code (Dev)` / `t3code-dev` in
+  development). Fresh installs keep using those folders. Existing T3 data is
+  never deleted, relocated, or overwritten. `appId` stays `com.t3tools.t3code`
+  so protocol handlers and single-instance locks remain compatible.

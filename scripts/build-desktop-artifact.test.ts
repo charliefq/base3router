@@ -52,6 +52,7 @@ import {
   resolveBuildOptions,
   resolveDesktopBuildIconAssets,
   resolveDesktopProductName,
+  resolveDesktopArtifactNameTemplate,
   resolveDesktopUpdateChannel,
   resolveDesktopWebAssetBrand,
   resolveResourceMonitorRustTargets,
@@ -254,8 +255,16 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   });
 
   it("switches desktop packaging product names to nightly for nightly builds", () => {
-    assert.equal(resolveDesktopProductName("0.0.17"), "T3 Code (Alpha)");
-    assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "T3 Code (Nightly)");
+    assert.equal(resolveDesktopProductName("0.0.17"), "Base3Router");
+    assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "Base3Router (Nightly)");
+    assert.equal(
+      resolveDesktopArtifactNameTemplate("0.0.17"),
+      "Base3Router-Internal-Alpha-${arch}.${ext}",
+    );
+    assert.equal(
+      resolveDesktopArtifactNameTemplate("0.0.17-nightly.20260413.42"),
+      "Base3Router-Nightly-${version}-${arch}.${ext}",
+    );
   });
 
   it("switches desktop packaging icons to the nightly artwork for nightly versions", () => {
@@ -658,7 +667,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "**/*.map",
       ]);
       assert.deepStrictEqual(mac.dmg, {
-        title: "T3 Code (Alpha) 1.2.3 Installer",
+        title: "Base3Router 1.2.3 Installer",
         background: "dmg/dmg-background-latest.png",
         window: { width: 640, height: 432 },
         contents: [
@@ -1870,6 +1879,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
       const mac = config.mac as Record<string, unknown>;
       assert.equal(config.appId, "com.t3tools.t3code");
+      assert.equal(config.productName, "Base3Router");
+      assert.equal(config.artifactName, "Base3Router-Internal-Alpha-${arch}.${ext}");
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
       assert.match(String(mac.sign), /[\\/]scripts[\\/]sign-macos\.ts$/);

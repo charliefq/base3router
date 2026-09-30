@@ -111,10 +111,11 @@ export function resolveDesktopAppBranding(input: {
   readonly appVersion: string;
 }): DesktopAppBranding {
   const stageLabel = resolveDesktopAppStageLabel(input);
+  const visibleStageLabel = stageLabel === "Alpha" ? "Internal Alpha" : stageLabel;
   return {
     baseName: APP_BASE_NAME,
     stageLabel,
-    displayName: `${APP_BASE_NAME} (${stageLabel})`,
+    displayName: `${APP_BASE_NAME} (${visibleStageLabel})`,
   };
 }
 
@@ -186,6 +187,8 @@ const make = Effect.fn("desktop.environment.make")(function* (
     joinPath: path.join,
     t3Home: config.t3Home,
   });
+  // Product identity is Base3Router. Storage stays on the T3 Code folder names
+  // so Internal Alpha does not create a second profile or touch existing data.
   const userDataDirName = isDevelopment ? "t3code-dev" : "t3code";
   const legacyUserDataDirName = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
   const linuxApplicationsDir = path.join(

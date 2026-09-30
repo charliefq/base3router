@@ -196,10 +196,12 @@ describe("DesktopAppIdentity", () => {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
         yield* identity.configure;
 
-        assert.deepEqual(calls.setName, ["Base3Router (Alpha)"]);
-        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "Base3Router (Alpha)");
+        assert.deepEqual(calls.setName, ["Base3Router (Internal Alpha)"]);
+        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "Base3Router");
         assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "1.2.3");
         assert.equal(calls.setAboutPanelOptions[0]?.version, "0123456789ab");
+        assert.include(calls.setAboutPanelOptions[0]?.copyright ?? "", "T3 Code");
+        assert.include(calls.setAboutPanelOptions[0]?.copyright ?? "", "MIT");
         // Packaged: the bundle's own icon stands, so a custom one the user
         // attached survives.
         assert.deepEqual(calls.setDockIcon, []);
