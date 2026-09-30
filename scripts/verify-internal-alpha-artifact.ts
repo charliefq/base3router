@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - Host-side artifact scan runs before an Effect runtime exists.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeCrypto from "node:crypto";
@@ -74,12 +75,12 @@ export function verifyInternalAlphaArtifactDirectory(directory: string): {
 if (import.meta.main) {
   const directory = process.argv[2];
   if (!directory) {
-    console.error("usage: verify-internal-alpha-artifact.ts <directory>");
+    process.stderr.write("usage: verify-internal-alpha-artifact.ts <directory>\n");
     process.exit(1);
   }
   const result = verifyInternalAlphaArtifactDirectory(directory);
   if (result.artifacts.length === 0) {
-    console.error(`no ${INTERNAL_ALPHA_ARTIFACT_PREFIX} artifacts in ${directory}`);
+    process.stderr.write(`no ${INTERNAL_ALPHA_ARTIFACT_PREFIX} artifacts in ${directory}\n`);
     process.exit(1);
   }
   const sums = result.artifacts
@@ -88,13 +89,13 @@ if (import.meta.main) {
   NodeFS.writeFileSync(NodePath.join(directory, "SHA256SUMS"), `${sums}\n`);
   for (const artifact of result.artifacts) {
     if (!artifact.name.includes("Base3Router")) {
-      console.error(`artifact is missing Base3Router in the filename: ${artifact.name}`);
+      process.stderr.write(`artifact is missing Base3Router in the filename: ${artifact.name}\n`);
       process.exit(1);
     }
-    console.log(`${artifact.name} ${artifact.sha256}`);
+    process.stdout.write(`${artifact.name} ${artifact.sha256}\n`);
   }
   if (result.findings.length > 0) {
-    console.error(result.findings.join("\n"));
+    process.stderr.write(`${result.findings.join("\n")}\n`);
     process.exit(1);
   }
 }
