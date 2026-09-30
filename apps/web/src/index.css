@@ -123,6 +123,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --workspace-gutter: 0.75rem;
   --workspace-gutter-start: calc(env(safe-area-inset-left) + var(--workspace-gutter));
   --workspace-gutter-end: calc(env(safe-area-inset-right) + var(--workspace-gutter));
+  --control-plane-accent: oklch(0.62 0.12 264);
+  --control-plane-rail-width: 3.75rem;
+  --control-plane-inspector-width: 20rem;
+  --control-plane-card-radius: 0.625rem;
+  --control-plane-rail-background: color-mix(in oklab, var(--background) 92%, black);
 
   @variant sm {
     --workspace-gutter: 1.25rem;
@@ -134,6 +139,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --app-scrollbar-thumb-hover: rgb(255 255 255 / 12%);
     --glass-blur: 16px;
     --glass-saturation: 1.08;
+    --control-plane-accent: oklch(0.72 0.1 264);
+    --control-plane-rail-background: color-mix(in oklab, var(--background) 88%, black);
   }
 }
 
