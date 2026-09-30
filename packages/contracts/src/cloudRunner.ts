@@ -286,6 +286,17 @@ export const isCursorCloudRunActive = (status: CursorCloudRunStatus | undefined)
 export const isCursorCloudRunTerminal = (status: CursorCloudRunStatus | undefined): boolean =>
   status === "FINISHED" || status === "ERROR" || status === "CANCELLED" || status === "EXPIRED";
 
+const isCursorCloudAgentIdle = (status: CursorCloudAgentStatus | undefined): boolean =>
+  status === "IDLE";
+
+/** Follow-up requires a terminal previous run and an IDLE durable agent. Do not infer IDLE. */
+export const isCursorCloudFollowUpReady = (binding: {
+  readonly cursorRunStatus?: CursorCloudRunStatus;
+  readonly cursorAgentStatus?: CursorCloudAgentStatus;
+}): boolean =>
+  isCursorCloudRunTerminal(binding.cursorRunStatus) &&
+  isCursorCloudAgentIdle(binding.cursorAgentStatus);
+
 export const cursorCloudCreateRequestFromTarget = (input: {
   readonly prompt: string;
   readonly agentId: string;

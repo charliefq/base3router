@@ -374,7 +374,7 @@ const cursorBinding = (status: CursorCloudRunnerBinding["status"]): CursorCloudR
   cursorAgentId: "bc-agent",
   cursorRunId: "run-cloud-1",
   cursorAgentUrl: "https://cursor.com/agents/bc-agent",
-  cursorAgentStatus: status === "running" ? "ACTIVE" : "IDLE",
+  cursorAgentStatus: status === "running" || status === "busy" ? "ACTIVE" : "IDLE",
   cursorRunStatus: status === "running" ? "RUNNING" : "FINISHED",
   status,
   ...(status === "finished" ? { sanitizedResult: "Done" } : {}),
@@ -521,6 +521,33 @@ it("renders agent and run identity and disables follow-up while busy", async () 
   expect(text()).toContain("run-cloud-1");
   expect(text()).toContain("Follow-up is disabled while the Cursor run is active.");
   expect(button("Send follow-up").props.disabled).toBe(true);
+  expect(text()).not.toMatch(/Bearer |crsr_|sk-|CURSOR_API_KEY=/);
+});
+
+it("disables follow-up while a terminal run still has an ACTIVE Cursor agent", async () => {
+  mock.catalog.mockResolvedValue(success(boundCatalog(cursorBinding("busy"))));
+  await mount(true, true);
+  await open();
+  await act(async () => select("Workflow run").props.onChange({ target: { value: "run-one" } }));
+  expect(text()).toContain("Cursor agent is finishing background work");
+  expect(text()).not.toContain("Follow-up is disabled while the Cursor run is active.");
+  expect(button("Send follow-up").props.disabled).toBe(true);
+  expect(text()).not.toMatch(/Bearer |crsr_|sk-|CURSOR_API_KEY=/);
+});
+
+it("enables follow-up once the Cursor agent is IDLE after a terminal run", async () => {
+  mock.catalog.mockResolvedValue(success(boundCatalog(cursorBinding("finished"))));
+  await mount(true, true);
+  await open();
+  await act(async () => select("Workflow run").props.onChange({ target: { value: "run-one" } }));
+  expect(text()).toContain("Follow-up and cancellation require ActionGate approval.");
+  expect(text()).not.toContain("Cursor agent is finishing background work");
+  await act(async () =>
+    renderer!.root.findByProps({ "aria-label": "Cursor Cloud follow-up" }).props.onChange({
+      target: { value: "Continue the review." },
+    }),
+  );
+  expect(button("Send follow-up").props.disabled).toBe(false);
   expect(text()).not.toMatch(/Bearer |crsr_|sk-|CURSOR_API_KEY=/);
 });
 

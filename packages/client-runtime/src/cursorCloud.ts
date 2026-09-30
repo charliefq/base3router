@@ -1,6 +1,7 @@
 import {
   decodeCursorCloudExecutionTarget,
-  isCursorCloudRunActive,
+  isCursorCloudFollowUpReady,
+  isCursorCloudRunTerminal,
   type CursorCloudDispatchPreview,
   type CursorCloudExecutionTarget,
   type CursorCloudImmutableDispatchPayload,
@@ -46,7 +47,14 @@ export const cursorCloudDispatchAllowed = (
 
 export const cursorCloudFollowUpDisabled = (
   binding: CursorCloudRunnerBinding | undefined,
-): boolean => binding === undefined || isCursorCloudRunActive(binding.cursorRunStatus);
+): boolean => binding === undefined || !isCursorCloudFollowUpReady(binding);
+
+export const cursorCloudAgentFinishingBackgroundWork = (
+  binding: CursorCloudRunnerBinding | undefined,
+): boolean =>
+  binding !== undefined &&
+  isCursorCloudRunTerminal(binding.cursorRunStatus) &&
+  binding.cursorAgentStatus === "ACTIVE";
 
 export const cursorCloudCancelDisabled = (binding: CursorCloudRunnerBinding | undefined): boolean =>
   binding === undefined || binding.cursorRunId === undefined;

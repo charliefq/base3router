@@ -4,7 +4,12 @@ import type { CursorCloudRunnerBinding } from "@t3tools/contracts";
 import { cursorCloudError } from "./CursorCloudErrors.ts";
 
 export type CursorCloudOperationKind = "create" | "follow-up" | "cancel";
-export type CursorCloudOperationState = "pending" | "completed" | "indeterminate";
+export type CursorCloudOperationState = "pending" | "completed" | "indeterminate" | "rejected";
+
+export type CursorCloudOutboxRejection = {
+  readonly code: "agent_busy";
+  readonly message: string;
+};
 
 export type CursorCloudOperationIntent = {
   readonly commandId: string;
@@ -29,12 +34,21 @@ export type CursorCloudOutboxRecord =
       readonly intent: CursorCloudOperationIntent;
       readonly binding: CursorCloudRunnerBinding;
     }
-  | { readonly state: "indeterminate"; readonly intent: CursorCloudOperationIntent };
+  | { readonly state: "indeterminate"; readonly intent: CursorCloudOperationIntent }
+  | {
+      readonly state: "rejected";
+      readonly intent: CursorCloudOperationIntent;
+      readonly error: CursorCloudOutboxRejection;
+    };
 
 export type CursorCloudOutbox = {
   claim(intent: CursorCloudOperationIntent): Promise<CursorCloudOutboxRecord>;
   complete(intent: CursorCloudOperationIntent, binding: CursorCloudRunnerBinding): Promise<void>;
   markIndeterminate(intent: CursorCloudOperationIntent): Promise<void>;
+  markRejected(
+    intent: CursorCloudOperationIntent,
+    error: CursorCloudOutboxRejection,
+  ): Promise<void>;
 };
 
 const SEPARATOR = "\u001f";
@@ -97,6 +111,9 @@ export const cursorCloudCommandConflict = () =>
 export const cursorCloudIndeterminateError = () =>
   cursorCloudError("indeterminate", "Cursor Cloud operation needs a refresh before retry.");
 
+export const cursorCloudRejectedError = (error: CursorCloudOutboxRejection) =>
+  cursorCloudError(error.code, error.message, { httpStatus: 409 });
+
 export const makeMemoryCursorCloudOutbox = (): CursorCloudOutbox => {
   const records = new Map<string, CursorCloudOutboxRecord>();
   return {
@@ -135,6 +152,14 @@ export const makeMemoryCursorCloudOutbox = (): CursorCloudOutbox => {
         throw new Error(`Cursor Cloud outbox is missing operation ${key}.`);
       }
       records.set(key, { state: "indeterminate", intent: existing.intent });
+    },
+    async markRejected(intent, error) {
+      const key = cursorCloudOperationKey(intent);
+      const existing = records.get(key);
+      if (existing === undefined) {
+        throw new Error(`Cursor Cloud outbox is missing operation ${key}.`);
+      }
+      records.set(key, { state: "rejected", intent: existing.intent, error });
     },
   };
 };

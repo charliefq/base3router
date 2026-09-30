@@ -4,6 +4,7 @@ import type {
   CursorCloudRunnerBinding,
 } from "@t3tools/contracts";
 import {
+  cursorCloudAgentFinishingBackgroundWork,
   cursorCloudCancelDisabled,
   cursorCloudDispatchAllowed,
   cursorCloudFollowUpDisabled,
@@ -159,7 +160,9 @@ export function CursorCloudBindingCard(props: {
       <Field label="Error" value={presented.error} />
       <Field label="Created" value={presented.createdAt} />
       <Field label="Updated" value={presented.updatedAt} />
-      {cursorCloudFollowUpDisabled(props.binding) ? (
+      {cursorCloudAgentFinishingBackgroundWork(props.binding) ? (
+        <p role="status">Cursor agent is finishing background work</p>
+      ) : cursorCloudFollowUpDisabled(props.binding) ? (
         <p role="status">Follow-up is disabled while the Cursor run is active.</p>
       ) : (
         <p className="text-muted-foreground">

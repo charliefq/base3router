@@ -99,6 +99,7 @@ const finishedBinding = (agentId: string, runId = "run-00000000-0000-0000-0000-0
   target,
   cursorAgentId: agentId,
   cursorRunId: runId,
+  cursorAgentStatus: "IDLE" as const,
   cursorRunStatus: "FINISHED" as const,
   status: "finished" as const,
   createdAt: at,
@@ -442,6 +443,61 @@ describe("Cursor Cloud sqlite restart crash window", () => {
       expect(
         requests.filter((request) => request.method === "GET" && request.path.includes("/runs?")),
       ).toHaveLength(2);
+    });
+  });
+
+  it("replays a finalized 409 agent_busy follow-up after restart without another POST", async () => {
+    const dispatchId = "dispatch-sqlite-follow-rejected";
+    const agentId = cursorCloudAgentIdFromDispatch({ ...identity, dispatchId });
+    const previous = "run-00000000-0000-0000-0000-000000000001";
+    const prompt = "Also add tests";
+    const commandId = "follow-sqlite-rejected";
+    await withSqliteDb(async (dbPath) => {
+      const { transport, requests } = recordTransport((request) => {
+        if (request.method === "POST" && request.path.endsWith("/runs")) {
+          return jsonResponse(409, { code: "agent_busy", message: "agent_busy" });
+        }
+        return jsonResponse(500, { message: "unexpected" });
+      });
+      const adapter = adapterFor(transport);
+      const outboxA = sqliteOutbox(dbPath);
+      await expect(
+        followUpCursorCloudStage({
+          adapter,
+          outbox: outboxA,
+          gate: allow,
+          binding: finishedBinding(agentId, previous),
+          prompt,
+          at,
+          ...identity,
+          commandId,
+        }),
+      ).rejects.toMatchObject({
+        code: "agent_busy",
+        message: "The Cursor agent is busy with another run.",
+      });
+      const outboxB = sqliteOutbox(dbPath);
+      await expect(
+        followUpCursorCloudStage({
+          adapter,
+          outbox: outboxB,
+          gate: allow,
+          binding: finishedBinding(agentId, previous),
+          prompt,
+          at,
+          ...identity,
+          commandId,
+        }),
+      ).rejects.toMatchObject({
+        code: "agent_busy",
+        message: "The Cursor agent is busy with another run.",
+      });
+      expect(
+        requests.filter((request) => request.method === "POST" && request.path.endsWith("/runs")),
+      ).toHaveLength(1);
+      expect(
+        requests.filter((request) => request.method === "GET" && request.path.includes("/runs?")),
+      ).toHaveLength(0);
     });
   });
 

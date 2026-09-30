@@ -137,6 +137,7 @@ const finishedBinding = (agentId: string): CursorCloudRunnerBinding => ({
   target,
   cursorAgentId: agentId,
   cursorRunId: "run-00000000-0000-0000-0000-000000000001",
+  cursorAgentStatus: "IDLE",
   cursorRunStatus: "FINISHED",
   status: "finished",
   createdAt: at,
@@ -349,6 +350,80 @@ describe("Cursor Cloud durable dispatch", () => {
     expect(second.cursorRunId).toBe(first.cursorRunId);
   });
 
+  it("does not POST a follow-up while the durable agent is ACTIVE after a terminal run", async () => {
+    const agentId = agentFor("dispatch-follow-active").id;
+    const { transport, requests } = recordTransport(() =>
+      jsonResponse(200, { run: runBody(agentId) }),
+    );
+    await expect(
+      followUpCursorCloudStage({
+        adapter: adapterFor(transport),
+        outbox: makeMemoryCursorCloudOutbox(),
+        gate: allow,
+        binding: {
+          ...finishedBinding(agentId),
+          cursorAgentStatus: "ACTIVE",
+          status: "busy",
+        },
+        prompt: "Also add tests",
+        at,
+        environmentId: identity.environmentId,
+        projectId: identity.projectId,
+        runId: identity.runId,
+        stageId: identity.stageId,
+        attempt: identity.attempt,
+        commandId: "follow-active-1",
+      }),
+    ).rejects.toMatchObject({ code: "agent_busy" });
+    expect(followUpPosts(requests)).toHaveLength(0);
+  });
+
+  it("finalizes a 409 agent_busy follow-up and replays the same rejection", async () => {
+    const agentId = agentFor("dispatch-follow-busy").id;
+    const followUp = runBody(agentId, "run-00000000-0000-0000-0000-000000000002");
+    let posts = 0;
+    const { transport, requests } = recordTransport((request) => {
+      if (request.method === "POST" && request.path.endsWith("/runs")) {
+        posts += 1;
+        if (posts === 1) {
+          return jsonResponse(409, { code: "agent_busy", message: "agent_busy" });
+        }
+        return jsonResponse(200, { run: followUp });
+      }
+      return jsonResponse(500, { message: "unexpected" });
+    });
+    const outbox = makeMemoryCursorCloudOutbox();
+    const args = {
+      adapter: adapterFor(transport),
+      outbox,
+      gate: allow,
+      binding: finishedBinding(agentId),
+      prompt: "Also add tests",
+      at,
+      environmentId: identity.environmentId,
+      projectId: identity.projectId,
+      runId: identity.runId,
+      stageId: identity.stageId,
+      attempt: identity.attempt,
+    };
+    await expect(
+      followUpCursorCloudStage({ ...args, commandId: "follow-busy-1" }),
+    ).rejects.toMatchObject({
+      code: "agent_busy",
+      message: "The Cursor agent is busy with another run.",
+    });
+    await expect(
+      followUpCursorCloudStage({ ...args, commandId: "follow-busy-1" }),
+    ).rejects.toMatchObject({
+      code: "agent_busy",
+      message: "The Cursor agent is busy with another run.",
+    });
+    expect(followUpPosts(requests)).toHaveLength(1);
+    const recovered = await followUpCursorCloudStage({ ...args, commandId: "follow-busy-2" });
+    expect(followUpPosts(requests)).toHaveLength(2);
+    expect(recovered.cursorRunId).toBe(followUp.id);
+  });
+
   it("replays a repeated cancel commandId without a second remote cancel", async () => {
     const agentId = agentFor("dispatch-cancel-1").id;
     const { transport, requests } = recordTransport((request) => {
@@ -389,6 +464,7 @@ const skipComplete = (inner: CursorCloudOutbox): CursorCloudOutbox => ({
     throw new Error("simulated crash before outbox.complete");
   },
   markIndeterminate: (intent) => inner.markIndeterminate(intent),
+  markRejected: (intent, error) => inner.markRejected(intent, error),
 });
 
 const followUpIntent = (

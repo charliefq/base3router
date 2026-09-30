@@ -14,6 +14,7 @@ import {
   type CursorCloudOperationState,
   type CursorCloudOutbox,
   type CursorCloudOutboxRecord,
+  type CursorCloudOutboxRejection,
 } from "./CursorCloudOutbox.ts";
 
 type StoredRow = {
@@ -32,11 +33,19 @@ type StoredRow = {
   readonly requestFingerprint: string;
   readonly claimedAt: string;
   readonly bindingJson: string | null;
+  readonly errorJson: string | null;
 };
 
 const BindingFromJson = Schema.fromJsonString(CursorCloudRunnerBinding);
 const decodeBindingJson = Schema.decodeUnknownSync(BindingFromJson);
 const encodeBindingJson = Schema.encodeSync(BindingFromJson);
+const OutboxRejection = Schema.Struct({
+  code: Schema.Literal("agent_busy"),
+  message: Schema.String,
+});
+const RejectionFromJson = Schema.fromJsonString(OutboxRejection);
+const decodeRejectionJson = Schema.decodeUnknownSync(RejectionFromJson);
+const encodeRejectionJson = Schema.encodeSync(RejectionFromJson);
 
 const intentFromRow = (row: StoredRow): CursorCloudOperationIntent => ({
   commandId: row.commandId,
@@ -60,6 +69,13 @@ const recordFromRow = (row: StoredRow, inserted: boolean): CursorCloudOutboxReco
   }
   if (row.state === "indeterminate") {
     return { state: "indeterminate", intent };
+  }
+  if (row.state === "rejected") {
+    const error: CursorCloudOutboxRejection =
+      row.errorJson === null
+        ? { code: "agent_busy", message: "The Cursor agent is busy with another run." }
+        : decodeRejectionJson(row.errorJson);
+    return { state: "rejected", intent, error };
   }
   return { state: inserted ? "accepted" : "pending", intent };
 };
@@ -91,6 +107,7 @@ export const makeSqliteCursorCloudOutbox = (
               request_fingerprint,
               claimed_at,
               binding_json,
+              error_json,
               created_at,
               updated_at
             ) VALUES (
@@ -108,6 +125,7 @@ export const makeSqliteCursorCloudOutbox = (
               ${intent.previousRunId ?? null},
               ${intent.requestFingerprint},
               ${intent.claimedAt ?? now},
+              NULL,
               NULL,
               ${now},
               ${now}
@@ -130,7 +148,8 @@ export const makeSqliteCursorCloudOutbox = (
               previous_run_id AS "previousRunId",
               request_fingerprint AS "requestFingerprint",
               claimed_at AS "claimedAt",
-              binding_json AS "bindingJson"
+              binding_json AS "bindingJson",
+              error_json AS "errorJson"
             FROM cursor_cloud_operations
             WHERE operation_key = ${key}
             LIMIT 1
@@ -178,6 +197,26 @@ export const makeSqliteCursorCloudOutbox = (
             UPDATE cursor_cloud_operations
             SET
               state = 'indeterminate',
+              updated_at = ${now}
+            WHERE operation_key = ${key}
+          `;
+        }),
+      ),
+    );
+  },
+  async markRejected(intent, error) {
+    const key = cursorCloudOperationKey(intent);
+    const errorJson = encodeRejectionJson(error);
+    await run(
+      Effect.orDie(
+        Effect.gen(function* () {
+          const now = DateTime.formatIso(yield* DateTime.now);
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`
+            UPDATE cursor_cloud_operations
+            SET
+              state = 'rejected',
+              error_json = ${errorJson},
               updated_at = ${now}
             WHERE operation_key = ${key}
           `;

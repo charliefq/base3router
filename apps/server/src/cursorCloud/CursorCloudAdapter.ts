@@ -1,7 +1,8 @@
 import {
   cursorCloudCreateRequestFromTarget,
   emptyCursorCloudBinding,
-  isCursorCloudRunActive,
+  isCursorCloudFollowUpReady,
+  isCursorCloudRunTerminal,
   mapCursorAgentStatus,
   mapCursorRunStatus,
   type CloudRunnerCanonicalStatus,
@@ -156,10 +157,17 @@ const gitOutput = (run: CursorCloudBetaRun): CursorCloudGitOutput | undefined =>
   };
 };
 
+// ACTIVE after a terminal run stays busy. Never infer agent IDLE from run status.
 const combinedStatus = (
   agentStatus: CursorCloudBetaAgent["status"] | undefined,
   runStatus: CursorCloudBetaRun["status"] | undefined,
 ): CloudRunnerCanonicalStatus => {
+  if (
+    agentStatus === "ACTIVE" &&
+    (runStatus === undefined || isCursorCloudRunTerminal(runStatus))
+  ) {
+    return "busy";
+  }
   if (runStatus !== undefined) return mapCursorRunStatus(runStatus);
   if (agentStatus !== undefined) return mapCursorAgentStatus(agentStatus);
   return "creating";
@@ -379,10 +387,8 @@ export const makeCursorCloudAdapter = (input: {
           "A durable Cursor agent is required before a follow-up.",
         );
       }
-      if (isCursorCloudRunActive(followUp.binding.cursorRunStatus)) {
-        throw cursorCloudError("agent_busy", "The Cursor agent is busy with another run.", {
-          httpStatus: 409,
-        });
+      if (!isCursorCloudFollowUpReady(followUp.binding)) {
+        throw cursorCloudError("agent_busy", "The Cursor agent is busy with another run.");
       }
       const body: CursorCloudFollowUpRequest = { prompt: { text: followUp.prompt } };
       const decoded = decodeBetaCreateRun(

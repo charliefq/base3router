@@ -15,6 +15,7 @@ import {
   decodeCursorCloudExecutionTarget,
   decodeCursorCloudRunnerBinding,
   emptyCursorCloudBinding,
+  isCursorCloudFollowUpReady,
   isCursorCloudRunActive,
   isCursorCloudRunTerminal,
   mapCursorAgentStatus,
@@ -243,6 +244,16 @@ describe("cursor-cloud runner contracts", () => {
     expect(isCursorCloudRunTerminal("FINISHED")).toBe(true);
     expect(isCursorCloudRunTerminal("CANCELLED")).toBe(true);
     expect(isCursorCloudRunTerminal("RUNNING")).toBe(false);
+    expect(
+      isCursorCloudFollowUpReady({ cursorRunStatus: "FINISHED", cursorAgentStatus: "IDLE" }),
+    ).toBe(true);
+    expect(
+      isCursorCloudFollowUpReady({ cursorRunStatus: "FINISHED", cursorAgentStatus: "ACTIVE" }),
+    ).toBe(false);
+    expect(isCursorCloudFollowUpReady({ cursorRunStatus: "FINISHED" })).toBe(false);
+    expect(
+      isCursorCloudFollowUpReady({ cursorRunStatus: "RUNNING", cursorAgentStatus: "IDLE" }),
+    ).toBe(false);
   });
 
   it("rejects a credential value on the persisted binding", () => {

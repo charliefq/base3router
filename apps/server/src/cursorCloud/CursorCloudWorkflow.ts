@@ -1,6 +1,7 @@
 import {
   CURSOR_CLOUD_CREDENTIAL_REFERENCE,
   emptyCursorCloudBinding,
+  isCursorCloudFollowUpReady,
   isCursorCloudRunTerminal,
   mapCursorAgentStatus,
   type ActionGateResult,
@@ -22,6 +23,7 @@ import {
 import {
   cursorCloudIndeterminateError,
   cursorCloudOperationKey,
+  cursorCloudRejectedError,
   cursorCloudRequestFingerprint,
   runCursorCloudCommandOnce,
   type CursorCloudOperationIntent,
@@ -143,22 +145,32 @@ const executeCursorCloudOperation = async (input: {
   ) => Promise<CursorCloudRunnerBinding | "retry">;
 }): Promise<CursorCloudRunnerBinding> =>
   runCursorCloudCommandOnce(cursorCloudOperationKey(input.intent), async () => {
-    const claimed = await input.outbox.claim(input.intent);
-    if (claimed.state === "completed") return claimed.binding;
-    if (claimed.state === "indeterminate") throw cursorCloudIndeterminateError();
-    if (claimed.state === "pending") {
-      const reconciled = await input.reconcilePending(claimed.intent);
-      if (reconciled === "retry") {
+    const persistAccepted = async () => {
+      try {
         const binding = await input.executeAccepted();
         await input.outbox.complete(input.intent, binding);
         return binding;
+      } catch (cause) {
+        if (isCursorCloudError(cause) && cause.code === "agent_busy" && cause.httpStatus === 409) {
+          await input.outbox.markRejected(input.intent, {
+            code: cause.code,
+            message: cause.message,
+          });
+        }
+        throw cause;
       }
+    };
+    const claimed = await input.outbox.claim(input.intent);
+    if (claimed.state === "completed") return claimed.binding;
+    if (claimed.state === "indeterminate") throw cursorCloudIndeterminateError();
+    if (claimed.state === "rejected") throw cursorCloudRejectedError(claimed.error);
+    if (claimed.state === "pending") {
+      const reconciled = await input.reconcilePending(claimed.intent);
+      if (reconciled === "retry") return persistAccepted();
       await input.outbox.complete(input.intent, reconciled);
       return reconciled;
     }
-    const binding = await input.executeAccepted();
-    await input.outbox.complete(input.intent, binding);
-    return binding;
+    return persistAccepted();
   });
 
 export const createCursorCloudStageBinding = async (input: {
@@ -268,6 +280,9 @@ export const followUpCursorCloudStage = async (input: {
   if (cursorAgentId === undefined) {
     throw cursorCloudError("rejected", "A durable Cursor agent is required before a follow-up.");
   }
+  if (!isCursorCloudFollowUpReady(input.binding)) {
+    throw cursorCloudError("agent_busy", "The Cursor agent is busy with another run.");
+  }
   const previousRunId = input.binding.cursorRunId;
   const intent: CursorCloudOperationIntent = {
     commandId: input.commandId,
@@ -287,12 +302,16 @@ export const followUpCursorCloudStage = async (input: {
     claimedAt: input.at,
     ...(previousRunId === undefined ? {} : { previousRunId }),
   };
-  const executeAccepted = () =>
-    input.adapter.createFollowUpRun({
+  const executeAccepted = () => {
+    if (!isCursorCloudFollowUpReady(input.binding)) {
+      throw cursorCloudError("agent_busy", "The Cursor agent is busy with another run.");
+    }
+    return input.adapter.createFollowUpRun({
       binding: input.binding,
       prompt: input.prompt,
       at: input.at,
     });
+  };
   return executeCursorCloudOperation({
     outbox: input.outbox,
     intent,

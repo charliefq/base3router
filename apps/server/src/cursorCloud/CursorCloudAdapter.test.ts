@@ -234,6 +234,7 @@ describe("Cursor Cloud adapter", () => {
         target: repositoryTarget,
         cursorAgentId: agent.id,
         cursorRunId: run.id,
+        cursorAgentStatus: "IDLE",
         cursorRunStatus: "FINISHED",
         status: "finished",
         createdAt: at,
@@ -288,6 +289,10 @@ describe("Cursor Cloud adapter", () => {
       at,
     });
     expect(observed.status).toBe("FINISHED");
+    expect(binding.cursorAgentId).toBe(agent.id);
+    expect(binding.cursorRunId).toBe(run.id);
+    expect(binding.cursorAgentStatus).toBe("IDLE");
+    expect(binding.cursorRunStatus).toBe("FINISHED");
     expect(binding.status).toBe("finished");
     expect(binding.output?.branch).toBe("cursor/phase-6-c98a");
     expect(binding.output?.pullRequestUrl).toBe("https://github.com/charliefq/base3router/pull/6");
@@ -308,6 +313,7 @@ describe("Cursor Cloud adapter", () => {
           runnerKind: "cursor-cloud",
           target: namedTarget,
           cursorAgentId: agent.id,
+          cursorAgentStatus: "IDLE",
           cursorRunStatus: "FINISHED",
           status: "finished",
           createdAt: at,
@@ -444,6 +450,63 @@ describe("Cursor Cloud adapter", () => {
     expect("value" in binding.credentialRef).toBe(false);
     expect(binding.sanitizedResult).not.toContain("secret_value");
     expect(binding.sanitizedResult).not.toContain("secret-value");
+  });
+
+  it("refuses to follow up while the durable agent is ACTIVE after a terminal run", async () => {
+    const { transport, requests } = recordTransport(() => jsonResponse(200, { run }));
+    await expect(
+      adapterFor(transport).createFollowUpRun({
+        binding: {
+          provider,
+          model: "composer-2",
+          runnerKind: "cursor-cloud",
+          target: repositoryTarget,
+          cursorAgentId: agent.id,
+          cursorRunId: run.id,
+          cursorAgentStatus: "ACTIVE",
+          cursorRunStatus: "FINISHED",
+          status: "busy",
+          createdAt: at,
+          updatedAt: at,
+          credentialRef: { kind: "env", name: "CURSOR_API_KEY" },
+        },
+        prompt: "Too soon",
+        at,
+      }),
+    ).rejects.toMatchObject({ code: "agent_busy" });
+    expect(requests).toHaveLength(0);
+  });
+
+  it("maps a terminal run with an ACTIVE agent as busy without inferring IDLE", async () => {
+    const { transport } = recordTransport((request) => {
+      if (request.path.endsWith(`/runs/${run.id}`)) {
+        return jsonResponse(200, { ...run, status: "FINISHED", result: "Run finished." });
+      }
+      if (request.path.endsWith(`/agents/${agent.id}`)) {
+        return jsonResponse(200, { ...agent, status: "ACTIVE", latestRunId: run.id });
+      }
+      return jsonResponse(500, { message: "unexpected" });
+    });
+    const binding = await adapterFor(transport).refreshBinding({
+      binding: {
+        provider,
+        model: "composer-2",
+        runnerKind: "cursor-cloud",
+        target: repositoryTarget,
+        cursorAgentId: agent.id,
+        cursorRunId: run.id,
+        status: "running",
+        createdAt: at,
+        updatedAt: at,
+        credentialRef: { kind: "env", name: "CURSOR_API_KEY" },
+      },
+      at,
+    });
+    expect(binding.cursorAgentId).toBe(agent.id);
+    expect(binding.cursorRunId).toBe(run.id);
+    expect(binding.cursorAgentStatus).toBe("ACTIVE");
+    expect(binding.cursorRunStatus).toBe("FINISHED");
+    expect(binding.status).toBe("busy");
   });
 
   it("refuses to follow up while the current run is still active", async () => {

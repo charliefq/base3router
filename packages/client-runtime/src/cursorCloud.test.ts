@@ -7,6 +7,7 @@ import {
 import { expect, it } from "@effect/vitest";
 
 import {
+  cursorCloudAgentFinishingBackgroundWork,
   cursorCloudDispatchAllowed,
   cursorCloudFollowUpDisabled,
   emptyCursorCloudTargetDraft,
@@ -85,21 +86,47 @@ it("requires ActionGate ALLOW plus an immutable payload before dispatch", () => 
   ).toBe(false);
 });
 
-it("disables follow-up while a Cursor run is active", () => {
+it("disables follow-up while a Cursor run is active or the agent is still ACTIVE", () => {
   const binding: CursorCloudRunnerBinding = {
     ...allow.payload!,
     status: "running",
     cursorAgentId: "bc-agent",
     cursorRunId: "run-1",
+    cursorAgentStatus: "ACTIVE",
     cursorRunStatus: "RUNNING",
     createdAt: "2026-09-29T00:00:00.000Z",
     updatedAt: "2026-09-29T00:00:00.000Z",
     credentialRef: CURSOR_CLOUD_CREDENTIAL_REFERENCE,
   };
   expect(cursorCloudFollowUpDisabled(binding)).toBe(true);
+  expect(cursorCloudAgentFinishingBackgroundWork(binding)).toBe(false);
+  expect(
+    cursorCloudFollowUpDisabled({
+      ...binding,
+      cursorRunStatus: "FINISHED",
+      cursorAgentStatus: "ACTIVE",
+      status: "busy",
+    }),
+  ).toBe(true);
+  expect(
+    cursorCloudAgentFinishingBackgroundWork({
+      ...binding,
+      cursorRunStatus: "FINISHED",
+      cursorAgentStatus: "ACTIVE",
+      status: "busy",
+    }),
+  ).toBe(true);
+  expect(
+    cursorCloudFollowUpDisabled({
+      ...binding,
+      cursorRunStatus: "FINISHED",
+      cursorAgentStatus: "IDLE",
+      status: "finished",
+    }),
+  ).toBe(false);
   expect(
     cursorCloudFollowUpDisabled({ ...binding, cursorRunStatus: "FINISHED", status: "idle" }),
-  ).toBe(false);
+  ).toBe(true);
 });
 
 it("presents sanitized binding metadata without secret-shaped fields", () => {
