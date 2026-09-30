@@ -5,6 +5,8 @@ import * as NodePath from "node:path";
 
 import {
   DispatcherTaskRouteBinding,
+  MODEL_ROUTER_DEFAULT_POLICY,
+  MODEL_ROUTER_UNKNOWN_METRICS,
   ModelSelection,
   ProviderRuntimeEvent,
   ProviderSession,
@@ -68,6 +70,7 @@ import {
   providerErrorLabelFromInstanceHint,
   ProviderCommandReactorLive,
 } from "./ProviderCommandReactor.ts";
+import { ModelRouterAvailabilityLive } from "../Services/ModelRouterAvailability.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -89,6 +92,7 @@ const dispatcherRouteBinding = (input: {
   readonly instanceId: string;
   readonly model: string;
   readonly fallbackIndex?: number;
+  readonly modelRoute?: DispatcherTaskRouteBinding["modelRoute"];
 }) => ({
   policyVersion: "dispatcher.phase-1a.v1" as const,
   target: {
@@ -100,7 +104,58 @@ const dispatcherRouteBinding = (input: {
   fallbackIndex: input.fallbackIndex ?? 0,
   source: "provider-default" as const,
   gate: { decision: "ALLOW" as const, reasonCodes: ["ACTION_ALLOWED" as const] },
+  ...(input.modelRoute !== undefined ? { modelRoute: input.modelRoute } : {}),
 });
+
+const autoRouteDecision = (input?: {
+  readonly selectedModel?: string;
+  readonly includeClaude?: boolean;
+}) => {
+  const selected = {
+    fallbackIndex: 0,
+    target: {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: input?.selectedModel ?? "gpt-5.5",
+    },
+    driver: ProviderDriverKind.make("codex"),
+    capabilities: ["code", "tools"] as const,
+    eligible: true,
+    reasonCodes: ["SELECTED"] as const,
+    preferredDefault: false,
+    metrics: MODEL_ROUTER_UNKNOWN_METRICS,
+  };
+  const claude = {
+    fallbackIndex: 1,
+    target: {
+      instanceId: ProviderInstanceId.make("claude"),
+      model: "claude-sonnet-4-6",
+    },
+    driver: ProviderDriverKind.make("claudeAgent"),
+    capabilities: ["code", "tools"] as const,
+    eligible: true,
+    reasonCodes: [] as const,
+    preferredDefault: false,
+    metrics: MODEL_ROUTER_UNKNOWN_METRICS,
+  };
+  return {
+    policyVersion: "model-router.v0" as const,
+    mode: "auto" as const,
+    task: { attachmentCount: 0, composerContextKinds: [], requiredCapabilities: [] as const },
+    policy: MODEL_ROUTER_DEFAULT_POLICY,
+    selected,
+    fallbacks: input?.includeClaude === false ? [] : [claude],
+    candidates: input?.includeClaude === false ? [selected] : [selected, claude],
+    reasonCodes: ["SELECTED"] as const,
+    explanation: "Auto Route selected codex · gpt-5.5.",
+    estimatedCostUsd: { status: "unknown" as const },
+    estimatedLatencyMs: { status: "unknown" as const },
+    estimatedQuality: { status: "unknown" as const },
+    executionStatus: "bound" as const,
+    attemptBudget: 3,
+    attempts: [] as const,
+    executed: selected,
+  };
+};
 
 const assistantQuoteText = "Retain the reconnect backoff.";
 const assistantCitation = {
@@ -487,6 +542,7 @@ describe("ProviderCommandReactor", () => {
       }),
     ).pipe(Layer.provide(orchestrationLayer));
     const layer = ProviderCommandReactorLive.pipe(
+      Layer.provideMerge(ModelRouterAvailabilityLive),
       Layer.provideMerge(reactorOrchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
@@ -1137,6 +1193,235 @@ describe("ProviderCommandReactor", () => {
     await harness.drain();
     expect(harness.startSession).toHaveBeenCalledTimes(1);
     expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails over Auto Route to another provider after a Codex usage-limit start failure", async () => {
+    const harness = await createHarness({
+      dispatcherEnabled: true,
+      sendTurnEffect: (request) =>
+        request.modelSelection?.instanceId === "codex"
+          ? Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: "codex",
+                method: "sendTurn",
+                detail: "Codex usage limit reached. Send the message again once the limit resets.",
+                failureCategory: "usage_quota_exhausted",
+                failureScope: "provider_instance",
+              }),
+            )
+          : Effect.succeed({
+              threadId: ThreadId.make("thread-1"),
+              turnId: asTurnId("turn-failover"),
+            }),
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-auto-route-failover"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("message-auto-route-failover"),
+          role: "user",
+          text: "Reply with exactly: ROUTER_SMOKE_OK.",
+          attachments: [],
+        },
+        routeBinding: dispatcherRouteBinding({
+          instanceId: "codex",
+          model: "gpt-5.5",
+          modelRoute: autoRouteDecision(),
+        }),
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length >= 2);
+    await harness.drain();
+    expect(harness.sendTurn.mock.calls.length).toBe(2);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.5" },
+    });
+    expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("claude"),
+        model: "claude-sonnet-4-6",
+      },
+    });
+    const routes = await harness.readDispatcherTaskRoutes();
+    expect(JSON.stringify(routes)).toContain("usage_quota_exhausted");
+    expect(JSON.stringify(routes)).not.toMatch(/sk-|Bearer /);
+  });
+
+  it("does not retry other Codex models after usage-limit exhaustion", async () => {
+    const harness = await createHarness({
+      dispatcherEnabled: true,
+      sendTurnEffect: () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "sendTurn",
+            detail: "Codex usage limit reached. Send the message again once the limit resets.",
+            failureCategory: "usage_quota_exhausted",
+            failureScope: "provider_instance",
+          }),
+        ),
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-auto-route-no-same-account"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("message-auto-route-no-same-account"),
+          role: "user",
+          text: "Fail quota",
+          attachments: [],
+        },
+        routeBinding: dispatcherRouteBinding({
+          instanceId: "codex",
+          model: "gpt-5.5",
+          modelRoute: autoRouteDecision({ includeClaude: false }),
+        }),
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return (
+        readModel.threads
+          .find((thread) => thread.id === ThreadId.make("thread-1"))
+          ?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ?? false
+      );
+    });
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    const readModel = await harness.readModel();
+    const detail = readModel.threads
+      .find((thread) => thread.id === ThreadId.make("thread-1"))
+      ?.activities.find((activity) => activity.kind === "provider.turn.start.failed")?.payload as {
+      detail?: string;
+    };
+    expect(detail.detail).toContain("No eligible alternate provider is currently configured");
+  });
+
+  it("keeps Manual selection instead of silently switching providers", async () => {
+    const harness = await createHarness({
+      dispatcherEnabled: true,
+      sendTurnEffect: () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "sendTurn",
+            detail: "Codex usage limit reached. Send the message again once the limit resets.",
+            failureCategory: "usage_quota_exhausted",
+            failureScope: "provider_instance",
+          }),
+        ),
+    });
+    const manualRoute = { ...autoRouteDecision(), mode: "manual" as const };
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-manual-no-failover"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("message-manual-no-failover"),
+          role: "user",
+          text: "Keep manual",
+          attachments: [],
+        },
+        routeBinding: dispatcherRouteBinding({
+          instanceId: "codex",
+          model: "gpt-5.5",
+          modelRoute: manualRoute,
+        }),
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return (
+        readModel.threads
+          .find((thread) => thread.id === ThreadId.make("thread-1"))
+          ?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ?? false
+      );
+    });
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    const readModel = await harness.readModel();
+    const detail = readModel.threads
+      .find((thread) => thread.id === ThreadId.make("thread-1"))
+      ?.activities.find((activity) => activity.kind === "provider.turn.start.failed")?.payload as {
+      detail?: string;
+    };
+    expect(detail.detail).toContain("Manual selection was kept");
+  });
+
+  it("does not automatically replay after a side-effect has started", async () => {
+    const harness = await createHarness({
+      dispatcherEnabled: true,
+      sendTurnEffect: () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "sendTurn",
+            detail: "Codex usage limit reached. Send the message again once the limit resets.",
+            failureCategory: "usage_quota_exhausted",
+            failureScope: "provider_instance",
+            sideEffectsStarted: true,
+          }),
+        ),
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-side-effect-no-failover"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("message-side-effect-no-failover"),
+          role: "user",
+          text: "Do not replay",
+          attachments: [],
+        },
+        routeBinding: dispatcherRouteBinding({
+          instanceId: "codex",
+          model: "gpt-5.5",
+          modelRoute: autoRouteDecision(),
+        }),
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return (
+        readModel.threads
+          .find((thread) => thread.id === ThreadId.make("thread-1"))
+          ?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ?? false
+      );
+    });
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    const readModel = await harness.readModel();
+    const detail = readModel.threads
+      .find((thread) => thread.id === ThreadId.make("thread-1"))
+      ?.activities.find((activity) => activity.kind === "provider.turn.start.failed")?.payload as {
+      detail?: string;
+    };
+    expect(detail.detail).toContain("Automatic replay was skipped");
   });
 
   effectIt.effect(

@@ -21,6 +21,7 @@ import { Command } from "effect/unstable/cli";
 import { afterEach, describe, expect, vi } from "vite-plus/test";
 
 import { makeCli } from "../bin.ts";
+import { ModelRouterAvailabilityLive } from "../orchestration/Services/ModelRouterAvailability.ts";
 
 vi.mock("node:os", async (importOriginal) => {
   const os = await importOriginal<typeof import("node:os")>();
@@ -35,6 +36,7 @@ const runCli = (args: ReadonlyArray<string>, env: Record<string, string> = {}) =
       Layer.mergeAll(
         NodeServices.layer,
         NetService.layer,
+        ModelRouterAvailabilityLive,
         ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
       ),
     ),

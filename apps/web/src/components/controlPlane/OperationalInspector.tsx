@@ -163,6 +163,33 @@ function InspectorBody(props: {
         {model.route.executionStatus ? (
           <p className="text-2xs text-muted-foreground">Execution: {model.route.executionStatus}</p>
         ) : null}
+        {model.route.attemptBudget !== null ? (
+          <p className="text-2xs text-muted-foreground">
+            Attempt budget: {model.route.attemptBudget}
+          </p>
+        ) : null}
+        {model.route.rerouted && model.route.initialModel && model.route.executedModel ? (
+          <p className="text-2xs text-muted-foreground">
+            Rerouted from {model.route.initialProvider} · {model.route.initialModel} to{" "}
+            {model.route.executedProvider} · {model.route.executedModel}
+          </p>
+        ) : null}
+        {model.route.attempts.length > 0 ? (
+          <ol className="mt-1 list-decimal pl-4 text-2xs text-muted-foreground">
+            {model.route.attempts.map((attempt) => (
+              <li key={`${attempt.attempt}-${attempt.target.instanceId}-${attempt.target.model}`}>
+                Attempt {attempt.attempt}: {attempt.target.instanceId} · {attempt.target.model} ·{" "}
+                {attempt.outcome}
+                {attempt.failureCategory ? ` · ${attempt.failureCategory}` : ""}
+                {attempt.failureScope ? ` · ${attempt.failureScope}` : ""}
+                {attempt.fallbackAllowed ? " · fallback allowed" : " · fallback blocked"}
+                {attempt.nextTarget
+                  ? ` · next ${attempt.nextTarget.instanceId} · ${attempt.nextTarget.model}`
+                  : ""}
+              </li>
+            ))}
+          </ol>
+        ) : null}
       </OperationalStatusCard>
       <OperationalStatusCard
         title="ActionGate"

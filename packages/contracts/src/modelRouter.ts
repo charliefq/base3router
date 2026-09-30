@@ -5,7 +5,9 @@ import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
 export const MODEL_ROUTER_POLICY_VERSION = "model-router.v0" as const;
 export const MODEL_ROUTER_MAX_CANDIDATES = 32;
+export const MODEL_ROUTER_ATTEMPT_BUDGET = 3;
 const MODEL_ROUTER_MAX_REASON_CODES = 16;
+const MODEL_ROUTER_MAX_ATTEMPTS = 8;
 
 /**
  * Documented Auto Route tie-break after preferred defaults. Unknown drivers
@@ -51,6 +53,14 @@ export const MODEL_ROUTER_REASON_CODES = [
   "PROVIDER_ERROR",
   "MODEL_NOT_FOUND",
   "NO_ELIGIBLE_CANDIDATES",
+  "PROVIDER_COOLDOWN",
+  "PROVIDER_USAGE_LIMIT",
+  "PROVIDER_RATE_LIMITED",
+  "FALLBACK_ATTEMPTED",
+  "FALLBACK_EXHAUSTED",
+  "FALLBACK_BLOCKED_SIDE_EFFECT",
+  "MANUAL_NO_FAILOVER",
+  "NO_ALTERNATE_PROVIDER",
 ] as const;
 export const ModelRouterReasonCode = Schema.Literals(MODEL_ROUTER_REASON_CODES);
 export type ModelRouterReasonCode = typeof ModelRouterReasonCode.Type;
@@ -150,6 +160,50 @@ export const ModelRouterCandidate = Schema.Struct({
 });
 export type ModelRouterCandidate = typeof ModelRouterCandidate.Type;
 
+export const MODEL_ROUTER_FAILURE_CATEGORIES = [
+  "model_unavailable",
+  "provider_instance_unavailable",
+  "usage_quota_exhausted",
+  "rate_limited",
+  "authentication_failed",
+  "transient_transport",
+  "non_retryable_request",
+  "side_effect_started",
+] as const;
+export const ModelRouterFailureCategory = Schema.Literals(MODEL_ROUTER_FAILURE_CATEGORIES);
+export type ModelRouterFailureCategory = typeof ModelRouterFailureCategory.Type;
+
+export const MODEL_ROUTER_FAILURE_SCOPES = ["model", "provider_instance", "global"] as const;
+export const ModelRouterFailureScope = Schema.Literals(MODEL_ROUTER_FAILURE_SCOPES);
+export type ModelRouterFailureScope = typeof ModelRouterFailureScope.Type;
+
+const MODEL_ROUTER_ATTEMPT_OUTCOMES = ["started", "succeeded", "failed", "skipped"] as const;
+export const ModelRouterAttemptOutcome = Schema.Literals(MODEL_ROUTER_ATTEMPT_OUTCOMES);
+export type ModelRouterAttemptOutcome = typeof ModelRouterAttemptOutcome.Type;
+
+export const ModelRouterRouteAttempt = Schema.Struct({
+  attempt: NonNegativeInt,
+  target: ModelRouterTarget,
+  driver: Schema.NullOr(ProviderDriverKind),
+  outcome: ModelRouterAttemptOutcome,
+  failureCategory: Schema.optional(ModelRouterFailureCategory),
+  failureScope: Schema.optional(ModelRouterFailureScope),
+  fallbackAllowed: Schema.Boolean,
+  nextTarget: Schema.optional(Schema.NullOr(ModelRouterTarget)),
+  detail: Schema.optional(BoundedExplanation),
+});
+export type ModelRouterRouteAttempt = typeof ModelRouterRouteAttempt.Type;
+
+export const ModelRouterAvailabilityCooldown = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  model: Schema.optional(BoundedModel),
+  scope: ModelRouterFailureScope,
+  category: ModelRouterFailureCategory,
+  until: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  reasonCode: ModelRouterReasonCode,
+});
+export type ModelRouterAvailabilityCooldown = typeof ModelRouterAvailabilityCooldown.Type;
+
 export const ModelRouterDecision = Schema.Struct({
   policyVersion: ModelRouterPolicyVersion,
   mode: ModelRouterMode,
@@ -168,5 +222,10 @@ export const ModelRouterDecision = Schema.Struct({
   estimatedLatencyMs: ModelRouterMetricValue,
   estimatedQuality: ModelRouterMetricValue,
   executionStatus: ModelRouterExecutionStatus,
+  attemptBudget: Schema.optional(NonNegativeInt),
+  attempts: Schema.optional(
+    Schema.Array(ModelRouterRouteAttempt).check(Schema.isMaxLength(MODEL_ROUTER_MAX_ATTEMPTS)),
+  ),
+  executed: Schema.optional(Schema.NullOr(ModelRouterCandidate)),
 });
 export type ModelRouterDecision = typeof ModelRouterDecision.Type;

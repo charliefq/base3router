@@ -8,6 +8,7 @@ import {
 
 import {
   MODEL_ROUTER_SECRET_REDACTION,
+  applyModelRouterCooldowns,
   modelRouterCatalogFromProviders,
   modelRouterDecisionOmitsSecrets,
   routeModel,
@@ -148,6 +149,47 @@ describe("routeModel", () => {
       "claude",
       "cursor",
     ]);
+  });
+
+  it("does not treat extra models on the same instance as executable fallbacks", () => {
+    const decision = routeModel({
+      mode: "auto",
+      catalog: [
+        entry({ instanceId: "codex", model: "gpt-5.5", driver: driver("codex") }),
+        entry({ instanceId: "codex", model: "gpt-5.4", driver: driver("codex") }),
+        entry({ instanceId: "claude", model: "claude-sonnet-4-6", driver: driver("claudeAgent") }),
+      ],
+    });
+    expect(decision.fallbacks).toHaveLength(1);
+    expect(decision.fallbacks[0]?.target.instanceId).toBe("claude");
+  });
+
+  it("marks cooled-down provider instances ineligible", () => {
+    const catalog = applyModelRouterCooldowns(
+      [
+        entry({ instanceId: "codex", model: "gpt-5.5" }),
+        entry({
+          instanceId: "claude",
+          model: "claude-sonnet-4-6",
+          driver: driver("claudeAgent"),
+        }),
+      ],
+      [
+        {
+          instanceId: instance("codex"),
+          scope: "provider_instance",
+          category: "usage_quota_exhausted",
+          until: "2026-09-30T00:15:00.000Z",
+          reasonCode: "PROVIDER_USAGE_LIMIT",
+        },
+      ],
+      Date.parse("2026-09-30T00:00:00.000Z"),
+    );
+    const decision = routeModel({ mode: "auto", catalog });
+    expect(decision.selected?.target.instanceId).toBe("claude");
+    expect(
+      decision.candidates.find((candidate) => candidate.target.instanceId === "codex")?.reasonCodes,
+    ).toContain("PROVIDER_USAGE_LIMIT");
   });
 
   it("keeps unknown metrics unknown and does not invent scores", () => {

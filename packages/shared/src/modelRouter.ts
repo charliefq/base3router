@@ -1,9 +1,11 @@
 import {
+  MODEL_ROUTER_ATTEMPT_BUDGET,
   MODEL_ROUTER_DEFAULT_POLICY,
   MODEL_ROUTER_MAX_CANDIDATES,
   MODEL_ROUTER_POLICY_VERSION,
   MODEL_ROUTER_TIE_BREAK_DRIVERS,
   MODEL_ROUTER_UNKNOWN_METRIC,
+  type ModelRouterAvailabilityCooldown,
   type ModelRouterCandidate,
   type ModelRouterCapability,
   type ModelRouterConstraints,
@@ -14,6 +16,7 @@ import {
   type ModelRouterMode,
   type ModelRouterPolicy,
   type ModelRouterReasonCode,
+  type ModelRouterRouteAttempt,
   type ModelRouterTarget,
   type ModelRouterTaskCharacteristics,
   type ProviderDriverKind,
@@ -52,6 +55,8 @@ const compareStrings = (left: string, right: string): number =>
 
 const targetKey = (target: ModelRouterTarget): string =>
   `${target.instanceId}\u0000${target.model}`;
+
+export const modelRouterTargetKey = targetKey;
 
 const uniqueReasons = (
   codes: ReadonlyArray<ModelRouterReasonCode>,
@@ -135,6 +140,66 @@ export function modelRouterCatalogFromProviders(
     }
   }
   return catalog;
+}
+
+function cooldownReason(cooldown: ModelRouterAvailabilityCooldown): ModelRouterReasonCode {
+  if (
+    cooldown.reasonCode === "PROVIDER_USAGE_LIMIT" ||
+    cooldown.reasonCode === "PROVIDER_RATE_LIMITED"
+  ) {
+    return cooldown.reasonCode;
+  }
+  if (cooldown.category === "usage_quota_exhausted") return "PROVIDER_USAGE_LIMIT";
+  if (cooldown.category === "rate_limited") return "PROVIDER_RATE_LIMITED";
+  return "PROVIDER_COOLDOWN";
+}
+
+function cooldownApplies(
+  cooldown: ModelRouterAvailabilityCooldown,
+  entry: ModelRouterCatalogEntry,
+  nowMs: number,
+): boolean {
+  if (Date.parse(cooldown.until) <= nowMs) return false;
+  if (cooldown.instanceId !== entry.instanceId) return false;
+  if (cooldown.scope === "model") return cooldown.model === entry.model;
+  return true;
+}
+
+export function applyModelRouterCooldowns(
+  catalog: ReadonlyArray<ModelRouterCatalogEntry>,
+  cooldowns: ReadonlyArray<ModelRouterAvailabilityCooldown>,
+  nowMs: number,
+): ReadonlyArray<ModelRouterCatalogEntry> {
+  if (cooldowns.length === 0) return catalog;
+  return catalog.map((entry) => {
+    const matching = cooldowns.filter((cooldown) => cooldownApplies(cooldown, entry, nowMs));
+    if (matching.length === 0) return entry;
+    return {
+      ...entry,
+      availabilityReasons: uniqueReasons([
+        ...entry.availabilityReasons,
+        ...matching.map(cooldownReason),
+      ]),
+    };
+  });
+}
+
+function distinctInstanceFallbacks(
+  eligible: ReadonlyArray<ModelRouterCandidate>,
+  selected: ModelRouterCandidate | null,
+): ReadonlyArray<ModelRouterCandidate> {
+  const seen = new Set<string>(selected === null ? [] : [selected.target.instanceId]);
+  const fallbacks: Array<ModelRouterCandidate> = [];
+  for (const candidate of eligible) {
+    if (seen.has(candidate.target.instanceId)) continue;
+    seen.add(candidate.target.instanceId);
+    fallbacks.push(candidate);
+  }
+  return fallbacks;
+}
+
+export function executableAlternateInstanceCount(decision: ModelRouterDecision): number {
+  return new Set(decision.fallbacks.map((candidate) => candidate.target.instanceId)).size;
 }
 
 function constraintReasons(
@@ -266,6 +331,12 @@ export function modelRouterDecisionOmitsSecrets(value: unknown): boolean {
   });
 }
 
+function sanitizeAttempt(attempt: ModelRouterRouteAttempt): ModelRouterRouteAttempt {
+  return attempt.detail === undefined
+    ? attempt
+    : { ...attempt, detail: sanitizeText(attempt.detail) };
+}
+
 function sanitizeDecision(decision: ModelRouterDecision): ModelRouterDecision {
   return {
     ...decision,
@@ -274,6 +345,8 @@ function sanitizeDecision(decision: ModelRouterDecision): ModelRouterDecision {
     candidates: decision.candidates,
     fallbacks: decision.fallbacks,
     selected: decision.selected,
+    attempts: decision.attempts?.map(sanitizeAttempt),
+    executed: decision.executed,
   };
 }
 
@@ -409,9 +482,7 @@ export function routeModel(input: ModelRouterInput): ModelRouterDecision {
     }
   }
 
-  const fallbacks = eligible.filter(
-    (candidate) => selected === null || targetKey(candidate.target) !== targetKey(selected.target),
-  );
+  const fallbacks = [...distinctInstanceFallbacks(eligible, selected)];
   const decisionReasons = uniqueReasons([
     ...selectionReasons,
     ...(selected === null
@@ -444,6 +515,9 @@ export function routeModel(input: ModelRouterInput): ModelRouterDecision {
     estimatedLatencyMs: selected?.metrics.latencyMs ?? MODEL_ROUTER_UNKNOWN_METRIC,
     estimatedQuality: selected?.metrics.quality ?? MODEL_ROUTER_UNKNOWN_METRIC,
     executionStatus: input.executionStatus ?? (selected ? "not-started" : "not-started"),
+    attemptBudget: MODEL_ROUTER_ATTEMPT_BUDGET,
+    attempts: [],
+    executed: selected,
   };
 
   return sanitizeDecision(decision);

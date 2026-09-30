@@ -34,9 +34,21 @@ export const ModelRouterControl = memo(function ModelRouterControl(props: {
   const [open, setOpen] = useComposerMenuState(props.hidden);
   const why = presentModelRouterWhy(props.decision);
   const fallback = presentModelRouterFallbackLabel(props.decision);
-  const selectedLabel = props.decision.selected
-    ? `${props.decision.selected.target.instanceId} · ${props.decision.selected.target.model}`
+  const selected = props.decision.selected?.target;
+  const executed = props.decision.executed?.target;
+  const rerouted =
+    selected !== undefined &&
+    executed !== undefined &&
+    (selected.instanceId !== executed.instanceId || selected.model !== executed.model);
+  const selectedLabel = selected
+    ? rerouted && executed
+      ? `Rerouted from ${selected.instanceId} · ${selected.model} to ${executed.instanceId} · ${executed.model}`
+      : `${selected.instanceId} · ${selected.model}`
     : "No eligible model";
+  const shownModel =
+    rerouted && executed && selected
+      ? `${selected.model} → ${executed.model}`
+      : (selected?.model ?? "Unrouted");
 
   return (
     <span
@@ -82,12 +94,17 @@ export const ModelRouterControl = memo(function ModelRouterControl(props: {
             <TooltipTrigger
               render={
                 <span
-                  className="max-w-28 truncate text-2xs text-muted-foreground sm:max-w-40"
+                  className={
+                    rerouted
+                      ? "max-w-48 truncate text-2xs text-muted-foreground sm:max-w-56"
+                      : "max-w-28 truncate text-2xs text-muted-foreground sm:max-w-40"
+                  }
                   data-model-router-selected
+                  data-model-router-rerouted={rerouted ? "true" : undefined}
                 />
               }
             >
-              {props.decision.selected?.target.model ?? "Unrouted"}
+              {shownModel}
             </TooltipTrigger>
             <TooltipPopup side="top">{selectedLabel}</TooltipPopup>
           </Tooltip>

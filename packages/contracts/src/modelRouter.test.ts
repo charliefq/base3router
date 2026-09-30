@@ -18,6 +18,7 @@ describe("model router contracts", () => {
   it("keeps the V0 policy and reason codes stable", () => {
     expect(MODEL_ROUTER_POLICY_VERSION).toBe("model-router.v0");
     expect(MODEL_ROUTER_DEFAULT_POLICY.version).toBe("model-router.v0");
+    expect(MODEL_ROUTER_REASON_CODES).toContain("PROVIDER_USAGE_LIMIT");
     expect(MODEL_ROUTER_FUTURE_API_DRIVERS).toEqual(["qwen", "deepseek", "kimi"]);
     expect(MODEL_ROUTER_REASON_CODES).toContain("METRICS_UNKNOWN");
     expect(Exit.isSuccess(decodeMode("auto"))).toBe(true);

@@ -3,6 +3,7 @@ import {
   type ChatAttachment,
   CommandId,
   EventId,
+  MODEL_ROUTER_ATTEMPT_BUDGET,
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
@@ -12,13 +13,22 @@ import {
   type ProviderSession,
   type RuntimeMode,
   type DispatcherTaskHandoff,
+  type DispatcherTaskRouteBinding,
   type TurnId,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
+import { modelRouterTargetKey } from "@t3tools/shared/modelRouter";
+import {
+  appendModelRouterAttempt,
+  classifyModelRouterFailure,
+  formatModelRouterTerminalFailure,
+  planModelRouterFailover,
+} from "@t3tools/shared/modelRouterFailover";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -54,6 +64,7 @@ import {
   ProviderCommandReactor,
   type ProviderCommandReactorShape,
 } from "../Services/ProviderCommandReactor.ts";
+import { ModelRouterAvailability } from "../Services/ModelRouterAvailability.ts";
 import { forkParked, ServerActivation } from "../../serverActivation.ts";
 import {
   formatThreadTitleContext,
@@ -141,13 +152,13 @@ export function providerErrorLabelFromInstanceHint(input: {
 }
 
 function findProviderAdapterRequestError(
-  cause: Cause.Cause<ProviderServiceError>,
+  cause: Cause.Cause<unknown>,
 ): ProviderAdapterRequestError | undefined {
   const failReason = cause.reasons.find(Cause.isFailReason);
   return isProviderAdapterRequestError(failReason?.error) ? failReason.error : undefined;
 }
 
-function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
+function isUnknownPendingApprovalRequestError(cause: Cause.Cause<unknown>): boolean {
   const error = findProviderAdapterRequestError(cause);
   if (error) {
     const detail = error.detail.toLowerCase();
@@ -165,7 +176,7 @@ function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderService
   );
 }
 
-function isUnknownPendingUserInputRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
+function isUnknownPendingUserInputRequestError(cause: Cause.Cause<unknown>): boolean {
   const error = findProviderAdapterRequestError(cause);
   if (error) {
     const detail = error.detail.toLowerCase();
@@ -227,6 +238,7 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const modelRouterAvailability = yield* ModelRouterAvailability;
   /** Environment settings with the thread's project overrides applied. */
   const projectSettingsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const settings = yield* serverSettingsService.getSettings;
@@ -579,6 +591,7 @@ const make = Effect.gen(function* () {
       readonly modelSelection?: ModelSelection;
       readonly pendingTurnStart?: boolean;
       readonly handoff?: DispatcherTaskHandoff;
+      readonly routeFailover?: boolean;
     },
   ) {
     const thread = yield* resolveThreadShell(threadId);
@@ -684,7 +697,11 @@ const make = Effect.gen(function* () {
         createdAt,
       });
     }
-    if (thread.session !== null && explicitHandoff === undefined) {
+    if (
+      thread.session !== null &&
+      explicitHandoff === undefined &&
+      options?.routeFailover !== true
+    ) {
       yield* rejectStartedThreadModelChangeIfRequired({
         threadId,
         currentModelSelection:
@@ -701,7 +718,8 @@ const make = Effect.gen(function* () {
     if (
       thread.session !== null &&
       requestedModelSelection !== undefined &&
-      requestedModelSelection.instanceId !== currentInstanceId
+      requestedModelSelection.instanceId !== currentInstanceId &&
+      options?.routeFailover !== true
     ) {
       if (
         explicitHandoff === undefined &&
@@ -794,6 +812,14 @@ const make = Effect.gen(function* () {
     if (explicitHandoff !== undefined && activeSession !== undefined) {
       yield* providerService.stopSession({ threadId });
     }
+    if (options?.routeFailover === true) {
+      if (activeSession !== undefined) {
+        yield* providerService.stopSession({ threadId }).pipe(Effect.catchCause(() => Effect.void));
+      }
+      const startedSession = yield* startProviderSession(undefined);
+      yield* bindSessionToThread(startedSession);
+      return startedSession.threadId;
+    }
     if (existingSessionThreadId) {
       const runtimeModeChanged = thread.runtimeMode !== thread.session?.runtimeMode;
       const cwdChanged = effectiveCwd !== activeSession?.cwd;
@@ -873,6 +899,7 @@ const make = Effect.gen(function* () {
     readonly handoff?: DispatcherTaskHandoff;
     readonly interactionMode?: "default" | "plan";
     readonly createdAt: string;
+    readonly routeFailover?: boolean;
   }) {
     const thread = yield* resolveThreadShell(input.threadId);
     if (!thread) {
@@ -884,6 +911,7 @@ const make = Effect.gen(function* () {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       pendingTurnStart: true,
       ...(input.handoff !== undefined ? { handoff: input.handoff } : {}),
+      ...(input.routeFailover === true ? { routeFailover: true } : {}),
     });
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
@@ -1618,29 +1646,253 @@ const make = Effect.gen(function* () {
       turnsAfterCompaction.set(event.payload.threadId, queued);
       return;
     }
-    const sendTurnRequest = yield* buildSendTurnRequestForThread({
-      threadId: event.payload.threadId,
-      messageText: projectComposerContextForProvider({
-        text: message.text,
-        records: message.context?.records ?? [],
-      }),
-      ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
-      ...(taskModelSelection !== undefined ? { modelSelection: taskModelSelection } : {}),
-      ...(event.payload.handoff !== undefined ? { handoff: event.payload.handoff } : {}),
-      interactionMode: event.payload.interactionMode,
-      createdAt: event.payload.createdAt,
-    }).pipe(
-      Effect.map(Option.some),
-      Effect.catchCause((cause) => handleTurnStartFailure(cause).pipe(Effect.as(Option.none()))),
-    );
+    const messageText = projectComposerContextForProvider({
+      text: message.text,
+      records: message.context?.records ?? [],
+    });
+    const modelRoute = routeBinding?.modelRoute;
+    let currentRoute = modelRoute;
+    const routingMode = modelRoute?.mode;
+    let currentSelection = taskModelSelection;
+    let attemptCount = 0;
+    const attemptedInstanceIds = new Set<string>();
+    const attemptedTargetKeys = new Set<string>();
 
+    const persistAttemptedRoute = (binding: DispatcherTaskRouteBinding) =>
+      Dispatcher.updateDispatcherTaskRouteBinding({
+        threadId: event.payload.threadId,
+        messageId: event.payload.messageId,
+        binding,
+      }).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+        Effect.ignore({ log: true, message: "failed to persist Auto Route attempt history" }),
+      );
+
+    const classifyTurnStartCause = (cause: Cause.Cause<unknown>, sideEffectsStarted: boolean) => {
+      const requestError = findProviderAdapterRequestError(cause);
+      const failReason = cause.reasons.find(Cause.isFailReason);
+      const tagged =
+        failReason !== undefined &&
+        typeof failReason.error === "object" &&
+        failReason.error !== null &&
+        "_tag" in failReason.error
+          ? String(failReason.error._tag)
+          : undefined;
+      return classifyModelRouterFailure({
+        ...(requestError?.failureCategory !== undefined
+          ? { category: requestError.failureCategory }
+          : {}),
+        ...(requestError?.failureScope !== undefined ? { scope: requestError.failureScope } : {}),
+        sideEffectsStarted: sideEffectsStarted || requestError?.sideEffectsStarted === true,
+        ...(tagged !== undefined ? { tagged } : {}),
+        detail: formatFailureDetail(cause),
+      });
+    };
+
+    const failWithClassifiedDetail = (cause: Cause.Cause<unknown>, detail: string) =>
+      handleTurnStartFailure(
+        Cause.fail(
+          new ProviderAdapterRequestError({
+            provider: providerErrorLabel(String(currentSelection?.instanceId ?? "")),
+            method: "thread.turn.start",
+            detail,
+          }),
+        ),
+      ).pipe(Effect.catchCause(() => recoverTurnStartFailure(cause)));
+
+    const markCurrentAttempt = () => {
+      if (currentSelection !== undefined) {
+        attemptedInstanceIds.add(currentSelection.instanceId);
+        attemptedTargetKeys.add(modelRouterTargetKey(currentSelection));
+      }
+    };
+
+    const buildRoutedTurnRequest = (routeFailover: boolean) =>
+      buildSendTurnRequestForThread({
+        threadId: event.payload.threadId,
+        messageText,
+        ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+        ...(currentSelection !== undefined ? { modelSelection: currentSelection } : {}),
+        ...(event.payload.handoff !== undefined ? { handoff: event.payload.handoff } : {}),
+        interactionMode: event.payload.interactionMode,
+        createdAt: event.payload.createdAt,
+        ...(routeFailover ? { routeFailover: true } : {}),
+      });
+
+    const planAndPersistFailure = (cause: Cause.Cause<unknown>) =>
+      Effect.gen(function* () {
+        const sideEffectsStarted = yield* modelRouterAvailability.hasSideEffects(
+          event.payload.threadId,
+        );
+        const classification = classifyTurnStartCause(cause, sideEffectsStarted);
+        const detail = formatFailureDetail(cause);
+        const target = currentSelection ?? routeBinding?.target;
+        if (currentRoute === undefined || target === undefined) {
+          yield* recoverTurnStartFailure(cause);
+          return false;
+        }
+        const nowMs = yield* Clock.currentTimeMillis;
+        const cooldowns = yield* modelRouterAvailability.snapshot(nowMs);
+        const plan = planModelRouterFailover({
+          decision: currentRoute,
+          failedTarget: { instanceId: target.instanceId, model: target.model },
+          driver: currentRoute.executed?.driver ?? routeBinding?.driver ?? null,
+          classification,
+          attemptedInstanceIds,
+          attemptedTargetKeys,
+          attemptCount,
+          nowMs,
+          cooldowns,
+          detail,
+        });
+        if (plan.cooldown !== null) {
+          yield* modelRouterAvailability.recordCooldown(plan.cooldown);
+        }
+        const updatedRoute = appendModelRouterAttempt(
+          currentRoute,
+          plan.attempt,
+          plan.next,
+          plan.next === null ? "failed" : "bound",
+        );
+        currentRoute = updatedRoute;
+        if (routeBinding !== null) {
+          yield* persistAttemptedRoute({
+            ...routeBinding,
+            ...(plan.next !== null && plan.next.driver !== null
+              ? {
+                  target: plan.next.target,
+                  driver: plan.next.driver,
+                  fallbackIndex: plan.next.fallbackIndex,
+                }
+              : {}),
+            modelRoute: updatedRoute,
+          });
+        }
+        if (plan.next === null || routingMode !== "auto") {
+          yield* modelRouterAvailability.clearPending(event.payload.threadId);
+          yield* failWithClassifiedDetail(
+            cause,
+            formatModelRouterTerminalFailure({
+              instanceId: String(target.instanceId),
+              model: target.model,
+              classification,
+              mode: routingMode ?? "manual",
+              terminalReason: plan.terminalReason,
+              detail,
+            }),
+          );
+          return false;
+        }
+        currentSelection = {
+          instanceId: plan.next.target.instanceId,
+          model: plan.next.target.model,
+        };
+        return true;
+      });
+
+    const registerCurrentPending = () =>
+      modelRouterAvailability.registerPending({
+        threadId: event.payload.threadId,
+        messageId: event.payload.messageId,
+        messageText,
+        attemptCount,
+        attemptedInstanceIds,
+        attemptedTargetKeys,
+        currentTarget: {
+          instanceId:
+            currentSelection?.instanceId ??
+            routeBinding?.target.instanceId ??
+            thread.modelSelection.instanceId,
+          model:
+            currentSelection?.model ?? routeBinding?.target.model ?? thread.modelSelection.model,
+        },
+        routingMode: routingMode ?? "manual",
+        sideEffectsStarted: false,
+        retry:
+          routingMode === "auto" && currentRoute !== undefined
+            ? (next) =>
+                Effect.suspend(() => {
+                  currentSelection = next;
+                  return continueRoutedAttempts();
+                })
+            : null,
+        onRuntimeFailure: ({ classification, detail }) =>
+          planAndPersistFailure(
+            Cause.fail(
+              new ProviderAdapterRequestError({
+                provider: providerErrorLabel(
+                  String(
+                    currentSelection?.instanceId ??
+                      routeBinding?.target.instanceId ??
+                      thread.modelSelection.instanceId,
+                  ),
+                ),
+                method: "thread.turn.start",
+                detail,
+                failureCategory: classification.category,
+                failureScope: classification.scope,
+                sideEffectsStarted: classification.sideEffectsStarted,
+              }),
+            ),
+          ).pipe(
+            Effect.flatMap((retry) =>
+              retry
+                ? continueRoutedAttempts().pipe(Effect.forkDetach, Effect.as(true))
+                : Effect.succeed(false),
+            ),
+          ),
+      });
+
+    const continueRoutedAttempts = (): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const budget = currentRoute?.attemptBudget ?? MODEL_ROUTER_ATTEMPT_BUDGET;
+        if (attemptCount >= budget) {
+          return;
+        }
+        attemptCount += 1;
+        markCurrentAttempt();
+        yield* sendRoutedTurn(true).pipe(
+          Effect.tap(() => registerCurrentPending()),
+          Effect.catchCause((cause) =>
+            planAndPersistFailure(cause).pipe(
+              Effect.flatMap((retry) => (retry ? continueRoutedAttempts() : Effect.void)),
+            ),
+          ),
+        );
+      });
+
+    const sendRoutedTurn = (routeFailover: boolean) =>
+      buildRoutedTurnRequest(routeFailover).pipe(
+        Effect.flatMap((request) => providerService.sendTurn(request).pipe(Effect.asVoid)),
+      );
+
+    attemptCount += 1;
+    markCurrentAttempt();
+    const sendTurnRequest = yield* buildRoutedTurnRequest(false).pipe(
+      Effect.map(Option.some),
+      Effect.catchCause((cause) =>
+        planAndPersistFailure(cause).pipe(
+          Effect.flatMap((retry) =>
+            retry
+              ? continueRoutedAttempts().pipe(Effect.as(Option.none()))
+              : Effect.succeed(Option.none()),
+          ),
+        ),
+      ),
+    );
     if (Option.isNone(sendTurnRequest)) {
       return;
     }
 
-    const send = providerService
-      .sendTurn(sendTurnRequest.value)
-      .pipe(Effect.asVoid, Effect.catchCause(recoverTurnStartFailure));
+    const send = providerService.sendTurn(sendTurnRequest.value).pipe(
+      Effect.asVoid,
+      Effect.tap(() => registerCurrentPending()),
+      Effect.catchCause((cause) =>
+        planAndPersistFailure(cause).pipe(
+          Effect.flatMap((retry) => (retry ? continueRoutedAttempts() : Effect.void)),
+        ),
+      ),
+    );
     // The forked send settles `sent` from here on, so drop the entry the post-processing hook uses.
     if (resumed && event.commandId !== null) resumedTurnStarts.delete(event.commandId);
     yield* send.pipe(

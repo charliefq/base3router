@@ -21,10 +21,17 @@ import {
   ProjectId,
   type ServerProvider,
   ThreadId,
+  type ModelRouterAvailabilityCooldown,
   type ModelRouterDecision,
+  MODEL_ROUTER_ATTEMPT_BUDGET,
 } from "@t3tools/contracts";
-import { modelRouterCatalogFromProviders, routeModel } from "@t3tools/shared/modelRouter";
+import {
+  applyModelRouterCooldowns,
+  modelRouterCatalogFromProviders,
+  routeModel,
+} from "@t3tools/shared/modelRouter";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -181,6 +188,25 @@ export const persistDispatcherTaskRoute = Effect.fn("Dispatcher.persistDispatche
     }
   },
 );
+
+export const updateDispatcherTaskRouteBinding = Effect.fn(
+  "Dispatcher.updateDispatcherTaskRouteBinding",
+)(function* (input: {
+  readonly threadId: ThreadId;
+  readonly messageId: MessageId;
+  readonly binding: DispatcherTaskRouteBindingType;
+}): Effect.fn.Return<void, ProjectionRepositoryError, SqlClient.SqlClient> {
+  const sql = yield* SqlClient.SqlClient;
+  const bindingJson = yield* encodeDispatcherTaskRoute(input.binding).pipe(
+    Effect.mapError(toPersistenceDecodeError("Dispatcher.updateTaskRoute:encodeBinding")),
+  );
+  yield* sql`
+    UPDATE projection_dispatcher_task_routes
+    SET binding_json = ${bindingJson}
+    WHERE thread_id = ${input.threadId}
+      AND message_id = ${input.messageId}
+  `.pipe(Effect.mapError(toPersistenceSqlError("Dispatcher.updateTaskRoute:update")));
+});
 
 export const readDispatcherTaskRoute = Effect.fn("Dispatcher.readDispatcherTaskRoute")(
   function* (input: {
@@ -634,7 +660,9 @@ function taskRouteBindingFromModelRoute(input: {
   const boundDecision: ModelRouterDecision = {
     ...input.decision,
     executionStatus: "bound",
-    selected: { ...selected, reasonCodes: selected.reasonCodes },
+    attemptBudget: MODEL_ROUTER_ATTEMPT_BUDGET,
+    attempts: input.decision.attempts ?? [],
+    executed: input.decision.executed ?? selected,
   };
   return {
     policyVersion: DISPATCHER_POLICY_VERSION,
@@ -697,6 +725,8 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
       readonly providers: Effect.Effect<ReadonlyArray<ServerProvider>, Error>;
       readonly environmentDefaultModelSelection: Effect.Effect<ModelSelection | null, Error>;
       readonly sql: SqlClient.SqlClient;
+      readonly availabilityCooldowns?: ReadonlyArray<ModelRouterAvailabilityCooldown>;
+      readonly availabilityNowMs?: number;
     },
   ): Effect.fn.Return<OrchestrationCommand, OrchestrationDispatchCommandError> {
     if (command.type !== "thread.turn.start") return command;
@@ -756,7 +786,11 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
       ];
       const decision = routeModel({
         mode: routingMode,
-        catalog: modelRouterCatalogFromProviders(resolution.providers),
+        catalog: applyModelRouterCooldowns(
+          modelRouterCatalogFromProviders(resolution.providers),
+          dependencies.availabilityCooldowns ?? [],
+          dependencies.availabilityNowMs ?? (yield* Clock.currentTimeMillis),
+        ),
         preferredTargets,
         ...(command.modelRouteConstraints === undefined
           ? {}

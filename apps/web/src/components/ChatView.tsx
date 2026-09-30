@@ -9888,6 +9888,12 @@ export default function ChatView(props: ChatViewProps) {
               />
               <ThreadErrorBanner
                 error={visibleThreadError}
+                onOpenProviderSetup={() => {
+                  void navigate({
+                    to: "/settings/providers",
+                    search: { environmentId },
+                  });
+                }}
                 onDismiss={() => {
                   setThreadError(activeThread.id, null);
                   dismissThreadErrorBannerForSession(threadErrorBannerKey);

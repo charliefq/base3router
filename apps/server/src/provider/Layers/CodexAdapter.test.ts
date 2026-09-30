@@ -2955,9 +2955,13 @@ usageLimitLayer("CodexAdapterLive usage limits", (it) => {
         if (event.type === "runtime.error") {
           NodeAssert.equal(event.payload.message, expected);
           NodeAssert.equal(event.payload.detail, CODEX_OUT_OF_CREDITS);
+          NodeAssert.equal(event.payload.failureCategory, "usage_quota_exhausted");
+          NodeAssert.equal(event.payload.failureScope, "provider_instance");
         }
         if (event.type === "turn.completed") {
           NodeAssert.equal(event.payload.errorMessage, expected);
+          NodeAssert.equal(event.payload.failureCategory, "usage_quota_exhausted");
+          NodeAssert.equal(event.payload.failureScope, "provider_instance");
         }
       }
     }),

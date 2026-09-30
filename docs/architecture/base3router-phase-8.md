@@ -74,8 +74,11 @@ meanings stay distinct.
    phase does not add credentials, API runners, or live calls.
 6. Mobile keeps the existing explicit picker (Manual). It does not grow a
    fake Auto Route control in this phase.
-7. Mid-turn failover onto the next candidate is still missing. V0 records an
-   ordered fallback chain and uses the first eligible model at bind time.
+7. Mid-turn Auto Route failover is bounded: Auto may try the next eligible
+   provider instance after a classified pre-output failure, at most three
+   attempts. Usage-limit failures cool down the whole provider instance.
+   Manual selection never switches silently. After tools or assistant output
+   begin, automatic replay is skipped.
 8. Resting composer measurement used the model picker as the only leading
    control. Auto Route hides that picker, so the Auto Route cluster is now a
    measured leading control and does not return `null` in reduced-height layout.

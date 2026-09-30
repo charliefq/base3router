@@ -53,7 +53,21 @@ describe("composer model routing presentation", () => {
       providers: [provider("codex", ["gpt-5.4"]), provider("claude", ["claude-sonnet-4-6"])],
     });
     expect(presentModelRouterWhy(decision)).toContain("Auto Route selected");
-    expect(presentModelRouterFallbackLabel(decision)).toBe("1 fallback");
+    expect(presentModelRouterFallbackLabel(decision)).toBe("1 alternate provider");
     expect(JSON.stringify(decision)).not.toContain("sk-");
+  });
+
+  it("counts distinct provider instances, not extra models on the same account", () => {
+    const decision = routeComposerModel({
+      mode: "auto",
+      providers: [
+        provider(
+          "codex",
+          Array.from({ length: 20 }, (_, index) => `gpt-${index}`),
+        ),
+        provider("claude", ["claude-sonnet-4-6"]),
+      ],
+    });
+    expect(presentModelRouterFallbackLabel(decision)).toBe("1 alternate provider");
   });
 });

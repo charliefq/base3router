@@ -9,6 +9,7 @@ import {
   modelRouterCatalogFromProviders,
   modelSelectionFromRoute,
   routeModel,
+  executableAlternateInstanceCount,
 } from "@t3tools/shared/modelRouter";
 
 export function resolveComposerModelRoutingMode(input: {
@@ -57,8 +58,20 @@ export function presentModelRouterFallbackLabel(decision: ModelRouterDecision): 
   if (skipped.length > 0) {
     return `Fallback after ${skipped.length} ineligible ${skipped.length === 1 ? "candidate" : "candidates"}`;
   }
-  if (decision.fallbacks.length === 0) return null;
-  return `${decision.fallbacks.length} ${decision.fallbacks.length === 1 ? "fallback" : "fallbacks"}`;
+  const alternates = executableAlternateInstanceCount(decision);
+  const unavailable = decision.candidates.filter((candidate) =>
+    candidate.reasonCodes.some(
+      (code) =>
+        code === "PROVIDER_USAGE_LIMIT" ||
+        code === "PROVIDER_RATE_LIMITED" ||
+        code === "PROVIDER_COOLDOWN" ||
+        code === "PROVIDER_UNAVAILABLE",
+    ),
+  ).length;
+  if (alternates === 0) {
+    return unavailable > 0 ? "no eligible alternate provider" : null;
+  }
+  return `${alternates} ${alternates === 1 ? "alternate provider" : "alternate providers"}`;
 }
 
 export function routedModelSelection(

@@ -15,6 +15,7 @@ import type {
   ModelRouterExecutionStatus,
   ModelRouterMetricValue,
   ModelRouterMode,
+  ModelRouterRouteAttempt,
   ServerProvider,
   WorkflowRun,
   WorkflowTemplate,
@@ -56,6 +57,13 @@ export type InspectorRouteModel = {
   readonly estimatedLatencyMs: ModelRouterMetricValue | null;
   readonly estimatedQuality: ModelRouterMetricValue | null;
   readonly executionStatus: ModelRouterExecutionStatus | null;
+  readonly attemptBudget: number | null;
+  readonly initialProvider: string | null;
+  readonly initialModel: string | null;
+  readonly executedProvider: string | null;
+  readonly executedModel: string | null;
+  readonly rerouted: boolean;
+  readonly attempts: ReadonlyArray<ModelRouterRouteAttempt>;
 };
 
 export type InspectorCursorCloudModel = {
@@ -122,6 +130,13 @@ const EMPTY_ROUTE: InspectorRouteModel = {
   estimatedLatencyMs: null,
   estimatedQuality: null,
   executionStatus: null,
+  attemptBudget: null,
+  initialProvider: null,
+  initialModel: null,
+  executedProvider: null,
+  executedModel: null,
+  rerouted: false,
+  attempts: [],
 };
 
 function executionStatusFromSession(
@@ -150,6 +165,13 @@ function presentModelRouteTrace(
   | "estimatedLatencyMs"
   | "estimatedQuality"
   | "executionStatus"
+  | "attemptBudget"
+  | "initialProvider"
+  | "initialModel"
+  | "executedProvider"
+  | "executedModel"
+  | "rerouted"
+  | "attempts"
 > {
   if (modelRoute === undefined) {
     return {
@@ -160,8 +182,21 @@ function presentModelRouteTrace(
       estimatedLatencyMs: null,
       estimatedQuality: null,
       executionStatus: executionStatusFromSession(sessionStatus, bound),
+      attemptBudget: null,
+      initialProvider: null,
+      initialModel: null,
+      executedProvider: null,
+      executedModel: null,
+      rerouted: false,
+      attempts: [],
     };
   }
+  const initial = modelRoute.selected?.target ?? null;
+  const executed = modelRoute.executed?.target ?? initial;
+  const rerouted =
+    initial !== null &&
+    executed !== null &&
+    (initial.instanceId !== executed.instanceId || initial.model !== executed.model);
   return {
     policyVersion: modelRoute.policyVersion,
     mode: modelRoute.mode,
@@ -170,6 +205,13 @@ function presentModelRouteTrace(
     estimatedLatencyMs: modelRoute.estimatedLatencyMs,
     estimatedQuality: modelRoute.estimatedQuality,
     executionStatus: executionStatusFromSession(sessionStatus, bound) ?? modelRoute.executionStatus,
+    attemptBudget: modelRoute.attemptBudget ?? null,
+    initialProvider: initial?.instanceId ?? null,
+    initialModel: initial?.model ?? null,
+    executedProvider: executed?.instanceId ?? null,
+    executedModel: executed?.model ?? null,
+    rerouted,
+    attempts: modelRoute.attempts ?? [],
   };
 }
 

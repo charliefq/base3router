@@ -54,6 +54,32 @@ it("renders Auto Route with the selected model and why-this-model control", () =
   expect(markup).toContain("Auto Route");
   expect(markup).toContain("gpt-5.4");
   expect(markup).toContain("Why this model?");
-  expect(markup).toContain("fallback");
+  expect(markup).toContain("alternate provider");
   expect(markup).not.toContain("sk-");
+});
+
+it("shows the executed model when Auto Route failsover", () => {
+  const claude = {
+    fallbackIndex: 1,
+    target: { instanceId: ProviderInstanceId.make("claude"), model: "claude-sonnet-4-6" },
+    driver: ProviderDriverKind.make("claudeAgent"),
+    capabilities: ["code", "tools"] as const,
+    eligible: true,
+    reasonCodes: [] as const,
+    preferredDefault: false,
+    metrics: MODEL_ROUTER_UNKNOWN_METRICS,
+  };
+  const markup = renderToStaticMarkup(
+    <ModelRouterControl
+      decision={{
+        ...decision,
+        executed: claude,
+        reasonCodes: ["SELECTED", "FALLBACK_ATTEMPTED"],
+      }}
+      mode="auto"
+      onModeChange={() => {}}
+    />,
+  );
+  expect(markup).toContain("gpt-5.4 → claude-sonnet-4-6");
+  expect(markup).toContain('data-model-router-rerouted="true"');
 });
