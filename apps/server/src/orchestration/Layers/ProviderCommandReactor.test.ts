@@ -1254,8 +1254,15 @@ describe("ProviderCommandReactor", () => {
           },
         });
         const routes = yield* Effect.promise(() => harness.readDispatcherTaskRoutes());
-        expect(JSON.stringify(routes)).toContain("usage_quota_exhausted");
-        expect(JSON.stringify(routes)).not.toMatch(/sk-|Bearer /);
+        const binding = decodeDispatcherTaskRouteBinding(routes[0]!.binding);
+        expect(
+          binding.modelRoute?.attempts?.some(
+            (attempt) => attempt.failureCategory === "usage_quota_exhausted",
+          ),
+        ).toBe(true);
+        for (const attempt of binding.modelRoute?.attempts ?? []) {
+          expect(attempt.detail ?? "").not.toMatch(/sk-|Bearer /);
+        }
       }),
   );
 
