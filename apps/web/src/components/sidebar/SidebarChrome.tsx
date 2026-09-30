@@ -87,7 +87,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
       <span className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium tracking-tight">
         <Base3RouterMark
           aria-label="Base3Router"
-          className="h-[1cap] w-auto shrink-0 text-[var(--control-plane-accent)]"
+          className="h-[1cap] w-auto shrink-0 text-info-foreground"
         />
         <span
           className={cn(

@@ -192,7 +192,7 @@ export function WelcomeWizard({
           title="Set up Base3Router"
           identity={
             <div className="flex items-center gap-1.5" role="img" aria-label="Base3Router">
-              <Base3RouterMark className="h-4 w-auto shrink-0 text-[var(--control-plane-accent)]" />
+              <Base3RouterMark className="h-4 w-auto shrink-0 text-info-foreground" />
               <span className="text-2xl font-medium tracking-tight text-muted-foreground">
                 Base3Router
               </span>

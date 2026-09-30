@@ -49,13 +49,13 @@ export function ProductRail(props: {
   return (
     <nav
       aria-label="Base3Router"
-      className="hidden h-full w-[var(--control-plane-rail-width)] shrink-0 flex-col border-r border-border/80 bg-[var(--control-plane-rail-background)] md:flex"
+      className="hidden h-full w-15 shrink-0 flex-col border-r border-border/80 bg-sidebar md:flex"
       data-control-plane="rail"
     >
-      <div className="flex h-[var(--workspace-topbar-height)] items-center justify-center">
+      <div className="flex h-(--workspace-topbar-height) items-center justify-center">
         <Link
           aria-label={`${APP_BASE_NAME} Control Center`}
-          className="flex size-8 items-center justify-center rounded-md text-[var(--control-plane-accent)] outline-hidden ring-ring focus-visible:ring-2"
+          className="flex size-8 items-center justify-center rounded-md text-info-foreground outline-hidden ring-ring focus-visible:ring-2"
           to="/control-center"
         >
           <Base3RouterMark className="size-5" />
@@ -89,7 +89,7 @@ export function ProductRail(props: {
           );
         })}
       </div>
-      <p className="px-1 pb-3 text-center text-[9px] tracking-[0.12em] text-muted-foreground uppercase">
+      <p className="px-1 pb-3 text-center text-3xs tracking-widest text-muted-foreground uppercase">
         {APP_STAGE_LABEL}
       </p>
     </nav>

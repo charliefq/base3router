@@ -22,6 +22,18 @@ vi.mock("@tanstack/react-router", () => ({
   ),
 }));
 
+vi.mock("../ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => children,
+  TooltipTrigger: ({
+    render,
+    children,
+  }: {
+    render?: React.ReactElement;
+    children?: React.ReactNode;
+  }) => render ?? children,
+  TooltipPopup: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+}));
+
 let renderer: ReactTestRenderer | null = null;
 beforeEach(() => vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true));
 afterEach(async () => {

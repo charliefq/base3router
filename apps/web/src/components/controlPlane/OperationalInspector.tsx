@@ -42,10 +42,10 @@ export function OperationalInspector(props: {
 
   return (
     <aside
-      className="flex h-full w-[var(--control-plane-inspector-width)] shrink-0 flex-col border-l border-border/80 bg-background"
+      className="flex h-full w-80 shrink-0 flex-col border-l border-border/80 bg-background"
       data-control-plane="inspector"
     >
-      <header className="flex h-[var(--workspace-topbar-height)] items-center justify-between gap-2 px-3">
+      <header className="flex h-(--workspace-topbar-height) items-center justify-between gap-2 px-3">
         <div>
           <p className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
             Inspector
