@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import ChatView from "./ChatView";
 import { resolveDraftPromotionNavigationTarget, threadHasStarted } from "./ChatView.logic";
 import { waitForDraftHeroTransition } from "./chat/draftHeroTransition";
-import { SidebarInset } from "./ui/sidebar";
+import { WorkspaceWithInspector } from "./controlPlane/WorkspaceWithInspector";
 import {
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThreadByRef,
@@ -207,8 +207,18 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   }
 
   return (
-    <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh">
+    <WorkspaceWithInspector
+      environmentId={
+        target.kind === "server"
+          ? target.threadRef.environmentId
+          : (draftSession?.environmentId ?? null)
+      }
+      projectId={serverThread?.projectId ?? serverThreadShell?.projectId ?? null}
+      threadId={
+        target.kind === "server" ? target.threadRef.threadId : (draftSession?.threadId ?? null)
+      }
+    >
       {view}
-    </SidebarInset>
+    </WorkspaceWithInspector>
   );
 }
