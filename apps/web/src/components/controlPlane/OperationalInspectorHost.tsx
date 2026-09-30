@@ -212,6 +212,38 @@ export function OperationalInspectorHost(props: {
         }
       : null;
 
+  const mutationHandlers =
+    cursorCloudInput === null
+      ? {}
+      : {
+          onCancel: () => {
+            setBusy(true);
+            void cancelCommand({
+              environmentId: cursorCloudInput.environmentId,
+              input: { ...cursorCloudInput, commandId: randomUUID() },
+            }).finally(() => setBusy(false));
+          },
+          onFollowUp: () => {
+            setBusy(true);
+            void followUpCommand({
+              environmentId: cursorCloudInput.environmentId,
+              input: {
+                ...cursorCloudInput,
+                commandId: randomUUID(),
+                prompt: followUp.slice(0, 16_000),
+              },
+            }).finally(() => setBusy(false));
+          },
+          onFollowUpChange: setFollowUp,
+          onRefresh: () => {
+            setBusy(true);
+            void refreshCommand({
+              environmentId: cursorCloudInput.environmentId,
+              input: cursorCloudInput,
+            }).finally(() => setBusy(false));
+          },
+        };
+
   return (
     <OperationalInspector
       binding={cursorCloudBinding}
@@ -219,36 +251,8 @@ export function OperationalInspectorHost(props: {
       collapsed={collapsed}
       followUp={followUp}
       model={model}
-      onCancel={() => {
-        if (cursorCloudInput === null) return;
-        setBusy(true);
-        void cancelCommand({
-          environmentId: cursorCloudInput.environmentId,
-          input: { ...cursorCloudInput, commandId: randomUUID() },
-        }).finally(() => setBusy(false));
-      }}
-      onFollowUp={() => {
-        if (cursorCloudInput === null) return;
-        setBusy(true);
-        void followUpCommand({
-          environmentId: cursorCloudInput.environmentId,
-          input: {
-            ...cursorCloudInput,
-            commandId: randomUUID(),
-            prompt: followUp.slice(0, 16_000),
-          },
-        }).finally(() => setBusy(false));
-      }}
-      onFollowUpChange={setFollowUp}
-      onRefresh={() => {
-        if (cursorCloudInput === null) return;
-        setBusy(true);
-        void refreshCommand({
-          environmentId: cursorCloudInput.environmentId,
-          input: cursorCloudInput,
-        }).finally(() => setBusy(false));
-      }}
       onToggle={toggle}
+      {...mutationHandlers}
     />
   );
 }

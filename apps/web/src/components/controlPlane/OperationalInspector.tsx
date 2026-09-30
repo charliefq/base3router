@@ -1,10 +1,10 @@
-import {
-  cursorCloudCancelDisabled,
-  cursorCloudFollowUpDisabled,
-} from "@t3tools/client-runtime/cursor-cloud";
 import type { CursorCloudRunnerBinding } from "@t3tools/contracts";
 import { PanelRightCloseIcon, PanelRightIcon } from "lucide-react";
 
+import {
+  resolveCursorCloudInspectorActions,
+  type CursorCloudInspectorActionHandlers,
+} from "~/controlPlane/inspectorActions";
 import type { OperationalInspectorModel } from "~/controlPlane/presentOperationalInspector";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
@@ -222,10 +222,10 @@ function InspectorBody(props: {
               binding={props.binding}
               busy={props.busy === true}
               followUp={props.followUp ?? ""}
-              onCancel={props.onCancel ?? (() => {})}
-              onFollowUp={props.onFollowUp ?? (() => {})}
-              onFollowUpChange={props.onFollowUpChange ?? (() => {})}
-              onRefresh={props.onRefresh ?? (() => {})}
+              onCancel={props.onCancel}
+              onFollowUp={props.onFollowUp}
+              onFollowUpChange={props.onFollowUpChange}
+              onRefresh={props.onRefresh}
             />
           ) : (
             <p className="mt-2 text-2xs text-muted-foreground">
@@ -240,46 +240,71 @@ function InspectorBody(props: {
   );
 }
 
-function CursorCloudInspectorControls(props: {
-  readonly binding: CursorCloudRunnerBinding;
-  readonly followUp: string;
-  readonly busy: boolean;
-  readonly onFollowUpChange: (value: string) => void;
-  readonly onFollowUp: () => void;
-  readonly onCancel: () => void;
-  readonly onRefresh: () => void;
-}) {
+function CursorCloudInspectorControls(
+  props: {
+    readonly binding: CursorCloudRunnerBinding;
+    readonly followUp: string;
+    readonly busy: boolean;
+  } & CursorCloudInspectorActionHandlers,
+) {
+  const actions = resolveCursorCloudInspectorActions({
+    binding: props.binding,
+    busy: props.busy,
+    followUp: props.followUp,
+    handlers: props,
+  });
+
+  if (actions.readOnly) {
+    return (
+      <p className="mt-2 text-2xs text-muted-foreground" data-control-plane="inspector-readonly">
+        Read only
+      </p>
+    );
+  }
+
   return (
     <div className="mt-2 space-y-2">
-      <Textarea
-        aria-label="Cursor Cloud follow-up"
-        maxLength={16_000}
-        value={props.followUp}
-        onChange={(event) => props.onFollowUpChange(event.target.value)}
-      />
+      {actions.followUpEditable ? (
+        <Textarea
+          aria-label="Cursor Cloud follow-up"
+          maxLength={16_000}
+          value={props.followUp}
+          onChange={(event) => props.onFollowUpChange?.(event.target.value)}
+        />
+      ) : null}
       <div className="flex flex-wrap gap-2">
-        <Button
-          disabled={
-            props.busy ||
-            cursorCloudFollowUpDisabled(props.binding) ||
-            props.followUp.trim().length === 0
-          }
-          size="xs"
-          onClick={props.onFollowUp}
-        >
-          Follow up
-        </Button>
-        <Button
-          disabled={props.busy || cursorCloudCancelDisabled(props.binding)}
-          size="xs"
-          variant="outline"
-          onClick={props.onCancel}
-        >
-          Cancel
-        </Button>
-        <Button disabled={props.busy} size="xs" variant="ghost" onClick={props.onRefresh}>
-          Refresh
-        </Button>
+        {actions.followUp.available ? (
+          <Button
+            data-control-plane="inspector-follow-up"
+            disabled={!actions.followUp.enabled}
+            size="xs"
+            onClick={props.onFollowUp}
+          >
+            Follow up
+          </Button>
+        ) : null}
+        {actions.cancel.available ? (
+          <Button
+            data-control-plane="inspector-cancel"
+            disabled={!actions.cancel.enabled}
+            size="xs"
+            variant="outline"
+            onClick={props.onCancel}
+          >
+            Cancel
+          </Button>
+        ) : null}
+        {actions.refresh.available ? (
+          <Button
+            data-control-plane="inspector-refresh"
+            disabled={!actions.refresh.enabled}
+            size="xs"
+            variant="ghost"
+            onClick={props.onRefresh}
+          >
+            Refresh
+          </Button>
+        ) : null}
       </div>
     </div>
   );

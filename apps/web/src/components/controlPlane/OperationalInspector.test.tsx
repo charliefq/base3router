@@ -1,5 +1,6 @@
+import { ProviderDriverKind, type CursorCloudRunnerBinding } from "@t3tools/contracts";
 import { act } from "react";
-import { create, type ReactTestRenderer } from "react-test-renderer";
+import { create, type ReactTestRendererJSON, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 import type { OperationalInspectorModel } from "~/controlPlane/presentOperationalInspector";
@@ -112,7 +113,126 @@ it("renders a bound Cursor Cloud workflow and approval state", async () => {
   expect(renderedText()).toContain("Approve");
   expect(renderedText()).toContain("bc-11111111-1111-5111-8111-111111111111");
   expect(renderedText()).toContain("cursor/output");
+  expect(renderedText()).not.toContain("Follow up");
   expect(renderedText()).not.toContain("CURSOR_API_KEY=");
+});
+
+const followUpReadyBinding: CursorCloudRunnerBinding = {
+  runnerKind: "cursor-cloud",
+  provider: ProviderDriverKind.make("cursor"),
+  model: "composer-2",
+  target: {
+    mode: "repository",
+    repositoryUrl: "https://github.com/charliefq/base3router",
+    startingRef: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  },
+  credentialRef: { kind: "env", name: "CURSOR_API_KEY" },
+  status: "finished",
+  cursorAgentId: "bc-11111111-1111-5111-8111-111111111111",
+  cursorRunId: "run-1",
+  cursorAgentStatus: "IDLE",
+  cursorRunStatus: "FINISHED",
+  createdAt: "2026-09-30T00:00:00.000Z",
+  updatedAt: "2026-09-30T00:00:00.000Z",
+};
+
+function findControl(
+  node: ReactTestRendererJSON | ReactTestRendererJSON[] | string | null | undefined,
+  name: string,
+): ReactTestRendererJSON | null {
+  if (node == null || typeof node === "string") return null;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findControl(child, name);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (node.props?.["data-control-plane"] === name) return node;
+  return findControl(node.children as ReactTestRendererJSON[] | undefined, name);
+}
+
+it("calls exactly one real handler from an enabled Follow up control", async () => {
+  const onFollowUp = vi.fn();
+  const onCancel = vi.fn();
+  const onRefresh = vi.fn();
+  await act(async () => {
+    renderer = create(
+      <OperationalInspector
+        binding={followUpReadyBinding}
+        collapsed={false}
+        followUp="Continue the review"
+        model={model({
+          runnerKind: "cursor-cloud",
+          cursorCloud: {
+            status: "finished",
+            agentId: "bc-11111111-1111-5111-8111-111111111111",
+            runId: "run-1",
+            repository: null,
+            startingRef: null,
+            branch: null,
+            commit: null,
+            pullRequestUrl: null,
+            result: "Done",
+            error: null,
+            followUpEnabled: true,
+            cancelEnabled: true,
+            refreshEnabled: true,
+          },
+        })}
+        onCancel={onCancel}
+        onFollowUp={onFollowUp}
+        onFollowUpChange={() => {}}
+        onRefresh={onRefresh}
+        onToggle={() => {}}
+      />,
+    );
+  });
+
+  const control = findControl(renderer?.toJSON(), "inspector-follow-up");
+  expect(control?.props.disabled).toBe(false);
+  await act(async () => {
+    control?.props.onClick();
+  });
+  expect(onFollowUp).toHaveBeenCalledTimes(1);
+  expect(onCancel).not.toHaveBeenCalled();
+  expect(onRefresh).not.toHaveBeenCalled();
+});
+
+it("does not render an interactive mutation when the handler is missing", async () => {
+  await act(async () => {
+    renderer = create(
+      <OperationalInspector
+        binding={followUpReadyBinding}
+        collapsed={false}
+        followUp="Continue the review"
+        model={model({
+          runnerKind: "cursor-cloud",
+          cursorCloud: {
+            status: "finished",
+            agentId: "bc-11111111-1111-5111-8111-111111111111",
+            runId: "run-1",
+            repository: null,
+            startingRef: null,
+            branch: null,
+            commit: null,
+            pullRequestUrl: null,
+            result: null,
+            error: null,
+            followUpEnabled: true,
+            cancelEnabled: true,
+            refreshEnabled: true,
+          },
+        })}
+        onToggle={() => {}}
+      />,
+    );
+  });
+
+  expect(renderedText()).toContain("Read only");
+  expect(findControl(renderer?.toJSON(), "inspector-follow-up")).toBeNull();
+  expect(findControl(renderer?.toJSON(), "inspector-cancel")).toBeNull();
+  expect(findControl(renderer?.toJSON(), "inspector-refresh")).toBeNull();
 });
 
 it("renders capability-off, unavailable, empty, and collapsed layouts", async () => {
