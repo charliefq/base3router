@@ -2,8 +2,9 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/models";
-import type { WorkflowCatalog } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ThreadId, WorkflowCatalog } from "@t3tools/contracts";
 
+import type { ControlCenterSurface } from "./controlCenterProjection";
 import { sanitizeDisplayText } from "./sanitizeDisplayText";
 
 export type ControlCenterItemStatus =
@@ -16,8 +17,9 @@ export type ControlCenterItemStatus =
   | "unavailable";
 
 export type ControlCenterTaskItem = {
-  readonly id: string;
-  readonly environmentId: string;
+  readonly id: ThreadId;
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
   readonly title: string;
   readonly projectTitle: string;
   readonly status: ControlCenterItemStatus;
@@ -26,8 +28,8 @@ export type ControlCenterTaskItem = {
 };
 
 export type ControlCenterProjectItem = {
-  readonly id: string;
-  readonly environmentId: string;
+  readonly id: ProjectId;
+  readonly environmentId: EnvironmentId;
   readonly title: string;
   readonly taskCount: number;
 };
@@ -39,6 +41,8 @@ export type ControlCenterCapabilities = {
 };
 
 export type ControlCenterModel = {
+  readonly selectedEnvironmentId: EnvironmentId | null;
+  readonly surface: ControlCenterSurface;
   readonly capabilities: ControlCenterCapabilities;
   readonly projects: ReadonlyArray<ControlCenterProjectItem>;
   readonly recentTasks: ReadonlyArray<ControlCenterTaskItem>;
@@ -50,10 +54,18 @@ export type ControlCenterModel = {
 };
 
 export type ControlCenterInput = {
+  readonly selectedEnvironmentId?: EnvironmentId | null;
+  readonly surface?: ControlCenterSurface;
   readonly capabilities: ControlCenterCapabilities;
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly catalogs?: ReadonlyArray<WorkflowCatalog>;
+};
+
+export type ControlCenterInspectorTarget = {
+  readonly environmentId: EnvironmentId | null;
+  readonly projectId: ProjectId | null;
+  readonly threadId: ThreadId | null;
 };
 
 function threadStatus(thread: EnvironmentThreadShell): ControlCenterItemStatus {
@@ -102,6 +114,7 @@ function toTaskItem(
   return {
     id: thread.id,
     environmentId: thread.environmentId,
+    projectId: thread.projectId,
     title: sanitizeDisplayText(thread.title) ?? thread.title,
     projectTitle: sanitizeDisplayText(project?.title) ?? "Unassigned project",
     status: threadStatus(thread),
@@ -111,6 +124,8 @@ function toTaskItem(
 }
 
 export function presentControlCenter(input: ControlCenterInput): ControlCenterModel {
+  const surface = input.surface ?? "ready";
+  const selectedEnvironmentId = input.selectedEnvironmentId ?? null;
   const tasks = input.threads
     .slice()
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
@@ -129,12 +144,16 @@ export function presentControlCenter(input: ControlCenterInput): ControlCenterMo
       ).length,
     }));
 
+  const ready = surface === "ready";
   const capabilityOff =
+    ready &&
     !input.capabilities.dispatcher &&
     !input.capabilities.workflow &&
     !input.capabilities.cursorCloud;
 
   return {
+    selectedEnvironmentId,
+    surface,
     capabilities: input.capabilities,
     projects,
     recentTasks: tasks.slice(0, 12),
@@ -143,7 +162,29 @@ export function presentControlCenter(input: ControlCenterInput): ControlCenterMo
     failedOrCancelled: tasks.filter(
       (task) => task.status === "failed" || task.status === "cancelled",
     ),
-    empty: projects.length === 0 && tasks.length === 0,
+    empty: ready && projects.length === 0 && tasks.length === 0,
     capabilityOff,
+  };
+}
+
+export function selectControlCenterInspectorTarget(
+  model: ControlCenterModel,
+): ControlCenterInspectorTarget {
+  if (model.surface !== "ready" || model.selectedEnvironmentId === null) {
+    return { environmentId: null, projectId: null, threadId: null };
+  }
+  const task = model.recentTasks[0] ?? null;
+  const project =
+    task === null
+      ? (model.projects[0] ?? null)
+      : (model.projects.find(
+          (entry) => entry.id === task.projectId && entry.environmentId === task.environmentId,
+        ) ??
+        model.projects[0] ??
+        null);
+  return {
+    environmentId: model.selectedEnvironmentId,
+    projectId: task?.projectId ?? project?.id ?? null,
+    threadId: task?.id ?? null,
   };
 }

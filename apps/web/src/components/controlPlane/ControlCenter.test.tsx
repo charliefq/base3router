@@ -2,8 +2,13 @@ import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
+import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+
 import type { ControlCenterModel } from "~/controlPlane/presentControlCenter";
 import { ControlCenter } from "./ControlCenter";
+
+const environmentId = EnvironmentId.make("environment-1");
+const projectId = ProjectId.make("project-1");
 
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
@@ -22,6 +27,8 @@ function renderedText(): string {
 }
 
 const empty: ControlCenterModel = {
+  selectedEnvironmentId: environmentId,
+  surface: "ready",
   capabilities: { dispatcher: true, workflow: true, cursorCloud: true },
   projects: [],
   recentTasks: [],
@@ -49,13 +56,12 @@ it("renders capability-off, approvals, and terminal run states", async () => {
           ...empty,
           empty: false,
           capabilityOff: true,
-          projects: [
-            { id: "project-1", environmentId: "environment-1", title: "Portfolio", taskCount: 3 },
-          ],
+          projects: [{ id: projectId, environmentId, title: "Portfolio", taskCount: 3 }],
           recentTasks: [
             {
-              id: "thread-1",
-              environmentId: "environment-1",
+              id: ThreadId.make("thread-1"),
+              environmentId,
+              projectId,
               title: "Active local task",
               projectTitle: "Portfolio",
               status: "active",
@@ -65,8 +71,9 @@ it("renders capability-off, approvals, and terminal run states", async () => {
           ],
           activeRuns: [
             {
-              id: "thread-2",
-              environmentId: "environment-1",
+              id: ThreadId.make("thread-2"),
+              environmentId,
+              projectId,
               title: "Cloud workflow",
               projectTitle: "Portfolio",
               status: "active",
@@ -76,8 +83,9 @@ it("renders capability-off, approvals, and terminal run states", async () => {
           ],
           approvals: [
             {
-              id: "thread-3",
-              environmentId: "environment-1",
+              id: ThreadId.make("thread-3"),
+              environmentId,
+              projectId,
               title: "Needs approval",
               projectTitle: "Portfolio",
               status: "approval",
@@ -87,8 +95,9 @@ it("renders capability-off, approvals, and terminal run states", async () => {
           ],
           failedOrCancelled: [
             {
-              id: "thread-4",
-              environmentId: "environment-1",
+              id: ThreadId.make("thread-4"),
+              environmentId,
+              projectId,
               title: "Cancelled run",
               projectTitle: "Portfolio",
               status: "cancelled",

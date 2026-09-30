@@ -30,13 +30,40 @@ export function ControlCenter(props: {
         </div>
       </WorkspacePageHeader>
       <div className="min-h-0 flex-1 overflow-y-auto pl-(--workspace-gutter-start) pr-(--workspace-gutter-end) pb-8">
-        <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 pt-2">
-          {props.model.capabilityOff ? (
+        <div
+          className="mx-auto flex w-full max-w-5xl flex-col gap-4 pt-2"
+          data-control-center-environment={props.model.selectedEnvironmentId ?? ""}
+          data-control-center-surface={props.model.surface}
+        >
+          {props.model.surface === "unpaired" ? (
+            <OperationalStatusCard
+              title="Offline"
+              detail="Pair an environment to see its projects, tasks, and capabilities."
+            />
+          ) : null}
+          {props.model.surface === "offline" ? (
+            <OperationalStatusCard
+              title="Offline"
+              tone="warning"
+              detail="The selected environment is offline. Reconnect to restore its projected state."
+            />
+          ) : null}
+          {props.model.surface === "loading" ? (
+            <OperationalStatusCard
+              title="Loading"
+              detail="Waiting for the paired environment snapshot."
+            />
+          ) : null}
+          {props.model.surface === "ready" ? (
             <OperationalStatusCard
               title="Capabilities"
-              tone="warning"
-              value="Off"
-              detail="This environment does not advertise dispatcher, workflow, or Cursor Cloud capabilities. Existing projects and tasks remain usable."
+              tone={props.model.capabilityOff ? "warning" : "success"}
+              value={props.model.capabilityOff ? "Off" : "On"}
+              detail={
+                props.model.capabilityOff
+                  ? "This environment does not advertise dispatcher, workflow, or Cursor Cloud capabilities. Existing projects and tasks remain usable."
+                  : `Dispatcher ${props.model.capabilities.dispatcher ? "on" : "off"} · Workflow ${props.model.capabilities.workflow ? "on" : "off"} · Cursor Cloud ${props.model.capabilities.cursorCloud ? "on" : "off"}`
+              }
             />
           ) : null}
           {props.model.empty ? (
@@ -48,12 +75,16 @@ export function ControlCenter(props: {
           {section === "overview" || section === "workflows" ? (
             <Section title="Projects" empty="No projects are connected.">
               {props.model.projects.map((project) => (
-                <OperationalStatusCard
+                <div
                   key={`${project.environmentId}:${project.id}`}
-                  title="Project"
-                  value={`${project.taskCount} tasks`}
-                  detail={project.title}
-                />
+                  data-control-center-project={project.id}
+                >
+                  <OperationalStatusCard
+                    title="Project"
+                    value={`${project.taskCount} tasks`}
+                    detail={project.title}
+                  />
+                </div>
               ))}
             </Section>
           ) : null}
@@ -110,6 +141,7 @@ function Section(props: {
 function TaskCard(props: { readonly task: ControlCenterTaskItem }) {
   return (
     <Link
+      data-control-center-thread={props.task.id}
       params={{ environmentId: props.task.environmentId, threadId: props.task.id }}
       to="/$environmentId/$threadId"
     >
