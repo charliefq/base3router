@@ -20,7 +20,7 @@ export function SettingsAboutRouteScreen() {
   const insets = useSafeAreaInsets();
 
   return (
-    <SettingsScreen title="About T3 Code">
+    <SettingsScreen title="About Base3Router">
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
@@ -120,6 +120,12 @@ function AppSettingsSection() {
 
   return (
     <SettingsSection title="App">
+      <SettingsRow
+        icon="info.circle"
+        label="Attribution"
+        value="Built on T3 Code. MIT license retained. Copyright 2026 T3 Tools Inc."
+        valuePosition="below"
+      />
       <SettingsRow icon="internaldrive" label="Client Storage" target="SettingsClientStorage" />
       <SettingsRow icon="stethoscope" label="Diagnostics" target="SettingsDiagnostics" />
       <SettingsRow

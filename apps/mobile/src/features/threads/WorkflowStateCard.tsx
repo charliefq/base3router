@@ -5,6 +5,7 @@ import { ScrollView, View } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { workflowEnvironment } from "../../state/workflow";
+import { presentMobileWorkflowState } from "./presentWorkflowState";
 
 /** Read-only native view. Workflow mutations remain in the shared web/desktop surface. */
 export function WorkflowStateCard(props: {
@@ -31,6 +32,7 @@ export function WorkflowStateCard(props: {
     entry.attempts.some((attempt) => attempt.destinationThreadId === props.threadId),
   );
   if (!run) return null;
+  const presented = presentMobileWorkflowState({ catalog, threadId: props.threadId });
   const template = catalog?.templates.find(
     (entry) => entry.id === run.templateId && entry.version === run.templateVersion,
   );
@@ -43,11 +45,11 @@ export function WorkflowStateCard(props: {
   return (
     <View className="mx-3 mt-2 rounded-2xl border border-composer-border bg-composer-surface px-3 py-2">
       <Text className="text-xs font-t3-bold text-foreground">
-        Workflow · {template?.displayName ?? run.templateId} v{run.templateVersion}
+        Workflow · {presented?.title ?? run.templateId} v{run.templateVersion}
       </Text>
       <Text className="text-xs text-foreground-muted">
-        {run.status} · {current?.label ?? "Finished"} · Role: {current?.profileId ?? "Human"}
-        {current?.profileVersion ? ` v${current.profileVersion}` : ""}
+        {presented?.status ?? run.status} · {presented?.currentStage ?? "Finished"} · Read-only
+        {presented?.runnerKind ? ` · ${presented.runnerKind}` : ""}
       </Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mt-1">
         {template?.stages.map((stage) => {
