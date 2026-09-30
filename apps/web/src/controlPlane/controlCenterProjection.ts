@@ -35,12 +35,52 @@ const EMPTY_CAPABILITIES: ControlCenterCapabilities = {
   cursorCloud: false,
 };
 
-/** Prefer the paired/active environment, then the catalog primary. */
+function latestProjectedEnvironmentId(
+  projects: ReadonlyArray<EnvironmentProject>,
+  threads: ReadonlyArray<EnvironmentThreadShell>,
+): EnvironmentId | null {
+  let latest: { readonly environmentId: EnvironmentId; readonly updatedAt: string } | null = null;
+  for (const record of projects) {
+    if (latest === null || record.updatedAt > latest.updatedAt) {
+      latest = record;
+    }
+  }
+  for (const record of threads) {
+    if (latest === null || record.updatedAt > latest.updatedAt) {
+      latest = record;
+    }
+  }
+  return latest?.environmentId ?? null;
+}
+
+/**
+ * Prefer an active environment that owns projected workspace data, then the
+ * primary environment when it owns data. If both are empty, follow the newest
+ * project/thread visible in the sidebar before falling back to connection
+ * identity alone.
+ */
 export function resolveControlCenterEnvironmentId(
   activeEnvironmentId: EnvironmentId | null,
   primaryEnvironmentId: EnvironmentId | null,
+  projects: ReadonlyArray<EnvironmentProject> = [],
+  threads: ReadonlyArray<EnvironmentThreadShell> = [],
 ): EnvironmentId | null {
-  return activeEnvironmentId ?? primaryEnvironmentId;
+  if (activeEnvironmentId === null && primaryEnvironmentId === null) {
+    return null;
+  }
+  const projectedEnvironmentIds = new Set<EnvironmentId>();
+  for (const project of projects) projectedEnvironmentIds.add(project.environmentId);
+  for (const thread of threads) projectedEnvironmentIds.add(thread.environmentId);
+
+  if (activeEnvironmentId !== null && projectedEnvironmentIds.has(activeEnvironmentId)) {
+    return activeEnvironmentId;
+  }
+  if (primaryEnvironmentId !== null && projectedEnvironmentIds.has(primaryEnvironmentId)) {
+    return primaryEnvironmentId;
+  }
+  return (
+    latestProjectedEnvironmentId(projects, threads) ?? activeEnvironmentId ?? primaryEnvironmentId
+  );
 }
 
 /**
@@ -108,6 +148,8 @@ export function selectControlCenterSource(input: ControlCenterSourceInput): Cont
   const selectedEnvironmentId = resolveControlCenterEnvironmentId(
     input.activeEnvironmentId,
     input.primaryEnvironmentId,
+    input.projects,
+    input.threads,
   );
   const serverConfig = acceptEnvironmentScopedValue(
     selectedEnvironmentId,

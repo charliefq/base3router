@@ -69,7 +69,38 @@ function serverConfig(
 it("prefers the paired active environment over the catalog primary", () => {
   expect(resolveControlCenterEnvironmentId(envA, envB)).toBe(envA);
   expect(resolveControlCenterEnvironmentId(null, envB)).toBe(envB);
-  expect(resolveControlCenterEnvironmentId(null, null)).toBeNull();
+  expect(
+    resolveControlCenterEnvironmentId(null, null, [project(envA, projectA, "Cached")]),
+  ).toBeNull();
+});
+
+it("selects the populated paired environment when the primary projection is empty", () => {
+  const projectedProject = project(envB, projectB, "Paired project");
+  const projectedThread = thread(envB, projectB, threadB, "Paired task");
+
+  expect(resolveControlCenterEnvironmentId(envA, envA, [projectedProject], [projectedThread])).toBe(
+    envB,
+  );
+
+  const model = presentControlCenter(
+    selectControlCenterSource({
+      activeEnvironmentId: envA,
+      primaryEnvironmentId: envA,
+      catalogReady: true,
+      bootstrapped: true,
+      connectionPhase: "connected",
+      serverConfig: serverConfig(envB, { dispatcherRoutePreview: true }),
+      incomingEnvironmentId: envB,
+      projects: [projectedProject],
+      threads: [projectedThread],
+    }),
+  );
+
+  expect(model.selectedEnvironmentId).toBe(envB);
+  expect(model.projects.map((entry) => entry.id)).toEqual([projectB]);
+  expect(model.recentTasks.map((entry) => entry.id)).toEqual([threadB]);
+  expect(model.empty).toBe(false);
+  expect(model.capabilityOff).toBe(false);
 });
 
 it("shows the live project and thread for one paired environment", () => {

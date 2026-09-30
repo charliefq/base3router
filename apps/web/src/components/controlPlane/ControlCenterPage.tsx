@@ -1,11 +1,14 @@
-import { selectControlCenterSource } from "~/controlPlane/controlCenterProjection";
+import {
+  resolveControlCenterEnvironmentId,
+  selectControlCenterSource,
+} from "~/controlPlane/controlCenterProjection";
 import {
   presentControlCenter,
   selectControlCenterInspectorTarget,
 } from "~/controlPlane/presentControlCenter";
 import {
   useActiveEnvironmentId,
-  useAllEnvironmentShellsBootstrapped,
+  useEnvironmentShellBootstrapped,
   useProjects,
   useServerConfigs,
   useThreadShells,
@@ -20,13 +23,18 @@ export function ControlCenterPage(props: {
 }) {
   const activeEnvironmentId = useActiveEnvironmentId();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const selectedEnvironmentId = activeEnvironmentId ?? primaryEnvironmentId;
   const { isReady } = useEnvironments();
-  const environment = useEnvironment(selectedEnvironmentId);
   const serverConfigs = useServerConfigs();
-  const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const projects = useProjects();
   const threads = useThreadShells();
+  const selectedEnvironmentId = resolveControlCenterEnvironmentId(
+    activeEnvironmentId,
+    primaryEnvironmentId,
+    projects,
+    threads,
+  );
+  const environment = useEnvironment(selectedEnvironmentId);
+  const bootstrapped = useEnvironmentShellBootstrapped(selectedEnvironmentId);
   const serverConfig =
     selectedEnvironmentId === null
       ? null
