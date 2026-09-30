@@ -10,6 +10,8 @@ import {
   type ModelRouterTarget,
 } from "@t3tools/contracts";
 
+import * as DateTime from "effect/DateTime";
+
 import { MODEL_ROUTER_SECRET_REDACTION, modelRouterTargetKey } from "./modelRouter.ts";
 
 const SECRET_SHAPED =
@@ -170,7 +172,7 @@ function cooldownFromFailure(input: {
     ...(input.classification.scope === "model" ? { model: input.model } : {}),
     scope: input.classification.scope,
     category: input.classification.category,
-    until: new Date(input.nowMs + ttl).toISOString(),
+    until: DateTime.formatIso(DateTime.makeUnsafe(input.nowMs + ttl)),
     reasonCode: input.classification.reasonCode,
   };
 }
@@ -180,7 +182,7 @@ function candidateMatchesCooldown(
   cooldown: ModelRouterAvailabilityCooldown,
   nowMs: number,
 ): boolean {
-  if (Date.parse(cooldown.until) <= nowMs) return false;
+  if (DateTime.toEpochMillis(DateTime.makeUnsafe(cooldown.until)) <= nowMs) return false;
   if (candidate.target.instanceId !== cooldown.instanceId) return false;
   if (cooldown.scope === "model") return candidate.target.model === cooldown.model;
   return true;
