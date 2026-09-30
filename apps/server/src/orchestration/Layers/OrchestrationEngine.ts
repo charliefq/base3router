@@ -66,6 +66,7 @@ function commandToAggregateRef(command: OrchestrationCommand): {
   readonly aggregateId: ProjectId | ThreadId;
 } {
   switch (command.type) {
+    case "workflow.record":
     case "project.create":
     case "project.meta.update":
     case "project.delete":

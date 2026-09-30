@@ -108,6 +108,7 @@ import {
   ThreadComposer,
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
+import { WorkflowStateCard } from "./WorkflowStateCard";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 
@@ -885,6 +886,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           onTouchEnd={handleFeedTouchEnd}
           onTouchCancel={handleFeedTouchCancel}
         >
+          {props.serverConfig?.environment.capabilities.workflowOs === true ? (
+            <WorkflowStateCard
+              environmentId={props.environmentId}
+              projectId={props.selectedThread.projectId}
+              threadId={props.selectedThread.id}
+            />
+          ) : null}
           <View
             pointerEvents="none"
             className={

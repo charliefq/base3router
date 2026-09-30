@@ -31,6 +31,7 @@ import {
   DispatcherTaskRouteBinding,
   DispatcherTaskRouteSnapshot,
 } from "./dispatcher.ts";
+import { WorkflowCatalog, WorkflowMutation, WorkflowStageDispatchMutation } from "./workflow.ts";
 import {
   PullRequestActor,
   PullRequestChecksState,
@@ -866,6 +867,7 @@ export const OrchestrationReadModel = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projects: Schema.Array(OrchestrationProject),
   threads: Schema.Array(OrchestrationThread),
+  workflow: Schema.optional(WorkflowCatalog),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationReadModel = typeof OrchestrationReadModel.Type;
@@ -1340,6 +1342,8 @@ export const ThreadTurnStartCommand = Schema.Struct({
   routeBinding: Schema.optional(DispatcherTaskRouteBinding),
   // Server-owned after validating a client handoff request.
   handoff: Schema.optional(DispatcherTaskHandoff),
+  // Server-owned workflow linkage, committed with the bound turn start.
+  workflowStage: Schema.optional(WorkflowStageDispatchMutation),
   createdAt: IsoDateTime,
 });
 
@@ -1662,7 +1666,16 @@ const ThreadPullRequestLinkSyncCommand = Schema.Struct({
   stack: Schema.NullOr(ThreadPullRequestStack),
 });
 
+const WorkflowRecordCommand = Schema.Struct({
+  type: Schema.Literal("workflow.record"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  mutation: WorkflowMutation,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
+  WorkflowRecordCommand,
   ThreadAutoSettleCommand,
   ThreadPullRequestSyncCommand,
   ThreadPullRequestLinkSyncCommand,
@@ -1692,6 +1705,7 @@ export const OrchestrationCommand = Schema.Union([
 export type OrchestrationCommand = typeof OrchestrationCommand.Type;
 
 export const OrchestrationEventType = Schema.Literals([
+  "workflow.recorded",
   "project.created",
   "project.meta-updated",
   "project.deleted",
@@ -2042,6 +2056,11 @@ const EventBaseFields = {
 } as const;
 
 export const OrchestrationEvent = Schema.Union([
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("workflow.recorded"),
+    payload: Schema.Struct({ projectId: ProjectId, mutation: WorkflowMutation }),
+  }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("project.created"),

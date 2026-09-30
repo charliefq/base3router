@@ -56,6 +56,23 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("requires read access for workflow inspection and operate access for every workflow mutation", () => {
+    for (const method of [
+      WS_METHODS.workflowCatalog,
+      WS_METHODS.workflowReadRun,
+      WS_METHODS.workflowStagePreview,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
+    for (const method of [
+      WS_METHODS.workflowAction,
+      WS_METHODS.workflowDispatchStage,
+      WS_METHODS.workflowProposeArtifact,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+    }
+  });
+
   it("requires write access to import agent session history", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.agentSessionsScan)).toBe(
       AuthOrchestrationReadScope,

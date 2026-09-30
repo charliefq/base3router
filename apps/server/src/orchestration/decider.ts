@@ -1,5 +1,6 @@
 import {
   EventId,
+  DispatcherTaskRouteBinding,
   MAX_SCRIPT_ID_LENGTH,
   SCRIPT_RUN_COMMAND_PATTERN,
   MessageId,
@@ -46,6 +47,7 @@ import {
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
 import { threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
+import { applyWorkflowMutation, emptyWorkflowCatalog } from "../workflow/Policy.ts";
 
 const monogramSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
@@ -54,6 +56,7 @@ const isScriptRunCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const decodeUserInputRequestedPayload = Schema.decodeUnknownOption(UserInputRequestedPayload);
 const threadPullRequestLinksEqual = Schema.toEquivalence(Schema.NullOr(ThreadLinkedPullRequest));
+const routeBindingsEqual = Schema.toEquivalence(DispatcherTaskRouteBinding);
 
 /**
  * Blocked-on-you work derived from the thread's retained activities: an
@@ -222,6 +225,32 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   Crypto.Crypto
 > {
   switch (command.type) {
+    case "workflow.record": {
+      yield* requireProject({ readModel, command, projectId: command.projectId });
+      yield* Effect.try({
+        try: () =>
+          applyWorkflowMutation(
+            readModel.workflow ?? emptyWorkflowCatalog(),
+            command.projectId,
+            command.mutation,
+          ),
+        catch: (cause) =>
+          new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: cause instanceof Error ? cause.message : "Invalid workflow transition.",
+          }),
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "project",
+          aggregateId: command.projectId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "workflow.recorded",
+        payload: { projectId: command.projectId, mutation: command.mutation },
+      };
+    }
     case "project.create": {
       yield* requireProjectAbsent({
         readModel,
@@ -1377,6 +1406,47 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const workflowStage = command.workflowStage;
+      if (
+        workflowStage !== undefined &&
+        (command.routeBinding === undefined ||
+          !routeBindingsEqual(workflowStage.routeBinding, command.routeBinding) ||
+          workflowStage.threadId !== command.threadId ||
+          workflowStage.messageId !== command.message.messageId)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Workflow task linkage must match the bound turn and route.",
+        });
+      }
+      if (workflowStage !== undefined) {
+        yield* Effect.try({
+          try: () =>
+            applyWorkflowMutation(
+              readModel.workflow ?? emptyWorkflowCatalog(),
+              targetThread.projectId,
+              workflowStage,
+            ),
+          catch: (cause) =>
+            new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: cause instanceof Error ? cause.message : "Invalid workflow stage dispatch.",
+            }),
+        });
+      }
+      const workflowEvent: Omit<OrchestrationEvent, "sequence"> | null =
+        workflowStage === undefined
+          ? null
+          : {
+              ...(yield* withEventBase({
+                aggregateKind: "project",
+                aggregateId: targetThread.projectId,
+                occurredAt: command.createdAt,
+                commandId: command.commandId,
+              })),
+              type: "workflow.recorded",
+              payload: { projectId: targetThread.projectId, mutation: workflowStage },
+            };
       const sourceProposedPlan = command.sourceProposedPlan;
       const sourceThread = sourceProposedPlan
         ? yield* requireThread({
@@ -1497,6 +1567,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       return [
+        ...(workflowEvent ? [workflowEvent] : []),
         ...lifecycleResetEvents,
         ...(userMessageEvent ? [userMessageEvent] : []),
         turnStartRequestedEvent,

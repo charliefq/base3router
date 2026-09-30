@@ -24,8 +24,9 @@ import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
+import { applyWorkflowMutation, emptyWorkflowCatalog } from "../workflow/Policy.ts";
 
-import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
+import { OrchestrationProjectorDecodeError, toProjectorDecodeError } from "./Errors.ts";
 import {
   MessageSentPayloadSchema,
   ProjectCreatedPayload,
@@ -317,6 +318,7 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
     snapshotSequence: 0,
     projects: [],
     threads: [],
+    workflow: emptyWorkflowCatalog(),
     updatedAt: nowIso,
   };
 }
@@ -332,6 +334,22 @@ export function projectEvent(
   };
 
   switch (event.type) {
+    case "workflow.recorded":
+      return Effect.try({
+        try: () => ({
+          ...nextBase,
+          workflow: applyWorkflowMutation(
+            nextBase.workflow ?? emptyWorkflowCatalog(),
+            event.payload.projectId,
+            event.payload.mutation,
+          ),
+        }),
+        catch: (cause) =>
+          new OrchestrationProjectorDecodeError({
+            eventType: event.type,
+            issue: cause instanceof Error ? cause.message : "Invalid workflow event.",
+          }),
+      });
     case "project.created":
       return decodeForEvent(ProjectCreatedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {

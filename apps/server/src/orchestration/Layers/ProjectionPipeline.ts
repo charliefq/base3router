@@ -65,8 +65,10 @@ import {
 } from "../../attachmentStore.ts";
 import * as Dispatcher from "../../dispatcher/Dispatcher.ts";
 import * as DispatcherHandoff from "../../dispatcher/Handoff.ts";
+import { projectWorkflowEvent } from "../../workflow/Projection.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
+  workflow: "projection.workflow",
   projects: "projection.projects",
   threads: "projection.threads",
   threadMessages: "projection.thread-messages",
@@ -1989,6 +1991,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     });
 
     const projectors: ReadonlyArray<ProjectorDefinition> = [
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.workflow,
+        apply: (event) =>
+          projectWorkflowEvent(event).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+      },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.projects,
         apply: applyProjectsProjection,

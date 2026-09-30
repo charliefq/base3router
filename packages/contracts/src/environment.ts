@@ -137,6 +137,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   dispatcherRoutePreview: Schema.optionalKey(Schema.Boolean),
   /** Server supports explicit, user-approved task handoff to another provider. */
   dispatcherTaskHandoff: Schema.optionalKey(Schema.Boolean),
+  /** Server owns versioned agent profiles, workflow state, and confirmed stage dispatch. */
+  workflowOs: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.pin / thread.unpin commands. Same
       version-skew contract as threadSettlement. */
   threadPinning: Schema.optionalKey(Schema.Boolean),
