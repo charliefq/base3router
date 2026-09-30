@@ -28,67 +28,50 @@ export function WorkflowStateCard(props: {
     };
   }, [props.environmentId, props.projectId, readCatalog]);
 
-  const run = catalog?.runs.find((entry) =>
-    entry.attempts.some((attempt) => attempt.destinationThreadId === props.threadId),
-  );
-  if (!run) return null;
   const presented = presentMobileWorkflowState({ catalog, threadId: props.threadId });
-  const template = catalog?.templates.find(
-    (entry) => entry.id === run.templateId && entry.version === run.templateVersion,
-  );
-  const current = template?.stages.find((entry) => entry.id === run.currentStageId);
-  const threadAttempt = run.attempts.findLast(
-    (entry) => entry.destinationThreadId === props.threadId,
-  );
-  const artifact =
-    run.artifacts.findLast((entry) => entry.stageId === current?.id) ?? run.artifacts.at(-1);
+  if (!presented) return null;
   return (
     <View className="mx-3 mt-2 rounded-2xl border border-composer-border bg-composer-surface px-3 py-2">
       <Text className="text-xs font-t3-bold text-foreground">
-        Workflow · {presented?.title ?? run.templateId} v{run.templateVersion}
+        Workflow · {presented.title} v{presented.templateVersion}
       </Text>
       <Text className="text-xs text-foreground-muted">
-        {presented?.status ?? run.status} · {presented?.currentStage ?? "Finished"} · Read-only
-        {presented?.runnerKind ? ` · ${presented.runnerKind}` : ""}
+        {presented.status} · {presented.currentStage} · Read-only · {presented.runnerKind}
+        {presented.cancelled ? " · Cancelled" : ""}
+        {presented.error ? " · Error" : ""}
+        {presented.terminal && !presented.cancelled && !presented.error ? " · Finished" : ""}
       </Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mt-1">
-        {template?.stages.map((stage) => {
-          const attempt = run.attempts.findLast((entry) => entry.stageId === stage.id);
-          return (
-            <Text key={stage.id} className="mr-3 text-xs text-foreground-muted">
-              {stage.label}: {attempt?.status ?? "waiting"}
-            </Text>
-          );
-        })}
+        {presented.stages.map((stage) => (
+          <Text key={stage.id} className="mr-3 text-xs text-foreground-muted">
+            {stage.label}: {stage.status}
+          </Text>
+        ))}
       </ScrollView>
-      {threadAttempt?.routeBinding ? (
+      {presented.boundRoute ? (
         <Text className="text-xs text-foreground">
-          Bound provider/model: {threadAttempt.routeBinding.target.instanceId} ·{" "}
-          {threadAttempt.routeBinding.target.model}
+          Bound provider/model: {presented.boundRoute}
         </Text>
       ) : null}
-      {threadAttempt?.runnerBinding ? (
+      {presented.cursorCloudStatus ? (
         <Text className="text-xs text-foreground">
-          Cursor Cloud · {threadAttempt.runnerBinding.status}
-          {threadAttempt.runnerBinding.cursorAgentId
-            ? ` · agent ${threadAttempt.runnerBinding.cursorAgentId}`
-            : ""}
-          {threadAttempt.runnerBinding.cursorRunId
-            ? ` · run ${threadAttempt.runnerBinding.cursorRunId}`
-            : ""}
+          Cursor Cloud · {presented.cursorCloudStatus}
+          {presented.agentId ? ` · agent ${presented.agentId}` : ""}
+          {presented.runId ? ` · run ${presented.runId}` : ""}
         </Text>
       ) : null}
-      {artifact ? (
+      {presented.artifact ? (
         <View className="mt-1">
           <Text className="text-xs font-t3-bold text-foreground">
-            {artifact.status === "accepted" ? "Accepted" : "Proposed"} artifact · {artifact.kind}
+            {presented.artifact.status === "accepted" ? "Accepted" : "Proposed"} artifact ·{" "}
+            {presented.artifact.kind}
           </Text>
-          {artifact.missingSections.length > 0 ? (
+          {presented.artifact.missingSections.length > 0 ? (
             <Text className="text-xs text-foreground-muted">
-              Missing: {artifact.missingSections.join(", ")}
+              Missing: {presented.artifact.missingSections.join(", ")}
             </Text>
           ) : null}
-          {artifact.sections.map((section) => (
+          {presented.artifact.sections.map((section) => (
             <Text key={section.label} className="text-xs text-foreground-muted" numberOfLines={3}>
               {section.label}: {section.content}
             </Text>

@@ -94,8 +94,11 @@ by `scripts/build-desktop-artifact.ts` but are not produced by this Internal
 Alpha workflow. The workflow never signs, notarizes, or publishes.
 
 iPhone EAS preview is a separate labeled workflow (`mobile-eas-preview.yml`)
-that requires `EXPO_TOKEN`. This Alpha does not claim an iPhone build unless
-that token and label are present.
+that requires `EXPO_TOKEN` and the `🚀 Mobile Continuous Deployment` label.
+This Internal Alpha fork does not configure that token, so no iPhone/EAS
+preview is claimed. Mobile stays a read-only client of the same server
+catalog: identity, workflow name/stage, runner kind, Cursor agent/run ids,
+and terminal/error/cancelled state. Mutation controls stay on web/desktop.
 
 ## Explicit non-goals
 
