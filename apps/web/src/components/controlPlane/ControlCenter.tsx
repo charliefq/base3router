@@ -29,7 +29,10 @@ export function ControlCenter(props: {
           </h1>
         </div>
       </WorkspacePageHeader>
-      <div className="min-h-0 flex-1 overflow-y-auto pl-(--workspace-gutter-start) pr-(--workspace-gutter-end) pb-8">
+      <div
+        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto pl-(--workspace-gutter-start) pr-(--workspace-gutter-end) pb-8"
+        data-workspace-scroll-surface="control-center"
+      >
         <div
           className="mx-auto flex w-full max-w-5xl flex-col gap-4 pt-2"
           data-control-center-environment={props.model.selectedEnvironmentId ?? ""}

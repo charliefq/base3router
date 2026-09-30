@@ -26,7 +26,7 @@ export function OperationalInspector(props: {
   if (props.collapsed) {
     return (
       <aside
-        className="flex h-full w-10 shrink-0 flex-col items-center border-l border-border/80 bg-background pt-3"
+        className="flex h-full min-h-0 w-10 shrink-0 flex-col items-center overflow-hidden border-l border-border/80 bg-background pt-3"
         data-control-plane="inspector-collapsed"
       >
         <Button
@@ -43,7 +43,7 @@ export function OperationalInspector(props: {
 
   return (
     <aside
-      className="flex h-full w-80 shrink-0 flex-col border-l border-border/80 bg-background"
+      className="flex h-full min-h-0 w-80 shrink-0 flex-col overflow-hidden border-l border-border/80 bg-background"
       data-control-plane="inspector"
     >
       <header className="flex h-(--workspace-topbar-height) items-center justify-between gap-2 px-3">
@@ -62,7 +62,10 @@ export function OperationalInspector(props: {
           <PanelRightCloseIcon />
         </Button>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 pb-4">
+      <div
+        className="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto px-3 pb-4"
+        data-workspace-scroll-surface="inspector"
+      >
         <InspectorBody {...props} />
       </div>
     </aside>

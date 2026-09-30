@@ -14,9 +14,9 @@ import {
   useThreadShells,
 } from "~/state/entities";
 import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
-import { SidebarInset } from "../ui/sidebar";
 import { ControlCenter } from "./ControlCenter";
 import { OperationalInspectorHost } from "./OperationalInspectorHost";
+import { WorkspaceScrollPane } from "./workspaceScrollLayout";
 
 export function ControlCenterPage(props: {
   readonly section?: "overview" | "workflows" | "agents";
@@ -55,17 +55,16 @@ export function ControlCenterPage(props: {
   const inspector = selectControlCenterInspectorTarget(model);
 
   return (
-    <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh">
-      <div className="flex h-full min-w-0">
-        <div className="min-w-0 flex-1">
-          <ControlCenter model={model} section={props.section ?? "overview"} />
-        </div>
+    <WorkspaceScrollPane
+      inspector={
         <OperationalInspectorHost
           environmentId={inspector.environmentId}
           projectId={inspector.projectId}
           threadId={inspector.threadId}
         />
-      </div>
-    </SidebarInset>
+      }
+    >
+      <ControlCenter model={model} section={props.section ?? "overview"} />
+    </WorkspaceScrollPane>
   );
 }

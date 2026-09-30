@@ -1261,6 +1261,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           ref={setTimelineViewportElement}
           className="relative h-full min-h-0"
           data-assistant-citation-viewport="true"
+          data-workspace-scroll-surface="conversation"
         >
           {onCiteAssistantText && citationThreadRef ? (
             <AssistantSelectionToolbar
