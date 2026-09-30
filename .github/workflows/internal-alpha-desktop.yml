@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       include_macos_x64:
-        description: "Build macOS x64 on macos-13 in addition to arm64"
+        description: "Build macOS x64 on macos-14 in addition to arm64"
         type: boolean
         default: true
   pull_request:
