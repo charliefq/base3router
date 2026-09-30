@@ -127,8 +127,8 @@ jobs:
       (github.event_name == 'pull_request' &&
         github.event.pull_request.head.repo.full_name == github.repository)
     needs: validate
-    # Same approach as release.yml: Apple Silicon host, electron-builder --arch x64.
-    # GitHub-hosted Intel macOS images are not used here.
+    # Same approach as release.yml: Apple Silicon host, electron-builder --arch x64,
+    # plus the x86_64-apple-darwin Rust target. GitHub-hosted Intel images are unused.
     runs-on: macos-14
     timeout-minutes: 75
     steps:
@@ -146,6 +146,12 @@ jobs:
           node-version-file: package.json
           cache: true
           run-install: false
+
+      - name: Setup Rust x64 target
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          targets: x86_64-apple-darwin
 
       - name: Install desktop dependencies
         run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...

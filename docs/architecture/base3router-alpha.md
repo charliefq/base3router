@@ -85,8 +85,9 @@ Unsigned packages are built by `.github/workflows/internal-alpha-desktop.yml`
 through the existing `vp run dist:desktop:artifact` path. Supported targets:
 
 - macOS arm64 on `macos-14` (`Base3Router-Internal-Alpha-mac-arm64`)
-- macOS x64 on `macos-14` via `--arch x64` (`Base3Router-Internal-Alpha-mac-x64`),
-  matching `release.yml` rather than a retired Intel image
+- macOS x64 on `macos-14` via `--arch x64` and `x86_64-apple-darwin`
+  (`Base3Router-Internal-Alpha-mac-x64`), matching `release.yml` rather than a
+  retired Intel image
 - Windows x64 on `windows-2022` (`Base3Router-Internal-Alpha-windows-x64`)
 
 Linux installers, Windows arm64, and macOS universal binaries remain supported
