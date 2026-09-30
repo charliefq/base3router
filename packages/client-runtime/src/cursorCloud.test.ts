@@ -1,6 +1,7 @@
 import {
   CURSOR_CLOUD_CREDENTIAL_REFERENCE,
   ProviderDriverKind,
+  acceptedCursorCloudObservation,
   type CursorCloudDispatchPreview,
   type CursorCloudRunnerBinding,
 } from "@t3tools/contracts";
@@ -127,6 +128,15 @@ it("disables follow-up while a Cursor run is active or the agent is still ACTIVE
   expect(
     cursorCloudFollowUpDisabled({ ...binding, cursorRunStatus: "FINISHED", status: "idle" }),
   ).toBe(true);
+  const accepted = acceptedCursorCloudObservation(binding, {
+    ...binding,
+    cursorRunStatus: "FINISHED",
+    cursorAgentStatus: "IDLE",
+    status: "finished",
+    updatedAt: "2026-09-29T00:00:05.000Z",
+  });
+  expect(cursorCloudFollowUpDisabled(accepted)).toBe(false);
+  expect(cursorCloudAgentFinishingBackgroundWork(accepted)).toBe(false);
 });
 
 it("presents sanitized binding metadata without secret-shaped fields", () => {

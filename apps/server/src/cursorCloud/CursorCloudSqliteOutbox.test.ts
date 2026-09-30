@@ -31,6 +31,7 @@ import { makeSqliteCursorCloudOutbox } from "./CursorCloudSqliteOutbox.ts";
 import {
   cancelCursorCloudStage,
   createCursorCloudStageBinding,
+  cursorCloudRefreshPersistDecision,
   followUpCursorCloudStage,
 } from "./CursorCloudWorkflow.ts";
 
@@ -531,6 +532,62 @@ describe("Cursor Cloud sqlite restart crash window", () => {
         requests.filter((request) => request.method === "GET" && request.path.includes("/runs?")),
       ).toHaveLength(0);
       expect(binding.cursorRunId).toBe(followUpId);
+    });
+  });
+
+  it("follow-up after a persisted IDLE/FINISHED refresh posts once across restart", async () => {
+    const dispatchId = "dispatch-sqlite-refresh-follow";
+    const agentId = cursorCloudAgentIdFromDispatch({ ...identity, dispatchId });
+    const previous = "run-00000000-0000-0000-0000-000000000001";
+    const followUpId = "run-00000000-0000-0000-0000-000000000002";
+    const running = {
+      ...finishedBinding(agentId, previous),
+      cursorAgentStatus: "ACTIVE" as const,
+      cursorRunStatus: "RUNNING" as const,
+      status: "running" as const,
+    };
+    const finished = finishedBinding(agentId, previous);
+    const first = cursorCloudRefreshPersistDecision(running, running);
+    const terminal = cursorCloudRefreshPersistDecision(first.accepted, finished);
+    expect(first.action).toBe("keep");
+    expect(terminal.action).toBe("persist");
+    expect(terminal.accepted.cursorAgentStatus).toBe("IDLE");
+    expect(terminal.accepted.cursorRunStatus).toBe("FINISHED");
+    await withSqliteDb(async (dbPath) => {
+      const { transport, requests } = recordTransport((request) => {
+        if (request.method === "POST" && request.path.endsWith("/runs")) {
+          return jsonResponse(200, { run: runBody(agentId, followUpId) });
+        }
+        return jsonResponse(500, { message: "unexpected" });
+      });
+      const adapter = adapterFor(transport);
+      const outboxA = sqliteOutbox(dbPath);
+      const binding = await followUpCursorCloudStage({
+        adapter,
+        outbox: outboxA,
+        gate: allow,
+        binding: terminal.accepted,
+        prompt: "Also add tests",
+        at,
+        ...identity,
+        commandId: "follow-after-refresh",
+      });
+      const outboxB = sqliteOutbox(dbPath);
+      const replayed = await followUpCursorCloudStage({
+        adapter,
+        outbox: outboxB,
+        gate: allow,
+        binding: terminal.accepted,
+        prompt: "Also add tests",
+        at,
+        ...identity,
+        commandId: "follow-after-refresh",
+      });
+      expect(
+        requests.filter((request) => request.method === "POST" && request.path.endsWith("/runs")),
+      ).toHaveLength(1);
+      expect(binding.cursorRunId).toBe(followUpId);
+      expect(replayed.cursorRunId).toBe(followUpId);
     });
   });
 });

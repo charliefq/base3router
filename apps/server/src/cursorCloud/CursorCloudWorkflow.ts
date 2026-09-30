@@ -1,8 +1,12 @@
+import * as NodeCrypto from "node:crypto";
 import {
   CURSOR_CLOUD_CREDENTIAL_REFERENCE,
+  acceptedCursorCloudObservation,
+  cursorCloudObservationFacts,
   emptyCursorCloudBinding,
   isCursorCloudFollowUpReady,
   isCursorCloudRunTerminal,
+  isNewerCursorCloudObservation,
   mapCursorAgentStatus,
   type ActionGateResult,
   type CursorCloudDispatchPreview,
@@ -405,6 +409,41 @@ export const cancelCursorCloudStage = async (input: {
     },
   });
 };
+
+/**
+ * Refresh is a repeatable read. Command identity is the observed Cursor
+ * facts, not the workflow attempt, so ACTIVE/RUNNING can later become
+ * IDLE/FINISHED without colliding with the first snapshot.
+ */
+export const cursorCloudRefreshCommandId = (input: {
+  readonly runId: string;
+  readonly stageId: string;
+  readonly attempt: number;
+  readonly observation: CursorCloudRunnerBinding;
+}): string =>
+  `cursor-obs-${NodeCrypto.createHash("sha256")
+    .update(
+      JSON.stringify({
+        runId: input.runId,
+        stageId: input.stageId,
+        attempt: input.attempt,
+        ...cursorCloudObservationFacts(input.observation),
+      }),
+    )
+    .digest("hex")
+    .slice(0, 40)}`;
+
+export type CursorCloudRefreshPersistDecision =
+  | { readonly action: "persist"; readonly accepted: CursorCloudRunnerBinding }
+  | { readonly action: "keep"; readonly accepted: CursorCloudRunnerBinding };
+
+export const cursorCloudRefreshPersistDecision = (
+  persisted: CursorCloudRunnerBinding,
+  observed: CursorCloudRunnerBinding,
+): CursorCloudRefreshPersistDecision => ({
+  action: isNewerCursorCloudObservation(persisted, observed) ? "persist" : "keep",
+  accepted: acceptedCursorCloudObservation(persisted, observed),
+});
 
 export const toWorkflowCursorCloudErrorMessage = (error: unknown): string => {
   if (typeof error === "object" && error !== null && "_tag" in error) {

@@ -11,6 +11,7 @@ import {
   WORKFLOW_MAX_ARTIFACT_CHARS,
   WORKFLOW_MAX_RECORDS,
   WorkflowRun as WorkflowRunSchema,
+  shouldAcceptCursorCloudRunnerUpdate,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -392,6 +393,12 @@ export function applyWorkflowMutation(
         mutation.runnerBinding.credentialRef.name !== "CURSOR_API_KEY"
       )
         reject("Only a credential reference may be persisted.");
+      if (
+        attempt.runnerBinding !== undefined &&
+        !shouldAcceptCursorCloudRunnerUpdate(attempt.runnerBinding, mutation.runnerBinding)
+      ) {
+        reject("A newer Cursor Cloud observation is already persisted.");
+      }
       const updated: WorkflowRun = {
         ...run,
         updatedAt: mutation.at,

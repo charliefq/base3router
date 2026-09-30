@@ -13,14 +13,19 @@ import {
   cursorCloudCreateRequestFromTarget,
   decodeCursorCloudCreateRequest,
   decodeCursorCloudExecutionTarget,
+  acceptedCursorCloudObservation,
+  cursorCloudObservationFacts,
+  cursorCloudObservationsEqual,
   decodeCursorCloudRunnerBinding,
   emptyCursorCloudBinding,
   isCursorCloudFollowUpReady,
   isCursorCloudRunActive,
   isCursorCloudRunTerminal,
+  isNewerCursorCloudObservation,
   mapCursorAgentStatus,
   mapCursorRunStatus,
   runnerBindingOmitsCredentialValue,
+  shouldAcceptCursorCloudRunnerUpdate,
 } from "./cloudRunner.ts";
 import { ActionGateResult, DispatcherTaskRouteBinding } from "./dispatcher.ts";
 import { WorkflowStageAttempt } from "./workflow.ts";
@@ -254,6 +259,72 @@ describe("cursor-cloud runner contracts", () => {
     expect(
       isCursorCloudFollowUpReady({ cursorRunStatus: "RUNNING", cursorAgentStatus: "IDLE" }),
     ).toBe(false);
+  });
+
+  const runningBinding = (): CursorCloudRunnerBinding => ({
+    ...emptyCursorCloudBinding({
+      provider,
+      model: "composer-2",
+      target: repositoryTarget,
+      at,
+    }),
+    cursorAgentId: "bc-00000000-0000-0000-0000-000000000001",
+    cursorRunId: "run-00000000-0000-0000-0000-000000000001",
+    cursorAgentStatus: "ACTIVE",
+    cursorRunStatus: "RUNNING",
+    status: "running",
+  });
+
+  const finishedBinding = (): CursorCloudRunnerBinding => ({
+    ...runningBinding(),
+    cursorAgentStatus: "IDLE",
+    cursorRunStatus: "FINISHED",
+    status: "finished",
+    updatedAt: "2026-09-29T00:00:05.000Z",
+  });
+
+  it("advances a same-run observation from ACTIVE/RUNNING to IDLE/FINISHED", () => {
+    const running = runningBinding();
+    const finished = finishedBinding();
+    expect(
+      cursorCloudObservationsEqual(running, { ...running, updatedAt: finished.updatedAt }),
+    ).toBe(true);
+    expect(isNewerCursorCloudObservation(running, finished)).toBe(true);
+    expect(isNewerCursorCloudObservation(finished, running)).toBe(false);
+    expect(acceptedCursorCloudObservation(running, finished)).toEqual(finished);
+    expect(acceptedCursorCloudObservation(finished, running)).toEqual(finished);
+    expect(shouldAcceptCursorCloudRunnerUpdate(finished, running)).toBe(false);
+    expect(isCursorCloudFollowUpReady(acceptedCursorCloudObservation(running, finished))).toBe(
+      true,
+    );
+  });
+
+  it("treats an identical terminal observation as idempotent even when clocks differ", () => {
+    const finished = finishedBinding();
+    const replay = {
+      ...finished,
+      createdAt: "2026-09-29T00:01:00.000Z",
+      updatedAt: "2026-09-29T00:01:00.000Z",
+    };
+    expect(cursorCloudObservationFacts(finished)).toEqual(cursorCloudObservationFacts(replay));
+    expect(cursorCloudObservationsEqual(finished, replay)).toBe(true);
+    expect(isNewerCursorCloudObservation(finished, replay)).toBe(false);
+    expect(acceptedCursorCloudObservation(finished, replay)).toEqual(finished);
+    expect(shouldAcceptCursorCloudRunnerUpdate(finished, replay)).toBe(true);
+  });
+
+  it("lets a new cursorRunId start an active lifecycle after the previous run is terminal", () => {
+    const finished = finishedBinding();
+    const nextRun = {
+      ...runningBinding(),
+      cursorRunId: "run-00000000-0000-0000-0000-000000000002",
+      updatedAt: "2026-09-29T00:02:00.000Z",
+    };
+    expect(isNewerCursorCloudObservation(finished, nextRun)).toBe(true);
+    expect(isNewerCursorCloudObservation(nextRun, finished)).toBe(false);
+    expect(acceptedCursorCloudObservation(finished, nextRun)).toEqual(nextRun);
+    expect(shouldAcceptCursorCloudRunnerUpdate(nextRun, finished)).toBe(false);
+    expect(isCursorCloudFollowUpReady(nextRun)).toBe(false);
   });
 
   it("rejects a credential value on the persisted binding", () => {

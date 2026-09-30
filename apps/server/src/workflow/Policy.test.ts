@@ -287,6 +287,103 @@ describe("generic workflow policy", () => {
     });
   });
 
+  it("persists a newer Cursor observation and rejects a stale ACTIVE/RUNNING refresh", () => {
+    const running = {
+      provider: ProviderDriverKind.make("cursor"),
+      model: "composer-2",
+      runnerKind: "cursor-cloud" as const,
+      target: {
+        mode: "repository" as const,
+        repositoryUrl: "https://github.com/charliefq/base3router",
+        startingRef: "9d5f2d8e41823acf518e7761a5b916defd5e4b2f",
+      },
+      cursorAgentId: "bc-00000000-0000-0000-0000-000000000001",
+      cursorRunId: "run-00000000-0000-0000-0000-000000000001",
+      cursorAgentStatus: "ACTIVE" as const,
+      cursorRunStatus: "RUNNING" as const,
+      status: "running" as const,
+      createdAt: at,
+      updatedAt: at,
+      credentialRef: { kind: "env" as const, name: "CURSOR_API_KEY" as const },
+    };
+    const finished = {
+      ...running,
+      cursorAgentStatus: "IDLE" as const,
+      cursorRunStatus: "FINISHED" as const,
+      status: "finished" as const,
+      updatedAt: "2026-09-28T00:00:05.000Z",
+    };
+    const nextRun = {
+      ...running,
+      cursorRunId: "run-00000000-0000-0000-0000-000000000002",
+      updatedAt: "2026-09-28T00:00:10.000Z",
+    };
+    const first = applyWorkflowMutation(dispatched(), projectId, {
+      type: "runner.update",
+      runId: "run-1",
+      stageId: "discovery",
+      attempt: 1,
+      runnerBinding: running,
+      at,
+    });
+    expect(first.runs[0]?.attempts[0]?.runnerBinding?.cursorRunStatus).toBe("RUNNING");
+    const terminal = applyWorkflowMutation(first, projectId, {
+      type: "runner.update",
+      runId: "run-1",
+      stageId: "discovery",
+      attempt: 1,
+      runnerBinding: finished,
+      at: finished.updatedAt,
+    });
+    expect(terminal.runs[0]?.attempts[0]?.runnerBinding?.cursorAgentStatus).toBe("IDLE");
+    expect(terminal.runs[0]?.attempts[0]?.runnerBinding?.cursorRunStatus).toBe("FINISHED");
+    const replayed = applyWorkflowMutation(terminal, projectId, {
+      type: "runner.update",
+      runId: "run-1",
+      stageId: "discovery",
+      attempt: 1,
+      runnerBinding: {
+        ...finished,
+        createdAt: "2026-09-28T00:00:06.000Z",
+        updatedAt: "2026-09-28T00:00:06.000Z",
+      },
+      at: "2026-09-28T00:00:06.000Z",
+    });
+    expect(replayed.runs[0]?.attempts[0]?.runnerBinding?.cursorRunStatus).toBe("FINISHED");
+    expect(() =>
+      applyWorkflowMutation(terminal, projectId, {
+        type: "runner.update",
+        runId: "run-1",
+        stageId: "discovery",
+        attempt: 1,
+        runnerBinding: running,
+        at: "2026-09-28T00:00:07.000Z",
+      }),
+    ).toThrow(/newer Cursor Cloud observation/);
+    const followed = applyWorkflowMutation(terminal, projectId, {
+      type: "runner.update",
+      runId: "run-1",
+      stageId: "discovery",
+      attempt: 1,
+      runnerBinding: nextRun,
+      at: nextRun.updatedAt,
+    });
+    expect(followed.runs[0]?.attempts[0]?.runnerBinding?.cursorRunId).toBe(
+      "run-00000000-0000-0000-0000-000000000002",
+    );
+    expect(followed.runs[0]?.attempts[0]?.runnerBinding?.cursorRunStatus).toBe("RUNNING");
+    expect(() =>
+      applyWorkflowMutation(followed, projectId, {
+        type: "runner.update",
+        runId: "run-1",
+        stageId: "discovery",
+        attempt: 1,
+        runnerBinding: finished,
+        at: "2026-09-28T00:00:11.000Z",
+      }),
+    ).toThrow(/newer Cursor Cloud observation/);
+  });
+
   it("requires a bound stage before an artifact and leaves missing sections visible", () => {
     expect(() =>
       applyWorkflowMutation(started(), projectId, {

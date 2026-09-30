@@ -28,6 +28,8 @@ import {
   cancelCursorCloudStage,
   createCursorCloudStageBinding,
   cursorCloudDispatchPreview,
+  cursorCloudRefreshCommandId,
+  cursorCloudRefreshPersistDecision,
   followUpCursorCloudStage,
   requireActionGateAllow,
 } from "./CursorCloudWorkflow.ts";
@@ -348,6 +350,116 @@ describe("Cursor Cloud durable dispatch", () => {
     expect(followUpPosts(requests)).toHaveLength(1);
     expect(first.cursorRunId).toBe(followUp.id);
     expect(second.cursorRunId).toBe(first.cursorRunId);
+  });
+
+  it("persists IDLE/FINISHED over ACTIVE/RUNNING and then follow-up posts once", async () => {
+    const agentId = agentFor("dispatch-refresh-persist").id;
+    const running: CursorCloudRunnerBinding = {
+      ...finishedBinding(agentId),
+      cursorAgentStatus: "ACTIVE",
+      cursorRunStatus: "RUNNING",
+      status: "running",
+    };
+    const finished: CursorCloudRunnerBinding = {
+      ...finishedBinding(agentId),
+      updatedAt: "2026-09-29T12:00:05.000Z",
+    };
+    const first = cursorCloudRefreshPersistDecision(running, running);
+    expect(first.action).toBe("keep");
+    expect(first.accepted.cursorRunStatus).toBe("RUNNING");
+    const second = cursorCloudRefreshPersistDecision(first.accepted, finished);
+    expect(second.action).toBe("persist");
+    expect(second.accepted.cursorAgentStatus).toBe("IDLE");
+    expect(second.accepted.cursorRunStatus).toBe("FINISHED");
+    const replay = cursorCloudRefreshPersistDecision(second.accepted, {
+      ...finished,
+      createdAt: "2026-09-29T12:01:00.000Z",
+      updatedAt: "2026-09-29T12:01:00.000Z",
+    });
+    expect(replay.action).toBe("keep");
+    expect(replay.accepted).toEqual(second.accepted);
+    const stale = cursorCloudRefreshPersistDecision(second.accepted, running);
+    expect(stale.action).toBe("keep");
+    expect(stale.accepted.cursorRunStatus).toBe("FINISHED");
+    const nextRun: CursorCloudRunnerBinding = {
+      ...running,
+      cursorRunId: "run-00000000-0000-0000-0000-000000000002",
+    };
+    const followed = cursorCloudRefreshPersistDecision(second.accepted, nextRun);
+    expect(followed.action).toBe("persist");
+    expect(followed.accepted.cursorRunId).toBe(nextRun.cursorRunId);
+    expect(
+      cursorCloudRefreshCommandId({
+        runId: identity.runId,
+        stageId: identity.stageId,
+        attempt: identity.attempt,
+        observation: running,
+      }),
+    ).not.toEqual(
+      cursorCloudRefreshCommandId({
+        runId: identity.runId,
+        stageId: identity.stageId,
+        attempt: identity.attempt,
+        observation: finished,
+      }),
+    );
+    expect(
+      cursorCloudRefreshCommandId({
+        runId: identity.runId,
+        stageId: identity.stageId,
+        attempt: identity.attempt,
+        observation: finished,
+      }),
+    ).toEqual(
+      cursorCloudRefreshCommandId({
+        runId: identity.runId,
+        stageId: identity.stageId,
+        attempt: identity.attempt,
+        observation: {
+          ...finished,
+          createdAt: "2026-09-29T12:01:00.000Z",
+          updatedAt: "2026-09-29T12:01:00.000Z",
+        },
+      }),
+    );
+    const followUp = runBody(agentId, "run-00000000-0000-0000-0000-000000000002");
+    const { transport, requests } = recordTransport((request) => {
+      if (request.path.endsWith("/runs")) return jsonResponse(200, { run: followUp });
+      return jsonResponse(500, { message: "unexpected" });
+    });
+    await expect(
+      followUpCursorCloudStage({
+        adapter: adapterFor(transport),
+        outbox: makeMemoryCursorCloudOutbox(),
+        gate: allow,
+        binding: running,
+        prompt: "Also add tests",
+        at,
+        environmentId: identity.environmentId,
+        projectId: identity.projectId,
+        runId: identity.runId,
+        stageId: identity.stageId,
+        attempt: identity.attempt,
+        commandId: "follow-after-stale-refresh",
+      }),
+    ).rejects.toMatchObject({ code: "agent_busy" });
+    expect(followUpPosts(requests)).toHaveLength(0);
+    const persisted = await followUpCursorCloudStage({
+      adapter: adapterFor(transport),
+      outbox: makeMemoryCursorCloudOutbox(),
+      gate: allow,
+      binding: second.accepted,
+      prompt: "Also add tests",
+      at,
+      environmentId: identity.environmentId,
+      projectId: identity.projectId,
+      runId: identity.runId,
+      stageId: identity.stageId,
+      attempt: identity.attempt,
+      commandId: "follow-after-idle-refresh",
+    });
+    expect(followUpPosts(requests)).toHaveLength(1);
+    expect(persisted.cursorRunId).toBe(followUp.id);
   });
 
   it("does not POST a follow-up while the durable agent is ACTIVE after a terminal run", async () => {

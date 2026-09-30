@@ -142,6 +142,8 @@ import { makeSqliteCursorCloudOutbox } from "./cursorCloud/CursorCloudSqliteOutb
 import {
   cancelCursorCloudStage,
   createCursorCloudStageBinding,
+  cursorCloudRefreshCommandId,
+  cursorCloudRefreshPersistDecision,
   followUpCursorCloudStage,
   toWorkflowCursorCloudErrorMessage,
 } from "./cursorCloud/CursorCloudWorkflow.ts";
@@ -2971,34 +2973,47 @@ const makeWsRpcLayer = (
                   message: "Cursor Cloud run was not found.",
                 });
               const at = DateTime.formatIso(yield* DateTime.now);
-              const runnerBinding = yield* Effect.tryPromise({
+              const observed = yield* Effect.tryPromise({
                 try: () => cursorCloudAdapter.refreshBinding({ binding, at }),
                 catch: (cause) =>
                   new WorkflowOperationError({
                     message: toWorkflowCursorCloudErrorMessage(cause),
                   }),
               });
-              yield* dispatchNormalizedCommand({
-                type: "workflow.record",
-                commandId: CommandId.make(`cursor-refresh-${run.id}-${input.attempt}`),
-                projectId,
-                mutation: {
-                  type: "runner.update",
-                  runId: run.id,
-                  stageId: input.stageId,
-                  attempt: input.attempt,
-                  runnerBinding,
-                  at,
-                },
-                createdAt: at,
-              });
+              const decision = cursorCloudRefreshPersistDecision(binding, observed);
+              if (decision.action === "persist") {
+                yield* dispatchNormalizedCommand({
+                  type: "workflow.record",
+                  commandId: CommandId.make(
+                    cursorCloudRefreshCommandId({
+                      runId: run.id,
+                      stageId: input.stageId,
+                      attempt: input.attempt,
+                      observation: decision.accepted,
+                    }),
+                  ),
+                  projectId,
+                  mutation: {
+                    type: "runner.update",
+                    runId: run.id,
+                    stageId: input.stageId,
+                    attempt: input.attempt,
+                    runnerBinding: decision.accepted,
+                    at,
+                  },
+                  createdAt: at,
+                });
+              }
               const latest = yield* Workflow.workflowCatalogForProject(projectId);
               const persisted = latest.runs.find((entry) => entry.id === run.id);
-              if (persisted === undefined)
+              const acceptedBinding = persisted?.attempts.find(
+                (entry) => entry.stageId === input.stageId && entry.attempt === input.attempt,
+              )?.runnerBinding;
+              if (persisted === undefined || acceptedBinding === undefined)
                 return yield* new WorkflowOperationError({
                   message: "Cursor Cloud refresh was not persisted.",
                 });
-              return { run: persisted, runnerBinding };
+              return { run: persisted, runnerBinding: acceptedBinding };
             }).pipe(
               Effect.catchCause((cause) => {
                 const error = Cause.squash(cause);

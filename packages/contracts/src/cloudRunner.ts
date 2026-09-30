@@ -297,6 +297,96 @@ export const isCursorCloudFollowUpReady = (binding: {
   isCursorCloudRunTerminal(binding.cursorRunStatus) &&
   isCursorCloudAgentIdle(binding.cursorAgentStatus);
 
+const cursorCloudRunProgress = (status: CursorCloudRunStatus | undefined): number => {
+  if (status === "CREATING") return 1;
+  if (status === "RUNNING") return 2;
+  if (isCursorCloudRunTerminal(status)) return 3;
+  return 0;
+};
+
+const cursorCloudAgentProgress = (status: CursorCloudAgentStatus | undefined): number => {
+  if (status === "ACTIVE") return 1;
+  if (status === "IDLE") return 2;
+  if (status === "ARCHIVED") return 3;
+  return 0;
+};
+
+/** Cursor facts only. Our persist clocks must not change observation identity. */
+export const cursorCloudObservationFacts = (binding: CursorCloudRunnerBinding) => ({
+  cursorAgentId: binding.cursorAgentId ?? null,
+  cursorRunId: binding.cursorRunId ?? null,
+  cursorAgentStatus: binding.cursorAgentStatus ?? null,
+  cursorRunStatus: binding.cursorRunStatus ?? null,
+  status: binding.status,
+  cursorAgentUrl: binding.cursorAgentUrl ?? null,
+  output:
+    binding.output === undefined
+      ? null
+      : {
+          repositoryUrl: binding.output.repositoryUrl ?? null,
+          branch: binding.output.branch ?? null,
+          commitSha: binding.output.commitSha ?? null,
+          pullRequestUrl: binding.output.pullRequestUrl ?? null,
+        },
+  sanitizedResult: binding.sanitizedResult ?? null,
+  sanitizedError: binding.sanitizedError ?? null,
+});
+export type CursorCloudObservationFacts = ReturnType<typeof cursorCloudObservationFacts>;
+
+export const cursorCloudObservationsEqual = (
+  left: CursorCloudRunnerBinding,
+  right: CursorCloudRunnerBinding,
+): boolean =>
+  JSON.stringify(cursorCloudObservationFacts(left)) ===
+  JSON.stringify(cursorCloudObservationFacts(right));
+
+/**
+ * True when `incoming` may replace `persisted`. Same-run status can advance.
+ * A new `cursorRunId` starts a lifecycle only after the persisted run is no
+ * longer active, so a stale older run cannot overwrite a live one.
+ */
+export const isNewerCursorCloudObservation = (
+  persisted: CursorCloudRunnerBinding,
+  incoming: CursorCloudRunnerBinding,
+): boolean => {
+  if (cursorCloudObservationsEqual(persisted, incoming)) return false;
+  if (persisted.cursorAgentId !== undefined) {
+    if (incoming.cursorAgentId === undefined) return false;
+    if (incoming.cursorAgentId !== persisted.cursorAgentId) return false;
+  }
+  const persistedRunId = persisted.cursorRunId;
+  const incomingRunId = incoming.cursorRunId;
+  if (
+    persistedRunId !== undefined &&
+    incomingRunId !== undefined &&
+    persistedRunId !== incomingRunId
+  ) {
+    return !isCursorCloudRunActive(persisted.cursorRunStatus);
+  }
+  const runDelta =
+    cursorCloudRunProgress(incoming.cursorRunStatus) -
+    cursorCloudRunProgress(persisted.cursorRunStatus);
+  if (runDelta !== 0) return runDelta > 0;
+  const agentDelta =
+    cursorCloudAgentProgress(incoming.cursorAgentStatus) -
+    cursorCloudAgentProgress(persisted.cursorAgentStatus);
+  if (agentDelta !== 0) return agentDelta > 0;
+  return true;
+};
+
+export const shouldAcceptCursorCloudRunnerUpdate = (
+  persisted: CursorCloudRunnerBinding,
+  incoming: CursorCloudRunnerBinding,
+): boolean =>
+  cursorCloudObservationsEqual(persisted, incoming) ||
+  isNewerCursorCloudObservation(persisted, incoming);
+
+export const acceptedCursorCloudObservation = (
+  persisted: CursorCloudRunnerBinding,
+  incoming: CursorCloudRunnerBinding,
+): CursorCloudRunnerBinding =>
+  isNewerCursorCloudObservation(persisted, incoming) ? incoming : persisted;
+
 export const cursorCloudCreateRequestFromTarget = (input: {
   readonly prompt: string;
   readonly agentId: string;
