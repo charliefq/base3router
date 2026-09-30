@@ -132,6 +132,21 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as Dispatcher from "./dispatcher/Dispatcher.ts";
 import * as DispatcherHandoff from "./dispatcher/Handoff.ts";
+import { makeCursorCloudAdapter } from "./cursorCloud/CursorCloudAdapter.ts";
+import {
+  envCursorCloudCredentialProvider,
+  isCursorCloudConfigured,
+} from "./cursorCloud/CursorCloudCredentials.ts";
+import { makeFetchCursorCloudTransport } from "./cursorCloud/CursorCloudHttp.ts";
+import { makeSqliteCursorCloudOutbox } from "./cursorCloud/CursorCloudSqliteOutbox.ts";
+import {
+  cancelCursorCloudStage,
+  createCursorCloudStageBinding,
+  cursorCloudRefreshCommandId,
+  cursorCloudRefreshPersistDecision,
+  followUpCursorCloudStage,
+  toWorkflowCursorCloudErrorMessage,
+} from "./cursorCloud/CursorCloudWorkflow.ts";
 import * as Workflow from "./workflow/Workflow.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -582,6 +597,13 @@ const makeWsRpcLayer = (
       const providerInstallation = yield* makeProviderInstallation();
       const serverUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
+      const cursorCloudAdapter = makeCursorCloudAdapter({
+        transport: makeFetchCursorCloudTransport(),
+        credentials: envCursorCloudCredentialProvider(),
+      });
+      const cursorCloudOutbox = makeSqliteCursorCloudOutbox((effect) =>
+        Effect.runPromise(effect.pipe(Effect.provideService(SqlClient.SqlClient, sql))),
+      );
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
@@ -2515,6 +2537,7 @@ const makeWsRpcLayer = (
                 environmentId,
                 providers,
                 environmentDefaultModelSelection: settings.defaultModelSelection,
+                ...(isCursorCloudConfigured() ? { cursorCloudConfigured: true } : {}),
               });
             }).pipe(
               Effect.catchCause(() =>
@@ -2593,6 +2616,33 @@ const makeWsRpcLayer = (
                   message: "The selected provider runner is unavailable.",
                 });
               const createdAt = DateTime.formatIso(yield* DateTime.now);
+              const prompt = `${packetText}\n\n## User instruction\n${input.additionalInstruction || "Continue with the bounded stage task."}`;
+              const runnerBinding =
+                input.runnerKind === "cursor-cloud"
+                  ? yield* Effect.tryPromise({
+                      try: () =>
+                        createCursorCloudStageBinding({
+                          adapter: cursorCloudAdapter,
+                          outbox: cursorCloudOutbox,
+                          configured: isCursorCloudConfigured(),
+                          gate: route.gate,
+                          routeBinding,
+                          target: input.cursorCloudTarget,
+                          prompt,
+                          at: createdAt,
+                          environmentId: input.environmentId,
+                          projectId: input.projectId,
+                          runId: input.runId,
+                          stageId: input.stageId,
+                          attempt: input.attempt,
+                          dispatchId: input.dispatchId,
+                        }),
+                      catch: (cause) =>
+                        new WorkflowOperationError({
+                          message: toWorkflowCursorCloudErrorMessage(cause),
+                        }),
+                    })
+                  : undefined;
               yield* dispatchNormalizedCommand({
                 type: "thread.create",
                 commandId: CommandId.make(`workflow-create-${input.dispatchId}`),
@@ -2606,32 +2656,52 @@ const makeWsRpcLayer = (
                 worktreePath: null,
                 createdAt,
               });
-              yield* dispatchNormalizedCommand({
-                type: "thread.turn.start",
-                commandId: CommandId.make(`workflow-turn-${input.dispatchId}`),
-                threadId,
-                message: {
-                  messageId,
-                  role: "user",
-                  text: `${packetText}\n\n## User instruction\n${input.additionalInstruction || "Continue with the bounded stage task."}`,
-                  attachments: [],
-                },
-                modelSelection: input.target,
-                runtimeMode: "approval-required",
-                interactionMode: "default",
-                routeBinding,
-                workflowStage: {
-                  type: "stage.dispatch",
-                  runId: run.id,
-                  stageId: stage.id,
-                  attempt: attempt.attempt,
+              if (runnerBinding === undefined) {
+                yield* dispatchNormalizedCommand({
+                  type: "thread.turn.start",
+                  commandId: CommandId.make(`workflow-turn-${input.dispatchId}`),
                   threadId,
-                  messageId,
+                  message: {
+                    messageId,
+                    role: "user",
+                    text: prompt,
+                    attachments: [],
+                  },
+                  modelSelection: input.target,
+                  runtimeMode: "approval-required",
+                  interactionMode: "default",
                   routeBinding,
-                  at: createdAt,
-                },
-                createdAt,
-              });
+                  workflowStage: {
+                    type: "stage.dispatch",
+                    runId: run.id,
+                    stageId: stage.id,
+                    attempt: attempt.attempt,
+                    threadId,
+                    messageId,
+                    routeBinding,
+                    at: createdAt,
+                  },
+                  createdAt,
+                });
+              } else {
+                yield* dispatchNormalizedCommand({
+                  type: "workflow.record",
+                  commandId: CommandId.make(`workflow-cursor-${input.dispatchId}`),
+                  projectId: input.projectId,
+                  mutation: {
+                    type: "stage.dispatch",
+                    runId: run.id,
+                    stageId: stage.id,
+                    attempt: attempt.attempt,
+                    threadId,
+                    messageId,
+                    routeBinding,
+                    runnerBinding,
+                    at: createdAt,
+                  },
+                  createdAt,
+                });
+              }
               const latest = yield* Workflow.workflowCatalogForProject(input.projectId);
               const persisted = latest.runs.find((candidate) => candidate.id === run.id);
               if (
@@ -2646,13 +2716,22 @@ const makeWsRpcLayer = (
                 return yield* new WorkflowOperationError({
                   message: "Stage binding was not persisted.",
                 });
-              return { run: persisted, threadId, messageId };
+              return {
+                run: persisted,
+                threadId,
+                messageId,
+                ...(runnerBinding === undefined ? {} : { runnerBinding }),
+              };
             }).pipe(
-              Effect.catchCause(() =>
-                Effect.fail(
-                  new WorkflowOperationError({ message: "Workflow dispatch failed or is stale." }),
-                ),
-              ),
+              Effect.catchCause((cause) => {
+                const error = Cause.squash(cause);
+                if (Schema.is(WorkflowOperationError)(error)) return Effect.fail(error);
+                return Effect.fail(
+                  new WorkflowOperationError({
+                    message: "Workflow dispatch failed or is stale.",
+                  }),
+                );
+              }),
             ),
             { "rpc.aggregate": "workflow" },
           ),
@@ -2672,6 +2751,280 @@ const makeWsRpcLayer = (
               : Effect.fail(
                   new WorkflowOperationError({ message: "Workflows are disabled on this server." }),
                 ),
+            { "rpc.aggregate": "workflow" },
+          ),
+        [WS_METHODS.workflowCursorCloudFollowUp]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workflowCursorCloudFollowUp,
+            Effect.gen(function* () {
+              if (config.dispatcherEnabled !== true || !isCursorCloudConfigured())
+                return yield* new WorkflowOperationError({
+                  message: "Cursor Cloud is not configured on this server.",
+                });
+              const projectId = ProjectId.make(input.projectId);
+              yield* Workflow.requireWorkflowProject(projectId);
+              const catalog = yield* Workflow.workflowCatalogForProject(projectId);
+              const run = catalog.runs.find((entry) => entry.id === input.runId);
+              const attempt = run?.attempts.find(
+                (entry) => entry.stageId === input.stageId && entry.attempt === input.attempt,
+              );
+              const binding = attempt?.runnerBinding;
+              if (run === undefined || attempt === undefined || binding === undefined)
+                return yield* new WorkflowOperationError({
+                  message: "Cursor Cloud run was not found.",
+                });
+              const [environmentId, providers, settings] = yield* Effect.all([
+                serverEnvironment.getEnvironmentId,
+                providerRegistry.getProviders,
+                serverSettings.getSettings,
+              ]);
+              const projected = yield* Dispatcher.readDispatcherProjectedState({});
+              const route = Dispatcher.resolveDispatcherRoute({
+                environmentId,
+                request: {
+                  environmentId,
+                  projectId,
+                  ...(attempt.routeBinding === null
+                    ? {}
+                    : { preferredRoute: attempt.routeBinding.target }),
+                  actionKind: "workspace-write",
+                },
+                projected,
+                message: null,
+                providers,
+                environmentDefaultModelSelection: settings.defaultModelSelection,
+                ...(attempt.routeBinding === null
+                  ? {}
+                  : { candidateMode: "explicit-only" as const }),
+              });
+              const at = DateTime.formatIso(yield* DateTime.now);
+              const runnerBinding = yield* Effect.tryPromise({
+                try: () =>
+                  followUpCursorCloudStage({
+                    adapter: cursorCloudAdapter,
+                    outbox: cursorCloudOutbox,
+                    gate: route.gate,
+                    binding,
+                    prompt: input.prompt,
+                    at,
+                    environmentId: input.environmentId,
+                    projectId,
+                    runId: run.id,
+                    stageId: input.stageId,
+                    attempt: input.attempt,
+                    commandId: input.commandId,
+                  }),
+                catch: (cause) =>
+                  new WorkflowOperationError({
+                    message: toWorkflowCursorCloudErrorMessage(cause),
+                  }),
+              });
+              yield* dispatchNormalizedCommand({
+                type: "workflow.record",
+                commandId: CommandId.make(input.commandId),
+                projectId,
+                mutation: {
+                  type: "runner.update",
+                  runId: run.id,
+                  stageId: input.stageId,
+                  attempt: input.attempt,
+                  runnerBinding,
+                  at,
+                },
+                createdAt: at,
+              });
+              const latest = yield* Workflow.workflowCatalogForProject(projectId);
+              const persisted = latest.runs.find((entry) => entry.id === run.id);
+              if (persisted === undefined)
+                return yield* new WorkflowOperationError({
+                  message: "Cursor Cloud follow-up was not persisted.",
+                });
+              return { run: persisted, runnerBinding };
+            }).pipe(
+              Effect.catchCause((cause) => {
+                const error = Cause.squash(cause);
+                if (Schema.is(WorkflowOperationError)(error)) return Effect.fail(error);
+                return Effect.fail(
+                  new WorkflowOperationError({
+                    message: toWorkflowCursorCloudErrorMessage(error),
+                  }),
+                );
+              }),
+            ),
+            { "rpc.aggregate": "workflow" },
+          ),
+        [WS_METHODS.workflowCursorCloudCancel]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workflowCursorCloudCancel,
+            Effect.gen(function* () {
+              if (config.dispatcherEnabled !== true || !isCursorCloudConfigured())
+                return yield* new WorkflowOperationError({
+                  message: "Cursor Cloud is not configured on this server.",
+                });
+              const projectId = ProjectId.make(input.projectId);
+              yield* Workflow.requireWorkflowProject(projectId);
+              const catalog = yield* Workflow.workflowCatalogForProject(projectId);
+              const run = catalog.runs.find((entry) => entry.id === input.runId);
+              const attempt = run?.attempts.find(
+                (entry) => entry.stageId === input.stageId && entry.attempt === input.attempt,
+              );
+              const binding = attempt?.runnerBinding;
+              if (run === undefined || attempt === undefined || binding === undefined)
+                return yield* new WorkflowOperationError({
+                  message: "Cursor Cloud run was not found.",
+                });
+              const [environmentId, providers, settings] = yield* Effect.all([
+                serverEnvironment.getEnvironmentId,
+                providerRegistry.getProviders,
+                serverSettings.getSettings,
+              ]);
+              const projected = yield* Dispatcher.readDispatcherProjectedState({});
+              const route = Dispatcher.resolveDispatcherRoute({
+                environmentId,
+                request: {
+                  environmentId,
+                  projectId,
+                  ...(attempt.routeBinding === null
+                    ? {}
+                    : { preferredRoute: attempt.routeBinding.target }),
+                  actionKind: "host-operation",
+                },
+                projected,
+                message: null,
+                providers,
+                environmentDefaultModelSelection: settings.defaultModelSelection,
+                ...(attempt.routeBinding === null
+                  ? {}
+                  : { candidateMode: "explicit-only" as const }),
+              });
+              const at = DateTime.formatIso(yield* DateTime.now);
+              const runnerBinding = yield* Effect.tryPromise({
+                try: () =>
+                  cancelCursorCloudStage({
+                    adapter: cursorCloudAdapter,
+                    outbox: cursorCloudOutbox,
+                    gate: route.gate,
+                    binding,
+                    at,
+                    environmentId: input.environmentId,
+                    projectId,
+                    runId: run.id,
+                    stageId: input.stageId,
+                    attempt: input.attempt,
+                    commandId: input.commandId,
+                  }),
+                catch: (cause) =>
+                  new WorkflowOperationError({
+                    message: toWorkflowCursorCloudErrorMessage(cause),
+                  }),
+              });
+              yield* dispatchNormalizedCommand({
+                type: "workflow.record",
+                commandId: CommandId.make(input.commandId),
+                projectId,
+                mutation: {
+                  type: "runner.update",
+                  runId: run.id,
+                  stageId: input.stageId,
+                  attempt: input.attempt,
+                  runnerBinding,
+                  at,
+                },
+                createdAt: at,
+              });
+              const latest = yield* Workflow.workflowCatalogForProject(projectId);
+              const persisted = latest.runs.find((entry) => entry.id === run.id);
+              if (persisted === undefined)
+                return yield* new WorkflowOperationError({
+                  message: "Cursor Cloud cancellation was not persisted.",
+                });
+              return { run: persisted, runnerBinding };
+            }).pipe(
+              Effect.catchCause((cause) => {
+                const error = Cause.squash(cause);
+                if (Schema.is(WorkflowOperationError)(error)) return Effect.fail(error);
+                return Effect.fail(
+                  new WorkflowOperationError({
+                    message: toWorkflowCursorCloudErrorMessage(error),
+                  }),
+                );
+              }),
+            ),
+            { "rpc.aggregate": "workflow" },
+          ),
+        [WS_METHODS.workflowCursorCloudRefresh]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workflowCursorCloudRefresh,
+            Effect.gen(function* () {
+              if (config.dispatcherEnabled !== true || !isCursorCloudConfigured())
+                return yield* new WorkflowOperationError({
+                  message: "Cursor Cloud is not configured on this server.",
+                });
+              const projectId = ProjectId.make(input.projectId);
+              yield* Workflow.requireWorkflowProject(projectId);
+              const catalog = yield* Workflow.workflowCatalogForProject(projectId);
+              const run = catalog.runs.find((entry) => entry.id === input.runId);
+              const attempt = run?.attempts.find(
+                (entry) => entry.stageId === input.stageId && entry.attempt === input.attempt,
+              );
+              const binding = attempt?.runnerBinding;
+              if (run === undefined || attempt === undefined || binding === undefined)
+                return yield* new WorkflowOperationError({
+                  message: "Cursor Cloud run was not found.",
+                });
+              const at = DateTime.formatIso(yield* DateTime.now);
+              const observed = yield* Effect.tryPromise({
+                try: () => cursorCloudAdapter.refreshBinding({ binding, at }),
+                catch: (cause) =>
+                  new WorkflowOperationError({
+                    message: toWorkflowCursorCloudErrorMessage(cause),
+                  }),
+              });
+              const decision = cursorCloudRefreshPersistDecision(binding, observed);
+              if (decision.action === "persist") {
+                yield* dispatchNormalizedCommand({
+                  type: "workflow.record",
+                  commandId: CommandId.make(
+                    cursorCloudRefreshCommandId({
+                      runId: run.id,
+                      stageId: input.stageId,
+                      attempt: input.attempt,
+                      observation: decision.accepted,
+                    }),
+                  ),
+                  projectId,
+                  mutation: {
+                    type: "runner.update",
+                    runId: run.id,
+                    stageId: input.stageId,
+                    attempt: input.attempt,
+                    runnerBinding: decision.accepted,
+                    at,
+                  },
+                  createdAt: at,
+                });
+              }
+              const latest = yield* Workflow.workflowCatalogForProject(projectId);
+              const persisted = latest.runs.find((entry) => entry.id === run.id);
+              const acceptedBinding = persisted?.attempts.find(
+                (entry) => entry.stageId === input.stageId && entry.attempt === input.attempt,
+              )?.runnerBinding;
+              if (persisted === undefined || acceptedBinding === undefined)
+                return yield* new WorkflowOperationError({
+                  message: "Cursor Cloud refresh was not persisted.",
+                });
+              return { run: persisted, runnerBinding: acceptedBinding };
+            }).pipe(
+              Effect.catchCause((cause) => {
+                const error = Cause.squash(cause);
+                if (Schema.is(WorkflowOperationError)(error)) return Effect.fail(error);
+                return Effect.fail(
+                  new WorkflowOperationError({
+                    message: toWorkflowCursorCloudErrorMessage(error),
+                  }),
+                );
+              }),
+            ),
             { "rpc.aggregate": "workflow" },
           ),
         [WS_METHODS.dispatcherHandoffPreview]: (input) =>

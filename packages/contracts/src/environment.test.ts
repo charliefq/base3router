@@ -28,6 +28,16 @@ describe("ExecutionEnvironmentDescriptor", () => {
     expect(decodeDescriptor(descriptor).capabilities.pullRequests).toBeUndefined();
   });
 
+  it("treats a missing cursor-cloud runner capability as unsupported", () => {
+    expect(decodeDescriptor(descriptor).capabilities.cursorCloudRunner).toBeUndefined();
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: { ...descriptor.capabilities, cursorCloudRunner: true },
+      }).capabilities.cursorCloudRunner,
+    ).toBe(true);
+  });
+
   it("preserves an advertised pull-request capability", () => {
     expect(
       decodeDescriptor({

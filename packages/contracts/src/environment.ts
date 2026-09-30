@@ -139,6 +139,11 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   dispatcherTaskHandoff: Schema.optionalKey(Schema.Boolean),
   /** Server owns versioned agent profiles, workflow state, and confirmed stage dispatch. */
   workflowOs: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Server can dispatch, monitor, continue, and cancel Cursor Cloud Agents.
+   * Absent or false preserves Phase 1–5 local-provider workflow behavior.
+   */
+  cursorCloudRunner: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.pin / thread.unpin commands. Same
       version-skew contract as threadSettlement. */
   threadPinning: Schema.optionalKey(Schema.Boolean),

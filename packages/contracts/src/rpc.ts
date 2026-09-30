@@ -14,6 +14,7 @@ import {
   WorkflowActionInput,
   WorkflowArtifact,
   WorkflowCatalog,
+  WorkflowCursorCloudCommandResult,
   WorkflowDispatchStageInput,
   WorkflowDispatchStageResult,
   WorkflowOperationError,
@@ -24,6 +25,11 @@ import {
   WorkflowStagePreview,
   WorkflowStagePreviewInput,
 } from "./workflow.ts";
+import {
+  WorkflowCursorCloudCancelInput,
+  WorkflowCursorCloudFollowUpInput,
+  WorkflowCursorCloudRefreshInput,
+} from "./cloudRunner.ts";
 import {
   ProviderAuthCancelInput,
   ProviderAuthCompleteInput,
@@ -341,6 +347,9 @@ export const WS_METHODS = {
   workflowStagePreview: "workflow.stagePreview",
   workflowDispatchStage: "workflow.dispatchStage",
   workflowProposeArtifact: "workflow.proposeArtifact",
+  workflowCursorCloudFollowUp: "workflow.cursorCloudFollowUp",
+  workflowCursorCloudCancel: "workflow.cursorCloudCancel",
+  workflowCursorCloudRefresh: "workflow.cursorCloudRefresh",
 
   // VCS methods
   vcsPull: "vcs.pull",
@@ -536,6 +545,21 @@ const WsWorkflowDispatchStageRpc = Rpc.make(WS_METHODS.workflowDispatchStage, {
 const WsWorkflowProposeArtifactRpc = Rpc.make(WS_METHODS.workflowProposeArtifact, {
   payload: WorkflowProposeArtifactInput,
   success: WorkflowArtifact,
+  error: WorkflowRpcError,
+});
+const WsWorkflowCursorCloudFollowUpRpc = Rpc.make(WS_METHODS.workflowCursorCloudFollowUp, {
+  payload: WorkflowCursorCloudFollowUpInput,
+  success: WorkflowCursorCloudCommandResult,
+  error: WorkflowRpcError,
+});
+const WsWorkflowCursorCloudCancelRpc = Rpc.make(WS_METHODS.workflowCursorCloudCancel, {
+  payload: WorkflowCursorCloudCancelInput,
+  success: WorkflowCursorCloudCommandResult,
+  error: WorkflowRpcError,
+});
+const WsWorkflowCursorCloudRefreshRpc = Rpc.make(WS_METHODS.workflowCursorCloudRefresh, {
+  payload: WorkflowCursorCloudRefreshInput,
+  success: WorkflowCursorCloudCommandResult,
   error: WorkflowRpcError,
 });
 
@@ -1477,6 +1501,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsWorkflowStagePreviewRpc,
   WsWorkflowDispatchStageRpc,
   WsWorkflowProposeArtifactRpc,
+  WsWorkflowCursorCloudFollowUpRpc,
+  WsWorkflowCursorCloudCancelRpc,
+  WsWorkflowCursorCloudRefreshRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,

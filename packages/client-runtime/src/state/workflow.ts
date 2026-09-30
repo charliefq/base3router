@@ -1,5 +1,8 @@
 import type {
   WorkflowActionInput,
+  WorkflowCursorCloudCancelInput,
+  WorkflowCursorCloudFollowUpInput,
+  WorkflowCursorCloudRefreshInput,
   WorkflowDispatchStageInput,
   WorkflowProposeArtifactInput,
   WorkflowReadInput,
@@ -58,6 +61,25 @@ export function createWorkflowEnvironmentAtoms<R, E>(
       label: "environment-data:workflow:propose-artifact",
       execute: (input: typeof WorkflowProposeArtifactInput.Type) => Workflow.proposeArtifact(input),
       scheduler,
+    }),
+    cursorCloudFollowUp: createEnvironmentCommand(runtime, {
+      label: "environment-data:workflow:cursor-cloud-follow-up",
+      execute: (input: WorkflowCursorCloudFollowUpInput) => Workflow.cursorCloudFollowUp(input),
+      scheduler,
+    }),
+    cursorCloudCancel: createEnvironmentCommand(runtime, {
+      label: "environment-data:workflow:cursor-cloud-cancel",
+      execute: (input: WorkflowCursorCloudCancelInput) => Workflow.cursorCloudCancel(input),
+      scheduler,
+    }),
+    cursorCloudRefresh: createEnvironmentCommand(runtime, {
+      label: "environment-data:workflow:cursor-cloud-refresh",
+      execute: (input: WorkflowCursorCloudRefreshInput) => Workflow.cursorCloudRefresh(input),
+      scheduler,
+      concurrency: {
+        mode: "latest",
+        key: ({ environmentId, input }) => `${environmentId}:${input.runId}:${input.attempt}`,
+      },
     }),
   };
 }

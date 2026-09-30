@@ -35,6 +35,9 @@ export function WorkflowStateCard(props: {
     (entry) => entry.id === run.templateId && entry.version === run.templateVersion,
   );
   const current = template?.stages.find((entry) => entry.id === run.currentStageId);
+  const threadAttempt = run.attempts.findLast(
+    (entry) => entry.destinationThreadId === props.threadId,
+  );
   const artifact =
     run.artifacts.findLast((entry) => entry.stageId === current?.id) ?? run.artifacts.at(-1);
   return (
@@ -56,19 +59,21 @@ export function WorkflowStateCard(props: {
           );
         })}
       </ScrollView>
-      {run.attempts.findLast((entry) => entry.destinationThreadId === props.threadId)
-        ?.routeBinding ? (
+      {threadAttempt?.routeBinding ? (
         <Text className="text-xs text-foreground">
-          Bound provider/model:{" "}
-          {
-            run.attempts.findLast((entry) => entry.destinationThreadId === props.threadId)!
-              .routeBinding!.target.instanceId
-          }{" "}
-          ·{" "}
-          {
-            run.attempts.findLast((entry) => entry.destinationThreadId === props.threadId)!
-              .routeBinding!.target.model
-          }
+          Bound provider/model: {threadAttempt.routeBinding.target.instanceId} ·{" "}
+          {threadAttempt.routeBinding.target.model}
+        </Text>
+      ) : null}
+      {threadAttempt?.runnerBinding ? (
+        <Text className="text-xs text-foreground">
+          Cursor Cloud · {threadAttempt.runnerBinding.status}
+          {threadAttempt.runnerBinding.cursorAgentId
+            ? ` · agent ${threadAttempt.runnerBinding.cursorAgentId}`
+            : ""}
+          {threadAttempt.runnerBinding.cursorRunId
+            ? ` · run ${threadAttempt.runnerBinding.cursorRunId}`
+            : ""}
         </Text>
       ) : null}
       {artifact ? (

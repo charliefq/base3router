@@ -1,6 +1,9 @@
 import {
   WS_METHODS,
   type WorkflowActionInput,
+  type WorkflowCursorCloudCancelInput,
+  type WorkflowCursorCloudFollowUpInput,
+  type WorkflowCursorCloudRefreshInput,
   type WorkflowDispatchStageInput,
   type WorkflowProposeArtifactInput,
   type WorkflowReadInput,
@@ -45,4 +48,22 @@ export const proposeArtifact = Effect.fn("EnvironmentWorkflow.proposeArtifact")(
   input: typeof WorkflowProposeArtifactInput.Type,
 ) {
   return yield* request(WS_METHODS.workflowProposeArtifact, input);
+});
+
+export const cursorCloudFollowUp = Effect.fn("EnvironmentWorkflow.cursorCloudFollowUp")(function* (
+  input: WorkflowCursorCloudFollowUpInput,
+) {
+  return yield* request(WS_METHODS.workflowCursorCloudFollowUp, input);
+});
+
+export const cursorCloudCancel = Effect.fn("EnvironmentWorkflow.cursorCloudCancel")(function* (
+  input: WorkflowCursorCloudCancelInput,
+) {
+  return yield* request(WS_METHODS.workflowCursorCloudCancel, input);
+});
+
+export const cursorCloudRefresh = Effect.fn("EnvironmentWorkflow.cursorCloudRefresh")(function* (
+  input: WorkflowCursorCloudRefreshInput,
+) {
+  return yield* request(WS_METHODS.workflowCursorCloudRefresh, input);
 });

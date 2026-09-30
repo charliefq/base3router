@@ -1,8 +1,10 @@
 import {
+  CURSOR_CLOUD_CREDENTIAL_REFERENCE,
   EnvironmentId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  type CursorCloudRunnerBinding,
   type WorkflowCatalog,
   type WorkflowStagePreview,
 } from "@t3tools/contracts";
@@ -16,11 +18,17 @@ const mock = vi.hoisted(() => ({
   preview: vi.fn(),
   dispatch: vi.fn(),
   propose: vi.fn(),
+  followUp: vi.fn(),
+  cancel: vi.fn(),
+  refresh: vi.fn(),
   catalogCommand: Symbol("catalog"),
   actionCommand: Symbol("action"),
   previewCommand: Symbol("preview"),
   dispatchCommand: Symbol("dispatch"),
   proposeCommand: Symbol("propose"),
+  followUpCommand: Symbol("followUp"),
+  cancelCommand: Symbol("cancel"),
+  refreshCommand: Symbol("refresh"),
 }));
 vi.mock("~/state/workflow", () => ({
   workflowEnvironment: {
@@ -29,6 +37,9 @@ vi.mock("~/state/workflow", () => ({
     previewStage: mock.previewCommand,
     dispatchStage: mock.dispatchCommand,
     proposeArtifact: mock.proposeCommand,
+    cursorCloudFollowUp: mock.followUpCommand,
+    cursorCloudCancel: mock.cancelCommand,
+    cursorCloudRefresh: mock.refreshCommand,
   },
 }));
 vi.mock("~/state/use-atom-command", () => ({
@@ -41,7 +52,13 @@ vi.mock("~/state/use-atom-command", () => ({
           ? mock.preview
           : command === mock.dispatchCommand
             ? mock.dispatch
-            : mock.propose,
+            : command === mock.followUpCommand
+              ? mock.followUp
+              : command === mock.cancelCommand
+                ? mock.cancel
+                : command === mock.refreshCommand
+                  ? mock.refresh
+                  : mock.propose,
 }));
 vi.mock("../ui/button", () => ({
   Button: ({
@@ -200,7 +217,16 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", globalThis);
   vi.useFakeTimers();
-  for (const handler of [mock.catalog, mock.action, mock.preview, mock.dispatch, mock.propose])
+  for (const handler of [
+    mock.catalog,
+    mock.action,
+    mock.preview,
+    mock.dispatch,
+    mock.propose,
+    mock.followUp,
+    mock.cancel,
+    mock.refresh,
+  ])
     handler.mockReset();
   mock.catalog.mockResolvedValue(success(catalog));
   mock.action.mockResolvedValue(success(catalog));
@@ -212,11 +238,12 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-const mount = async (available = true) => {
+const mount = async (available = true, cursorCloudAvailable = false) => {
   await act(async () => {
     renderer = create(
       <WorkflowControl
         available={available}
+        cursorCloudAvailable={cursorCloudAvailable}
         environmentId={environmentId}
         project={{ id: projectId, title: "Project" }}
         onOpenThread={vi.fn()}
@@ -306,5 +333,255 @@ it("prevents a double click from dispatching a second provider task", async () =
     resolveDispatch?.(
       success({ run: catalog.runs[0]!, threadId: "thread-1", messageId: "message-1" }),
     ),
+  );
+});
+
+const sha = "9d5f2d8e41823acf518e7761a5b916defd5e4b2f";
+const cursorTarget = {
+  mode: "repository" as const,
+  repositoryUrl: "https://github.com/charliefq/base3router",
+  startingRef: sha,
+};
+const cursorPreview = (
+  packetText: string,
+  gate: WorkflowStagePreview["route"]["gate"] = preview("x").route.gate,
+): WorkflowStagePreview => ({
+  ...preview(packetText),
+  cursorCloud: {
+    available: true,
+    configured: true,
+    target: cursorTarget,
+    payload:
+      gate.decision === "ALLOW"
+        ? {
+            runnerKind: "cursor-cloud",
+            provider: ProviderDriverKind.make("cursor"),
+            model: "composer-2",
+            target: cursorTarget,
+            workOnCurrentBranch: false,
+            autoCreatePR: false,
+            credentialRef: CURSOR_CLOUD_CREDENTIAL_REFERENCE,
+          }
+        : null,
+    gate,
+  },
+});
+const cursorBinding = (status: CursorCloudRunnerBinding["status"]): CursorCloudRunnerBinding => ({
+  provider: ProviderDriverKind.make("cursor"),
+  model: "composer-2",
+  runnerKind: "cursor-cloud",
+  target: cursorTarget,
+  cursorAgentId: "bc-agent",
+  cursorRunId: "run-cloud-1",
+  cursorAgentUrl: "https://cursor.com/agents/bc-agent",
+  cursorAgentStatus: status === "running" || status === "busy" ? "ACTIVE" : "IDLE",
+  cursorRunStatus: status === "running" ? "RUNNING" : "FINISHED",
+  status,
+  ...(status === "finished" ? { sanitizedResult: "Done" } : {}),
+  ...(status === "error" ? { sanitizedError: "The Cursor agent is busy with another run." } : {}),
+  createdAt: at,
+  updatedAt: at,
+  credentialRef: CURSOR_CLOUD_CREDENTIAL_REFERENCE,
+});
+const boundCatalog = (binding: CursorCloudRunnerBinding): WorkflowCatalog => ({
+  ...catalog,
+  runs: [
+    {
+      ...catalog.runs[0]!,
+      attempts: [
+        {
+          ...catalog.runs[0]!.attempts[0]!,
+          status: "dispatched",
+          destinationThreadId:
+            "thread-1" as WorkflowCatalog["runs"][number]["attempts"][number]["destinationThreadId"],
+          runnerBinding: binding,
+        },
+      ],
+    },
+  ],
+});
+
+it("hides Cursor Cloud when the server capability is off", async () => {
+  mock.preview.mockResolvedValue(success(preview("LOCAL PACKET")));
+  await mount(true, false);
+  await open();
+  await act(async () => select("Workflow run").props.onChange({ target: { value: "run-one" } }));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(181);
+  });
+  expect(text()).not.toContain("Cursor Cloud");
+  expect(text()).toContain("Provisional route");
+  expect(text()).not.toMatch(/Bearer |crsr_|sk-|CURSOR_API_KEY=/);
+});
+
+it("previews Cursor Cloud as a distinct runner with an exact starting SHA", async () => {
+  mock.preview.mockImplementation(
+    ({ input }: { input: { cursorCloudTarget?: typeof cursorTarget } }) =>
+      Promise.resolve(
+        success(input.cursorCloudTarget ? cursorPreview("CURSOR PACKET") : preview("LOCAL PACKET")),
+      ),
+  );
+  await mount(true, true);
+  await open();
+  await act(async () => select("Workflow run").props.onChange({ target: { value: "run-one" } }));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(181);
+  });
+  await act(async () =>
+    select("Execution runner").props.onChange({ target: { value: "cursor-cloud" } }),
+  );
+  await act(async () => {
+    renderer!.root.findByProps({ "aria-label": "GitHub repository URL" }).props.onChange({
+      target: { value: cursorTarget.repositoryUrl },
+    });
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ "aria-label": "Exact starting commit SHA" }).props.onChange({
+      target: { value: sha },
+    });
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(181);
+  });
+  expect(text()).toContain("Cursor Cloud");
+  expect(text()).toContain(sha);
+  expect(text()).toContain("workOnCurrentBranch");
+  expect(text()).toContain("autoCreatePR");
+  expect(text()).toContain("ActionGate approved");
+  expect(text()).not.toMatch(/Bearer |crsr_|sk-|CURSOR_API_KEY=/);
+  expect(mock.preview).toHaveBeenCalledWith(
+    expect.objectContaining({
+      input: expect.objectContaining({ cursorCloudTarget: cursorTarget }),
+    }),
+  );
+});
+
+it("requires ActionGate approval and a valid target before Cursor Cloud dispatch", async () => {
+  mock.preview.mockResolvedValue(
+    success(cursorPreview("DENIED", { decision: "DENY", reasonCodes: ["PROVIDER_UNAVAILABLE"] })),
+  );
+  await mount(true, true);
+  await open();
+  await act(async () => select("Workflow run").props.onChange({ target: { value: "run-one" } }));
+  await act(async () =>
+    select("Execution runner").props.onChange({ target: { value: "cursor-cloud" } }),
+  );
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(181);
+  });
+  expect(text()).toContain("ActionGate denied");
+  expect(button("Confirm and start task").props.disabled).toBe(true);
+  expect(mock.dispatch).not.toHaveBeenCalled();
+});
+
+it("dispatches the immutable Cursor Cloud payload after approval", async () => {
+  mock.preview.mockResolvedValue(success(cursorPreview("CURSOR PACKET")));
+  mock.dispatch.mockResolvedValue(
+    success({ run: catalog.runs[0]!, threadId: "thread-1", messageId: "message-1" }),
+  );
+  await mount(true, true);
+  await open();
+  await act(async () => select("Workflow run").props.onChange({ target: { value: "run-one" } }));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(181);
+  });
+  await act(async () =>
+    select("Execution runner").props.onChange({ target: { value: "cursor-cloud" } }),
+  );
+  await act(async () => {
+    renderer!.root.findByProps({ "aria-label": "GitHub repository URL" }).props.onChange({
+      target: { value: cursorTarget.repositoryUrl },
+    });
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ "aria-label": "Exact starting commit SHA" }).props.onChange({
+      target: { value: sha },
+    });
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(181);
+  });
+  await act(async () => button("Confirm and start task").props.onClick());
+  expect(mock.dispatch).toHaveBeenCalledWith(
+    expect.objectContaining({
+      input: expect.objectContaining({
+        runnerKind: "cursor-cloud",
+        cursorCloudTarget: cursorTarget,
+      }),
+    }),
+  );
+});
+
+it("renders agent and run identity and disables follow-up while busy", async () => {
+  mock.catalog.mockResolvedValue(success(boundCatalog(cursorBinding("running"))));
+  await mount(true, true);
+  await open();
+  await act(async () => select("Workflow run").props.onChange({ target: { value: "run-one" } }));
+  expect(text()).toContain("bc-agent");
+  expect(text()).toContain("run-cloud-1");
+  expect(text()).toContain("Follow-up is disabled while the Cursor run is active.");
+  expect(button("Send follow-up").props.disabled).toBe(true);
+  expect(text()).not.toMatch(/Bearer |crsr_|sk-|CURSOR_API_KEY=/);
+});
+
+it("disables follow-up while a terminal run still has an ACTIVE Cursor agent", async () => {
+  mock.catalog.mockResolvedValue(success(boundCatalog(cursorBinding("busy"))));
+  await mount(true, true);
+  await open();
+  await act(async () => select("Workflow run").props.onChange({ target: { value: "run-one" } }));
+  expect(text()).toContain("Cursor agent is finishing background work");
+  expect(text()).not.toContain("Follow-up is disabled while the Cursor run is active.");
+  expect(button("Send follow-up").props.disabled).toBe(true);
+  expect(text()).not.toMatch(/Bearer |crsr_|sk-|CURSOR_API_KEY=/);
+});
+
+it("enables follow-up once the Cursor agent is IDLE after a terminal run", async () => {
+  mock.catalog.mockResolvedValue(success(boundCatalog(cursorBinding("finished"))));
+  await mount(true, true);
+  await open();
+  await act(async () => select("Workflow run").props.onChange({ target: { value: "run-one" } }));
+  expect(text()).toContain("Follow-up and cancellation require ActionGate approval.");
+  expect(text()).not.toContain("Cursor agent is finishing background work");
+  await act(async () =>
+    renderer!.root.findByProps({ "aria-label": "Cursor Cloud follow-up" }).props.onChange({
+      target: { value: "Continue the review." },
+    }),
+  );
+  expect(button("Send follow-up").props.disabled).toBe(false);
+  expect(text()).not.toMatch(/Bearer |crsr_|sk-|CURSOR_API_KEY=/);
+});
+
+it("requires ActionGate-backed cancellation and shows sanitized busy errors", async () => {
+  mock.catalog.mockResolvedValue(success(boundCatalog(cursorBinding("finished"))));
+  mock.cancel.mockResolvedValue(
+    success({
+      run: boundCatalog(cursorBinding("cancelled")).runs[0]!,
+      runnerBinding: cursorBinding("cancelled"),
+    }),
+  );
+  mock.followUp.mockResolvedValue({
+    _tag: "Failure",
+    cause: new Error("The Cursor agent is busy with another run."),
+  });
+  await mount(true, true);
+  await open();
+  await act(async () => select("Workflow run").props.onChange({ target: { value: "run-one" } }));
+  await act(async () =>
+    renderer!.root.findByProps({ "aria-label": "Cursor Cloud follow-up" }).props.onChange({
+      target: { value: "Continue the review." },
+    }),
+  );
+  await act(async () => button("Send follow-up").props.onClick());
+  expect(text()).toContain("The Cursor agent is busy with another run.");
+  expect(text()).not.toMatch(/Bearer |crsr_|sk-|CURSOR_API_KEY=/);
+  await act(async () => button("Cancel Cursor run").props.onClick());
+  expect(mock.cancel).toHaveBeenCalledWith(
+    expect.objectContaining({
+      input: expect.objectContaining({
+        runId: "run-one",
+        stageId: "research",
+        attempt: 1,
+      }),
+    }),
   );
 });

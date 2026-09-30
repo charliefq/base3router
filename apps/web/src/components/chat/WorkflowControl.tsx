@@ -1,3 +1,9 @@
+import {
+  cursorCloudDispatchAllowed,
+  emptyCursorCloudTargetDraft,
+  parseCursorCloudTarget,
+  type CursorCloudTargetDraft,
+} from "@t3tools/client-runtime/cursor-cloud";
 import type {
   AgentProfile,
   EnvironmentId,
@@ -5,11 +11,12 @@ import type {
   ThreadId,
   WorkflowActionInput,
   WorkflowCatalog,
+  WorkflowCursorCloudCommandResult,
   WorkflowStage,
   WorkflowStagePreview,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { workflowEnvironment } from "~/state/workflow";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -18,6 +25,11 @@ import { Button } from "../ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
+import {
+  CursorCloudBindingCard,
+  CursorCloudDispatchReview,
+  CursorCloudTargetFields,
+} from "./CursorCloudWorkflowPanel";
 
 type Tab = "runs" | "profiles" | "templates";
 type StageDraft = Pick<
@@ -39,8 +51,13 @@ const lines = (value: string) =>
     .map((entry) => entry.trim())
     .filter(Boolean);
 const failureText = (cause: unknown) => {
-  const error = Cause.squash(cause as Cause.Cause<unknown>);
-  return error instanceof Error ? error.message : "The workflow request failed.";
+  if (cause instanceof Error) return cause.message;
+  try {
+    const error = Cause.squash(cause as Cause.Cause<unknown>);
+    return error instanceof Error ? error.message : "The workflow request failed.";
+  } catch {
+    return "The workflow request failed.";
+  }
 };
 const versionKey = (id: string, version: number) => `${id}@${version}`;
 const newStage = (profile: AgentProfile | undefined): StageDraft => ({
@@ -57,6 +74,7 @@ const newStage = (profile: AgentProfile | undefined): StageDraft => ({
 
 export function WorkflowControl(props: {
   readonly available: boolean;
+  readonly cursorCloudAvailable?: boolean;
   readonly environmentId: EnvironmentId;
   readonly project: { readonly id: ProjectId; readonly title: string } | null;
   readonly onOpenThread: (threadId: ThreadId) => void;
@@ -74,6 +92,11 @@ export function WorkflowControl(props: {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [preferredKey, setPreferredKey] = useState("");
   const [instruction, setInstruction] = useState("");
+  const [runnerKind, setRunnerKind] = useState<"local" | "cursor-cloud">("local");
+  const [cursorCloudDraft, setCursorCloudDraft] = useState<CursorCloudTargetDraft>(
+    emptyCursorCloudTargetDraft,
+  );
+  const [followUp, setFollowUp] = useState("");
   const previewGeneration = useRef(0);
   const dispatchKey = useRef<{ readonly attemptKey: string; readonly id: string } | null>(null);
   const [profileEditKey, setProfileEditKey] = useState("");
@@ -114,7 +137,24 @@ export function WorkflowControl(props: {
     reportFailure: false,
     reportDefect: false,
   });
+  const runFollowUp = useAtomCommand(workflowEnvironment.cursorCloudFollowUp, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const runCancelCursor = useAtomCommand(workflowEnvironment.cursorCloudCancel, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const runRefreshCursor = useAtomCommand(workflowEnvironment.cursorCloudRefresh, {
+    reportFailure: false,
+    reportDefect: false,
+  });
   const projectId = props.project?.id ?? null;
+  const cursorCloudAvailable = props.cursorCloudAvailable === true;
+  const cursorCloudTarget = useMemo(
+    () => (cursorCloudAvailable ? parseCursorCloudTarget(cursorCloudDraft) : null),
+    [cursorCloudAvailable, cursorCloudDraft],
+  );
 
   useEffect(() => {
     if (!open || projectId === null) return;
@@ -178,6 +218,9 @@ export function WorkflowControl(props: {
                 },
               }
             : {}),
+          ...(cursorCloudAvailable && runnerKind === "cursor-cloud" && cursorCloudTarget
+            ? { cursorCloudTarget }
+            : {}),
         },
       }).then((result) => {
         if (previewGeneration.current !== generation) return;
@@ -194,7 +237,17 @@ export function WorkflowControl(props: {
       window.clearTimeout(timer);
       if (previewGeneration.current === generation) previewGeneration.current += 1;
     };
-  }, [open, projectId, props.environmentId, stageKey, preferredKey, runPreview]);
+  }, [
+    open,
+    projectId,
+    props.environmentId,
+    stageKey,
+    preferredKey,
+    runPreview,
+    cursorCloudAvailable,
+    runnerKind,
+    cursorCloudTarget,
+  ]);
 
   if (!props.available || props.project === null) return null;
 
@@ -280,7 +333,18 @@ export function WorkflowControl(props: {
         )
       : null;
 
+  const applyRunnerResult = (result: WorkflowCursorCloudCommandResult) => {
+    setCatalog(
+      (previous) =>
+        previous && {
+          ...previous,
+          runs: previous.runs.map((entry) => (entry.id === result.run.id ? result.run : entry)),
+        },
+    );
+  };
   const dispatch = async () => {
+    const cursorCloudReady =
+      runnerKind !== "cursor-cloud" || cursorCloudDispatchAllowed(preview?.cursorCloud);
     if (
       busyRef.current ||
       !projectId ||
@@ -288,7 +352,9 @@ export function WorkflowControl(props: {
       !stage ||
       !attempt ||
       !selectedRoute ||
-      preview?.route.gate.decision !== "ALLOW"
+      preview?.route.gate.decision !== "ALLOW" ||
+      !cursorCloudReady ||
+      (runnerKind === "cursor-cloud" && cursorCloudTarget === null)
     )
       return;
     busyRef.current = true;
@@ -308,6 +374,9 @@ export function WorkflowControl(props: {
         dispatchId: dispatchKey.current.id,
         target: selectedRoute.target,
         additionalInstruction: instruction.slice(0, 2_000),
+        ...(runnerKind === "cursor-cloud" && cursorCloudTarget
+          ? { runnerKind: "cursor-cloud" as const, cursorCloudTarget }
+          : {}),
       },
     });
     busyRef.current = false;
@@ -326,6 +395,32 @@ export function WorkflowControl(props: {
         },
     );
     props.onOpenThread(result.value.threadId);
+  };
+  const beginCursorCloud = () => {
+    if (busyRef.current || projectId === null || !run || !stage || !attempt) return null;
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    return {
+      environmentId: props.environmentId,
+      projectId,
+      runId: run.id,
+      stageId: stage.id,
+      attempt: attempt.attempt,
+    };
+  };
+  const finishCursorCloud = (
+    result:
+      | { readonly _tag: "Success"; readonly value: WorkflowCursorCloudCommandResult }
+      | { readonly _tag: "Failure"; readonly cause: unknown },
+  ) => {
+    busyRef.current = false;
+    setBusy(false);
+    if (result._tag === "Failure") {
+      setError(failureText(result.cause));
+      return;
+    }
+    applyRunnerResult(result.value);
   };
 
   return (
@@ -464,6 +559,14 @@ export function WorkflowControl(props: {
                                 {latest.routeBinding.target.model}
                               </span>
                             ) : null}
+                            {latest?.runnerBinding ? (
+                              <span>
+                                Cursor Cloud · {latest.runnerBinding.status}
+                                {latest.runnerBinding.cursorAgentId
+                                  ? ` · ${latest.runnerBinding.cursorAgentId}`
+                                  : ""}
+                              </span>
+                            ) : null}
                             {latest?.destinationThreadId ? (
                               <Button
                                 size="sm"
@@ -487,6 +590,19 @@ export function WorkflowControl(props: {
                         Role:{" "}
                         {stage.profileId ? `${stage.profileId} v${stage.profileVersion}` : "Human"}
                       </div>
+                      {cursorCloudAvailable ? (
+                        <select
+                          aria-label="Execution runner"
+                          className="h-8 w-full rounded-md border border-input bg-background px-2"
+                          value={runnerKind}
+                          onChange={(event) =>
+                            setRunnerKind(event.target.value as "local" | "cursor-cloud")
+                          }
+                        >
+                          <option value="local">Local provider</option>
+                          <option value="cursor-cloud">Cursor Cloud</option>
+                        </select>
+                      ) : null}
                       {proposed ? (
                         <div className="space-y-2">
                           <div>
@@ -509,6 +625,46 @@ export function WorkflowControl(props: {
                             </div>
                           ))}
                         </div>
+                      ) : null}
+                      {attempt.runnerBinding ? (
+                        <CursorCloudBindingCard
+                          binding={attempt.runnerBinding}
+                          taskId={run.id}
+                          followUp={followUp}
+                          busy={busy}
+                          onFollowUpChange={setFollowUp}
+                          onFollowUp={() => {
+                            const shared = beginCursorCloud();
+                            if (shared === null) return;
+                            void runFollowUp({
+                              environmentId: props.environmentId,
+                              input: {
+                                ...shared,
+                                commandId: randomUUID(),
+                                prompt: followUp.slice(0, 16_000),
+                              },
+                            }).then(finishCursorCloud);
+                          }}
+                          onCancel={() => {
+                            const shared = beginCursorCloud();
+                            if (shared === null) return;
+                            void runCancelCursor({
+                              environmentId: props.environmentId,
+                              input: {
+                                ...shared,
+                                commandId: randomUUID(),
+                              },
+                            }).then(finishCursorCloud);
+                          }}
+                          onRefresh={() => {
+                            const shared = beginCursorCloud();
+                            if (shared === null) return;
+                            void runRefreshCursor({
+                              environmentId: props.environmentId,
+                              input: shared,
+                            }).then(finishCursorCloud);
+                          }}
+                        />
                       ) : null}
                       {stage.type === "agent" && attempt.status === "dispatched" ? (
                         <Button
@@ -546,6 +702,20 @@ export function WorkflowControl(props: {
                                 ? "Provisional route · confirm to bind"
                                 : "No available runner for this stage"}
                           </div>
+                          {cursorCloudAvailable && runnerKind === "cursor-cloud" ? (
+                            <>
+                              <CursorCloudTargetFields
+                                draft={cursorCloudDraft}
+                                onChange={setCursorCloudDraft}
+                              />
+                              <CursorCloudDispatchReview
+                                preview={preview?.cursorCloud}
+                                target={cursorCloudTarget}
+                                provider={preview?.route.selected?.driver ?? null}
+                                model={preview?.route.selected?.target.model ?? null}
+                              />
+                            </>
+                          ) : null}
                           {preview ? (
                             <>
                               <p className="text-muted-foreground">
@@ -586,7 +756,11 @@ export function WorkflowControl(props: {
                               <Button
                                 size="sm"
                                 disabled={
-                                  busy || previewLoading || preview.route.gate.decision !== "ALLOW"
+                                  busy ||
+                                  previewLoading ||
+                                  preview.route.gate.decision !== "ALLOW" ||
+                                  (runnerKind === "cursor-cloud" &&
+                                    !cursorCloudDispatchAllowed(preview.cursorCloud))
                                 }
                                 onClick={() => void dispatch()}
                               >

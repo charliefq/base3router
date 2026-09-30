@@ -91,6 +91,10 @@
       "types": "./src/dispatcher.ts",
       "default": "./src/dispatcher.ts"
     },
+    "./cursor-cloud": {
+      "types": "./src/cursorCloud.ts",
+      "default": "./src/cursorCloud.ts"
+    },
     "./handoff": {
       "types": "./src/handoff.ts",
       "default": "./src/handoff.ts"

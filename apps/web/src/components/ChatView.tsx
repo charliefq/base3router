@@ -10053,6 +10053,9 @@ export default function ChatView(props: ChatViewProps) {
                     <div className="mb-2 flex justify-end">
                       <WorkflowControl
                         available={serverConfig?.environment.capabilities.workflowOs === true}
+                        cursorCloudAvailable={
+                          serverConfig?.environment.capabilities.cursorCloudRunner === true
+                        }
                         environmentId={environmentId}
                         project={
                           activeProject === null

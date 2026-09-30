@@ -11,6 +11,7 @@ import {
   WORKFLOW_MAX_ARTIFACT_CHARS,
   WORKFLOW_MAX_RECORDS,
   WorkflowRun as WorkflowRunSchema,
+  shouldAcceptCursorCloudRunnerUpdate,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -22,7 +23,7 @@ export const emptyWorkflowCatalog = (): WorkflowCatalog => ({
   runs: [],
 });
 
-export class WorkflowPolicyError extends Error {}
+class WorkflowPolicyError extends Error {}
 
 const runEquivalent = Schema.toEquivalence(WorkflowRunSchema);
 
@@ -367,8 +368,42 @@ export function applyWorkflowMutation(
                 destinationThreadId: mutation.threadId,
                 destinationMessageId: mutation.messageId,
                 routeBinding: mutation.routeBinding,
+                ...(mutation.runnerBinding === undefined
+                  ? {}
+                  : { runnerBinding: mutation.runnerBinding }),
               }
             : entry,
+        ),
+      };
+      return { ...catalog, runs: catalog.runs.map((entry) => (entry === run ? updated : entry)) };
+    }
+    case "runner.update": {
+      const run =
+        catalog.runs.find(
+          (entry) => entry.id === mutation.runId && entry.projectId === projectId,
+        ) ?? reject("Workflow run was not found.");
+      const attempt =
+        run.attempts.find(
+          (entry) => entry.stageId === mutation.stageId && entry.attempt === mutation.attempt,
+        ) ?? reject("Workflow attempt is unavailable.");
+      if (mutation.runnerBinding.runnerKind !== "cursor-cloud")
+        reject("Only a cursor-cloud runner binding can be stored.");
+      if (
+        mutation.runnerBinding.credentialRef.kind !== "env" ||
+        mutation.runnerBinding.credentialRef.name !== "CURSOR_API_KEY"
+      )
+        reject("Only a credential reference may be persisted.");
+      if (
+        attempt.runnerBinding !== undefined &&
+        !shouldAcceptCursorCloudRunnerUpdate(attempt.runnerBinding, mutation.runnerBinding)
+      ) {
+        reject("A newer Cursor Cloud observation is already persisted.");
+      }
+      const updated: WorkflowRun = {
+        ...run,
+        updatedAt: mutation.at,
+        attempts: run.attempts.map((entry) =>
+          entry === attempt ? { ...entry, runnerBinding: mutation.runnerBinding } : entry,
         ),
       };
       return { ...catalog, runs: catalog.runs.map((entry) => (entry === run ? updated : entry)) };

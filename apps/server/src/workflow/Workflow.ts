@@ -21,6 +21,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { cursorCloudDispatchPreview } from "../cursorCloud/CursorCloudWorkflow.ts";
 import * as Dispatcher from "../dispatcher/Dispatcher.ts";
 import { projectedSummarySection } from "../dispatcher/Handoff.ts";
 import { BUILTIN_AGENT_PROFILES, BUILTIN_WORKFLOW_TEMPLATES } from "./Builtins.ts";
@@ -403,6 +404,7 @@ export const previewWorkflowStage = Effect.fn("Workflow.previewStage")(function*
     readonly environmentDefaultModelSelection: Parameters<
       typeof Dispatcher.resolveDispatcherRoute
     >[0]["environmentDefaultModelSelection"];
+    readonly cursorCloudConfigured?: boolean;
   },
 ) {
   yield* requireWorkflowProject(input.projectId);
@@ -429,6 +431,18 @@ export const previewWorkflowStage = Effect.fn("Workflow.previewStage")(function*
     attempt: packet.attempt.attempt,
     packetText: packet.packetText,
     route,
+    ...(dependencies.cursorCloudConfigured === undefined
+      ? {}
+      : {
+          cursorCloud: cursorCloudDispatchPreview({
+            available: dependencies.cursorCloudConfigured,
+            configured: dependencies.cursorCloudConfigured,
+            gate: route.gate,
+            provider: route.selected?.driver ?? null,
+            model: route.selected?.target.model ?? null,
+            target: input.cursorCloudTarget ?? null,
+          }),
+        }),
   };
 });
 

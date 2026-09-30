@@ -197,7 +197,7 @@ const projectRelativePath = (
   return safeProjectRelativePath(candidate.slice(workspace.length + 1));
 };
 
-export const sanitizeProjectedSummary = (
+const sanitizeProjectedSummary = (
   value: string,
   source: Pick<Source, "worktreePath" | "workspaceRoot">,
   options: { readonly allowPublicUrls?: boolean } = {},
