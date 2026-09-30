@@ -345,6 +345,7 @@ const makePairServerConfig = Effect.fn(function* (input: {
     resourceMonitorPath: undefined,
     autoBootstrapProjectFromCwd: false,
     logWebSocketEvents: false,
+    dispatcherEnabled: false,
     tailscaleServeEnabled: false,
     tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
   });

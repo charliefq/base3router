@@ -63,6 +63,7 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
+import * as Dispatcher from "../../dispatcher/Dispatcher.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -1364,12 +1365,23 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     )(function* (event, _attachmentSideEffects) {
       switch (event.type) {
         case "thread.created":
+          yield* Dispatcher.deleteDispatcherTaskRoutesByThread({
+            threadId: event.payload.threadId,
+          }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
           yield* projectionTurnRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
           return;
 
         case "thread.turn-start-requested": {
+          if (event.payload.routeBinding !== undefined) {
+            yield* Dispatcher.persistDispatcherTaskRoute({
+              threadId: event.payload.threadId,
+              messageId: event.payload.messageId,
+              binding: event.payload.routeBinding,
+              createdAt: event.payload.createdAt,
+            }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+          }
           const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
             threadId: event.payload.threadId,
           });

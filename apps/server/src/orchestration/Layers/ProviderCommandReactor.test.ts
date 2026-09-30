@@ -79,6 +79,22 @@ const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
+const dispatcherRouteBinding = (input: {
+  readonly instanceId: string;
+  readonly model: string;
+  readonly fallbackIndex?: number;
+}) => ({
+  policyVersion: "dispatcher.phase-1a.v1" as const,
+  target: {
+    instanceId: ProviderInstanceId.make(input.instanceId),
+    model: input.model,
+  },
+  driver: ProviderDriverKind.make(input.instanceId.startsWith("claude") ? "claudeAgent" : "codex"),
+  modelFamily: input.instanceId.startsWith("claude") ? "claude" : "openai",
+  fallbackIndex: input.fallbackIndex ?? 0,
+  source: "provider-default" as const,
+  gate: { decision: "ALLOW" as const, reasonCodes: ["ACTION_ALLOWED" as const] },
+});
 
 const assistantQuoteText = "Retain the reconnect backoff.";
 const assistantCitation = {
@@ -181,7 +197,9 @@ describe("ProviderCommandReactor", () => {
     readonly beforeTurnStartDispatch?: () => Effect.Effect<void>;
     readonly afterTurnStartDispatch?: () => Effect.Effect<void>;
     readonly compactThreadEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
+    readonly dispatcherEnabled?: boolean;
     readonly interruptTurnEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
+    readonly sendTurnEffect?: ProviderServiceShape["sendTurn"];
     readonly stopSessionEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly startSessionEffect?: (
       session: ProviderSession,
@@ -266,11 +284,13 @@ describe("ProviderCommandReactor", () => {
         ),
       );
     });
-    const sendTurn = vi.fn((_: unknown) =>
-      Effect.succeed({
-        threadId: ThreadId.make("thread-1"),
-        turnId: asTurnId("turn-1"),
-      }),
+    const sendTurn = vi.fn((request: Parameters<ProviderServiceShape["sendTurn"]>[0]) =>
+      input?.sendTurnEffect !== undefined
+        ? input.sendTurnEffect(request)
+        : Effect.succeed({
+            threadId: ThreadId.make("thread-1"),
+            turnId: asTurnId("turn-1"),
+          }),
     );
     const compactThread = vi.fn((_: ThreadId) => input?.compactThreadEffect?.() ?? Effect.void);
     const interruptTurn = vi.fn((_: unknown) => input?.interruptTurnEffect?.() ?? Effect.void);
@@ -492,7 +512,11 @@ describe("ProviderCommandReactor", () => {
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(SqlitePersistenceMemory),
-      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+      Layer.provideMerge(
+        ServerConfig.layerTest(process.cwd(), baseDir, {
+          dispatcherEnabled: input?.dispatcherEnabled ?? false,
+        }),
+      ),
       Layer.provideMerge(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
@@ -887,6 +911,205 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.status).toBe("starting");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("uses the persisted dispatcher route after dispatcher binding is disabled", async () => {
+    const harness = await createHarness({ dispatcherEnabled: false });
+    const routeBinding = dispatcherRouteBinding({
+      instanceId: "claude_work",
+      model: "claude-sonnet-4-6",
+      fallbackIndex: 1,
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-dispatcher-bound-route"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("message-dispatcher-bound-route"),
+          role: "user",
+          text: "Use the bound route",
+          attachments: [],
+        },
+        routeBinding,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      provider: ProviderDriverKind.make("claudeAgent"),
+      providerInstanceId: ProviderInstanceId.make("claude_work"),
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("claude_work"),
+        model: "claude-sonnet-4-6",
+      },
+    });
+    expect(harness.sendTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claude_work"),
+          model: "claude-sonnet-4-6",
+        },
+      }),
+    );
+  });
+
+  it("preserves the legacy thread route when dispatcher binding is disabled", async () => {
+    const harness = await createHarness({ dispatcherEnabled: false });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-dispatcher-disabled"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("message-dispatcher-disabled"),
+          role: "user",
+          text: "Keep existing behavior",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      },
+    });
+  });
+
+  it("rejects a binding whose provider instance driver changed before startup", async () => {
+    const harness = await createHarness({ dispatcherEnabled: true });
+    const binding = dispatcherRouteBinding({
+      instanceId: "claude_work",
+      model: "claude-sonnet-4-6",
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-dispatcher-driver-mismatch"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("message-dispatcher-driver-mismatch"),
+          role: "user",
+          text: "Reject the stale route",
+          attachments: [],
+        },
+        routeBinding: { ...binding, driver: ProviderDriverKind.make("codex") },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return (
+        readModel.threads
+          .find((thread) => thread.id === ThreadId.make("thread-1"))
+          ?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ?? false
+      );
+    });
+    await harness.drain();
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back after provider session, hook, or MCP startup begins", async () => {
+    const harness = await createHarness({
+      dispatcherEnabled: true,
+      startSessionEffect: () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "claudeAgent",
+            method: "thread.turn.start",
+            detail: "Injected startup boundary failure",
+          }),
+        ),
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-dispatcher-session-failure"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("message-dispatcher-session-failure"),
+          role: "user",
+          text: "Fail during startup",
+          attachments: [],
+        },
+        routeBinding: dispatcherRouteBinding({
+          instanceId: "claude_work",
+          model: "claude-sonnet-4-6",
+          fallbackIndex: 1,
+        }),
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await harness.drain();
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      providerInstanceId: ProviderInstanceId.make("claude_work"),
+    });
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back after turn invocation begins", async () => {
+    const harness = await createHarness({
+      dispatcherEnabled: true,
+      sendTurnEffect: () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "claudeAgent",
+            method: "sendTurn",
+            detail: "Injected turn failure",
+          }),
+        ),
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-dispatcher-turn-failure"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("message-dispatcher-turn-failure"),
+          role: "user",
+          text: "Fail the turn",
+          attachments: [],
+        },
+        routeBinding: dispatcherRouteBinding({
+          instanceId: "claude_work",
+          model: "claude-sonnet-4-6",
+          fallbackIndex: 1,
+        }),
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
   });
 
   effectIt.effect("projects inline context before sending the provider turn", () =>

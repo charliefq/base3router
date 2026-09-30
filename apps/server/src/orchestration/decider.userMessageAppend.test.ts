@@ -5,6 +5,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -132,6 +133,28 @@ it.layer(NodeServices.layer)("thread.message.user.append", (it) => {
         "thread.message-sent",
         "thread.turn-start-requested",
       ]);
+    }),
+  );
+
+  it.effect("copies the immutable dispatcher binding into turn-start intent", () =>
+    Effect.gen(function* () {
+      const readModel = yield* readModelWithThread;
+      const routeBinding = {
+        policyVersion: "dispatcher.phase-1a.v1" as const,
+        target: { instanceId: ProviderInstanceId.make("codex_work"), model: "gpt-5.4" },
+        driver: ProviderDriverKind.make("codex"),
+        modelFamily: "openai",
+        fallbackIndex: 1,
+        source: "provider-default" as const,
+        gate: { decision: "ALLOW" as const, reasonCodes: ["ACTION_ALLOWED" as const] },
+      };
+      const planned = yield* decideOrchestrationCommand({
+        command: { ...turnStartCommand, routeBinding },
+        readModel,
+      });
+      const events = Array.isArray(planned) ? planned : [planned];
+      const turnStart = events.find((event) => event.type === "thread.turn-start-requested");
+      expect(turnStart?.payload).toMatchObject({ messageId, routeBinding });
     }),
   );
 });

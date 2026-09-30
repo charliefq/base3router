@@ -24,6 +24,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { DispatcherTaskRouteBinding } from "./dispatcher.ts";
 import {
   PullRequestActor,
   PullRequestChecksState,
@@ -1322,6 +1323,8 @@ export const ThreadTurnStartCommand = Schema.Struct({
   ),
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  // Server-owned. ClientThreadTurnStartCommand intentionally omits this field.
+  routeBinding: Schema.optional(DispatcherTaskRouteBinding),
   createdAt: IsoDateTime,
 });
 
@@ -1910,6 +1913,8 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  // Optional so pre-dispatcher events remain replayable.
+  routeBinding: Schema.optional(DispatcherTaskRouteBinding),
   createdAt: IsoDateTime,
 });
 

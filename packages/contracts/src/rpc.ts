@@ -3,6 +3,11 @@ import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
+  DispatcherPreviewError,
+  DispatcherRouteDecision,
+  DispatcherRoutePreviewRequest,
+} from "./dispatcher.ts";
+import {
   ProviderAuthCancelInput,
   ProviderAuthCompleteInput,
   ProviderAuthState,
@@ -310,6 +315,9 @@ export const WS_METHODS = {
   providerInstallSubscribe: "provider.install.subscribe",
   providerInstallRemove: "provider.install.remove",
 
+  // Dispatcher methods
+  dispatcherRoutePreview: "dispatcher.routePreview",
+
   // VCS methods
   vcsPull: "vcs.pull",
   vcsRefreshStatus: "vcs.refreshStatus",
@@ -461,6 +469,12 @@ const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
   payload: Schema.Struct({}),
   success: Schema.Struct({}),
   error: EnvironmentAuthorizationError,
+});
+
+const WsDispatcherRoutePreviewRpc = Rpc.make(WS_METHODS.dispatcherRoutePreview, {
+  payload: DispatcherRoutePreviewRequest,
+  success: DispatcherRouteDecision,
+  error: Schema.Union([DispatcherPreviewError, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
@@ -1393,6 +1407,7 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
 
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
+  WsDispatcherRoutePreviewRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,

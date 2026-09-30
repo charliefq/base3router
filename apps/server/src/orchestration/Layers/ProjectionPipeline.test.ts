@@ -11,6 +11,7 @@ import {
   type ThreadPullRequestSnapshot,
   ThreadLinkedPullRequest,
   TurnId,
+  ProviderDriverKind,
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -45,6 +46,7 @@ import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ServerConfig } from "../../config.ts";
+import { readDispatcherTaskRoute } from "../../dispatcher/Dispatcher.ts";
 
 const makeProjectionPipelinePrefixedTestLayer = (prefix: string) =>
   OrchestrationProjectionPipelineLive.pipe(
@@ -4244,6 +4246,15 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
     const sourcePlanId = "plan-source";
     const turnStartedAt = "2026-02-26T14:00:00.000Z";
     const sessionSetAt = "2026-02-26T14:00:05.000Z";
+    const routeBinding = {
+      policyVersion: "dispatcher.phase-1a.v1" as const,
+      target: { instanceId: ProviderInstanceId.make("codex_work"), model: "gpt-5.4" },
+      driver: ProviderDriverKind.make("codex"),
+      modelFamily: "openai",
+      fallbackIndex: 1,
+      source: "provider-default" as const,
+      gate: { decision: "ALLOW" as const, reasonCodes: ["ACTION_ALLOWED" as const] },
+    };
 
     yield* Effect.gen(function* () {
       const eventStore = yield* OrchestrationEventStore;
@@ -4266,6 +4277,7 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
             threadId: sourcePlanThreadId,
             planId: sourcePlanId,
           },
+          routeBinding,
           runtimeMode: "approval-required",
           createdAt: turnStartedAt,
         },
@@ -4274,7 +4286,7 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
       yield* projectionPipeline.bootstrap;
     }).pipe(Effect.provide(firstProjectionLayer));
 
-    const turnRows = yield* Effect.gen(function* () {
+    const reloaded = yield* Effect.gen(function* () {
       const eventStore = yield* OrchestrationEventStore;
       const projectionPipeline = yield* OrchestrationProjectionPipeline;
       const sql = yield* SqlClient.SqlClient;
@@ -4314,7 +4326,7 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
       `;
       assert.deepEqual(pendingRows, []);
 
-      return yield* sql<{
+      const turnRows = yield* sql<{
         readonly turnId: string;
         readonly userMessageId: string | null;
         readonly sourceProposedPlanThreadId: string | null;
@@ -4330,9 +4342,11 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
         FROM projection_turns
         WHERE turn_id = ${turnId}
       `;
+      const route = yield* readDispatcherTaskRoute({ threadId, messageId });
+      return { turnRows, route };
     }).pipe(Effect.provide(secondProjectionLayer));
 
-    assert.deepEqual(turnRows, [
+    assert.deepEqual(reloaded.turnRows, [
       {
         turnId: "turn-restart",
         userMessageId: "message-restart",
@@ -4341,6 +4355,7 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
         startedAt: turnStartedAt,
       },
     ]);
+    assert.deepEqual(Option.getOrNull(reloaded.route), routeBinding);
   }).pipe(
     Effect.provide(
       Layer.provideMerge(
