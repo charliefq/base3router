@@ -184,6 +184,8 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.threadPullRequests).toBe(true);
       expect(second.capabilities.threadPullRequestLinking).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);
+      expect(second.capabilities.openRouterGuidance?.configuredGuidanceMode).toBe("off");
+      expect(second.capabilities.openRouterGuidance?.credentialStatus).toBe("missing");
     }),
   );
 

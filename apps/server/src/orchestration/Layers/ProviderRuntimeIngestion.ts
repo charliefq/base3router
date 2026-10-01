@@ -59,6 +59,7 @@ import { projectActivityPayload } from "../ActivityPayloadProjection.ts";
 import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ModelRouterAvailability } from "../Services/ModelRouterAvailability.ts";
+import { persistOpenRouterObservationFromRuntimeEvent } from "../../openRouter/OpenRouterObservationPersist.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
 
@@ -1802,6 +1803,22 @@ const make = Effect.gen(function* () {
               threadId: thread.id,
             })
           : Option.none();
+      if (
+        event.type === "turn.completed" &&
+        event.payload.openRouter !== undefined &&
+        Option.isSome(pendingTurnStart)
+      ) {
+        yield* persistOpenRouterObservationFromRuntimeEvent({
+          threadId: thread.id,
+          messageId: pendingTurnStart.value.messageId,
+          event,
+        }).pipe(
+          Effect.ignore({
+            log: true,
+            message: "failed to persist OpenRouter Teacher observation",
+          }),
+        );
+      }
       const hasPendingTurnStart =
         Option.isSome(pendingTurnStart) && thread.session?.status === "starting";
 

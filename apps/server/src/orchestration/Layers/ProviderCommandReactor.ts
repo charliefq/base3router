@@ -15,6 +15,8 @@ import {
   type DispatcherTaskHandoff,
   type DispatcherTaskRouteBinding,
   type TurnId,
+  emptyOpenRouterObservation,
+  type OpenRouterCostTier,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
@@ -79,6 +81,8 @@ import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import * as Dispatcher from "../../dispatcher/Dispatcher.ts";
 import * as DispatcherHandoff from "../../dispatcher/Handoff.ts";
+import { runOpenRouterShadowObservation } from "../../openRouter/OpenRouterShadow.ts";
+import { resolveOpenRouterApiKey } from "../../openRouter/OpenRouterCredentials.ts";
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
@@ -899,6 +903,10 @@ const make = Effect.gen(function* () {
     readonly interactionMode?: "default" | "plan";
     readonly createdAt: string;
     readonly routeFailover?: boolean;
+    readonly openRouter?: {
+      readonly allowedModels: ReadonlyArray<string>;
+      readonly costTier: OpenRouterCostTier;
+    };
   }) {
     const thread = yield* resolveThreadShell(input.threadId);
     if (!thread) {
@@ -951,6 +959,7 @@ const make = Effect.gen(function* () {
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      ...(input.openRouter !== undefined ? { openRouter: input.openRouter } : {}),
     };
   });
 
@@ -1667,6 +1676,74 @@ const make = Effect.gen(function* () {
         Effect.ignore({ log: true, message: "failed to persist Auto Route attempt history" }),
       );
 
+    const maybeRunOpenRouterShadow = (input: {
+      readonly routeBinding: DispatcherTaskRouteBinding | null;
+      readonly prompt: string;
+      readonly persist: (binding: DispatcherTaskRouteBinding) => Effect.Effect<void>;
+    }) => {
+      const observation = input.routeBinding?.openRouter;
+      if (
+        input.routeBinding === null ||
+        observation === undefined ||
+        observation.guidanceMode !== "shadow" ||
+        observation.status !== "pending"
+      ) {
+        return Effect.void;
+      }
+      const binding = input.routeBinding;
+      return Effect.gen(function* () {
+        const settings = yield* serverSettingsService.getSettings;
+        const apiKey = resolveOpenRouterApiKey({
+          providerInstances: settings.providerInstances,
+        });
+        if (apiKey === undefined) {
+          yield* input.persist({
+            ...binding,
+            openRouter: {
+              ...observation,
+              status: "skipped",
+              skipReason: "missing_api_key",
+            },
+          });
+          return;
+        }
+        yield* runOpenRouterShadowObservation({
+          apiKey,
+          prompt: input.prompt,
+          allowedModels: observation.allowedModels,
+          costTier: observation.costTier,
+          ...(observation.base3Selected?.model !== undefined
+            ? { base3Model: observation.base3Selected.model }
+            : {}),
+        }).pipe(
+          Effect.flatMap((result) =>
+            input.persist({
+              ...binding,
+              openRouter: {
+                ...result,
+                ...(observation.base3Selected !== undefined
+                  ? { base3Selected: observation.base3Selected }
+                  : {}),
+              },
+            }),
+          ),
+          Effect.catch(() =>
+            input.persist({
+              ...binding,
+              openRouter: emptyOpenRouterObservation({
+                guidanceMode: "shadow",
+                status: "failed",
+                errorCategory: "unknown",
+                allowedModels: observation.allowedModels,
+                costTier: observation.costTier,
+                detail: "Shadow observation failed.",
+              }),
+            }),
+          ),
+        );
+      });
+    };
+
     const classifyTurnStartCause = (cause: Cause.Cause<unknown>, sideEffectsStarted: boolean) => {
       const requestError = findProviderAdapterRequestError(cause);
       const failReason = cause.reasons.find(Cause.isFailReason);
@@ -1716,6 +1793,16 @@ const make = Effect.gen(function* () {
         interactionMode: event.payload.interactionMode,
         createdAt: event.payload.createdAt,
         ...(routeFailover ? { routeFailover: true } : {}),
+        ...(routeBinding?.openRouter !== undefined &&
+        routeBinding.openRouter.guidanceMode === "teacher" &&
+        routeBinding.openRouter.status === "pending"
+          ? {
+              openRouter: {
+                allowedModels: routeBinding.openRouter.allowedModels,
+                costTier: routeBinding.openRouter.costTier,
+              },
+            }
+          : {}),
       });
 
     const planAndPersistFailure = (cause: Cause.Cause<unknown>) =>
@@ -1898,6 +1985,11 @@ const make = Effect.gen(function* () {
       Effect.ensuring(resumed ? Deferred.succeed(resumed.sent, undefined) : Effect.void),
       Effect.forkScoped,
     );
+    yield* maybeRunOpenRouterShadow({
+      routeBinding,
+      prompt: messageText,
+      persist: persistAttemptedRoute,
+    }).pipe(Effect.forkDetach);
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (

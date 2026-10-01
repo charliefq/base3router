@@ -24,12 +24,17 @@ import {
   type ModelRouterAvailabilityCooldown,
   type ModelRouterDecision,
   MODEL_ROUTER_ATTEMPT_BUDGET,
+  type OpenRouterGuidanceMode,
+  type OpenRouterGuidanceSettings,
+  ProviderInstanceId,
 } from "@t3tools/contracts";
 import {
   applyModelRouterCooldowns,
+  modelRouterCatalogForMode,
   modelRouterCatalogFromProviders,
   routeModel,
 } from "@t3tools/shared/modelRouter";
+import { applyOpenRouterGuidanceToBinding } from "@t3tools/shared/openRouterGuidance";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -727,6 +732,11 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
       readonly sql: SqlClient.SqlClient;
       readonly availabilityCooldowns?: ReadonlyArray<ModelRouterAvailabilityCooldown>;
       readonly availabilityNowMs?: number;
+      readonly openRouter?: {
+        readonly settings: OpenRouterGuidanceSettings;
+        readonly credentialPresent: boolean;
+        readonly instanceId: ProviderInstanceId;
+      };
     },
   ): Effect.fn.Return<OrchestrationCommand, OrchestrationDispatchCommandError> {
     if (command.type !== "thread.turn.start") return command;
@@ -787,7 +797,10 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
       const decision = routeModel({
         mode: routingMode,
         catalog: applyModelRouterCooldowns(
-          modelRouterCatalogFromProviders(resolution.providers),
+          modelRouterCatalogForMode(
+            modelRouterCatalogFromProviders(resolution.providers),
+            routingMode,
+          ),
           dependencies.availabilityCooldowns ?? [],
           dependencies.availabilityNowMs ?? (yield* Clock.currentTimeMillis),
         ),
@@ -827,7 +840,36 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
         }
         return routed;
       }
-      return { ...routed, routeBinding };
+      const openRouter = dependencies.openRouter;
+      if (openRouter === undefined) {
+        return { ...routed, routeBinding };
+      }
+      const guided = applyOpenRouterGuidanceToBinding({
+        binding: routeBinding,
+        ...(command.openRouterGuidanceMode !== undefined
+          ? { requestedMode: command.openRouterGuidanceMode }
+          : {}),
+        settings: openRouter.settings,
+        credentialPresent: openRouter.credentialPresent,
+        openRouterInstanceId: openRouter.instanceId,
+        prompt: command.message.text,
+        routingMode,
+      });
+      if (
+        guided.failed !== undefined &&
+        guided.binding.openRouter?.guidanceMode === "teacher" &&
+        openRouter.settings.teacherFallbackToBase3 !== true
+      ) {
+        return yield* new OrchestrationDispatchCommandError({
+          message: `OpenRouter Teacher could not bind (${guided.failed}).`,
+        });
+      }
+      const teacherBound =
+        guided.binding.openRouter?.guidanceMode === "teacher" &&
+        guided.binding.openRouter.status === "pending"
+          ? applySelectedModelSelection(routed, guided.executionTarget)
+          : routed;
+      return { ...teacherBound, routeBinding: guided.binding };
     }
 
     const decision = yield* resolveDispatcherRouteObserved("dispatcher.task_route_binding", {
