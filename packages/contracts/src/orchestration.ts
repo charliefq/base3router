@@ -32,6 +32,7 @@ import {
   DispatcherTaskRouteSnapshot,
 } from "./dispatcher.ts";
 import { ModelRouterConstraints, ModelRouterMode } from "./modelRouter.ts";
+import { OpenRouterGuidanceMode } from "./openRouter.ts";
 import { WorkflowCatalog, WorkflowMutation, WorkflowStageDispatchMutation } from "./workflow.ts";
 import {
   PullRequestActor,
@@ -1332,6 +1333,8 @@ export const ThreadTurnStartCommand = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   routingMode: Schema.optional(ModelRouterMode),
   modelRouteConstraints: Schema.optional(ModelRouterConstraints),
+  /** Phase 10. Omitted clients keep Off / server-default guidance. */
+  openRouterGuidanceMode: Schema.optional(OpenRouterGuidanceMode),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
   interactionMode: ProviderInteractionMode.pipe(
@@ -1364,6 +1367,8 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   routingMode: Schema.optional(ModelRouterMode),
   modelRouteConstraints: Schema.optional(ModelRouterConstraints),
+  /** Phase 10. Omitted clients keep Off / server-default guidance. */
+  openRouterGuidanceMode: Schema.optional(OpenRouterGuidanceMode),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,

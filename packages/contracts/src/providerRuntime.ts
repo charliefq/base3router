@@ -17,6 +17,7 @@ import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
 import { ProviderUsageLimitsUpdate } from "./providerUsageLimits.ts";
 import { ProviderApprovalOption } from "./orchestration.ts";
 import { ModelRouterFailureCategory, ModelRouterFailureScope } from "./modelRouter.ts";
+import { OpenRouterTeacherObservationV0 } from "./openRouter.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -357,6 +358,8 @@ const TurnCompletedPayload = Schema.Struct({
   failureCategory: Schema.optional(ModelRouterFailureCategory),
   failureScope: Schema.optional(ModelRouterFailureScope),
   sideEffectsStarted: Schema.optional(Schema.Boolean),
+  /** Sanitized Teacher observation. Absent on non-OpenRouter turns. */
+  openRouter: Schema.optional(OpenRouterTeacherObservationV0),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 

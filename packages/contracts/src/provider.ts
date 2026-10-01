@@ -23,6 +23,7 @@ import {
   RuntimeMode,
 } from "./orchestration.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
+import { OpenRouterCostTier } from "./openRouter.ts";
 
 const ProviderSessionStatus = Schema.Literals([
   "connecting",
@@ -81,6 +82,18 @@ export const ProviderSendTurnInput = Schema.Struct({
   ),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  /**
+   * Teacher-mode allowlist and cost band. Absent for every non-OpenRouter
+   * turn and for clients that predate Phase 10. Never carries credentials.
+   */
+  openRouter: Schema.optional(
+    Schema.Struct({
+      allowedModels: Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(256))).check(
+        Schema.isMaxLength(64),
+      ),
+      costTier: OpenRouterCostTier,
+    }),
+  ),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 

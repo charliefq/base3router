@@ -8,6 +8,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { OpenRouterCapabilitySnapshot } from "./openRouter.ts";
 
 /** Wire version for orchestration snapshots, streams, commands, and RPC payloads. */
 export const ORCHESTRATION_PROTOCOL_VERSION = 1;
@@ -193,6 +194,11 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       desktop servers whose app predates the remote trigger, where clients
       must keep telling the user to update the app on that machine. */
   desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Server can run OpenRouter guidance (Off / Shadow / Teacher). Absent on
+   * pre-Phase-10 servers, so clients hide the guidance surface.
+   */
+  openRouterGuidance: Schema.optionalKey(OpenRouterCapabilitySnapshot),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
