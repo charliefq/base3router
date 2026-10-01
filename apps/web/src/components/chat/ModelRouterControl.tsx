@@ -151,14 +151,21 @@ export const ModelRouterControl = memo(function ModelRouterControl(props: {
         </>
       ) : null}
       {props.openRouter !== undefined && props.openRouter.connectionStatus !== "not_configured" ? (
-        <span
-          className="max-w-28 truncate text-2xs text-muted-foreground"
-          data-openrouter-guidance={props.openRouter.mode}
-          data-openrouter-connection={props.openRouter.connectionStatus}
-          title="OpenRouter guidance is separate from Auto Route"
-        >
-          OR {props.openRouter.mode}
-        </span>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span
+                className="max-w-28 truncate text-2xs text-muted-foreground"
+                data-openrouter-guidance={props.openRouter.mode}
+                data-openrouter-connection={props.openRouter.connectionStatus}
+                aria-label="OpenRouter guidance is separate from Auto Route"
+              />
+            }
+          >
+            OR {props.openRouter.mode}
+          </TooltipTrigger>
+          <TooltipPopup side="top">OpenRouter guidance is separate from Auto Route</TooltipPopup>
+        </Tooltip>
       ) : null}
     </span>
   );
