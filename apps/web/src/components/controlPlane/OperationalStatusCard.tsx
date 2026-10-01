@@ -6,10 +6,10 @@ export type OperationalStatusTone = "neutral" | "info" | "success" | "warning" |
 
 const TONE_CLASS: Record<OperationalStatusTone, string> = {
   neutral: "text-muted-foreground",
-  info: "text-info-foreground",
-  success: "text-success-foreground",
-  warning: "text-warning-foreground",
-  danger: "text-error-foreground",
+  info: "text-status-running",
+  success: "text-status-success",
+  warning: "text-status-warning",
+  danger: "text-status-failure",
 };
 
 export function OperationalStatusCard(props: {
@@ -20,7 +20,7 @@ export function OperationalStatusCard(props: {
   readonly children?: ReactNode;
 }) {
   return (
-    <section className="rounded-md border border-border/80 bg-card/40 px-3 py-2.5">
+    <section className="rounded-(--control-plane-card-radius) border border-border/80 bg-card/40 px-3 py-2.5">
       <header className="flex items-baseline justify-between gap-3">
         <h3 className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
           {props.title}
@@ -45,17 +45,24 @@ export function statusTone(status: string | null | undefined): OperationalStatus
     case "ALLOW":
     case "completed":
     case "accepted":
+    case "ready":
+    case "bound":
+    case "succeeded":
       return "success";
     case "approval":
     case "paused":
     case "proposed":
     case "DENY":
+    case "loading":
+    case "not-started":
+    case "pending":
       return "warning";
     case "failed":
     case "error":
     case "rejected":
     case "cancelled":
     case "unavailable":
+    case "offline":
       return "danger";
     default:
       return "neutral";

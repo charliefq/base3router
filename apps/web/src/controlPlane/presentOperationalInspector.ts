@@ -64,6 +64,9 @@ export type InspectorRouteModel = {
   readonly executedModel: string | null;
   readonly rerouted: boolean;
   readonly attempts: ReadonlyArray<ModelRouterRouteAttempt>;
+  readonly eligibleCount: number | null;
+  readonly filteredCount: number | null;
+  readonly filteredReasonCodes: ReadonlyArray<string>;
 };
 
 export type InspectorCursorCloudModel = {
@@ -137,6 +140,9 @@ const EMPTY_ROUTE: InspectorRouteModel = {
   executedModel: null,
   rerouted: false,
   attempts: [],
+  eligibleCount: null,
+  filteredCount: null,
+  filteredReasonCodes: [],
 };
 
 function executionStatusFromSession(
@@ -172,6 +178,9 @@ function presentModelRouteTrace(
   | "executedModel"
   | "rerouted"
   | "attempts"
+  | "eligibleCount"
+  | "filteredCount"
+  | "filteredReasonCodes"
 > {
   if (modelRoute === undefined) {
     return {
@@ -189,6 +198,9 @@ function presentModelRouteTrace(
       executedModel: null,
       rerouted: false,
       attempts: [],
+      eligibleCount: null,
+      filteredCount: null,
+      filteredReasonCodes: [],
     };
   }
   const initial = modelRoute.selected?.target ?? null;
@@ -212,6 +224,15 @@ function presentModelRouteTrace(
     executedModel: executed?.model ?? null,
     rerouted,
     attempts: modelRoute.attempts ?? [],
+    eligibleCount: modelRoute.candidates.filter((candidate) => candidate.eligible).length,
+    filteredCount: modelRoute.candidates.filter((candidate) => !candidate.eligible).length,
+    filteredReasonCodes: [
+      ...new Set(
+        modelRoute.candidates.flatMap((candidate) =>
+          candidate.eligible ? [] : candidate.reasonCodes,
+        ),
+      ),
+    ],
   };
 }
 

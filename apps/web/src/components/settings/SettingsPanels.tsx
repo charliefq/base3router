@@ -3198,7 +3198,7 @@ export function GeneralSettingsPanel() {
         )}
         <SettingsRow
           title="Attribution"
-          description="Base3Router is built on the open-source T3 Code project and preserves its MIT license. Copyright 2026 T3 Tools Inc."
+          description="Base3Router is built on the open-source Base3Router project and preserves its MIT license. Copyright 2026 T3 Tools Inc."
         />
       </SettingsSection>
       <SettingsSection title="Diagnostics">
@@ -3223,7 +3223,7 @@ export function GeneralSettingsPanel() {
         />
         <SettingsRow
           {...searchableSetting("open-source-licenses")}
-          description="Notices for dependencies, assets, and optional tools used by T3 Code."
+          description="Notices for dependencies, assets, and optional tools used by Base3Router."
           control={
             <Button
               render={<Link to="/settings/open-source-licenses" />}

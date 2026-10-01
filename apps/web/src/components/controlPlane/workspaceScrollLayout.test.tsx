@@ -50,6 +50,7 @@ const overflowingModel: ControlCenterModel = {
   failedOrCancelled: [],
   empty: false,
   capabilityOff: false,
+  environmentLabel: "Portfolio host",
 };
 
 let renderer: ReactTestRenderer | null = null;

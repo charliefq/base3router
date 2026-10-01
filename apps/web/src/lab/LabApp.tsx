@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Outlet,
   RouterProvider,
@@ -44,6 +44,14 @@ function LabShell() {
   const [error, setError] = useState(scenario.error);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(scenario.inspectorCollapsed);
 
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle("dark", scenario.appearance === "dark");
+    return () => {
+      root.classList.remove("dark");
+    };
+  }, [scenario.appearance]);
+
   const applyScenario = (id: UiLabScenarioId) => {
     const next = createLabScenario(id);
     setScenarioId(id);
@@ -59,10 +67,12 @@ function LabShell() {
 
   return (
     <div
-      className="flex h-svh min-h-0 w-full overflow-hidden bg-background text-foreground"
+      className={`flex h-svh min-h-0 w-full overflow-hidden bg-background text-foreground ${scenario.appearance === "dark" ? "dark" : ""}`}
       data-ui-lab="root"
       data-ui-lab-scenario={scenario.id}
       data-ui-lab-viewport={scenario.viewport}
+      data-ui-lab-appearance={scenario.appearance}
+      data-ui-lab-view={scenario.view}
     >
       <LabWorkspace
         decision={decision}

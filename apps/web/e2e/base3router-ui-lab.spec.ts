@@ -7,7 +7,28 @@ import { UI_LAB_BEARER_PROBE, UI_LAB_SECRET_PROBE } from "../src/lab/fakeProvide
 
 const SCREENSHOT_DIR = NodePath.join(import.meta.dirname, "../playwright-results/screenshots");
 
+const CONTROL_CENTER_SCENARIOS = new Set<UiLabScenarioId>(["empty-workspace", "disconnected"]);
+
+async function applyScenarioViewport(page: Page, id: UiLabScenarioId) {
+  if (id === "compact-height") {
+    await page.setViewportSize({ width: 1280, height: 360 });
+    return;
+  }
+  if (id === "reduced-height") {
+    await page.setViewportSize({ width: 1280, height: 520 });
+    return;
+  }
+  if (id === "narrow-width") {
+    await page.setViewportSize({ width: 1024, height: 640 });
+    return;
+  }
+  if (id === "standard-width") {
+    await page.setViewportSize({ width: 1440, height: 900 });
+  }
+}
+
 async function openScenario(page: Page, id: UiLabScenarioId) {
+  await applyScenarioViewport(page, id);
   await page.goto(`/lab.html?scenario=${id}`);
   await expect(page.locator('[data-ui-lab="root"]')).toHaveAttribute("data-ui-lab-scenario", id);
 }
@@ -27,14 +48,26 @@ async function assertNoSecrets(page: Page) {
   expect(body).not.toMatch(/sk-[A-Za-z0-9]{8,}/);
 }
 
+async function assertNoPageOverflow(page: Page) {
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(1);
+}
+
 test.describe("Base3Router UI Lab", () => {
   for (const id of UI_LAB_SCENARIO_IDS) {
     test(`opens ${id}`, async ({ page }) => {
       await openScenario(page, id);
-      await expect(page.locator('[data-ui-lab="composer"]')).toBeVisible();
       await expect(page.locator('[data-control-plane="rail"]')).toBeVisible();
-      await expect(page.getByLabel("Model routing mode")).toBeVisible();
+      if (CONTROL_CENTER_SCENARIOS.has(id)) {
+        await expect(page.locator('[data-control-plane="control-center"]')).toBeVisible();
+      } else {
+        await expect(page.locator('[data-ui-lab="composer"]')).toBeVisible();
+        await expect(page.getByLabel("Model routing mode")).toBeVisible();
+      }
       await assertNoSecrets(page);
+      await assertNoPageOverflow(page);
       await capture(page, id);
     });
   }
@@ -43,6 +76,8 @@ test.describe("Base3Router UI Lab", () => {
     await openScenario(page, "empty-thread");
     const mode = page.locator("[data-model-router-mode]");
     await expect(mode).toHaveAttribute("data-model-router-mode", "auto");
+    await expect(mode).toContainText("Auto Route");
+    await expect(page.locator("body")).not.toContainText("learned routing");
     await mode.click();
     await page.getByRole("option", { name: "Manual", exact: true }).click();
     await expect(mode).toHaveAttribute("data-model-router-mode", "manual");
@@ -95,6 +130,20 @@ test.describe("Base3Router UI Lab", () => {
     await expect(page.getByRole("alert")).toBeVisible();
   });
 
+  test("shows Inspector empty copy before a route exists", async ({ page }) => {
+    await openScenario(page, "inspector-empty");
+    await expect(page.getByText("No project or task is selected")).toBeVisible();
+    await expect(page.locator("[data-model-router-attempts]")).toHaveCount(0);
+    await capture(page, "inspector-empty");
+  });
+
+  test("Control Center names the environment and offline state", async ({ page }) => {
+    await openScenario(page, "disconnected");
+    await expect(page.locator('[data-control-center-surface="offline"]')).toBeVisible();
+    await expect(page.getByText("Offline lab environment")).toBeVisible();
+    await capture(page, "disconnected-control-center");
+  });
+
   test("scrolls conversation independently of sidebar and Inspector", async ({ page }) => {
     await openScenario(page, "long-thread");
     const conversation = page.locator('[data-workspace-scroll-surface="conversation"]');
@@ -132,6 +181,16 @@ test.describe("Base3Router UI Lab", () => {
     await capture(page, "reduced-height-composer");
   });
 
+  test("keeps composer and Inspector reachable at 360px height", async ({ page }) => {
+    await openScenario(page, "compact-height");
+    await page.setViewportSize({ width: 1280, height: 360 });
+    await expect(page.locator('[data-ui-lab="composer"]')).toBeVisible();
+    await expect(page.getByLabel("Model routing mode")).toBeVisible();
+    await expect(page.getByLabel("Collapse operational inspector")).toBeVisible();
+    await assertNoPageOverflow(page);
+    await capture(page, "compact-height-composer");
+  });
+
   test("narrow and standard desktop widths keep independent panes", async ({ page }) => {
     await openScenario(page, "standard-width");
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -140,9 +199,22 @@ test.describe("Base3Router UI Lab", () => {
     await capture(page, "standard-width");
 
     await openScenario(page, "narrow-width");
-    await page.setViewportSize({ width: 900, height: 800 });
+    await page.setViewportSize({ width: 1024, height: 640 });
     await expect(page.locator('[data-ui-lab="composer"]')).toBeVisible();
     await expect(page.locator('[data-control-plane="rail"]')).toBeVisible();
+    await assertNoPageOverflow(page);
     await capture(page, "narrow-width");
+  });
+
+  test("icon-only rail and Inspector controls have accessible names", async ({ page }) => {
+    await openScenario(page, "auto-route-preview");
+    await expect(page.getByLabel("Base3Router Control Center")).toBeVisible();
+    await expect(page.getByLabel("Collapse operational inspector")).toBeVisible();
+    await expect(page.getByLabel("Model routing mode")).toBeVisible();
+    await expect(page.getByLabel("Why this model?")).toBeVisible();
+    await page.getByLabel("Collapse operational inspector").click();
+    await expect(page.getByLabel("Open operational inspector")).toBeVisible();
+    await page.keyboard.press("Tab");
+    await expect(page.locator(":focus")).toBeVisible();
   });
 });

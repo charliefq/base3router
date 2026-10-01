@@ -1,12 +1,22 @@
 import type { ModelRouterMode } from "@t3tools/contracts";
 
-import { LAB_CLAUDE, LAB_CODEX, LAB_CURSOR, labDecision } from "./fixtures";
+import {
+  LAB_CLAUDE,
+  LAB_CODEX,
+  LAB_CURSOR,
+  LAB_INELIGIBLE,
+  LAB_LONG_NAME,
+  labDecision,
+} from "./fixtures";
 import { labAdapters, simulateRoutedTurn, type FakeProviderAdapter } from "./fakeProvider";
 
 export const UI_LAB_SCENARIO_IDS = [
   "empty-thread",
+  "empty-workspace",
   "long-thread",
+  "long-names",
   "reduced-height",
+  "compact-height",
   "auto-route-preview",
   "manual-selection",
   "auto-success",
@@ -14,13 +24,21 @@ export const UI_LAB_SCENARIO_IDS = [
   "quota-exhausted",
   "no-alternate",
   "bounded-attempts",
+  "capability-filtered",
+  "provider-unavailable",
+  "inspector-empty",
   "inspector-attempts",
+  "inspector-success",
+  "inspector-failure",
+  "disconnected",
   "thread-loading",
   "thread-error",
   "thread-failed",
   "thread-completed",
   "narrow-width",
   "standard-width",
+  "light-appearance",
+  "dark-appearance",
 ] as const;
 
 export type UiLabScenarioId = (typeof UI_LAB_SCENARIO_IDS)[number];
@@ -33,7 +51,11 @@ export type LabMessage = {
   readonly text: string;
 };
 
-export type LabViewportHint = "standard" | "narrow" | "reduced-height";
+export type LabViewportHint = "standard" | "narrow" | "reduced-height" | "compact-height";
+
+export type LabAppearance = "light" | "dark";
+
+export type LabView = "thread" | "control-center";
 
 export type LabScenarioState = {
   readonly id: UiLabScenarioId;
@@ -48,6 +70,10 @@ export type LabScenarioState = {
   readonly adapters: ReadonlyArray<FakeProviderAdapter>;
   readonly viewport: LabViewportHint;
   readonly inspectorCollapsed: boolean;
+  readonly appearance: LabAppearance;
+  readonly view: LabView;
+  readonly inspectorEmpty: boolean;
+  readonly longNames: boolean;
 };
 
 const LONG_THREAD_MESSAGES: ReadonlyArray<LabMessage> = Array.from({ length: 48 }, (_, index) => ({
@@ -66,6 +92,15 @@ const SIDEBAR_THREADS: ReadonlyArray<LabMessage> = Array.from({ length: 24 }, (_
 }));
 
 export const LAB_SIDEBAR_THREADS = SIDEBAR_THREADS;
+
+export const LAB_LONG_SIDEBAR_THREADS: ReadonlyArray<LabMessage> = Array.from(
+  { length: 12 },
+  (_, index) => ({
+    id: `lab-long-name-${index + 1}`,
+    role: "user",
+    text: `Very-long-project-and-thread-name-that-must-truncate-without-horizontal-overflow-${index + 1}`,
+  }),
+);
 
 function applyTurn(
   base: Omit<LabScenarioState, "decision" | "error" | "threadStatus" | "messages"> & {
@@ -100,6 +135,10 @@ export function createLabScenario(id: UiLabScenarioId): LabScenarioState {
     inspectorCollapsed: false,
     adapters: labAdapters({}),
     mode: "auto" as const,
+    appearance: "dark" as const,
+    view: "thread" as const,
+    inspectorEmpty: false,
+    longNames: false,
   };
 
   switch (id) {
@@ -109,6 +148,18 @@ export function createLabScenario(id: UiLabScenarioId): LabScenarioState {
         label: "Empty / new thread",
         description: "New thread with Auto Route preview and an empty conversation.",
         decision: labDecision({ executionStatus: "not-started" }),
+        threadStatus: "idle",
+        error: null,
+        messages: [],
+      };
+    case "empty-workspace":
+      return {
+        ...defaults,
+        view: "control-center",
+        inspectorEmpty: true,
+        label: "Empty workspace",
+        description: "Control Center with no projects or tasks in the selected environment.",
+        decision: labDecision({ executionStatus: "not-started", selected: null }),
         threadStatus: "idle",
         error: null,
         messages: [],
@@ -133,6 +184,41 @@ export function createLabScenario(id: UiLabScenarioId): LabScenarioState {
         threadStatus: "completed",
         error: null,
         messages: LONG_THREAD_MESSAGES.slice(0, 20),
+      };
+    case "compact-height":
+      return {
+        ...defaults,
+        viewport: "compact-height",
+        label: "Compact height",
+        description: "360px-class height. Composer, rail, and Inspector remain reachable.",
+        decision: labDecision({ executionStatus: "not-started" }),
+        threadStatus: "idle",
+        error: null,
+        messages: LONG_THREAD_MESSAGES.slice(0, 8),
+      };
+    case "long-names":
+      return {
+        ...defaults,
+        longNames: true,
+        label: "Long names",
+        description: "Long project, thread, provider, and model names without page overflow.",
+        decision: labDecision({
+          selected: LAB_LONG_NAME,
+          executed: LAB_LONG_NAME,
+          fallbacks: [LAB_CLAUDE],
+          candidates: [LAB_LONG_NAME, LAB_CLAUDE],
+          explanation:
+            "Auto Route selected very-long-provider-instance · very-long-model-slug-name-for-truncation by policy model-router.v0 tie-break.",
+        }),
+        threadStatus: "idle",
+        error: null,
+        messages: [
+          {
+            id: "lab-long-user",
+            role: "user",
+            text: "Use the long provider and model names without clipping the composer.",
+          },
+        ],
       };
     case "auto-route-preview":
       return {
@@ -276,6 +362,98 @@ export function createLabScenario(id: UiLabScenarioId): LabScenarioState {
         description: "Operational Inspector lists each Auto Route attempt.",
       };
     }
+    case "capability-filtered":
+      return {
+        ...defaults,
+        label: "Capability filtered",
+        description: "A candidate was ineligible because it lacked required capabilities.",
+        decision: labDecision({
+          selected: LAB_CODEX,
+          fallbacks: [LAB_CLAUDE],
+          candidates: [LAB_INELIGIBLE, LAB_CODEX, LAB_CLAUDE],
+          explanation:
+            "Auto Route selected Codex after filtering candidates that lacked required capabilities.",
+        }),
+        threadStatus: "idle",
+        error: null,
+        messages: [],
+      };
+    case "provider-unavailable": {
+      const result = simulateRoutedTurn({
+        decision: labDecision({
+          selected: LAB_CODEX,
+          fallbacks: [LAB_CLAUDE],
+          candidates: [LAB_CODEX, LAB_CLAUDE],
+        }),
+        adapters: labAdapters({ codex: "quota_exhaustion", claude: "success" }),
+        prompt: "Codex is unavailable; failover to Claude.",
+      });
+      return {
+        ...defaults,
+        label: "Provider unavailable",
+        description: "Initial instance unavailable, then a successful fallback.",
+        adapters: labAdapters({ codex: "quota_exhaustion", claude: "success" }),
+        decision: result.decision,
+        error: result.error,
+        threadStatus: result.status === "completed" ? "completed" : "failed",
+        messages: [
+          { id: "lab-user-1", role: "user", text: "Codex is unavailable; failover to Claude." },
+        ],
+      };
+    }
+    case "inspector-empty":
+      return {
+        ...defaults,
+        inspectorEmpty: true,
+        label: "Inspector empty",
+        description: "Inspector before a route exists.",
+        decision: labDecision({ executionStatus: "not-started", selected: null }),
+        threadStatus: "idle",
+        error: null,
+        messages: [],
+      };
+    case "inspector-success":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "inspector-success",
+        label: "Inspector success",
+        description: "Inspector after a successful Auto Route turn.",
+      };
+    case "inspector-failure":
+      return {
+        ...createLabScenario("no-alternate"),
+        id: "inspector-failure",
+        label: "Inspector failure",
+        description: "Inspector after Auto Route exhausted every alternate.",
+      };
+    case "disconnected":
+      return {
+        ...defaults,
+        view: "control-center",
+        inspectorEmpty: true,
+        label: "Disconnected environment",
+        description: "Control Center while the selected environment is offline.",
+        decision: labDecision({ executionStatus: "not-started", selected: null }),
+        threadStatus: "idle",
+        error: null,
+        messages: [],
+      };
+    case "light-appearance":
+      return {
+        ...createLabScenario("auto-route-preview"),
+        id: "light-appearance",
+        appearance: "light",
+        label: "Light appearance",
+        description: "Control-plane tokens in light appearance.",
+      };
+    case "dark-appearance":
+      return {
+        ...createLabScenario("auto-route-preview"),
+        id: "dark-appearance",
+        appearance: "dark",
+        label: "Dark appearance",
+        description: "Control-plane tokens in dark appearance.",
+      };
     case "thread-loading":
       return {
         ...defaults,

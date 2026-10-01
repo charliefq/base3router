@@ -54,6 +54,9 @@ function model(overrides: Partial<OperationalInspectorModel> = {}): OperationalI
       executedModel: "gpt-5.4",
       rerouted: false,
       attempts: [],
+      eligibleCount: 1,
+      filteredCount: 0,
+      filteredReasonCodes: [],
     },
     runnerKind: "local",
     workflowName: null,
@@ -80,7 +83,7 @@ it("renders a provisional local route", async () => {
   expect(renderedText()).toContain("local");
   expect(renderedText()).toContain("Auto Route");
   expect(renderedText()).toContain("model-router.v0");
-  expect(renderedText()).toContain("Cost:");
+  expect(renderedText()).toContain("Metrics:");
   expect(renderedText()).toContain("unknown");
   expect(renderedText()).not.toContain("sk-");
 });
@@ -114,6 +117,9 @@ it("renders a bound Cursor Cloud workflow and approval state", async () => {
             executedModel: "claude-sonnet-4-6",
             rerouted: false,
             attempts: [],
+            eligibleCount: 1,
+            filteredCount: 0,
+            filteredReasonCodes: [],
           },
           runnerKind: "cursor-cloud",
           workflowName: "Review",
@@ -292,7 +298,7 @@ it("renders capability-off, unavailable, empty, and collapsed layouts", async ()
       />,
     );
   });
-  expect(renderedText()).toContain("Select a project or task");
+  expect(renderedText()).toContain("No project or task is selected");
 
   await act(async () => {
     renderer?.update(<OperationalInspector collapsed model={model()} onToggle={() => {}} />);
@@ -345,6 +351,9 @@ it("renders sanitized Auto Route attempt history after failover", async () => {
                 detail: "[redacted]",
               },
             ],
+            eligibleCount: 1,
+            filteredCount: 1,
+            filteredReasonCodes: ["PROVIDER_USAGE_LIMIT"],
           },
         })}
         onToggle={() => {}}

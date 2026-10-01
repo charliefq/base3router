@@ -51,6 +51,7 @@ export type ControlCenterModel = {
   readonly failedOrCancelled: ReadonlyArray<ControlCenterTaskItem>;
   readonly empty: boolean;
   readonly capabilityOff: boolean;
+  readonly environmentLabel: string | null;
 };
 
 export type ControlCenterInput = {
@@ -60,6 +61,7 @@ export type ControlCenterInput = {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly catalogs?: ReadonlyArray<WorkflowCatalog>;
+  readonly environmentLabel?: string | null;
 };
 
 export type ControlCenterInspectorTarget = {
@@ -164,6 +166,7 @@ export function presentControlCenter(input: ControlCenterInput): ControlCenterMo
     ),
     empty: ready && projects.length === 0 && tasks.length === 0,
     capabilityOff,
+    environmentLabel: sanitizeDisplayText(input.environmentLabel ?? null),
   };
 }
 

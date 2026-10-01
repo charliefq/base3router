@@ -7,7 +7,12 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "~/components/ui/sidebar";
-import { LAB_SIDEBAR_THREADS, type LabScenarioState, type UiLabScenarioId } from "./scenarios";
+import {
+  LAB_LONG_SIDEBAR_THREADS,
+  LAB_SIDEBAR_THREADS,
+  type LabScenarioState,
+  type UiLabScenarioId,
+} from "./scenarios";
 
 export function LabSidebar(props: {
   readonly scenario: LabScenarioState;
@@ -47,13 +52,15 @@ export function LabSidebar(props: {
       >
         <SidebarGroup>
           <SidebarMenu>
-            {LAB_SIDEBAR_THREADS.map((thread, index) => (
-              <SidebarMenuItem key={thread.id}>
-                <SidebarMenuButton isActive={index === 0}>
-                  <span className="truncate">{thread.text}</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ))}
+            {(props.scenario.longNames ? LAB_LONG_SIDEBAR_THREADS : LAB_SIDEBAR_THREADS).map(
+              (thread, index) => (
+                <SidebarMenuItem key={thread.id}>
+                  <SidebarMenuButton isActive={index === 0}>
+                    <span className="truncate">{thread.text}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ),
+            )}
           </SidebarMenu>
         </SidebarGroup>
       </SidebarContent>
