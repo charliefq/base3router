@@ -175,9 +175,17 @@ function InspectorBody(props: {
           </p>
         ) : null}
         {model.route.attempts.length > 0 ? (
-          <ol className="mt-1 list-decimal pl-4 text-2xs text-muted-foreground">
+          <ol
+            className="mt-1 list-decimal pl-4 text-2xs text-muted-foreground"
+            data-model-router-attempts=""
+          >
             {model.route.attempts.map((attempt) => (
-              <li key={`${attempt.attempt}-${attempt.target.instanceId}-${attempt.target.model}`}>
+              <li
+                data-model-router-attempt={String(attempt.attempt)}
+                data-model-router-attempt-model={attempt.target.model}
+                data-model-router-attempt-outcome={attempt.outcome}
+                key={`${attempt.attempt}-${attempt.target.instanceId}-${attempt.target.model}`}
+              >
                 Attempt {attempt.attempt}: {attempt.target.instanceId} · {attempt.target.model} ·{" "}
                 {attempt.outcome}
                 {attempt.failureCategory ? ` · ${attempt.failureCategory}` : ""}

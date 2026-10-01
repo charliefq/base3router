@@ -63,6 +63,7 @@ const sourcemapEnv = process.env.T3CODE_WEB_SOURCEMAP?.trim().toLowerCase();
 // round trip per import level in unbundled dev); T3CODE_BUNDLED_DEV=0 opts out.
 const bundledDevEnv = process.env.T3CODE_BUNDLED_DEV?.trim().toLowerCase();
 const bundledDev = bundledDevEnv === "1" || bundledDevEnv === "true";
+const uiLabEnabled = process.env.T3CODE_UI_LAB === "1";
 
 const buildSourcemap: boolean | "hidden" =
   sourcemapEnv === "0" || sourcemapEnv === "false"
@@ -127,6 +128,36 @@ const devProxyTarget = resolveDevProxyTarget(process.env.T3CODE_PORT, configured
 // both machines sit idle. Compressing turns it into a few seconds of CPU.
 // Brotli quality 5 keeps encode time in the hundreds of ms; the default
 // (quality 11) would trade the transfer stall for an equally long encode stall.
+function uiLabGuardPlugin(): Plugin {
+  const isLabPath = (url: string | undefined) => {
+    if (!url) return false;
+    const path = url.split("?")[0] ?? "";
+    return path === "/lab.html" || path === "/ui-lab" || path.startsWith("/src/lab/");
+  };
+  return {
+    name: "t3code:ui-lab-guard",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (!isLabPath(req.url)) {
+          next();
+          return;
+        }
+        if (!uiLabEnabled) {
+          res.statusCode = 404;
+          res.setHeader("content-type", "text/plain; charset=utf-8");
+          res.end("Base3Router UI Lab is disabled.");
+          return;
+        }
+        const [path, query] = (req.url ?? "").split("?");
+        if (path === "/ui-lab") {
+          req.url = query ? `/lab.html?${query}` : "/lab.html";
+        }
+        next();
+      });
+    },
+  };
+}
+
 function devCompressionPlugin(): Plugin {
   return {
     name: "t3code:dev-compression",
@@ -157,6 +188,7 @@ export default defineConfig(() => {
   return {
     assetsInclude: ["**/*.wasm"],
     plugins: [
+      uiLabGuardPlugin(),
       devCompressionPlugin(),
       thirdPartyLicensesPlugin({
         bundleName: "web",
@@ -234,7 +266,7 @@ export default defineConfig(() => {
       // modules one import-level at a time while the browser waits — which
       // over a tailnet origin turns into minutes of waterfall.
       warmup: {
-        clientFiles: ["./src/main.tsx"],
+        clientFiles: uiLabEnabled ? ["./src/main.tsx", "./src/lab/main.tsx"] : ["./src/main.tsx"],
       },
       ...(devProxyTarget
         ? {

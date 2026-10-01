@@ -8,6 +8,8 @@
     "dev:share": "node scripts/dev-runner.ts dev --share",
     "dev:server": "node scripts/dev-runner.ts dev:server",
     "dev:web": "node scripts/dev-runner.ts dev:web",
+    "ui-lab": "node scripts/base3router-ui-lab.ts --serve",
+    "ui-lab:accept": "node scripts/base3router-ui-lab.ts",
     "dev:marketing": "vp run --filter @t3tools/marketing dev",
     "dev:desktop": "node scripts/dev-runner.ts dev:desktop",
     "migrate-dev-db": "node apps/server/scripts/migrate-dev-db.ts",
