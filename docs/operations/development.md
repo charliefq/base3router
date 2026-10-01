@@ -111,7 +111,7 @@ That command starts the lab Vite server, waits until `/lab.html` is ready, runs 
 acceptance suite, shuts the server down, and writes:
 
 - HTML report: `apps/web/playwright-report/index.html`
-- Screenshots: `apps/web/playwright-report/screenshots/`
+- Screenshots: `apps/web/playwright-results/screenshots/`
 
 `vp run ui-lab` keeps the lab at `http://127.0.0.1:45733/lab.html` for interactive work. Open a
 scenario with `?scenario=failover-success` (see `apps/web/src/lab/scenarios.ts`).

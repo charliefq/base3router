@@ -6,22 +6,23 @@ import * as NodeFs from "node:fs";
 import * as NodeHttp from "node:http";
 import * as NodeNet from "node:net";
 import * as NodePath from "node:path";
-import * as NodeProcess from "node:process";
+import process from "node:process";
 import * as NodeURL from "node:url";
 
 const REPO_ROOT = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 const WEB_ROOT = NodePath.join(REPO_ROOT, "apps/web");
 const REPORT_DIR = NodePath.join(WEB_ROOT, "playwright-report");
-const SCREENSHOT_DIR = NodePath.join(REPORT_DIR, "screenshots");
+const SCREENSHOT_DIR = NodePath.join(WEB_ROOT, "playwright-results", "screenshots");
 const RESULTS_DIR = NodePath.join(WEB_ROOT, "playwright-results");
 const DEFAULT_PORT = 45733;
 
-const serveOnly = NodeProcess.argv.includes("--serve");
+const serveOnly = process.argv.includes("--serve");
 
 function labEnv(port: number): NodeJS.ProcessEnv {
-  const env = { ...NodeProcess.env };
+  const env = { ...process.env };
   env.T3CODE_UI_LAB = "1";
   env.T3CODE_SINGLE_ORIGIN_DEV = "1";
+  env.HOST = "127.0.0.1";
   env.PORT = String(port);
   env.T3CODE_UI_LAB_PORT = String(port);
   delete env.VITE_HTTP_URL;
@@ -76,26 +77,36 @@ function waitForLab(origin: string, timeoutMs: number): Promise<void> {
   });
 }
 
+function signalProcess(pid: number, signal: NodeJS.Signals): boolean {
+  try {
+    process.kill(pid, signal);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function stopChild(child: NodeChildProcess.ChildProcess): Promise<void> {
   const pid = child.pid;
   if (pid === undefined) return Promise.resolve();
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      try {
-        NodeProcess.kill(pid, "SIGKILL");
-      } catch {
-        // Already exited.
-      }
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(killTimer);
+      resolve();
+    };
+    const killTimer = setTimeout(() => {
+      signalProcess(-pid, "SIGKILL");
+      signalProcess(pid, "SIGKILL");
+      setTimeout(finish, 250);
     }, 5_000);
-    child.once("exit", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    try {
-      NodeProcess.kill(pid, "SIGTERM");
-    } catch {
-      clearTimeout(timer);
-      resolve();
+    child.once("exit", finish);
+    // `vp dev` is spawned as a process-group leader so Vite grandchildren
+    // receive the same signal. Fall back to the recorded PID if the group is gone.
+    if (!signalProcess(-pid, "SIGTERM")) {
+      signalProcess(pid, "SIGTERM");
     }
   });
 }
@@ -105,7 +116,7 @@ function runPlaywright(origin: string, port: number): number {
   env.T3CODE_UI_LAB_URL = origin;
   const install = NodeChildProcess.spawnSync(
     "vp",
-    ["exec", "playwright", "install", "chromium", ...(NodeProcess.env.CI ? ["--with-deps"] : [])],
+    ["exec", "playwright", "install", "chromium", ...(process.env.CI ? ["--with-deps"] : [])],
     { cwd: WEB_ROOT, env, stdio: "inherit" },
   );
   if (install.status !== 0) return install.status ?? 1;
@@ -117,9 +128,36 @@ function runPlaywright(origin: string, port: number): number {
   return test.status ?? 1;
 }
 
+function waitForPortFree(port: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const attempt = () => {
+      const server = NodeNet.createServer();
+      server.once("error", (error: NodeJS.ErrnoException) => {
+        if (error.code !== "EADDRINUSE") {
+          reject(error);
+          return;
+        }
+        if (Date.now() >= deadline) {
+          reject(new Error(`Port ${port} stayed occupied after UI Lab shutdown.`));
+          return;
+        }
+        setTimeout(attempt, 100);
+      });
+      server.listen(port, "127.0.0.1", () => {
+        server.close((closeError) => {
+          if (closeError) reject(closeError);
+          else resolve();
+        });
+      });
+    };
+    attempt();
+  });
+}
+
 async function main(): Promise<number> {
   NodeFs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
-  const preferred = Number(NodeProcess.env.T3CODE_UI_LAB_PORT ?? DEFAULT_PORT);
+  const preferred = Number(process.env.T3CODE_UI_LAB_PORT ?? DEFAULT_PORT);
   const port = await listenAvailablePort(Number.isInteger(preferred) ? preferred : DEFAULT_PORT);
   const origin = `http://127.0.0.1:${port}`;
   const env = labEnv(port);
@@ -127,27 +165,32 @@ async function main(): Promise<number> {
     cwd: WEB_ROOT,
     env,
     stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
   });
   const capturedPid = child.pid;
   if (capturedPid === undefined) {
     throw new Error("Failed to start the UI Lab Vite process.");
   }
   child.stdout?.on("data", (chunk: Buffer) => {
-    NodeProcess.stdout.write(chunk);
+    process.stdout.write(chunk);
   });
   child.stderr?.on("data", (chunk: Buffer) => {
-    NodeProcess.stderr.write(chunk);
+    process.stderr.write(chunk);
   });
 
+  let shuttingDown = false;
   const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     await stopChild(child);
+    await waitForPortFree(port, 8_000);
   };
 
-  NodeProcess.once("SIGINT", () => {
-    void shutdown().then(() => NodeProcess.exit(130));
+  process.once("SIGINT", () => {
+    void shutdown().then(() => process.exit(130));
   });
-  NodeProcess.once("SIGTERM", () => {
-    void shutdown().then(() => NodeProcess.exit(143));
+  process.once("SIGTERM", () => {
+    void shutdown().then(() => process.exit(143));
   });
 
   try {
@@ -171,9 +214,9 @@ async function main(): Promise<number> {
 
 main()
   .then((status) => {
-    NodeProcess.exit(status);
+    process.exit(status);
   })
   .catch((error: unknown) => {
     console.error(error);
-    NodeProcess.exit(1);
+    process.exit(1);
   });
