@@ -58,6 +58,7 @@ import { RuntimeReceiptBusTest } from "../src/orchestration/Layers/RuntimeReceip
 import { OrchestrationReactorLive } from "../src/orchestration/Layers/OrchestrationReactor.ts";
 import { ProviderCommandReactorLive } from "../src/orchestration/Layers/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionLive } from "../src/orchestration/Layers/ProviderRuntimeIngestion.ts";
+import { ModelRouterAvailabilityLive } from "../src/orchestration/Services/ModelRouterAvailability.ts";
 import { CheckpointReactor } from "../src/orchestration/Services/CheckpointReactor.ts";
 import { ProviderRuntimeIngestionService } from "../src/orchestration/Services/ProviderRuntimeIngestion.ts";
 import {
@@ -421,8 +422,9 @@ export const makeOrchestrationIntegrationHarness = (
           start: () => Effect.void,
         }),
       ),
-    );
+    ).pipe(Layer.provide(ModelRouterAvailabilityLive));
     const layer = Layer.empty.pipe(
+      Layer.provideMerge(ModelRouterAvailabilityLive),
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(orchestrationReactorLayer),
       Layer.provideMerge(providerRegistryLayer),

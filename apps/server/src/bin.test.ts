@@ -38,6 +38,7 @@ import {
 import * as ServerConfig from "./config.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ModelRouterAvailabilityLive } from "./orchestration/Services/ModelRouterAvailability.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
@@ -55,7 +56,11 @@ import { environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 
 import packageJson from "../package.json" with { type: "json" };
 
-const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
+const CliRuntimeLayer = Layer.mergeAll(
+  NodeServices.layer,
+  NetService.layer,
+  ModelRouterAvailabilityLive,
+);
 const DisconnectedLauncherChildLayer = Layer.mergeAll(
   Layer.succeed(HostProcessEnvironment, {
     ...process.env,

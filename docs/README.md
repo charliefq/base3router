@@ -34,6 +34,7 @@ source alone does not explain. Most code changes do not need an internal documen
 
 - [Architecture overview](./internals/overview.md)
 - [Base3Router Internal Alpha](./architecture/base3router-alpha.md)
+- [Base3Router Phase 8 Auto Model Router](./architecture/base3router-phase-8.md)
 - [Glossary](./internals/glossary.md)
 - [Connection runtime](./internals/connection-runtime.md)
 - [Providers](./internals/providers.md)

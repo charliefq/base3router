@@ -32,6 +32,10 @@ import * as Predicate from "effect/Predicate";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { formatTokens } from "@t3tools/shared/usageFormat";
+import {
+  classifyModelRouterFailure,
+  formatModelRouterTerminalFailure,
+} from "@t3tools/shared/modelRouterFailover";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -54,6 +58,7 @@ import {
 import { projectActivityPayload } from "../ActivityPayloadProjection.ts";
 import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { ModelRouterAvailability } from "../Services/ModelRouterAvailability.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
 
@@ -1028,6 +1033,7 @@ const make = Effect.gen(function* () {
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const serverSettingsService = yield* ServerSettingsService;
+  const modelRouterAvailability = yield* ModelRouterAvailability;
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
     crypto.randomUUIDv4.pipe(
@@ -1769,6 +1775,15 @@ const make = Effect.gen(function* () {
       const thread = yield* resolveThreadRuntimeContext(event.threadId);
       if (!thread) return;
 
+      if (
+        (event.type === "content.delta" &&
+          event.payload.streamKind === "assistant_text" &&
+          event.payload.delta.length > 0) ||
+        (event.type === "item.started" && isToolLifecycleItemType(event.payload.itemType))
+      ) {
+        yield* modelRouterAvailability.markSideEffects(thread.id);
+      }
+
       const now = event.createdAt;
       const eventTurnId = toTurnId(event.turnId);
       const activeTurnId = thread.session?.activeTurnId ?? null;
@@ -1848,6 +1863,55 @@ const make = Effect.gen(function* () {
         event.type === "turn.started" ||
         isTerminalTurn
       ) {
+        let autoRouteFailingOver = false;
+        if (
+          event.type === "turn.completed" &&
+          normalizeRuntimeTurnState(event.payload.state) === "failed"
+        ) {
+          const pending = yield* modelRouterAvailability.getPending(thread.id);
+          const sideEffectsStarted =
+            pending?.sideEffectsStarted === true || event.payload.sideEffectsStarted === true;
+          const classification = classifyModelRouterFailure({
+            ...(event.payload.failureCategory !== undefined
+              ? { category: event.payload.failureCategory }
+              : {}),
+            ...(event.payload.failureScope !== undefined
+              ? { scope: event.payload.failureScope }
+              : {}),
+            sideEffectsStarted,
+            detail: event.payload.errorMessage ?? "Turn failed",
+          });
+          if (pending !== undefined && pending.routingMode === "auto") {
+            autoRouteFailingOver = yield* pending.onRuntimeFailure({
+              classification,
+              detail: event.payload.errorMessage ?? "Turn failed",
+            });
+          } else if (pending !== undefined && pending.routingMode === "manual") {
+            // Keep provider errors for sandbox/tool failures and turns that
+            // already produced output. Routing copy is only for Manual
+            // selection failures Auto Route would otherwise retry.
+            if (
+              classification.category !== "non_retryable_request" &&
+              classification.category !== "side_effect_started"
+            ) {
+              event = {
+                ...event,
+                payload: {
+                  ...event.payload,
+                  errorMessage: formatModelRouterTerminalFailure({
+                    instanceId: String(pending.currentTarget.instanceId),
+                    model: pending.currentTarget.model,
+                    classification,
+                    mode: "manual",
+                    terminalReason: "MANUAL_NO_FAILOVER",
+                    detail: event.payload.errorMessage ?? "Turn failed",
+                  }),
+                },
+              };
+            }
+            yield* modelRouterAvailability.clearPending(thread.id);
+          }
+        }
         const status = (() => {
           switch (event.type) {
             case "session.state.changed": {
@@ -1861,6 +1925,12 @@ const make = Effect.gen(function* () {
             case "turn.aborted":
               return "interrupted";
             case "turn.completed":
+              if (
+                autoRouteFailingOver &&
+                normalizeRuntimeTurnState(event.payload.state) === "failed"
+              ) {
+                return "starting";
+              }
               return normalizeRuntimeTurnState(event.payload.state) === "failed"
                 ? "error"
                 : "ready";
@@ -1869,6 +1939,8 @@ const make = Effect.gen(function* () {
               // Provider thread/session start notifications can arrive during an
               // active or pending turn; preserve that lifecycle state.
               return activeTurnId !== null ? "running" : hasPendingTurnStart ? "starting" : "ready";
+            default:
+              return thread.session?.status ?? "ready";
           }
         })();
         const nextActiveTurnId =
@@ -1882,8 +1954,9 @@ const make = Effect.gen(function* () {
                   )
                 ? null
                 : activeTurnId;
-        const lastError =
-          event.type === "session.state.changed" && event.payload.state === "error"
+        const lastError = autoRouteFailingOver
+          ? null
+          : event.type === "session.state.changed" && event.payload.state === "error"
             ? (event.payload.reason ?? thread.session?.lastError ?? "Provider session error")
             : event.type === "turn.completed" &&
                 normalizeRuntimeTurnState(event.payload.state) === "failed"

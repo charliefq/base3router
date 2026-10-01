@@ -122,14 +122,81 @@ function InspectorBody(props: {
         }
       >
         <p className="mt-1 text-2xs text-muted-foreground">{model.route.reason}</p>
+        {model.route.mode ? (
+          <p className="text-2xs text-muted-foreground">
+            Mode: {model.route.mode === "auto" ? "Auto Route" : "Manual"}
+          </p>
+        ) : null}
+        {model.route.policyVersion ? (
+          <p className="text-2xs text-muted-foreground">Policy: {model.route.policyVersion}</p>
+        ) : null}
         {model.route.source ? (
           <p className="text-2xs text-muted-foreground">Source: {model.route.source}</p>
+        ) : null}
+        {model.route.reasonCodes.length > 0 ? (
+          <p className="text-2xs text-muted-foreground">
+            Reasons: {model.route.reasonCodes.join(", ")}
+          </p>
         ) : null}
         {model.route.fallbacks.length > 0 ? (
           <p className="text-2xs text-muted-foreground">
             Fallbacks:{" "}
             {model.route.fallbacks.map((entry) => `${entry.provider} · ${entry.model}`).join(", ")}
           </p>
+        ) : null}
+        <p className="text-2xs text-muted-foreground">
+          Cost:{" "}
+          {model.route.estimatedCostUsd?.status === "known"
+            ? model.route.estimatedCostUsd.value
+            : "unknown"}
+          {" · "}
+          Latency:{" "}
+          {model.route.estimatedLatencyMs?.status === "known"
+            ? model.route.estimatedLatencyMs.value
+            : "unknown"}
+          {" · "}
+          Quality:{" "}
+          {model.route.estimatedQuality?.status === "known"
+            ? model.route.estimatedQuality.value
+            : "unknown"}
+        </p>
+        {model.route.executionStatus ? (
+          <p className="text-2xs text-muted-foreground">Execution: {model.route.executionStatus}</p>
+        ) : null}
+        {model.route.attemptBudget !== null ? (
+          <p className="text-2xs text-muted-foreground">
+            Attempt budget: {model.route.attemptBudget}
+          </p>
+        ) : null}
+        {model.route.rerouted && model.route.initialModel && model.route.executedModel ? (
+          <p className="text-2xs text-muted-foreground">
+            Rerouted from {model.route.initialProvider} · {model.route.initialModel} to{" "}
+            {model.route.executedProvider} · {model.route.executedModel}
+          </p>
+        ) : null}
+        {model.route.attempts.length > 0 ? (
+          <ol
+            className="mt-1 list-decimal pl-4 text-2xs text-muted-foreground"
+            data-model-router-attempts=""
+          >
+            {model.route.attempts.map((attempt) => (
+              <li
+                data-model-router-attempt={String(attempt.attempt)}
+                data-model-router-attempt-model={attempt.target.model}
+                data-model-router-attempt-outcome={attempt.outcome}
+                key={`${attempt.attempt}-${attempt.target.instanceId}-${attempt.target.model}`}
+              >
+                Attempt {attempt.attempt}: {attempt.target.instanceId} · {attempt.target.model} ·{" "}
+                {attempt.outcome}
+                {attempt.failureCategory ? ` · ${attempt.failureCategory}` : ""}
+                {attempt.failureScope ? ` · ${attempt.failureScope}` : ""}
+                {attempt.fallbackAllowed ? " · fallback allowed" : " · fallback blocked"}
+                {attempt.nextTarget
+                  ? ` · next ${attempt.nextTarget.instanceId} · ${attempt.nextTarget.model}`
+                  : ""}
+              </li>
+            ))}
+          </ol>
         ) : null}
       </OperationalStatusCard>
       <OperationalStatusCard

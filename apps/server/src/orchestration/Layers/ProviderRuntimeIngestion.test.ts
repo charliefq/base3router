@@ -62,6 +62,10 @@ import {
   ProviderRuntimeIngestionLive,
   splitBufferedAssistantText,
 } from "./ProviderRuntimeIngestion.ts";
+import {
+  ModelRouterAvailability,
+  ModelRouterAvailabilityLive,
+} from "../Services/ModelRouterAvailability.ts";
 import { DEFAULT_THREAD_TITLE } from "../threadTitles.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
@@ -321,6 +325,7 @@ describe("ProviderRuntimeIngestion", () => {
       sleep: (duration) => realClock.sleep(duration),
     };
     const layer = ProviderRuntimeIngestionLive.pipe(
+      Layer.provideMerge(ModelRouterAvailabilityLive),
       Layer.provide(Layer.succeed(Clock.Clock, shiftedClock)),
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(ingestionProjectionSnapshotLayer),
@@ -350,6 +355,7 @@ describe("ProviderRuntimeIngestion", () => {
     const engine = await testRuntime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await testRuntime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const ingestion = await testRuntime.runPromise(Effect.service(ProviderRuntimeIngestionService));
+    const availability = await testRuntime.runPromise(Effect.service(ModelRouterAvailability));
     scope = await Effect.runPromise(Scope.make("sequential"));
     await testRuntime.runPromise(ingestion.start().pipe(Scope.provide(scope)));
     const drain = () => testRuntime.runPromise(ingestion.drain);
@@ -434,6 +440,9 @@ describe("ProviderRuntimeIngestion", () => {
         clockOffsetMs += ms;
       },
       emitAndDrain,
+      availability,
+      registerPending: (pending: Parameters<(typeof availability)["registerPending"]>[0]) =>
+        testRuntime.runPromise(availability.registerPending(pending)),
       sqlCount: sqlCounter.count,
       setProviderSession: provider.setSession,
       drain,
@@ -480,6 +489,257 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("turn failed");
+  });
+
+  it("keeps the session starting when Auto Route failsover after a usage-limit completion", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-auto-route-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-auto-route"),
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.session?.status === "running" && thread.session?.activeTurnId === "turn-auto-route",
+    );
+
+    let failoverClassification: string | undefined;
+    await Effect.runPromise(
+      harness.availability.registerPending({
+        threadId: asThreadId("thread-1"),
+        messageId: "message-auto-route",
+        messageText: "Reply with exactly: ROUTER_SMOKE_OK.",
+        attemptCount: 1,
+        attemptedInstanceIds: new Set(["codex"]),
+        attemptedTargetKeys: new Set(["codex\u0000gpt-5.5"]),
+        currentTarget: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.5" },
+        routingMode: "auto",
+        sideEffectsStarted: false,
+        retry: null,
+        onRuntimeFailure: ({ classification }) => {
+          failoverClassification = classification.category;
+          return Effect.succeed(classification.fallbackAllowed);
+        },
+      }),
+    );
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-auto-route-usage-limit"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-auto-route"),
+      payload: {
+        state: "failed",
+        errorMessage: "Codex usage limit reached. Send the message again once the limit resets.",
+        failureCategory: "usage_quota_exhausted",
+        failureScope: "provider_instance",
+        sideEffectsStarted: false,
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.status === "starting" && entry.session?.lastError === null,
+    );
+    expect(thread.session?.status).toBe("starting");
+    expect(failoverClassification).toBe("usage_quota_exhausted");
+  });
+
+  it("rewrites Manual usage-limit failures without switching providers", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-manual-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-manual"),
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.session?.status === "running" && thread.session?.activeTurnId === "turn-manual",
+    );
+
+    await Effect.runPromise(
+      harness.availability.registerPending({
+        threadId: asThreadId("thread-1"),
+        messageId: "message-manual",
+        messageText: "Keep manual",
+        attemptCount: 1,
+        attemptedInstanceIds: new Set(["codex"]),
+        attemptedTargetKeys: new Set(["codex\u0000gpt-5.5"]),
+        currentTarget: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.5" },
+        routingMode: "manual",
+        sideEffectsStarted: false,
+        retry: null,
+        onRuntimeFailure: () => Effect.succeed(true),
+      }),
+    );
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-manual-usage-limit"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-manual"),
+      payload: {
+        state: "failed",
+        errorMessage: "Codex usage limit reached. Send the message again once the limit resets.",
+        failureCategory: "usage_quota_exhausted",
+        failureScope: "provider_instance",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.status === "error" &&
+        typeof entry.session?.lastError === "string" &&
+        entry.session.lastError.includes("Manual selection was kept"),
+    );
+    expect(thread.session?.lastError).toContain("Manual selection was kept");
+  });
+
+  it("keeps Manual sandbox failures after assistant output as the provider error", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-sandbox-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-sandbox"),
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.session?.status === "running" && thread.session?.activeTurnId === "turn-sandbox",
+    );
+
+    await harness.registerPending({
+      threadId: asThreadId("thread-1"),
+      messageId: "message-sandbox",
+      messageText: "Run risky command",
+      attemptCount: 1,
+      attemptedInstanceIds: new Set(["codex"]),
+      attemptedTargetKeys: new Set(["codex\u0000gpt-5.5"]),
+      currentTarget: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.5" },
+      routingMode: "manual",
+      sideEffectsStarted: false,
+      retry: null,
+      onRuntimeFailure: () => Effect.succeed(true),
+    });
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-sandbox-text"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-sandbox"),
+      payload: { streamKind: "assistant_text", delta: "Partial output before failure.\n" },
+    });
+    await harness.drain();
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-sandbox-failed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-sandbox"),
+      payload: {
+        state: "failed",
+        errorMessage: "Sandbox command failed.",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.status === "error" && entry.session?.lastError === "Sandbox command failed.",
+    );
+    expect(thread.session?.lastError).toBe("Sandbox command failed.");
+  });
+
+  it("does not failover Auto Route after assistant output has started", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-side-effect-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-side-effect"),
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.session?.status === "running" && thread.session?.activeTurnId === "turn-side-effect",
+    );
+
+    let fallbackAllowed: boolean | undefined;
+    await Effect.runPromise(
+      harness.availability.registerPending({
+        threadId: asThreadId("thread-1"),
+        messageId: "message-side-effect",
+        messageText: "Do not replay",
+        attemptCount: 1,
+        attemptedInstanceIds: new Set(["codex"]),
+        attemptedTargetKeys: new Set(["codex\u0000gpt-5.5"]),
+        currentTarget: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.5" },
+        routingMode: "auto",
+        sideEffectsStarted: false,
+        retry: null,
+        onRuntimeFailure: ({ classification }) => {
+          fallbackAllowed = classification.fallbackAllowed;
+          return Effect.succeed(classification.fallbackAllowed);
+        },
+      }),
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-side-effect-text"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-side-effect"),
+      payload: { streamKind: "assistant_text", delta: "ROUTER_SMOKE_OK" },
+    });
+    await harness.drain();
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-side-effect-failed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-side-effect"),
+      payload: {
+        state: "failed",
+        errorMessage: "Codex usage limit reached. Send the message again once the limit resets.",
+        failureCategory: "usage_quota_exhausted",
+        failureScope: "provider_instance",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.status === "error",
+    );
+    expect(thread.session?.status).toBe("error");
+    expect(fallbackAllowed).toBe(false);
   });
 
   it.each([

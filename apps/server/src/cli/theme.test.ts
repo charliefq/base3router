@@ -13,6 +13,7 @@ import * as TestConsole from "effect/testing/TestConsole";
 import { Command } from "effect/unstable/cli";
 
 import { cli } from "../bin.ts";
+import { ModelRouterAvailabilityLive } from "../orchestration/Services/ModelRouterAvailability.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
@@ -22,7 +23,14 @@ const windowsHost = HostProcessPlatform.defaultValue() === "win32";
 
 const runCli = (args: ReadonlyArray<string>) =>
   Command.runWith(cli, { version: "0.0.0" })(args).pipe(
-    Effect.provide(Layer.mergeAll(NodeServices.layer, NetService.layer, TestConsole.layer)),
+    Effect.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        NetService.layer,
+        ModelRouterAvailabilityLive,
+        TestConsole.layer,
+      ),
+    ),
   );
 
 const makeBaseDir = () => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-theme-cli-"));

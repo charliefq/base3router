@@ -36,11 +36,16 @@ export function isThreadErrorBannerDismissedForSession(bannerKey: string | null)
 export const ThreadErrorBanner = memo(function ThreadErrorBanner({
   error,
   onDismiss,
+  onOpenProviderSetup,
 }: {
   error: string | null;
   onDismiss?: () => void;
+  onOpenProviderSetup?: () => void;
 }) {
   if (!error) return null;
+  const showProviderSettings =
+    onOpenProviderSetup !== undefined &&
+    (/no eligible alternate provider/i.test(error) || /open provider settings/i.test(error));
   return (
     <div className="pointer-events-auto mx-auto w-fit max-w-[min(48rem,calc(100%-2rem))] pt-3">
       <Alert variant="error" surface="glass" controlAlignment="first-line">
@@ -53,6 +58,13 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
             </TooltipPopup>
           </Tooltip>
         </AlertDescription>
+        {showProviderSettings ? (
+          <AlertAction>
+            <Button variant="ghost" size="compact" onClick={onOpenProviderSetup}>
+              Provider settings
+            </Button>
+          </AlertAction>
+        ) : null}
         {onDismiss && (
           <AlertAction>
             <Button variant="ghost" size="icon-xs" aria-label="Dismiss error" onClick={onDismiss}>

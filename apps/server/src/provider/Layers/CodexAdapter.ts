@@ -2391,6 +2391,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
             let usageLimitError: ProviderRuntimeEvent | undefined;
             let usageLimitMessage: string | undefined;
+            let usageLimitClassification:
+              | {
+                  readonly failureCategory: "usage_quota_exhausted";
+                  readonly failureScope: "provider_instance";
+                  readonly sideEffectsStarted: boolean;
+                }
+              | undefined;
             if (event.method === "turn/completed") {
               const completedPayload = readPayload(
                 EffectCodexSchema.V2TurnCompletedNotification,
@@ -2402,6 +2409,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   : undefined;
               if (turnError?.codexErrorInfo === "usageLimitExceeded") {
                 usageLimitMessage = codexUsageLimitMessage(rateLimits, event.createdAt);
+                const items = completedPayload?.turn.items;
+                const sideEffectsStarted = Array.isArray(items) && items.length > 0;
+                usageLimitClassification = {
+                  failureCategory: "usage_quota_exhausted",
+                  failureScope: "provider_instance",
+                  sideEffectsStarted,
+                };
                 usageLimitError = {
                   ...runtimeEventBase(event, event.threadId),
                   type: "runtime.error",
@@ -2409,6 +2423,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                     message: usageLimitMessage,
                     class: "provider_error",
                     ...(turnError.message ? { detail: turnError.message } : {}),
+                    ...usageLimitClassification,
                   },
                 };
               }
@@ -2421,6 +2436,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   payload: {
                     ...runtimeEvent.payload,
                     ...(usageLimitMessage ? { errorMessage: usageLimitMessage } : {}),
+                    ...(usageLimitClassification !== undefined ? usageLimitClassification : {}),
                     tokenUsage: completeCodexTurnTokenUsage(
                       turnTokenUsage,
                       String(runtimeEvent.turnId),

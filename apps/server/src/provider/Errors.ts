@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { ModelRouterFailureCategory, ModelRouterFailureScope } from "@t3tools/contracts";
 
 import type { CheckpointServiceError } from "../checkpointing/Errors.ts";
 
@@ -61,6 +62,9 @@ export class ProviderAdapterRequestError extends Schema.TaggedError<ProviderAdap
     method: Schema.String,
     detail: Schema.String,
     cause: Schema.optional(Schema.Defect()),
+    failureCategory: Schema.optional(ModelRouterFailureCategory),
+    failureScope: Schema.optional(ModelRouterFailureScope),
+    sideEffectsStarted: Schema.optional(Schema.Boolean),
   },
 ) {
   override get message(): string {

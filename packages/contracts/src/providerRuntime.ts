@@ -16,6 +16,7 @@ import {
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
 import { ProviderUsageLimitsUpdate } from "./providerUsageLimits.ts";
 import { ProviderApprovalOption } from "./orchestration.ts";
+import { ModelRouterFailureCategory, ModelRouterFailureScope } from "./modelRouter.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -353,6 +354,9 @@ const TurnCompletedPayload = Schema.Struct({
   totalCostUsd: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(TrimmedNonEmptyStringSchema),
   tokenUsage: Schema.optional(TurnTokenUsage),
+  failureCategory: Schema.optional(ModelRouterFailureCategory),
+  failureScope: Schema.optional(ModelRouterFailureScope),
+  sideEffectsStarted: Schema.optional(Schema.Boolean),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 
@@ -811,6 +815,9 @@ const RuntimeErrorPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
   class: Schema.optional(RuntimeErrorClass),
   detail: Schema.optional(Schema.Unknown),
+  failureCategory: Schema.optional(ModelRouterFailureCategory),
+  failureScope: Schema.optional(ModelRouterFailureScope),
+  sideEffectsStarted: Schema.optional(Schema.Boolean),
 });
 export type RuntimeErrorPayload = typeof RuntimeErrorPayload.Type;
 

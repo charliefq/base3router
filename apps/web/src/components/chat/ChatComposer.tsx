@@ -245,6 +245,12 @@ import {
 import { useEnvironmentQuery } from "~/state/query";
 import { useDebouncedValue } from "~/state/queries";
 import { ProviderModelPicker } from "./ProviderModelPicker";
+import { ModelRouterControl } from "./ModelRouterControl";
+import {
+  resolveComposerModelRoutingMode,
+  routeComposerModel,
+  routedModelSelection,
+} from "../../modelRouterPresentation";
 import { resolveModelPickerSelectedModel } from "./ModelPickerContent";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
@@ -1049,7 +1055,7 @@ function useRestingComposerControlsLayout(host: HTMLDivElement | null, useContro
       observer.observe(controls);
       controls
         .querySelectorAll<HTMLElement>(
-          "[data-resting-block], [data-composer-control-label], [data-chat-provider-model-picker-label]",
+          "[data-resting-block], [data-composer-control-label], [data-chat-provider-model-picker-label], [data-model-router-cluster]",
         )
         .forEach((element) => observer.observe(element));
       measure();
@@ -1300,6 +1306,7 @@ export interface ChatComposerHandle {
     selectedPromptEffort: string | null;
     selectedModelOptionsForDispatch: unknown;
     selectedModelSelection: ModelSelection;
+    routingMode: "auto" | "manual";
     multipleModelSelections: ReadonlyArray<ModelSelection> | null;
     providerAvailable: boolean;
     selectedProvider: ProviderDriverKind;
@@ -2050,6 +2057,44 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => createModelSelection(selectedInstanceId, selectedModel, selectedModelOptionsForDispatch),
     [selectedInstanceId, selectedModel, selectedModelOptionsForDispatch],
   );
+  const modelRoutingMode = resolveComposerModelRoutingMode(composerDraft ?? {});
+  const modelRouteDecision = useMemo(
+    () =>
+      routeComposerModel({
+        mode: modelRoutingMode,
+        providers: providerStatuses,
+        preferredProject: activeProjectDefaultModelSelection ?? null,
+        preferredEnvironment: settings.defaultModelSelection ?? null,
+        manualOverride: selectedModelSelection,
+      }),
+    [
+      activeProjectDefaultModelSelection,
+      modelRoutingMode,
+      providerStatuses,
+      selectedModelSelection,
+      settings.defaultModelSelection,
+    ],
+  );
+  const dispatchModelSelection =
+    modelRoutingMode === "auto"
+      ? routedModelSelection(modelRouteDecision, selectedModelSelection)
+      : selectedModelSelection;
+  const dispatchProviderEntry =
+    providerInstanceEntries.find(
+      (entry) => entry.instanceId === dispatchModelSelection.instanceId,
+    ) ?? null;
+  const dispatchProvider = dispatchProviderEntry?.driverKind ?? selectedProvider;
+  const dispatchProviderModels = dispatchProviderEntry?.models ?? selectedProviderModels;
+  const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
+  const handleModelRoutingModeChange = (mode: "auto" | "manual") => {
+    if (mode === "manual") {
+      setComposerDraftModelSelection(composerDraftTarget, dispatchModelSelection, {
+        explicit: true,
+      });
+      return;
+    }
+    setComposerDraftModelSelection(composerDraftTarget, selectedModelSelection);
+  };
   const selectedModelForPicker = selectedModel;
   // Instance-keyed option list so the picker can show each configured
   // instance (built-in + custom) as a first-class sidebar entry. The
@@ -5017,89 +5062,98 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           data-resting-controls-separator="true"
         />
       ) : null}
-      <ProviderModelPicker
-        isComposerOwned
-        disabled={providerCatalogPending || isSendBusy}
-        {...(routeKind === "draft" && supportsMultipleModels
-          ? {
-              ...(multipleModelSelections !== null
-                ? { selectedModels: multipleModelSelections }
-                : {}),
-              onToggleModel: (instanceId: ProviderInstanceId, model: string) => {
-                const current = multipleModelSelections ?? [selectedModelSelection];
-                const matchesModel = (selection: ModelSelection) => {
-                  if (selection.instanceId !== instanceId) return false;
-                  const entry = providerInstanceEntries.find(
-                    (entry) => entry.instanceId === selection.instanceId,
-                  );
-                  const resolvedModel = resolveModelPickerSelectedModel({
-                    driverKind: entry?.driverKind,
-                    model: selection.model,
-                    options: modelOptionsByInstance.get(selection.instanceId) ?? [],
-                  });
-                  return (resolvedModel?.slug ?? selection.model) === model;
-                };
-                const exists = current.some(matchesModel);
-                const next = exists
-                  ? current.filter((selection) => !matchesModel(selection))
-                  : [...current, createModelSelection(instanceId, model)];
-                if (next.length > 1) {
-                  setMultipleModelSelections(next);
-                } else {
-                  setMultipleModelSelections(null);
-                  const remaining = next[0] ?? selectedModelSelection;
-                  onProviderModelSelect(remaining.instanceId, remaining.model, {
-                    focusComposer: false,
-                  });
-                }
-              },
-            }
-          : {})}
-        activeInstanceId={
-          providerCatalogPending
-            ? (activeThreadModelSelection?.instanceId ?? selectedInstanceId)
-            : selectedInstanceId
-        }
-        model={
-          providerCatalogPending
-            ? (activeThreadModelSelection?.model ?? selectedModelForPickerWithCustomFallback)
-            : selectedModelForPickerWithCustomFallback
-        }
-        lockedProvider={lockedProvider}
-        lockedContinuationGroupKey={lockedContinuationGroupKey}
-        instanceEntries={providerInstanceEntries}
-        keybindings={keybindings}
-        modelOptionsByInstance={modelOptionsByInstance}
+      <ModelRouterControl
+        mode={modelRoutingMode}
+        decision={modelRouteDecision}
         size={composerControlsInStrip ? "xs" : "sm"}
-        triggerClassName={
-          composerControlsInStrip
-            ? "min-w-13 shrink text-xs! @max-[640px]/composer-surface:[&_[data-chat-provider-model-picker-label]]:w-0 @max-[640px]/composer-surface:[&_[data-chat-provider-model-picker-label]]:flex-none"
-            : "-ms-2.5 min-w-13"
-        }
-        terminalOpen={terminalOpen}
-        open={isComposerModelPickerOpen}
-        instanceIndicatorBackground={
-          composerControlsInStrip
-            ? "color-mix(in srgb, var(--chat-composer-glass-surface) var(--glass-opacity), transparent)"
-            : "var(--contrast-input)"
-        }
-        {...(composerProviderState.modelPickerIconClassName || composerControlsInStrip
-          ? {
-              activeProviderIconClassName: cn(
-                composerProviderState.modelPickerIconClassName,
-                composerControlsInStrip &&
-                  "fill-muted-foreground/70! text-muted-foreground/70! [&_path]:fill-muted-foreground/70! [&_rect]:fill-muted-foreground/70! [&_[data-opencode-hole]]:fill-transparent!",
-              ),
-            }
-          : {})}
-        onOpenChange={setIsComposerModelPickerOpen}
-        getModelDisabledReason={getModelDisabledReason}
-        onInstanceModelChange={(instanceId, model) => {
-          setMultipleModelSelections(null);
-          onProviderModelSelect(instanceId, model);
-        }}
-        onOpenProviderSetup={onOpenProviderSetup}
+        disabled={providerCatalogPending || isSendBusy}
+        onModeChange={handleModelRoutingModeChange}
       />
+      {modelRoutingMode === "manual" ? (
+        <ProviderModelPicker
+          isComposerOwned
+          disabled={providerCatalogPending || isSendBusy}
+          {...(routeKind === "draft" && supportsMultipleModels
+            ? {
+                ...(multipleModelSelections !== null
+                  ? { selectedModels: multipleModelSelections }
+                  : {}),
+                onToggleModel: (instanceId: ProviderInstanceId, model: string) => {
+                  const current = multipleModelSelections ?? [selectedModelSelection];
+                  const matchesModel = (selection: ModelSelection) => {
+                    if (selection.instanceId !== instanceId) return false;
+                    const entry = providerInstanceEntries.find(
+                      (entry) => entry.instanceId === selection.instanceId,
+                    );
+                    const resolvedModel = resolveModelPickerSelectedModel({
+                      driverKind: entry?.driverKind,
+                      model: selection.model,
+                      options: modelOptionsByInstance.get(selection.instanceId) ?? [],
+                    });
+                    return (resolvedModel?.slug ?? selection.model) === model;
+                  };
+                  const exists = current.some(matchesModel);
+                  const next = exists
+                    ? current.filter((selection) => !matchesModel(selection))
+                    : [...current, createModelSelection(instanceId, model)];
+                  if (next.length > 1) {
+                    setMultipleModelSelections(next);
+                  } else {
+                    setMultipleModelSelections(null);
+                    const remaining = next[0] ?? selectedModelSelection;
+                    onProviderModelSelect(remaining.instanceId, remaining.model, {
+                      focusComposer: false,
+                    });
+                  }
+                },
+              }
+            : {})}
+          activeInstanceId={
+            providerCatalogPending
+              ? (activeThreadModelSelection?.instanceId ?? selectedInstanceId)
+              : selectedInstanceId
+          }
+          model={
+            providerCatalogPending
+              ? (activeThreadModelSelection?.model ?? selectedModelForPickerWithCustomFallback)
+              : selectedModelForPickerWithCustomFallback
+          }
+          lockedProvider={lockedProvider}
+          lockedContinuationGroupKey={lockedContinuationGroupKey}
+          instanceEntries={providerInstanceEntries}
+          keybindings={keybindings}
+          modelOptionsByInstance={modelOptionsByInstance}
+          size={composerControlsInStrip ? "xs" : "sm"}
+          triggerClassName={
+            composerControlsInStrip
+              ? "min-w-13 shrink text-xs! @max-[640px]/composer-surface:[&_[data-chat-provider-model-picker-label]]:w-0 @max-[640px]/composer-surface:[&_[data-chat-provider-model-picker-label]]:flex-none"
+              : "-ms-2.5 min-w-13"
+          }
+          terminalOpen={terminalOpen}
+          open={isComposerModelPickerOpen}
+          instanceIndicatorBackground={
+            composerControlsInStrip
+              ? "color-mix(in srgb, var(--chat-composer-glass-surface) var(--glass-opacity), transparent)"
+              : "var(--contrast-input)"
+          }
+          {...(composerProviderState.modelPickerIconClassName || composerControlsInStrip
+            ? {
+                activeProviderIconClassName: cn(
+                  composerProviderState.modelPickerIconClassName,
+                  composerControlsInStrip &&
+                    "fill-muted-foreground/70! text-muted-foreground/70! [&_path]:fill-muted-foreground/70! [&_rect]:fill-muted-foreground/70! [&_[data-opencode-hole]]:fill-transparent!",
+                ),
+              }
+            : {})}
+          onOpenChange={setIsComposerModelPickerOpen}
+          getModelDisabledReason={getModelDisabledReason}
+          onInstanceModelChange={(instanceId, model) => {
+            setMultipleModelSelections(null);
+            onProviderModelSelect(instanceId, model);
+          }}
+          onOpenProviderSetup={onOpenProviderSetup}
+        />
+      ) : null}
 
       <>
         {restingBlockDefs.map((def, index) => {
@@ -5136,6 +5190,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           <CompactComposerControlsMenu
             interactionMode={interactionMode}
             runtimeMode={runtimeMode}
+            routingMode={modelRoutingMode}
             size={composerControlsInStrip ? "xs" : "sm"}
             hidden={composerControlsHidden || hiddenRestingBlockIds.length === 0}
             showInteractionModeToggle={planModeUiEnabled && hiddenRestingBlockIds.includes("mode")}
@@ -5144,6 +5199,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             }
             onToggleInteractionMode={toggleInteractionMode}
             onRuntimeModeChange={handleRuntimeModeChange}
+            onRoutingModeChange={handleModelRoutingModeChange}
           />
         </div>
       </>
@@ -6019,7 +6075,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         reviewComments: composerReviewComments,
         selectedPromptEffort,
         selectedModelOptionsForDispatch,
-        selectedModelSelection,
+        selectedModelSelection: dispatchModelSelection,
+        routingMode: modelRoutingMode,
         multipleModelSelections:
           routeKind === "draft" && multipleModelSelections !== null
             ? multipleModelSelections.map((selection) =>
@@ -6032,9 +6089,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         providerAvailable:
           multipleModelSelections !== null ||
           (!noProviderAvailable && providerSendBlockReason === null),
-        selectedProvider,
-        selectedModel,
-        selectedProviderModels,
+        selectedProvider: dispatchProvider,
+        selectedModel: dispatchModelSelection.model,
+        selectedProviderModels: dispatchProviderModels,
         interactionMode,
         interactionModeEnabled: planModeUiEnabled,
       }),

@@ -1,4 +1,8 @@
-import { ProviderDriverKind, type CursorCloudRunnerBinding } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type CursorCloudRunnerBinding,
+} from "@t3tools/contracts";
 import { act } from "react";
 import { create, type ReactTestRendererJSON, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -36,6 +40,20 @@ function model(overrides: Partial<OperationalInspectorModel> = {}): OperationalI
       fallbacks: [{ provider: "claude", model: "claude-sonnet-4-6" }],
       gateDecision: "ALLOW",
       gateReasons: ["ACTION_ALLOWED"],
+      policyVersion: "model-router.v0",
+      mode: "auto",
+      reasonCodes: ["SELECTED", "METRICS_UNKNOWN"],
+      estimatedCostUsd: { status: "unknown" },
+      estimatedLatencyMs: { status: "unknown" },
+      estimatedQuality: { status: "unknown" },
+      executionStatus: "not-started",
+      attemptBudget: 3,
+      initialProvider: "codex",
+      initialModel: "gpt-5.4",
+      executedProvider: "codex",
+      executedModel: "gpt-5.4",
+      rerouted: false,
+      attempts: [],
     },
     runnerKind: "local",
     workflowName: null,
@@ -60,6 +78,10 @@ it("renders a provisional local route", async () => {
   expect(renderedText()).toContain("ActionGate");
   expect(renderedText()).toContain("ALLOW");
   expect(renderedText()).toContain("local");
+  expect(renderedText()).toContain("Auto Route");
+  expect(renderedText()).toContain("model-router.v0");
+  expect(renderedText()).toContain("Cost:");
+  expect(renderedText()).toContain("unknown");
   expect(renderedText()).not.toContain("sk-");
 });
 
@@ -78,6 +100,20 @@ it("renders a bound Cursor Cloud workflow and approval state", async () => {
             fallbacks: [],
             gateDecision: "DENY",
             gateReasons: ["PROVIDER_UNAVAILABLE"],
+            policyVersion: "model-router.v0",
+            mode: "manual",
+            reasonCodes: ["MANUAL_OVERRIDE"],
+            estimatedCostUsd: { status: "unknown" },
+            estimatedLatencyMs: { status: "unknown" },
+            estimatedQuality: { status: "unknown" },
+            executionStatus: "failed",
+            attemptBudget: 3,
+            initialProvider: "claude",
+            initialModel: "claude-sonnet-4-6",
+            executedProvider: "claude",
+            executedModel: "claude-sonnet-4-6",
+            rerouted: false,
+            attempts: [],
           },
           runnerKind: "cursor-cloud",
           workflowName: "Review",
@@ -263,4 +299,62 @@ it("renders capability-off, unavailable, empty, and collapsed layouts", async ()
   });
   expect(renderedText()).toContain("inspector-collapsed");
   expect(renderedText()).not.toContain("Provisional route");
+});
+
+it("renders sanitized Auto Route attempt history after failover", async () => {
+  await act(async () => {
+    renderer = create(
+      <OperationalInspector
+        collapsed={false}
+        model={model({
+          route: {
+            kind: "bound",
+            provider: "claude",
+            model: "claude-sonnet-4-6",
+            source: "provider-default",
+            reason: "Auto Route selected claude after Codex usage limits.",
+            fallbacks: [{ provider: "claude", model: "claude-sonnet-4-6" }],
+            gateDecision: "ALLOW",
+            gateReasons: ["ACTION_ALLOWED"],
+            policyVersion: "model-router.v0",
+            mode: "auto",
+            reasonCodes: ["SELECTED", "FALLBACK_ATTEMPTED"],
+            estimatedCostUsd: { status: "unknown" },
+            estimatedLatencyMs: { status: "unknown" },
+            estimatedQuality: { status: "unknown" },
+            executionStatus: "running",
+            attemptBudget: 3,
+            initialProvider: "codex",
+            initialModel: "gpt-5.5",
+            executedProvider: "claude",
+            executedModel: "claude-sonnet-4-6",
+            rerouted: true,
+            attempts: [
+              {
+                attempt: 1,
+                target: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.5" },
+                driver: ProviderDriverKind.make("codex"),
+                outcome: "failed",
+                failureCategory: "usage_quota_exhausted",
+                failureScope: "provider_instance",
+                fallbackAllowed: true,
+                nextTarget: {
+                  instanceId: ProviderInstanceId.make("claude"),
+                  model: "claude-sonnet-4-6",
+                },
+                detail: "[redacted]",
+              },
+            ],
+          },
+        })}
+        onToggle={() => {}}
+      />,
+    );
+  });
+
+  expect(renderedText()).toContain("Rerouted from");
+  expect(renderedText()).toContain("Attempt ");
+  expect(renderedText()).toContain("usage_quota_exhausted");
+  expect(renderedText()).toContain("Attempt budget:");
+  expect(renderedText()).not.toContain("sk-");
 });

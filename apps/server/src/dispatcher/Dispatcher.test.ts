@@ -17,6 +17,7 @@ import {
   type ModelSelection,
   type ServerProvider,
 } from "@t3tools/contracts";
+import { modelRouterDecisionOmitsSecrets } from "@t3tools/shared/modelRouter";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -239,6 +240,114 @@ it.effect("binds the deterministic fallback before any provider work", () =>
       ),
     });
     expect(disabled).toEqual(command);
+  }).pipe(Effect.provide(SqlitePersistenceMemory)),
+);
+
+it.effect("Auto Route rewrites turn start to the selected eligible model", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO projection_projects
+      (project_id, title, workspace_root, default_model_selection_json, scripts_json, created_at, updated_at, deleted_at)
+      VALUES
+      ('project-a', 'Dispatcher', '/workspace/a', '{"instanceId":"project_provider","model":"project-model"}', '[]', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL)`;
+    yield* sql`INSERT INTO projection_threads
+      (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at, deleted_at)
+      VALUES ('thread-a', 'project-a', 'Thread', '{"instanceId":"thread_provider","model":"thread-model"}', 'full-access', 'default', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL)`;
+
+    const command = {
+      type: "thread.turn.start" as const,
+      commandId: CommandId.make("model-router-auto-turn"),
+      threadId: threadA,
+      message: {
+        messageId: MessageId.make("model-router-auto-message"),
+        role: "user" as const,
+        text: "This prose is not routing input.",
+        attachments: [],
+      },
+      modelSelection: selection("unavailable", "unavailable-model"),
+      routingMode: "auto" as const,
+      runtimeMode: "full-access" as const,
+      interactionMode: "default" as const,
+      createdAt: "2026-09-24T00:00:00.000Z",
+    };
+    const dependencies = {
+      enabled: false,
+      environmentId: Effect.succeed(environmentId),
+      providers: Effect.succeed([
+        provider({
+          instanceId: "unavailable",
+          models: ["unavailable-model"],
+          availability: "unavailable",
+        }),
+        provider({ instanceId: "thread_provider", models: ["thread-model"] }),
+        provider({ instanceId: "project_provider", models: ["project-model"] }),
+      ]),
+      environmentDefaultModelSelection: Effect.succeed(null),
+      sql,
+    };
+
+    const bound = yield* bindDispatcherTurnStartCommand(command, dependencies);
+    expect(bound).toMatchObject({
+      modelSelection: { instanceId: "project_provider", model: "project-model" },
+      routeBinding: {
+        target: { instanceId: "project_provider", model: "project-model" },
+        source: "project-default",
+        modelRoute: {
+          mode: "auto",
+          policyVersion: "model-router.v0",
+          executionStatus: "bound",
+        },
+      },
+    });
+    expect(modelRouterDecisionOmitsSecrets(bound)).toBe(true);
+  }).pipe(Effect.provide(SqlitePersistenceMemory)),
+);
+
+it.effect("manual routing keeps the user model and still records a route decision", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO projection_projects
+      (project_id, title, workspace_root, default_model_selection_json, scripts_json, created_at, updated_at, deleted_at)
+      VALUES
+      ('project-a', 'Dispatcher', '/workspace/a', '{"instanceId":"project_provider","model":"project-model"}', '[]', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL)`;
+    yield* sql`INSERT INTO projection_threads
+      (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at, deleted_at)
+      VALUES ('thread-a', 'project-a', 'Thread', '{"instanceId":"thread_provider","model":"thread-model"}', 'full-access', 'default', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL)`;
+
+    const command = {
+      type: "thread.turn.start" as const,
+      commandId: CommandId.make("model-router-manual-turn"),
+      threadId: threadA,
+      message: {
+        messageId: MessageId.make("model-router-manual-message"),
+        role: "user" as const,
+        text: "This prose is not routing input.",
+        attachments: [],
+      },
+      modelSelection: selection("thread_provider", "thread-model"),
+      routingMode: "manual" as const,
+      runtimeMode: "full-access" as const,
+      interactionMode: "default" as const,
+      createdAt: "2026-09-24T00:00:00.000Z",
+    };
+    const bound = yield* bindDispatcherTurnStartCommand(command, {
+      enabled: false,
+      environmentId: Effect.succeed(environmentId),
+      providers: Effect.succeed([
+        provider({ instanceId: "thread_provider", models: ["thread-model"] }),
+        provider({ instanceId: "project_provider", models: ["project-model"] }),
+      ]),
+      environmentDefaultModelSelection: Effect.succeed(null),
+      sql,
+    });
+    expect(bound).toMatchObject({
+      modelSelection: { instanceId: "thread_provider", model: "thread-model" },
+      routeBinding: {
+        target: { instanceId: "thread_provider", model: "thread-model" },
+        source: "explicit",
+        modelRoute: { mode: "manual", policyVersion: "model-router.v0" },
+      },
+    });
   }).pipe(Effect.provide(SqlitePersistenceMemory)),
 );
 

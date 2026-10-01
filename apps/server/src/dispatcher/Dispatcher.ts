@@ -21,8 +21,17 @@ import {
   ProjectId,
   type ServerProvider,
   ThreadId,
+  type ModelRouterAvailabilityCooldown,
+  type ModelRouterDecision,
+  MODEL_ROUTER_ATTEMPT_BUDGET,
 } from "@t3tools/contracts";
+import {
+  applyModelRouterCooldowns,
+  modelRouterCatalogFromProviders,
+  routeModel,
+} from "@t3tools/shared/modelRouter";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -179,6 +188,25 @@ export const persistDispatcherTaskRoute = Effect.fn("Dispatcher.persistDispatche
     }
   },
 );
+
+export const updateDispatcherTaskRouteBinding = Effect.fn(
+  "Dispatcher.updateDispatcherTaskRouteBinding",
+)(function* (input: {
+  readonly threadId: ThreadId;
+  readonly messageId: MessageId;
+  readonly binding: DispatcherTaskRouteBindingType;
+}): Effect.fn.Return<void, ProjectionRepositoryError, SqlClient.SqlClient> {
+  const sql = yield* SqlClient.SqlClient;
+  const bindingJson = yield* encodeDispatcherTaskRoute(input.binding).pipe(
+    Effect.mapError(toPersistenceDecodeError("Dispatcher.updateTaskRoute:encodeBinding")),
+  );
+  yield* sql`
+    UPDATE projection_dispatcher_task_routes
+    SET binding_json = ${bindingJson}
+    WHERE thread_id = ${input.threadId}
+      AND message_id = ${input.messageId}
+  `.pipe(Effect.mapError(toPersistenceSqlError("Dispatcher.updateTaskRoute:update")));
+});
 
 export const readDispatcherTaskRoute = Effect.fn("Dispatcher.readDispatcherTaskRoute")(
   function* (input: {
@@ -595,6 +623,92 @@ export function taskRouteBindingFromDecision(
   };
 }
 
+function modelRouterBindingSource(input: {
+  readonly decision: ModelRouterDecision;
+  readonly projectDefault: ModelSelection | null;
+  readonly environmentDefault: ModelSelection | null;
+}): DispatcherRouteCandidateSource {
+  if (input.decision.mode === "manual") return "explicit";
+  const selected = input.decision.selected;
+  if (selected === null) return "provider-default";
+  if (
+    input.projectDefault !== null &&
+    selected.target.instanceId === input.projectDefault.instanceId &&
+    selected.target.model === input.projectDefault.model
+  ) {
+    return "project-default";
+  }
+  if (
+    input.environmentDefault !== null &&
+    selected.target.instanceId === input.environmentDefault.instanceId &&
+    selected.target.model === input.environmentDefault.model
+  ) {
+    return "environment-default";
+  }
+  return "provider-default";
+}
+
+function taskRouteBindingFromModelRoute(input: {
+  readonly decision: ModelRouterDecision;
+  readonly projectDefault: ModelSelection | null;
+  readonly environmentDefault: ModelSelection | null;
+}): DispatcherTaskRouteBindingType | null {
+  const selected = input.decision.selected;
+  if (selected === null || selected.driver === null || !selected.eligible) {
+    return null;
+  }
+  const boundDecision: ModelRouterDecision = {
+    ...input.decision,
+    executionStatus: "bound",
+    attemptBudget: MODEL_ROUTER_ATTEMPT_BUDGET,
+    attempts: input.decision.attempts ?? [],
+    executed: input.decision.executed ?? selected,
+  };
+  return {
+    policyVersion: DISPATCHER_POLICY_VERSION,
+    target: selected.target,
+    driver: selected.driver,
+    modelFamily: normalizeModelFamily(selected.target.model),
+    fallbackIndex: selected.fallbackIndex,
+    source: modelRouterBindingSource({
+      decision: input.decision,
+      projectDefault: input.projectDefault,
+      environmentDefault: input.environmentDefault,
+    }),
+    gate: { decision: "ALLOW", reasonCodes: ["ACTION_ALLOWED"] },
+    modelRoute: boundDecision,
+  };
+}
+
+function applySelectedModelSelection(
+  command: Extract<OrchestrationCommand, { readonly type: "thread.turn.start" }>,
+  target: DispatcherRouteTarget,
+): Extract<OrchestrationCommand, { readonly type: "thread.turn.start" }> {
+  const previous = command.modelSelection ?? command.bootstrap?.createThread?.modelSelection;
+  const modelSelection: ModelSelection = {
+    instanceId: target.instanceId,
+    model: target.model,
+    ...(previous?.instanceId === target.instanceId &&
+    previous.model === target.model &&
+    previous.options !== undefined
+      ? { options: previous.options }
+      : {}),
+  };
+  const createThread = command.bootstrap?.createThread;
+  return {
+    ...command,
+    modelSelection,
+    ...(createThread === undefined
+      ? {}
+      : {
+          bootstrap: {
+            ...command.bootstrap,
+            createThread: { ...createThread, modelSelection },
+          },
+        }),
+  };
+}
+
 /**
  * Adds the server-owned route fact before the command enters the decider.
  * Provider snapshots are cached presentation state; this function never asks
@@ -611,10 +725,14 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
       readonly providers: Effect.Effect<ReadonlyArray<ServerProvider>, Error>;
       readonly environmentDefaultModelSelection: Effect.Effect<ModelSelection | null, Error>;
       readonly sql: SqlClient.SqlClient;
+      readonly availabilityCooldowns?: ReadonlyArray<ModelRouterAvailabilityCooldown>;
+      readonly availabilityNowMs?: number;
     },
   ): Effect.fn.Return<OrchestrationCommand, OrchestrationDispatchCommandError> {
     if (command.type !== "thread.turn.start") return command;
-    if (!dependencies.enabled || command.routeBinding !== undefined) return command;
+    if (command.routeBinding !== undefined) return command;
+    const routingMode = command.routingMode;
+    if (!dependencies.enabled && routingMode === undefined) return command;
 
     const createThread = command.bootstrap?.createThread;
     const preferredModelSelection = command.modelSelection ?? createThread?.modelSelection;
@@ -634,6 +752,83 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
           }),
       ),
     );
+
+    if (routingMode === "auto" || routingMode === "manual") {
+      const projectId = createThread?.projectId;
+      const thread = resolution.projected.threads.find(
+        (candidate) => candidate.id === command.threadId,
+      );
+      const project =
+        projectId === undefined
+          ? thread === undefined
+            ? null
+            : (resolution.projected.projects.find(
+                (candidate) => candidate.id === thread.projectId,
+              ) ?? null)
+          : (resolution.projected.projects.find((candidate) => candidate.id === projectId) ?? null);
+      const preferredTargets = [
+        ...(project?.defaultModelSelection
+          ? [
+              {
+                instanceId: project.defaultModelSelection.instanceId,
+                model: project.defaultModelSelection.model,
+              },
+            ]
+          : []),
+        ...(resolution.environmentDefaultModelSelection
+          ? [
+              {
+                instanceId: resolution.environmentDefaultModelSelection.instanceId,
+                model: resolution.environmentDefaultModelSelection.model,
+              },
+            ]
+          : []),
+      ];
+      const decision = routeModel({
+        mode: routingMode,
+        catalog: applyModelRouterCooldowns(
+          modelRouterCatalogFromProviders(resolution.providers),
+          dependencies.availabilityCooldowns ?? [],
+          dependencies.availabilityNowMs ?? (yield* Clock.currentTimeMillis),
+        ),
+        preferredTargets,
+        ...(command.modelRouteConstraints === undefined
+          ? {}
+          : { constraints: command.modelRouteConstraints }),
+        ...(routingMode === "manual" && preferredModelSelection !== undefined
+          ? {
+              manualOverride: {
+                instanceId: preferredModelSelection.instanceId,
+                model: preferredModelSelection.model,
+              },
+            }
+          : {}),
+        executionStatus: "bound",
+      });
+      if (routingMode === "auto" && decision.selected === null) {
+        return yield* new OrchestrationDispatchCommandError({
+          message: `Auto Route could not select a model (${decision.reasonCodes.join(",")}).`,
+        });
+      }
+      const routed =
+        routingMode === "auto" && decision.selected !== null
+          ? applySelectedModelSelection(command, decision.selected.target)
+          : command;
+      const routeBinding = taskRouteBindingFromModelRoute({
+        decision,
+        projectDefault: project?.defaultModelSelection ?? null,
+        environmentDefault: resolution.environmentDefaultModelSelection,
+      });
+      if (routeBinding === null) {
+        if (routingMode === "auto") {
+          return yield* new OrchestrationDispatchCommandError({
+            message: `Auto Route denied turn start (${decision.reasonCodes.join(",")}).`,
+          });
+        }
+        return routed;
+      }
+      return { ...routed, routeBinding };
+    }
 
     const decision = yield* resolveDispatcherRouteObserved("dispatcher.task_route_binding", {
       environmentId: resolution.environmentId,

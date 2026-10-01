@@ -97,6 +97,25 @@ startup and keeps its own SQLite data, signing key, and revocation state. Deskto
 servers ignore the value. See [environment authentication](../internals/environment-auth.md#reusable-dev-credential)
 for the security model.
 
+### Base3Router UI Lab
+
+Use this for Auto Route and Control Center UI work without a desktop DMG or live provider
+credentials. It is a Vite-only page (`apps/web/lab.html`) gated by `T3CODE_UI_LAB=1` and is
+not part of the production bundle or app navigation.
+
+```sh
+vp run ui-lab:accept
+```
+
+That command starts the lab Vite server, waits until `/lab.html` is ready, runs the Playwright
+acceptance suite, shuts the server down, and writes:
+
+- HTML report: `apps/web/playwright-report/index.html`
+- Screenshots: `apps/web/playwright-results/screenshots/`
+
+`vp run ui-lab` keeps the lab at `http://127.0.0.1:45733/lab.html` for interactive work. Open a
+scenario with `?scenario=failover-success` (see `apps/web/src/lab/scenarios.ts`).
+
 ## Checks
 
 Run checks for the files and packages you changed:

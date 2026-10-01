@@ -7183,6 +7183,7 @@ export default function ChatView(props: ChatViewProps) {
                 threadId,
                 message: { messageId, role: "user", text: "/compact", attachments: [] },
                 modelSelection: context.selectedModelSelection,
+                routingMode: context.routingMode,
                 runtimeMode,
                 interactionMode: context.interactionMode,
                 createdAt,
@@ -8433,6 +8434,7 @@ export default function ChatView(props: ChatViewProps) {
           titleSeed: title,
           runtimeMode,
           interactionMode: sendInteractionMode,
+          routingMode: sendCtx.routingMode,
           ...(bootstrap ? { bootstrap } : {}),
           createdAt: messageCreatedAt,
         },
@@ -9059,6 +9061,7 @@ export default function ChatView(props: ChatViewProps) {
             titleSeed: activeThread.title,
             runtimeMode,
             interactionMode: nextInteractionMode,
+            routingMode: sendCtx.routingMode,
             ...(nextInteractionMode === "default" && activeProposedPlan
               ? {
                   sourceProposedPlan: {
@@ -9199,6 +9202,7 @@ export default function ChatView(props: ChatViewProps) {
           titleSeed: nextThreadTitle,
           runtimeMode: defaultRuntimeMode,
           interactionMode: "default",
+          routingMode: sendCtx.routingMode,
           sourceProposedPlan: {
             threadId: activeThread.id,
             planId: activeProposedPlan.id,
@@ -9884,6 +9888,12 @@ export default function ChatView(props: ChatViewProps) {
               />
               <ThreadErrorBanner
                 error={visibleThreadError}
+                onOpenProviderSetup={() => {
+                  void navigate({
+                    to: "/settings/providers",
+                    search: { environmentId },
+                  });
+                }}
                 onDismiss={() => {
                   setThreadError(activeThread.id, null);
                   dismissThreadErrorBannerForSession(threadErrorBannerKey);

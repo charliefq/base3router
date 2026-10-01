@@ -3,6 +3,7 @@ import {
   withUsageLimitsCommands,
 } from "@t3tools/shared/usageLimits";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -131,6 +132,7 @@ import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as Dispatcher from "./dispatcher/Dispatcher.ts";
+import { ModelRouterAvailability } from "./orchestration/Services/ModelRouterAvailability.ts";
 import * as DispatcherHandoff from "./dispatcher/Handoff.ts";
 import { makeCursorCloudAdapter } from "./cursorCloud/CursorCloudAdapter.ts";
 import {
@@ -1934,14 +1936,23 @@ const makeWsRpcLayer = (
                     : Effect.succeed(normalized),
                 ),
                 Effect.flatMap((handoffBound) =>
-                  Dispatcher.bindDispatcherTurnStartCommand(handoffBound, {
-                    enabled: config.dispatcherEnabled === true,
-                    environmentId: serverEnvironment.getEnvironmentId,
-                    providers: providerRegistry.getProviders,
-                    environmentDefaultModelSelection: serverSettings.getSettings.pipe(
-                      Effect.map((settings) => settings.defaultModelSelection),
-                    ),
-                    sql,
+                  Effect.gen(function* () {
+                    const availability = yield* Effect.serviceOption(ModelRouterAvailability);
+                    const availabilityNowMs = yield* Clock.currentTimeMillis;
+                    const availabilityCooldowns = Option.isSome(availability)
+                      ? yield* availability.value.snapshot(availabilityNowMs)
+                      : [];
+                    return yield* Dispatcher.bindDispatcherTurnStartCommand(handoffBound, {
+                      enabled: config.dispatcherEnabled === true,
+                      environmentId: serverEnvironment.getEnvironmentId,
+                      providers: providerRegistry.getProviders,
+                      environmentDefaultModelSelection: serverSettings.getSettings.pipe(
+                        Effect.map((settings) => settings.defaultModelSelection),
+                      ),
+                      sql,
+                      availabilityCooldowns,
+                      availabilityNowMs,
+                    });
                   }),
                 ),
               );

@@ -78,4 +78,39 @@ describe("measureRestingComposerControls", () => {
       measurePicker({ clientWidth: 0, flexGrow: "1", maxWidth: "180px" }).naturalFixedWidth,
     ).toBe(180);
   });
+
+  it("measures Auto Route as the leading control when the picker is hidden", () => {
+    const cluster = {
+      getBoundingClientRect: () => ({ width: 88 }),
+    };
+    const controls = {
+      querySelector: (selector: string) => {
+        if (selector === "[data-chat-provider-model-picker]") return null;
+        if (selector === "[data-model-router-cluster]") return cluster;
+        if (selector === "[data-resting-controls-overflow]") {
+          return { getBoundingClientRect: () => ({ width: 24 }) };
+        }
+        return null;
+      },
+      querySelectorAll: () => [
+        {
+          dataset: {},
+          querySelectorAll: () => [],
+          getBoundingClientRect: () => ({ width: 140 }),
+        },
+      ],
+    };
+    vi.stubGlobal("getComputedStyle", () => ({
+      columnGap: "4px",
+      marginInlineStart: "0",
+      marginInlineEnd: "0",
+    }));
+    const measurement = measureRestingComposerControls(controls as unknown as HTMLElement)!;
+    expect(measurement.naturalFixedWidth).toBe(88);
+    expect(resolveRestingComposerControlsLayout({ ...measurement, hostWidth: 200 })).toEqual({
+      hiddenCount: 1,
+      iconOnlyCount: 1,
+      visible: true,
+    });
+  });
 });

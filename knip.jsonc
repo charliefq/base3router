@@ -3,7 +3,16 @@
   // Exported types are part of our contracts even before they have consumers.
   "rules": { "types": "off", "nsTypes": "off" },
   // These executables are supplied by the OS or installed separately from npm.
-  "ignoreBinaries": ["eas", "file", "mkfifo", "pkill", "pkg-config", "plutil", "sips"],
+  "ignoreBinaries": [
+    "eas",
+    "file",
+    "mkfifo",
+    "pkill",
+    "pkg-config",
+    "plutil",
+    "playwright",
+    "sips",
+  ],
   "workspaces": {
     ".": {
       // Keep vendored reference repositories outside the root project.
@@ -14,7 +23,7 @@
     },
     "scripts": {
       // Knip loads its preprocessor through a CLI option; native verification runs directly.
-      "entry": ["knip-schemas.ts", "mobile-native-client.ts"],
+      "entry": ["knip-schemas.ts", "mobile-native-client.ts", "base3router-ui-lab.ts"],
     },
     "apps/server": {
       // Vite+ pack entries and the launcher used by installed background services.
@@ -51,7 +60,12 @@
     },
     "apps/web": {
       // Worktree setup invokes this directly from t3.json.
-      "entry": ["scripts/warm-dep-cache.ts"],
+      "entry": [
+        "scripts/warm-dep-cache.ts",
+        "src/lab/main.tsx",
+        "playwright.config.ts",
+        "e2e/**/*.ts",
+      ],
       // UI component modules are copied and adapted as cohesive sets. Keep their
       // named subcomponents even before they have callers; the file audit still
       // reports an entire component module when nothing imports it.

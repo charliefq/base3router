@@ -119,6 +119,162 @@ it("shows an immutable bound route after submission", () => {
   expect(model.route.fallbacks).toEqual([]);
 });
 
+it("presents a bound Auto Route trace without secret-shaped values", () => {
+  const model = presentOperationalInspector({
+    selected: true,
+    projectTitle: "Portfolio",
+    taskObjective: "Draft the dispatcher note",
+    gitBranch: "cursor/phase-8",
+    sessionStatus: "running",
+    sessionError: null,
+    capabilities: { dispatcher: false, workflow: true, cursorCloud: false },
+    providers: [],
+    preview: { status: "idle" },
+    boundRoute: {
+      ...boundRoute,
+      modelRoute: {
+        policyVersion: "model-router.v0",
+        mode: "auto",
+        task: { attachmentCount: 0, composerContextKinds: [], requiredCapabilities: [] },
+        policy: {
+          version: "model-router.v0",
+          qualityWeight: 1,
+          costWeight: 1,
+          latencyWeight: 1,
+        },
+        selected: {
+          fallbackIndex: 0,
+          target: { instanceId: ProviderInstanceId.make("claude"), model: "claude-sonnet-4-6" },
+          driver: ProviderDriverKind.make("claudeAgent"),
+          capabilities: ["code", "tools"],
+          eligible: true,
+          reasonCodes: ["SELECTED", "METRICS_UNKNOWN"],
+          preferredDefault: true,
+          metrics: {
+            quality: { status: "unknown" },
+            costUsd: { status: "unknown" },
+            latencyMs: { status: "unknown" },
+          },
+        },
+        fallbacks: [],
+        candidates: [],
+        reasonCodes: ["SELECTED", "PREFERRED_DEFAULT", "METRICS_UNKNOWN"],
+        explanation:
+          "Auto Route selected claude · claude-sonnet-4-6 because it is the configured default.",
+        estimatedCostUsd: { status: "unknown" },
+        estimatedLatencyMs: { status: "unknown" },
+        estimatedQuality: { status: "unknown" },
+        executionStatus: "bound",
+      },
+    },
+    workflowRun: null,
+    workflowTemplate: null,
+    cursorCloudBinding: null,
+  });
+
+  expect(model.route.mode).toBe("auto");
+  expect(model.route.policyVersion).toBe("model-router.v0");
+  expect(model.route.reasonCodes).toContain("SELECTED");
+  expect(model.route.estimatedCostUsd).toEqual({ status: "unknown" });
+  expect(model.route.executionStatus).toBe("running");
+  expect(model.route.attempts).toEqual([]);
+  expect(JSON.stringify(model)).not.toContain("sk-");
+  expect(JSON.stringify(model)).not.toContain("Bearer ");
+});
+
+it("presents sanitized Auto Route attempt history after failover", () => {
+  const model = presentOperationalInspector({
+    selected: true,
+    projectTitle: "Portfolio",
+    taskObjective: "Draft the dispatcher note",
+    gitBranch: "cursor/phase-8",
+    sessionStatus: "running",
+    sessionError: null,
+    capabilities: { dispatcher: false, workflow: true, cursorCloud: false },
+    providers: [],
+    preview: { status: "idle" },
+    boundRoute: {
+      ...boundRoute,
+      target: { instanceId: ProviderInstanceId.make("claude"), model: "claude-sonnet-4-6" },
+      modelRoute: {
+        policyVersion: "model-router.v0",
+        mode: "auto",
+        task: { attachmentCount: 0, composerContextKinds: [], requiredCapabilities: [] },
+        policy: {
+          version: "model-router.v0",
+          qualityWeight: 1,
+          costWeight: 1,
+          latencyWeight: 1,
+        },
+        selected: {
+          fallbackIndex: 0,
+          target: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.5" },
+          driver: ProviderDriverKind.make("codex"),
+          capabilities: ["code", "tools"],
+          eligible: true,
+          reasonCodes: ["SELECTED"],
+          preferredDefault: false,
+          metrics: {
+            quality: { status: "unknown" },
+            costUsd: { status: "unknown" },
+            latencyMs: { status: "unknown" },
+          },
+        },
+        fallbacks: [],
+        candidates: [],
+        reasonCodes: ["SELECTED", "FALLBACK_ATTEMPTED"],
+        explanation: "Auto Route selected codex · gpt-5.5.",
+        estimatedCostUsd: { status: "unknown" },
+        estimatedLatencyMs: { status: "unknown" },
+        estimatedQuality: { status: "unknown" },
+        executionStatus: "running",
+        attemptBudget: 3,
+        executed: {
+          fallbackIndex: 1,
+          target: { instanceId: ProviderInstanceId.make("claude"), model: "claude-sonnet-4-6" },
+          driver: ProviderDriverKind.make("claudeAgent"),
+          capabilities: ["code", "tools"],
+          eligible: true,
+          reasonCodes: [],
+          preferredDefault: false,
+          metrics: {
+            quality: { status: "unknown" },
+            costUsd: { status: "unknown" },
+            latencyMs: { status: "unknown" },
+          },
+        },
+        attempts: [
+          {
+            attempt: 1,
+            target: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.5" },
+            driver: ProviderDriverKind.make("codex"),
+            outcome: "failed",
+            failureCategory: "usage_quota_exhausted",
+            failureScope: "provider_instance",
+            fallbackAllowed: true,
+            nextTarget: {
+              instanceId: ProviderInstanceId.make("claude"),
+              model: "claude-sonnet-4-6",
+            },
+            detail: "[redacted]",
+          },
+        ],
+      },
+    },
+    workflowRun: null,
+    workflowTemplate: null,
+    cursorCloudBinding: null,
+  });
+
+  expect(model.route.rerouted).toBe(true);
+  expect(model.route.initialModel).toBe("gpt-5.5");
+  expect(model.route.executedModel).toBe("claude-sonnet-4-6");
+  expect(model.route.attemptBudget).toBe(3);
+  expect(model.route.attempts[0]?.failureCategory).toBe("usage_quota_exhausted");
+  expect(JSON.stringify(model)).not.toContain("sk-");
+  expect(JSON.stringify(model)).not.toContain("Bearer ");
+});
+
 it("labels Cursor Cloud as a runner, not a provider", () => {
   const model = presentOperationalInspector({
     selected: true,
