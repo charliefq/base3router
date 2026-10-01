@@ -25,7 +25,7 @@ import {
 } from "@t3tools/contracts";
 
 const SECRET_SHAPED =
-  /Bearer\s+\S+|crsr[_-][A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]+|CURSOR_API_KEY\s*=|api[_-]?key\s*[=:]|Authorization\s*:/i;
+  /Bearer\s+\S+|crsr[_-][A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]+|OPENROUTER_API_KEY\s*=|CURSOR_API_KEY\s*=|api[_-]?key\s*[=:]|Authorization\s*:/i;
 
 export const MODEL_ROUTER_SECRET_REDACTION = "[redacted]";
 
@@ -141,6 +141,16 @@ export function modelRouterCatalogFromProviders(
   }
   return catalog;
 }
+
+/**
+ * OpenRouter is a Teacher/Shadow execution vehicle, not an Auto Route peer.
+ * Including it in Auto ranking would change Phase 8 selections.
+ */
+export const modelRouterCatalogForMode = (
+  catalog: ReadonlyArray<ModelRouterCatalogEntry>,
+  mode: ModelRouterMode,
+): ReadonlyArray<ModelRouterCatalogEntry> =>
+  mode === "auto" ? catalog.filter((entry) => entry.driver !== "openrouter") : catalog;
 
 function cooldownReason(cooldown: ModelRouterAvailabilityCooldown): ModelRouterReasonCode {
   if (

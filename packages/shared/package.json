@@ -39,6 +39,38 @@
       "types": "./src/modelRouterFailover.ts",
       "import": "./src/modelRouterFailover.ts"
     },
+    "./openRouterRedaction": {
+      "types": "./src/openRouterRedaction.ts",
+      "import": "./src/openRouterRedaction.ts"
+    },
+    "./openRouterPrivacy": {
+      "types": "./src/openRouterPrivacy.ts",
+      "import": "./src/openRouterPrivacy.ts"
+    },
+    "./openRouterErrors": {
+      "types": "./src/openRouterErrors.ts",
+      "import": "./src/openRouterErrors.ts"
+    },
+    "./openRouterTaskProfile": {
+      "types": "./src/openRouterTaskProfile.ts",
+      "import": "./src/openRouterTaskProfile.ts"
+    },
+    "./openRouterIdentity": {
+      "types": "./src/openRouterIdentity.ts",
+      "import": "./src/openRouterIdentity.ts"
+    },
+    "./openRouterMarketPriors": {
+      "types": "./src/openRouterMarketPriors.ts",
+      "import": "./src/openRouterMarketPriors.ts"
+    },
+    "./openRouterGuidance": {
+      "types": "./src/openRouterGuidance.ts",
+      "import": "./src/openRouterGuidance.ts"
+    },
+    "./openRouterMetadata": {
+      "types": "./src/openRouterMetadata.ts",
+      "import": "./src/openRouterMetadata.ts"
+    },
     "./advertisedEndpoint": {
       "types": "./src/advertisedEndpoint.ts",
       "import": "./src/advertisedEndpoint.ts"
