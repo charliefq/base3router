@@ -2614,8 +2614,14 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 
 export function resolveDesktopProductName(version: string): string {
   return resolveDesktopUpdateChannel(version) === "nightly"
-    ? "T3 Code (Nightly)"
-    : (desktopPackageJson.productName ?? "T3 Code");
+    ? "Base3Router (Nightly)"
+    : (desktopPackageJson.productName ?? "Base3Router");
+}
+
+export function resolveDesktopArtifactNameTemplate(version: string): string {
+  return resolveDesktopUpdateChannel(version) === "nightly"
+    ? "Base3Router-Nightly-${version}-${arch}.${ext}"
+    : "Base3Router-Internal-Alpha-${arch}.${ext}";
 }
 
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
@@ -2640,7 +2646,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const buildConfig: Record<string, unknown> = {
     appId: DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version),
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    artifactName: resolveDesktopArtifactNameTemplate(version),
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,

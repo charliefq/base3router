@@ -122,9 +122,11 @@ export const make = Effect.gen(function* () {
     const commitHash = yield* resolveAboutCommitHash;
     yield* electronApp.setName(environment.displayName);
     yield* electronApp.setAboutPanelOptions({
-      applicationName: environment.displayName,
+      applicationName: environment.branding.baseName,
       applicationVersion: environment.appVersion,
       version: Option.getOrElse(commitHash, () => "unknown"),
+      copyright:
+        "Built on the open-source T3 Code project. MIT license retained. Copyright 2026 T3 Tools Inc.",
     });
 
     if (environment.platform === "win32") {

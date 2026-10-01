@@ -54,7 +54,7 @@ Routing decisions and handoff records are server-owned. Clients display provisio
 
 ## Current status
 
-The dispatcher is an experimental fork under active development. Core routing and Codex-to-Claude continuation have passed focused tests and isolated runtime acceptance. Broader rollout, automatic limit detection, automatic retry, long-term preference memory, and final narrow/mobile visual acceptance remain future work.
+The dispatcher is an experimental fork under active development. Core routing and Codex-to-Claude continuation have passed focused tests and isolated runtime acceptance. Phase 7B packages the Internal Alpha as Base3Router. User-data directories stay on the legacy T3 Code paths so existing installs are not migrated or deleted.
 
 Implementation is organized as stacked pull requests so each layer can be reviewed independently:
 
@@ -62,6 +62,9 @@ Implementation is organized as stacked pull requests so each layer can be review
 2. Route preview workflow
 3. Explicit provider handoff
 4. Verified handoff-summary extraction
+5. Workflow OS
+6. Cursor Cloud runner
+7. Internal Alpha product shell
 
 ## Development
 
