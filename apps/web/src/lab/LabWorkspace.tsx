@@ -45,6 +45,10 @@ export function LabWorkspace(props: {
             ? "ready"
             : "idle",
     error: props.error,
+    overflow:
+      props.scenario.id === "long-thread" ||
+      props.scenario.id === "narrow-width" ||
+      props.scenario.id === "reduced-height",
   });
 
   return (

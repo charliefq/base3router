@@ -39,6 +39,7 @@ export default defineConfig({
             ...process.env,
             T3CODE_UI_LAB: "1",
             T3CODE_SINGLE_ORIGIN_DEV: "1",
+            HOST: "127.0.0.1",
             PORT: String(port),
             VITE_HTTP_URL: "",
             VITE_WS_URL: "",

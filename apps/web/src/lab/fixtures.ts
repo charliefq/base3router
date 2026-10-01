@@ -95,6 +95,7 @@ export function inspectorModelFromLab(input: {
   readonly decision: ModelRouterDecision;
   readonly sessionStatus: string | null;
   readonly error: string | null;
+  readonly overflow?: boolean;
 }): OperationalInspectorModel {
   const initial = input.decision.selected?.target ?? null;
   const executed = input.decision.executed?.target ?? initial;
@@ -136,9 +137,17 @@ export function inspectorModelFromLab(input: {
       attempts: input.decision.attempts ?? [],
     },
     runnerKind: "local",
-    workflowName: null,
-    workflowStatus: null,
-    stages: [],
+    workflowName: input.overflow === true ? "UI Lab overflow" : null,
+    workflowStatus: input.overflow === true ? "running" : null,
+    stages:
+      input.overflow === true
+        ? Array.from({ length: 28 }, (_, index) => ({
+            id: `lab-inspector-row-${index + 1}`,
+            label: `Independent Inspector row ${index + 1}`,
+            status: index === 0 ? "running" : "waiting",
+            current: index === 0,
+          }))
+        : [],
     cursorCloud: null,
     error: input.error,
     emptyReason: null,

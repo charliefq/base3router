@@ -5,7 +5,7 @@ import * as NodePath from "node:path";
 import { UI_LAB_SCENARIO_IDS, type UiLabScenarioId } from "../src/lab/scenarios";
 import { UI_LAB_BEARER_PROBE, UI_LAB_SECRET_PROBE } from "../src/lab/fakeProvider";
 
-const SCREENSHOT_DIR = NodePath.join(import.meta.dirname, "../playwright-report/screenshots");
+const SCREENSHOT_DIR = NodePath.join(import.meta.dirname, "../playwright-results/screenshots");
 
 async function openScenario(page: Page, id: UiLabScenarioId) {
   await page.goto(`/lab.html?scenario=${id}`);
@@ -44,10 +44,10 @@ test.describe("Base3Router UI Lab", () => {
     const mode = page.locator("[data-model-router-mode]");
     await expect(mode).toHaveAttribute("data-model-router-mode", "auto");
     await mode.click();
-    await page.getByRole("option", { name: "Manual" }).click();
+    await page.getByRole("option", { name: "Manual", exact: true }).click();
     await expect(mode).toHaveAttribute("data-model-router-mode", "manual");
     await mode.click();
-    await page.getByRole("option", { name: "Auto Route" }).click();
+    await page.getByRole("option", { name: "Auto Route", exact: true }).click();
     await expect(mode).toHaveAttribute("data-model-router-mode", "auto");
     await page.locator("[data-ui-lab-prompt]").fill("Route this harmless lab prompt.");
     await page.locator("[data-ui-lab-submit]").click();
@@ -110,8 +110,13 @@ test.describe("Base3Router UI Lab", () => {
     expect(await sidebar.evaluate((element) => element.scrollTop)).toBe(0);
     expect(await inspector.evaluate((element) => element.scrollTop)).toBe(0);
     const inspectorBefore = await inspector.evaluate((element) => element.scrollTop);
-    await inspector.hover();
-    await page.mouse.wheel(0, 400);
+    const inspectorBox = await inspector.boundingBox();
+    if (inspectorBox === null) throw new Error("Inspector scroll surface is not visible.");
+    await page.mouse.move(
+      inspectorBox.x + inspectorBox.width / 2,
+      inspectorBox.y + Math.min(48, inspectorBox.height / 2),
+    );
+    await page.mouse.wheel(0, 800);
     await expect
       .poll(async () => inspector.evaluate((element) => element.scrollTop))
       .toBeGreaterThan(inspectorBefore);
