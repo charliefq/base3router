@@ -3198,7 +3198,7 @@ export function GeneralSettingsPanel() {
         )}
         <SettingsRow
           title="Attribution"
-          description="Base3Router is built on the open-source Base3Router project and preserves its MIT license. Copyright 2026 T3 Tools Inc."
+          description="Base3Router is built on the open-source T3 Code project and preserves its MIT license. Copyright 2026 T3 Tools Inc."
         />
       </SettingsSection>
       <SettingsSection title="Diagnostics">

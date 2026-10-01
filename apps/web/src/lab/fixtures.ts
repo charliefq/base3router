@@ -300,13 +300,6 @@ export const LAB_INELIGIBLE = labCandidate({
   eligible: false,
   reasonCodes: ["REQUIRED_CAPABILITY_MISSING"],
 });
-export const LAB_UNAVAILABLE = labCandidate({
-  instanceId: "codex",
-  model: "gpt-5.5",
-  fallbackIndex: 0,
-  eligible: false,
-  reasonCodes: ["PROVIDER_UNAVAILABLE"],
-});
 export const LAB_LONG_NAME = labCandidate({
   instanceId: "very-long-provider-instance",
   model: "very-long-model-slug-name-for-truncation",

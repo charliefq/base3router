@@ -112,13 +112,18 @@ Lab fixtures.
 Preserve: `T3CODE_*` / `VITE_T3CODE_*`, `com.t3tools.t3code`, `t3code` URL
 schemes, user-data directories (`T3 Code (Alpha)` / `t3code`), `@t3tools/*`
 package names, `npx t3`, T3 Connect, storage keys `t3code:*`, git author
-`T3 Code`, MCP server name `T3 Code`, and About attribution to the upstream
-project.
+`T3 Code`, MCP server name `T3 Code`, About attribution to the upstream
+project, and the GitHub triage playbook (`.github/triage/PLAYBOOK.md` must stay
+byte-identical, including the upstream product name).
 
 Ambiguous, decided preserve: `apps/marketing` remains the upstream T3 Code
 site. Contributor docs that still say "Working on T3 Code" refer to the
 upstream project, not the product title. Injected Electron branding tests keep
-a fictional `T3 Code` payload to prove the injection path.
+a fictional `T3 Code` payload to prove the injection path. GitHub release
+titles and Discord announcement copy stay on the upstream naming until a
+dedicated packaging pass. CLI installer banners (`scripts/install.sh`) stay
+deferred with the CLI rename.
 
 Deferred: CLI binary rename, user-data path migration, marketing rewrite,
-mobile Auto Route control.
+mobile Auto Route control, installer/release-channel copy that still says
+T3 Code.
