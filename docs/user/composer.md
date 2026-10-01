@@ -29,7 +29,7 @@ before an upload finishes requires you to attach that file again.
 You can drag or paste images into the web or desktop composer. HEIC and HEIF
 photos are converted to JPEG there and when selected from the mobile photo
 library; photos over the image limit are also resized to fit. On mobile, you can
-also send files to T3 Code through another app's system share sheet.
+also send files to Base3Router through another app's system share sheet.
 
 See [images and videos](#images-and-videos-in-messages) for previewing and saving media.
 
@@ -65,11 +65,25 @@ uses its account catalog and does not support custom models.
 
 ## Model defaults
 
-T3 Code remembers your provider, model, and model options for new threads. A
+Base3Router remembers your provider, model, and model options for new threads. A
 project's configured model takes precedence; resetting that project setting
 returns to the remembered selection.
 
 Leaving reasoning level or service tier unset uses the provider's own configuration.
+
+## Auto Route and Manual
+
+On web and desktop, the composer has a routing control next to the model picker.
+
+- **Auto Route** (default): Base3Router selects an available, authorized model. The Inspector
+  shows why that model was eligible and which constraints removed alternatives.
+- **Manual**: you choose the provider instance and model yourself. Failover stays off.
+
+Auto Route is not the **Access Auto** permission mode, and it is not a provider catalog slug
+named `auto`. It does not classify prompts, learn from earlier turns, or report measured cost,
+quality, or latency. Unknown metrics stay unknown.
+
+Mobile does not yet offer Auto Route; it stays on Manual.
 
 ## Continue with another provider
 
@@ -79,7 +93,7 @@ review or edit the handoff text before continuing. The preview is provisional; t
 provider and model become authoritative only after submission.
 
 The continuation stays in the same thread and keeps the earlier turn and its route unchanged.
-T3 Code does not silently switch providers or retry a failed handoff on another runner.
+Base3Router does not silently switch providers or retry a failed handoff on another runner.
 
 ## Use a workflow
 
@@ -165,7 +179,7 @@ minutes long. Canceling, leaving the screen, or an audio interruption discards t
 recording and preserves your existing draft. While recording, the screen stays
 awake; it can sleep normally once recording stops.
 
-Transcription runs on your device. T3 Code deletes the temporary audio after
+Transcription runs on your device. Base3Router deletes the temporary audio after
 transcription or cancellation; only the message text is sent when you submit.
 
 ## Commands and skills
@@ -177,7 +191,7 @@ provider. On mobile, both are also available before starting a thread on
 The slash menu also includes skills unless you turn off **Settings → General →
 Show skills in slash menu**. Only skills enabled for the provider are listed.
 
-Provider commands must start the message to run. T3 Code commands such as
+Provider commands must start the message to run. Base3Router commands such as
 `/model` and `/plan`, and skill mentions, work on any line.
 
 Send `/compact` in an existing conversation to reduce context usage when the
@@ -208,7 +222,7 @@ exist only as chips: deleting a file's last chip removes the file from the messa
 Copy text that holds chips and paste it into another draft, in the same thread or another one,
 and the chips come along with what they point to. Images and files are fetched again from the
 environment they came from; while that happens the chip shows a dashed outline, and if it cannot
-complete T3 Code tells you and leaves the chip for you to remove or replace. A chip whose
+complete Base3Router tells you and leaves the chip for you to remove or replace. A chip whose
 context is no longer available shows the same dashed outline; hover it for what to do.
 
 Copying a message with the copy button, or copying text out of it, gives other apps readable
@@ -255,7 +269,7 @@ styles, or images from neighboring files.
 
 On web and desktop, HTML and PDF files open as rendered pages. Switch an HTML
 file to source view to read its markup; a link to a specific line opens source
-automatically. HTML previews cannot access your T3 Code session.
+automatically. HTML previews cannot access your Base3Router session.
 
 On mobile, select a PDF attachment or link to open it. iOS uses the native viewer;
 Android opens a compatible installed file viewer.

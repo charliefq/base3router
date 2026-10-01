@@ -1,8 +1,8 @@
-# T3 Code docs
+# Base3Router docs
 
-## Using T3 Code
+## Using Base3Router
 
-- [Install T3 Code](./user/install.md)
+- [Install Base3Router](./user/install.md)
 - [Messages and context](./user/composer.md)
 - [Working with threads](./user/thread-sidebar.md)
 - [Permission modes](./user/permission-modes.md)
@@ -18,7 +18,7 @@
 - [Product usage data](./user/telemetry.md)
 - [Remote access](./user/remote-access.md)
 - [Running in the background](./user/background-service.md)
-- [Updating T3 Code](./user/updating.md)
+- [Updating Base3Router](./user/updating.md)
 - Provider guides: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md) · [Antigravity](./user/providers-antigravity.md)
 
 ---
@@ -35,6 +35,7 @@ source alone does not explain. Most code changes do not need an internal documen
 - [Architecture overview](./internals/overview.md)
 - [Base3Router Internal Alpha](./architecture/base3router-alpha.md)
 - [Base3Router Phase 8 Auto Model Router](./architecture/base3router-phase-8.md)
+- [Base3Router Phase 9 product rebrand](./architecture/base3router-phase-9.md)
 - [Glossary](./internals/glossary.md)
 - [Connection runtime](./internals/connection-runtime.md)
 - [Providers](./internals/providers.md)
