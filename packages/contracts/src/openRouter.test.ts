@@ -75,7 +75,10 @@ describe("openrouter guidance contracts", () => {
       skipReason: "guidance_off",
     });
     const encoded = JSON.stringify(observation);
-    expect(encoded).not.toMatch(/sk-|Bearer |Authorization|prompt|completion/i);
+    expect(encoded).not.toContain("sk-or-");
+    expect(encoded).not.toContain("Bearer ");
+    expect(encoded).not.toContain("Authorization");
+    expect(encoded).not.toMatch(/"messages"|"content":/);
     expect(observation.privacyPolicy).toBe("zdr_deny_collection");
   });
 

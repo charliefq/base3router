@@ -29,7 +29,7 @@ import { openRouterAgreement } from "@t3tools/shared/openRouterGuidance";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -111,7 +111,7 @@ export const makeOpenRouterAdapter = Effect.fn("makeOpenRouterAdapter")(function
   options: OpenRouterAdapterOptions,
 ) {
   const crypto = yield* Crypto.Crypto;
-  const events = yield* PubSub.unbounded<ProviderRuntimeEvent>();
+  const events = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = yield* Ref.make(new Map<string, SessionRecord>());
   const client: OpenRouterClient | null =
     options.apiKey === undefined
@@ -133,7 +133,7 @@ export const makeOpenRouterAdapter = Effect.fn("makeOpenRouterAdapter")(function
         }),
     ),
   );
-  const emit = (event: ProviderRuntimeEvent) => PubSub.publish(events, event).pipe(Effect.asVoid);
+  const emit = (event: ProviderRuntimeEvent) => Queue.offer(events, event).pipe(Effect.asVoid);
 
   const failMissingKey = (method: string) =>
     new ProviderAdapterRequestError({
@@ -407,7 +407,7 @@ export const makeOpenRouterAdapter = Effect.fn("makeOpenRouterAdapter")(function
         for (const record of map.values()) record.abort?.abort("cancelled");
         return new Map();
       }),
-    streamEvents: Stream.fromPubSub(events),
+    streamEvents: Stream.fromQueue(events),
   };
 
   return adapter;

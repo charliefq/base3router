@@ -15,7 +15,7 @@ export type OpenRouterCatalogCache = {
   readonly fetchedAtMs: number;
 };
 
-export const createOpenRouterCatalogCache = (): OpenRouterCatalogCache => ({
+const createOpenRouterCatalogCache = (): OpenRouterCatalogCache => ({
   snapshot: null,
   fetchedAtMs: 0,
 });

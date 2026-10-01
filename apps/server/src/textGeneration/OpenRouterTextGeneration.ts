@@ -1,8 +1,6 @@
 import {
   OPENROUTER_AUTO_SLUG,
-  OPENROUTER_DRIVER_KIND,
   type OpenRouterSettings,
-  ProviderDriverKind,
   TextGenerationError,
   type ModelSelection,
 } from "@t3tools/contracts";
@@ -78,5 +76,3 @@ export const makeOpenRouterTextGeneration = Effect.fn("makeOpenRouterTextGenerat
       ),
   } satisfies TextGeneration.TextGeneration["Service"];
 });
-
-export const OPENROUTER_DRIVER = ProviderDriverKind.make(OPENROUTER_DRIVER_KIND);

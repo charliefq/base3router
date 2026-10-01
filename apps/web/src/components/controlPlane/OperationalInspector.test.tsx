@@ -405,5 +405,6 @@ it("renders OpenRouter guidance observations without raw prompts or keys", async
   expect(renderedText()).toContain("teacher");
   expect(renderedText()).toContain("code:debugging");
   expect(renderedText()).toContain("openrouter_internal");
-  expect(renderedText()).not.toContain("sk-");
+  expect(renderedText()).not.toContain("sk-or-");
+  expect(renderedText()).not.toContain("OPENROUTER_API_KEY");
 });

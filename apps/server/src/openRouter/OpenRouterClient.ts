@@ -5,6 +5,7 @@ import {
   OPENROUTER_CLASSIFICATION_WINDOW,
   OPENROUTER_DEFAULT_BASE_URL,
   OPENROUTER_CATALOG_PAGE_SIZE,
+  OPENROUTER_CATALOG_PAGE_SIZE_MAX,
   OPENROUTER_MODELS_PATH,
   OPENROUTER_REQUEST_TIMEOUT_MS,
   type OpenRouterCostTier,
@@ -255,12 +256,13 @@ export const createOpenRouterClient = (config: OpenRouterClientConfig) => {
     ): Promise<{ readonly status: number; readonly data: unknown[] }> => {
       const data: unknown[] = [];
       let offset = 0;
+      const pageLimit = Math.min(OPENROUTER_CATALOG_PAGE_SIZE, OPENROUTER_CATALOG_PAGE_SIZE_MAX);
       for (;;) {
         const response = await request(
           {
             method: "GET",
             path: OPENROUTER_MODELS_PATH,
-            query: `?offset=${offset}&limit=${OPENROUTER_CATALOG_PAGE_SIZE}`,
+            query: `?offset=${offset}&limit=${pageLimit}`,
           },
           signal,
         );
@@ -274,7 +276,7 @@ export const createOpenRouterClient = (config: OpenRouterClientConfig) => {
         data.push(...page);
         const next = nextModelsPageOffset({
           offset,
-          limit: OPENROUTER_CATALOG_PAGE_SIZE,
+          limit: pageLimit,
           pageLength: page.length,
         });
         if (next === null) return { status: 200, data };

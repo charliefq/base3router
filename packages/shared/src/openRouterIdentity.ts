@@ -11,7 +11,7 @@ const normalizeSlug = (value: string): string => value.trim().toLowerCase();
  * Documented aliases only. Keys are `driver:normalizedBase3Model`.
  * Similarly named models are not assumed identical.
  */
-export const OPENROUTER_DOCUMENTED_ALIASES: Readonly<Record<string, string>> = {
+const OPENROUTER_DOCUMENTED_ALIASES: Readonly<Record<string, string>> = {
   "openrouter:openrouter/auto": "openrouter/auto",
 };
 

@@ -4,7 +4,6 @@ import {
   OPENROUTER_AUTO_SLUG,
   OPENROUTER_METADATA_HEADER,
   OPENROUTER_METADATA_HEADER_VALUE,
-  OPENROUTER_PHASE10_PRIVACY_POLICY,
   OPENROUTER_SHADOW_MAX_TOKENS,
 } from "@t3tools/contracts";
 
@@ -33,7 +32,7 @@ export const openRouterMetadataHeaders = (): Readonly<Record<string, string>> =>
   [OPENROUTER_METADATA_HEADER]: OPENROUTER_METADATA_HEADER_VALUE,
 });
 
-export const openRouterAutoRouterPlugin = (input: {
+const openRouterAutoRouterPlugin = (input: {
   readonly allowedModels: ReadonlyArray<string>;
   readonly excludedModels?: ReadonlyArray<string>;
   readonly costTier: OpenRouterCostTier;
@@ -84,5 +83,3 @@ export const openRouterRequestOmitsPluginsAndTools = (body: OpenRouterChatReques
     !("tool_choice" in body)
   );
 };
-
-export const openRouterPhase10PrivacyPolicy = OPENROUTER_PHASE10_PRIVACY_POLICY;

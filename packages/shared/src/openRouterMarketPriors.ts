@@ -66,7 +66,7 @@ export const normalizeOpenRouterCatalogModel = (raw: unknown): OpenRouterCatalog
   };
 };
 
-export const normalizeOpenRouterClassification = (
+const normalizeOpenRouterClassification = (
   raw: unknown,
 ): OpenRouterMarketPriorClassificationV0 | null => {
   if (raw === null || typeof raw !== "object") return null;

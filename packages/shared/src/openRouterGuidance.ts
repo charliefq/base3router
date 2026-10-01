@@ -63,7 +63,7 @@ export const openRouterAgreement = (input: {
     : "disagreement";
 };
 
-export const teacherAllowlistFromDecision = (input: {
+const teacherAllowlistFromDecision = (input: {
   readonly candidates: ReadonlyArray<ModelRouterCandidate>;
   readonly costTier?: OpenRouterCostTier;
 }): {
