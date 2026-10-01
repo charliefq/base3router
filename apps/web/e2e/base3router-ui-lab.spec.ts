@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { mkdir } from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
 import { UI_LAB_SCENARIO_IDS, type UiLabScenarioId } from "../src/lab/scenarios";
@@ -13,7 +13,7 @@ async function openScenario(page: Page, id: UiLabScenarioId) {
 }
 
 async function capture(page: Page, name: string) {
-  await mkdir(SCREENSHOT_DIR, { recursive: true });
+  await NodeFSP.mkdir(SCREENSHOT_DIR, { recursive: true });
   await page.screenshot({
     path: NodePath.join(SCREENSHOT_DIR, `${name}.png`),
     animations: "disabled",
