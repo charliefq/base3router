@@ -608,6 +608,70 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toContain("Manual selection was kept");
   });
 
+  it("keeps Manual sandbox failures after assistant output as the provider error", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-sandbox-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-sandbox"),
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.session?.status === "running" && thread.session?.activeTurnId === "turn-sandbox",
+    );
+
+    await Effect.runPromise(
+      harness.availability.registerPending({
+        threadId: asThreadId("thread-1"),
+        messageId: "message-sandbox",
+        messageText: "Run risky command",
+        attemptCount: 1,
+        attemptedInstanceIds: new Set(["codex"]),
+        attemptedTargetKeys: new Set(["codex\u0000gpt-5.5"]),
+        currentTarget: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.5" },
+        routingMode: "manual",
+        sideEffectsStarted: false,
+        retry: null,
+        onRuntimeFailure: () => Effect.succeed(true),
+      }),
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-sandbox-text"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-sandbox"),
+      payload: { streamKind: "assistant_text", delta: "Partial output before failure.\n" },
+    });
+    await harness.drain();
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-sandbox-failed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-sandbox"),
+      payload: {
+        state: "failed",
+        errorMessage: "Sandbox command failed.",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.status === "error" && entry.session?.lastError === "Sandbox command failed.",
+    );
+    expect(thread.session?.lastError).toBe("Sandbox command failed.");
+  });
+
   it("does not failover Auto Route after assistant output has started", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

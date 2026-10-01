@@ -1887,20 +1887,28 @@ const make = Effect.gen(function* () {
               detail: event.payload.errorMessage ?? "Turn failed",
             });
           } else if (pending !== undefined && pending.routingMode === "manual") {
-            event = {
-              ...event,
-              payload: {
-                ...event.payload,
-                errorMessage: formatModelRouterTerminalFailure({
-                  instanceId: String(pending.currentTarget.instanceId),
-                  model: pending.currentTarget.model,
-                  classification,
-                  mode: "manual",
-                  terminalReason: "MANUAL_NO_FAILOVER",
-                  detail: event.payload.errorMessage ?? "Turn failed",
-                }),
-              },
-            };
+            // Keep provider errors for sandbox/tool failures and turns that
+            // already produced output. Routing copy is only for Manual
+            // selection failures Auto Route would otherwise retry.
+            if (
+              classification.category !== "non_retryable_request" &&
+              classification.category !== "side_effect_started"
+            ) {
+              event = {
+                ...event,
+                payload: {
+                  ...event.payload,
+                  errorMessage: formatModelRouterTerminalFailure({
+                    instanceId: String(pending.currentTarget.instanceId),
+                    model: pending.currentTarget.model,
+                    classification,
+                    mode: "manual",
+                    terminalReason: "MANUAL_NO_FAILOVER",
+                    detail: event.payload.errorMessage ?? "Turn failed",
+                  }),
+                },
+              };
+            }
             yield* modelRouterAvailability.clearPending(thread.id);
           }
         }
