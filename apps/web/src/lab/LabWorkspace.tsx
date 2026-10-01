@@ -57,6 +57,7 @@ export function LabWorkspace(props: {
           taskObjective: "A-unusually-long-thread-title-for-Inspector-truncation-checks",
         }
       : {}),
+    ...(props.scenario.openRouter !== undefined ? { openRouter: props.scenario.openRouter } : {}),
   });
 
   return (
@@ -101,6 +102,9 @@ export function LabWorkspace(props: {
               error={props.error}
               mode={props.mode}
               prompt={props.prompt}
+              {...(props.scenario.openRouterControl !== undefined
+                ? { openRouter: props.scenario.openRouterControl }
+                : {})}
               onDismissError={props.onDismissError}
               onModeChange={props.onModeChange}
               onPromptChange={props.onPromptChange}

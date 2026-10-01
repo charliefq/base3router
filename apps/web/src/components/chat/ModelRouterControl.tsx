@@ -1,4 +1,8 @@
-import type { ModelRouterDecision, ModelRouterMode } from "@t3tools/contracts";
+import type {
+  ModelRouterDecision,
+  ModelRouterMode,
+  OpenRouterGuidanceMode,
+} from "@t3tools/contracts";
 import { memo } from "react";
 import { CircleHelpIcon, RouteIcon } from "lucide-react";
 import { Select, SelectItem, SelectPopup, SelectValue } from "../ui/select";
@@ -28,6 +32,10 @@ export const ModelRouterControl = memo(function ModelRouterControl(props: {
   readonly hidden?: boolean;
   readonly disabled?: boolean;
   readonly onModeChange: (mode: ModelRouterMode) => void;
+  readonly openRouter?: {
+    readonly mode: OpenRouterGuidanceMode;
+    readonly connectionStatus: "not_configured" | "connected" | "unavailable";
+  };
 }) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const size = props.size ?? "sm";
@@ -141,6 +149,16 @@ export const ModelRouterControl = memo(function ModelRouterControl(props: {
             </span>
           ) : null}
         </>
+      ) : null}
+      {props.openRouter !== undefined && props.openRouter.connectionStatus !== "not_configured" ? (
+        <span
+          className="max-w-28 truncate text-2xs text-muted-foreground"
+          data-openrouter-guidance={props.openRouter.mode}
+          data-openrouter-connection={props.openRouter.connectionStatus}
+          title="OpenRouter guidance is separate from Auto Route"
+        >
+          OR {props.openRouter.mode}
+        </span>
       ) : null}
     </span>
   );

@@ -14,7 +14,10 @@ import {
 } from "@t3tools/contracts";
 
 import type { ControlCenterModel } from "~/controlPlane/presentControlCenter";
-import type { OperationalInspectorModel } from "~/controlPlane/presentOperationalInspector";
+import type {
+  InspectorOpenRouterModel,
+  OperationalInspectorModel,
+} from "~/controlPlane/presentOperationalInspector";
 
 export const UI_LAB_NOW_MS = Date.parse("2026-09-30T00:00:00.000Z");
 const UI_LAB_PROJECT_TITLE = "Base3Router Lab";
@@ -108,6 +111,7 @@ export function inspectorModelFromLab(input: {
   readonly empty?: boolean;
   readonly projectTitle?: string;
   readonly taskObjective?: string;
+  readonly openRouter?: InspectorOpenRouterModel | null;
 }): OperationalInspectorModel {
   if (input.empty === true) {
     return {
@@ -148,6 +152,7 @@ export function inspectorModelFromLab(input: {
       workflowStatus: null,
       stages: [],
       cursorCloud: null,
+      openRouter: null,
       error: null,
       emptyReason: "no-selection",
     };
@@ -213,6 +218,7 @@ export function inspectorModelFromLab(input: {
           }))
         : [],
     cursorCloud: null,
+    openRouter: input.openRouter ?? null,
     error: input.error,
     emptyReason: null,
   };

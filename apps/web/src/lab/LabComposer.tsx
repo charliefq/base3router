@@ -14,6 +14,10 @@ export function LabComposer(props: {
   readonly prompt: string;
   readonly error: string | null;
   readonly disabled?: boolean;
+  readonly openRouter?: {
+    readonly mode: "off" | "shadow" | "teacher";
+    readonly connectionStatus: "not_configured" | "connected" | "unavailable";
+  };
   readonly onModeChange: (mode: ModelRouterMode) => void;
   readonly onPromptChange: (value: string) => void;
   readonly onSubmit: () => void;
@@ -58,6 +62,7 @@ export function LabComposer(props: {
                   disabled={props.disabled === true}
                   mode={props.mode}
                   onModeChange={props.onModeChange}
+                  {...(props.openRouter !== undefined ? { openRouter: props.openRouter } : {})}
                 />
                 <Button
                   aria-label="Send lab prompt"

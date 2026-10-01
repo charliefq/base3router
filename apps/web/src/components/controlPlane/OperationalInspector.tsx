@@ -7,6 +7,7 @@ import {
   type CursorCloudInspectorActionHandlers,
 } from "~/controlPlane/inspectorActions";
 import type {
+  InspectorOpenRouterModel,
   InspectorRouteModel,
   OperationalInspectorModel,
 } from "~/controlPlane/presentOperationalInspector";
@@ -115,6 +116,7 @@ function InspectorBody(props: {
         detail={model.projectTitle ?? "No project selected."}
       />
       <RouteTraceCard route={model.route} />
+      {model.openRouter ? <OpenRouterGuidanceCard model={model.openRouter} /> : null}
       <OperationalStatusCard
         title="ActionGate"
         tone={statusTone(model.route.gateDecision)}
@@ -359,6 +361,59 @@ function RouteTraceCard(props: { readonly route: InspectorRouteModel }) {
           {metricLabel("quality", route.estimatedQuality)}
         </p>
       )}
+    </OperationalStatusCard>
+  );
+}
+
+function OpenRouterGuidanceCard(props: { readonly model: InspectorOpenRouterModel }) {
+  const { model } = props;
+  const requested = model.requestedRouterTarget;
+  const actual = model.actualModel;
+  const differs = requested !== null && actual !== null && requested !== actual;
+  return (
+    <OperationalStatusCard
+      title="OpenRouter guidance"
+      value={model.mode}
+      detail={`Status ${model.status}. Privacy ${model.privacyPolicy}.`}
+      tone={
+        model.status === "failed" || model.status === "policy_violation"
+          ? "danger"
+          : model.status === "skipped"
+            ? "warning"
+            : "neutral"
+      }
+    >
+      <div className="mt-1 space-y-1 text-2xs text-muted-foreground" data-openrouter-inspector="">
+        <p data-openrouter-mode={model.mode}>Mode: {model.mode}</p>
+        <p data-openrouter-task-source={model.taskSource}>
+          Task: {model.taskTag ?? "unknown"} ({model.taskSource})
+        </p>
+        {model.base3Model ? <p data-openrouter-base3="">Base3Router: {model.base3Model}</p> : null}
+        {model.openRouterModel ? (
+          <p data-openrouter-suggested="">OpenRouter: {model.openRouterModel}</p>
+        ) : null}
+        {differs ? (
+          <p data-openrouter-actual="">
+            Requested {requested} · actual {actual}
+          </p>
+        ) : null}
+        <p data-openrouter-agreement={model.agreement}>Agreement: {model.agreement}</p>
+        {model.skipReason ? <p data-openrouter-skip="">Skipped: {model.skipReason}</p> : null}
+        {model.errorCategory ? (
+          <p data-openrouter-error="">Failure: {model.errorCategory}</p>
+        ) : null}
+        {model.nestedFallbacks.length > 0 ? (
+          <ol data-openrouter-nested-fallbacks="">
+            {model.nestedFallbacks.map((entry, index) => (
+              <li key={`${index}-${entry}`}>{entry}</li>
+            ))}
+          </ol>
+        ) : null}
+        {model.freshness ? (
+          <p data-openrouter-freshness={model.freshness}>Priors {model.freshness}</p>
+        ) : null}
+        {model.asOf ? <p data-openrouter-as-of="">Observed {model.asOf}</p> : null}
+      </div>
     </OperationalStatusCard>
   );
 }

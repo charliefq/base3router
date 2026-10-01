@@ -3,6 +3,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  emptyOpenRouterObservation,
   type DispatcherRouteDecision,
   type DispatcherTaskRouteBinding,
 } from "@t3tools/contracts";
@@ -373,4 +374,48 @@ it("shows no-selection when nothing is bound in the workspace", () => {
   });
 
   expect(model.emptyReason).toBe("no-selection");
+});
+
+it("presents sanitized OpenRouter Teacher observations without prompt text", () => {
+  const model = presentOperationalInspector({
+    selected: true,
+    projectTitle: "Portfolio",
+    taskObjective: "Draft the dispatcher note",
+    gitBranch: "cursor/phase-7",
+    sessionStatus: "running",
+    sessionError: null,
+    capabilities: { dispatcher: true, workflow: true, cursorCloud: false },
+    providers: [],
+    preview: { status: "idle" },
+    boundRoute: {
+      ...boundRoute,
+      openRouter: {
+        ...emptyOpenRouterObservation({
+          guidanceMode: "teacher",
+          status: "observed",
+          allowedModels: ["anthropic/claude-sonnet-4.5"],
+        }),
+        openRouterSuggested: "anthropic/claude-sonnet-4.5",
+        actualExecutionModel: "anthropic/claude-sonnet-4.5",
+        requestedRouterTarget: "openrouter/auto",
+        nestedFallbacks: [
+          {
+            origin: "openrouter_internal",
+            provider: "Anthropic",
+            model: "anthropic/claude-sonnet-4.5",
+            status: 200,
+          },
+        ],
+      },
+    },
+    workflowRun: null,
+    workflowTemplate: null,
+    cursorCloudBinding: null,
+  });
+
+  expect(model.openRouter?.mode).toBe("teacher");
+  expect(model.openRouter?.actualModel).toBe("anthropic/claude-sonnet-4.5");
+  expect(model.openRouter?.nestedFallbacks[0]).toContain("openrouter_internal");
+  expect(JSON.stringify(model.openRouter)).not.toContain("sk-");
+  expect(JSON.stringify(model.openRouter)).not.toContain("Draft the dispatcher note");
 });

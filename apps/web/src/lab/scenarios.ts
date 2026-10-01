@@ -1,4 +1,5 @@
 import type { ModelRouterMode } from "@t3tools/contracts";
+import type { InspectorOpenRouterModel } from "~/controlPlane/presentOperationalInspector";
 
 import {
   LAB_CLAUDE,
@@ -39,6 +40,21 @@ export const UI_LAB_SCENARIO_IDS = [
   "standard-width",
   "light-appearance",
   "dark-appearance",
+  "openrouter-not-configured",
+  "openrouter-off",
+  "openrouter-shadow-warning",
+  "openrouter-shadow-agreement",
+  "openrouter-shadow-disagreement",
+  "openrouter-shadow-privacy",
+  "openrouter-shadow-failure",
+  "openrouter-teacher",
+  "openrouter-teacher-actual-differs",
+  "openrouter-teacher-unavailable",
+  "openrouter-stale-priors",
+  "openrouter-unknown-task",
+  "openrouter-nested-fallback",
+  "openrouter-long-names",
+  "openrouter-compact-height",
 ] as const;
 
 export type UiLabScenarioId = (typeof UI_LAB_SCENARIO_IDS)[number];
@@ -74,6 +90,11 @@ export type LabScenarioState = {
   readonly view: LabView;
   readonly inspectorEmpty: boolean;
   readonly longNames: boolean;
+  readonly openRouter?: InspectorOpenRouterModel | null;
+  readonly openRouterControl?: {
+    readonly mode: "off" | "shadow" | "teacher";
+    readonly connectionStatus: "not_configured" | "connected" | "unavailable";
+  };
 };
 
 const LONG_THREAD_MESSAGES: ReadonlyArray<LabMessage> = Array.from({ length: 48 }, (_, index) => ({
@@ -101,6 +122,29 @@ export const LAB_LONG_SIDEBAR_THREADS: ReadonlyArray<LabMessage> = Array.from(
     text: `Very-long-project-and-thread-name-that-must-truncate-without-horizontal-overflow-${index + 1}`,
   }),
 );
+
+function labOpenRouter(
+  input: Partial<InspectorOpenRouterModel> & { readonly mode: string },
+): InspectorOpenRouterModel {
+  return {
+    status: "observed",
+    connection: "connected",
+    privacyPolicy: "zdr_deny_collection",
+    taskTag: "code:general_impl",
+    taskSource: "openrouter_auto",
+    base3Model: "gpt-5.5",
+    openRouterModel: "anthropic/claude-sonnet-4.5",
+    requestedRouterTarget: "openrouter/auto",
+    actualModel: "anthropic/claude-sonnet-4.5",
+    agreement: "disagreement",
+    skipReason: null,
+    errorCategory: null,
+    nestedFallbacks: [],
+    freshness: "fresh",
+    asOf: "2026-06-17",
+    ...input,
+  };
+}
 
 function applyTurn(
   base: Omit<LabScenarioState, "decision" | "error" | "threadStatus" | "messages"> & {
@@ -515,6 +559,237 @@ export function createLabScenario(id: UiLabScenarioId): LabScenarioState {
         label: "Standard desktop",
         description: "1440px-class desktop width.",
         viewport: "standard",
+      };
+    case "openrouter-not-configured":
+      return {
+        ...defaults,
+        label: "OpenRouter not configured",
+        description: "Auto Route without OpenRouter guidance.",
+        decision: labDecision({ executionStatus: "completed" }),
+        threadStatus: "completed",
+        error: null,
+        messages: [],
+        openRouterControl: { mode: "off", connectionStatus: "not_configured" },
+      };
+    case "openrouter-off":
+      return {
+        ...defaults,
+        label: "OpenRouter Off",
+        description: "Guidance Off while a key is present.",
+        decision: labDecision({ executionStatus: "completed" }),
+        threadStatus: "completed",
+        error: null,
+        messages: [],
+        openRouter: labOpenRouter({
+          mode: "off",
+          status: "not_requested",
+          agreement: "inapplicable",
+        }),
+        openRouterControl: { mode: "off", connectionStatus: "connected" },
+      };
+    case "openrouter-shadow-warning":
+      return {
+        ...defaults,
+        label: "Shadow warning",
+        description: "Shadow consent warning before activation.",
+        decision: labDecision({ executionStatus: "not-started" }),
+        threadStatus: "idle",
+        error: null,
+        messages: [],
+        openRouter: labOpenRouter({
+          mode: "shadow",
+          status: "skipped",
+          skipReason: "consent_required",
+          agreement: "inapplicable",
+        }),
+        openRouterControl: { mode: "shadow", connectionStatus: "connected" },
+      };
+    case "openrouter-shadow-agreement":
+      return {
+        ...defaults,
+        label: "Shadow agreement",
+        description: "Shadow observation agrees with Base3Router.",
+        decision: labDecision({ executionStatus: "completed" }),
+        threadStatus: "completed",
+        error: null,
+        messages: [{ id: "lab-user-1", role: "user", text: "Implement the helper." }],
+        openRouter: labOpenRouter({
+          mode: "shadow",
+          agreement: "agreement",
+          openRouterModel: "gpt-5.5",
+          actualModel: "gpt-5.5",
+        }),
+        openRouterControl: { mode: "shadow", connectionStatus: "connected" },
+      };
+    case "openrouter-shadow-disagreement":
+      return {
+        ...defaults,
+        label: "Shadow disagreement",
+        description: "Shadow suggested a different model. Execution stays Base3Router.",
+        decision: labDecision({ executionStatus: "completed" }),
+        threadStatus: "completed",
+        error: null,
+        messages: [{ id: "lab-user-1", role: "user", text: "Implement the helper." }],
+        openRouter: labOpenRouter({ mode: "shadow", agreement: "disagreement" }),
+        openRouterControl: { mode: "shadow", connectionStatus: "connected" },
+      };
+    case "openrouter-shadow-privacy":
+      return {
+        ...defaults,
+        label: "Shadow skipped for privacy",
+        description: "Likely credentials skipped the Shadow request.",
+        decision: labDecision({ executionStatus: "completed" }),
+        threadStatus: "completed",
+        error: null,
+        messages: [],
+        openRouter: labOpenRouter({
+          mode: "shadow",
+          status: "skipped",
+          skipReason: "likely_credentials",
+          agreement: "inapplicable",
+        }),
+        openRouterControl: { mode: "shadow", connectionStatus: "connected" },
+      };
+    case "openrouter-shadow-failure":
+      return {
+        ...defaults,
+        label: "Shadow provider failure",
+        description: "Shadow failed. The real turn still completed.",
+        decision: labDecision({ executionStatus: "completed" }),
+        threadStatus: "completed",
+        error: null,
+        messages: [],
+        openRouter: labOpenRouter({
+          mode: "shadow",
+          status: "failed",
+          errorCategory: "rate_limited",
+          agreement: "inapplicable",
+        }),
+        openRouterControl: { mode: "shadow", connectionStatus: "connected" },
+      };
+    case "openrouter-teacher":
+      return {
+        ...defaults,
+        label: "Teacher selected",
+        description: "Teacher executed OpenRouter Auto inside the eligible set.",
+        decision: labDecision({ executionStatus: "completed" }),
+        threadStatus: "completed",
+        error: null,
+        messages: [{ id: "lab-user-1", role: "user", text: "Plan then execute." }],
+        openRouter: labOpenRouter({ mode: "teacher", agreement: "inapplicable" }),
+        openRouterControl: { mode: "teacher", connectionStatus: "connected" },
+      };
+    case "openrouter-teacher-actual-differs":
+      return {
+        ...defaults,
+        label: "Teacher actual model differs",
+        description: "Requested openrouter/auto; actual model is shown separately.",
+        decision: labDecision({ executionStatus: "completed" }),
+        threadStatus: "completed",
+        error: null,
+        messages: [],
+        openRouter: labOpenRouter({
+          mode: "teacher",
+          requestedRouterTarget: "openrouter/auto",
+          actualModel: "anthropic/claude-sonnet-4.5",
+        }),
+        openRouterControl: { mode: "teacher", connectionStatus: "connected" },
+      };
+    case "openrouter-teacher-unavailable":
+      return {
+        ...defaults,
+        label: "Teacher unavailable",
+        description: "Teacher could not run. Fallback stays Auto Route when allowed.",
+        decision: labDecision({ executionStatus: "completed" }),
+        threadStatus: "completed",
+        error: null,
+        messages: [],
+        openRouter: labOpenRouter({
+          mode: "teacher",
+          status: "failed",
+          errorCategory: "missing_api_key",
+          agreement: "inapplicable",
+        }),
+        openRouterControl: { mode: "teacher", connectionStatus: "unavailable" },
+      };
+    case "openrouter-stale-priors":
+      return {
+        ...defaults,
+        label: "Stale market priors",
+        description: "Market-prior snapshot is stale. Scores stay unknown when missing.",
+        decision: labDecision({ executionStatus: "completed" }),
+        threadStatus: "completed",
+        error: null,
+        messages: [],
+        openRouter: labOpenRouter({
+          mode: "shadow",
+          freshness: "stale",
+          asOf: "2026-06-17",
+        }),
+        openRouterControl: { mode: "shadow", connectionStatus: "connected" },
+      };
+    case "openrouter-unknown-task":
+      return {
+        ...defaults,
+        label: "Unknown task type",
+        description: "Missing OpenRouter task type stays unknown.",
+        decision: labDecision({ executionStatus: "completed" }),
+        threadStatus: "completed",
+        error: null,
+        messages: [],
+        openRouter: labOpenRouter({
+          mode: "shadow",
+          taskTag: null,
+          taskSource: "unknown",
+        }),
+        openRouterControl: { mode: "shadow", connectionStatus: "connected" },
+      };
+    case "openrouter-nested-fallback":
+      return {
+        ...defaults,
+        label: "Nested OpenRouter fallback",
+        description:
+          "Internal OpenRouter attempts are nested evidence, not extra Auto Route attempts.",
+        decision: labDecision({ executionStatus: "completed" }),
+        threadStatus: "completed",
+        error: null,
+        messages: [],
+        openRouter: labOpenRouter({
+          mode: "teacher",
+          nestedFallbacks: [
+            "openrouter_internal · Anthropic · anthropic/claude-sonnet-4.5 · 429",
+            "openrouter_internal · Anthropic · anthropic/claude-sonnet-4.5 · 200",
+          ],
+        }),
+        openRouterControl: { mode: "teacher", connectionStatus: "connected" },
+      };
+    case "openrouter-long-names":
+      return {
+        ...createLabScenario("long-names"),
+        id: "openrouter-long-names",
+        label: "Long OpenRouter names",
+        description: "Long OpenRouter model names truncate in the Inspector.",
+        openRouter: labOpenRouter({
+          mode: "teacher",
+          openRouterModel: "very-long-openrouter-provider/very-long-model-slug-name-for-truncation",
+          actualModel: "very-long-openrouter-provider/very-long-model-slug-name-for-truncation",
+        }),
+        openRouterControl: { mode: "teacher", connectionStatus: "connected" },
+      };
+    case "openrouter-compact-height":
+      return {
+        ...createLabScenario("compact-height"),
+        id: "openrouter-compact-height",
+        label: "Compact OpenRouter guidance",
+        description: "Guidance indicator at compact composer height.",
+        viewport: "compact-height",
+        openRouter: labOpenRouter({
+          mode: "shadow",
+          agreement: "agreement",
+          openRouterModel: "gpt-5.5",
+          actualModel: "gpt-5.5",
+        }),
+        openRouterControl: { mode: "shadow", connectionStatus: "connected" },
       };
   }
 }

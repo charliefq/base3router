@@ -63,6 +63,7 @@ function model(overrides: Partial<OperationalInspectorModel> = {}): OperationalI
     workflowStatus: null,
     stages: [],
     cursorCloud: null,
+    openRouter: null,
     error: null,
     emptyReason: null,
     ...overrides,
@@ -365,5 +366,44 @@ it("renders sanitized Auto Route attempt history after failover", async () => {
   expect(renderedText()).toContain("Attempt ");
   expect(renderedText()).toContain("usage_quota_exhausted");
   expect(renderedText()).toContain("Attempt budget:");
+  expect(renderedText()).not.toContain("sk-");
+});
+
+it("renders OpenRouter guidance observations without raw prompts or keys", async () => {
+  await act(async () => {
+    renderer = create(
+      <OperationalInspector
+        collapsed={false}
+        model={model({
+          openRouter: {
+            mode: "teacher",
+            status: "observed",
+            connection: "connected",
+            privacyPolicy: "zdr_deny_collection",
+            taskTag: "code:debugging",
+            taskSource: "openrouter_auto",
+            base3Model: "gpt-5.4",
+            openRouterModel: "anthropic/claude-sonnet-4.5",
+            requestedRouterTarget: "openrouter/auto",
+            actualModel: "anthropic/claude-sonnet-4.5",
+            agreement: "disagreement",
+            skipReason: null,
+            errorCategory: null,
+            nestedFallbacks: [
+              "openrouter_internal · Anthropic · anthropic/claude-sonnet-4.5 · 200",
+            ],
+            freshness: "fresh",
+            asOf: "2026-06-17",
+          },
+        })}
+        onToggle={() => {}}
+      />,
+    );
+  });
+
+  expect(renderedText()).toContain("OpenRouter guidance");
+  expect(renderedText()).toContain("teacher");
+  expect(renderedText()).toContain("code:debugging");
+  expect(renderedText()).toContain("openrouter_internal");
   expect(renderedText()).not.toContain("sk-");
 });

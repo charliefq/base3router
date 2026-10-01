@@ -10,7 +10,7 @@ const SCREENSHOT_DIR = NodePath.join(import.meta.dirname, "../playwright-results
 const CONTROL_CENTER_SCENARIOS = new Set<UiLabScenarioId>(["empty-workspace", "disconnected"]);
 
 async function applyScenarioViewport(page: Page, id: UiLabScenarioId) {
-  if (id === "compact-height") {
+  if (id === "compact-height" || id === "openrouter-compact-height") {
     await page.setViewportSize({ width: 1280, height: 360 });
     return;
   }

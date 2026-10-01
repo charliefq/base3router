@@ -83,3 +83,25 @@ it("shows the executed model when Auto Route failsover", () => {
   expect(markup).toContain("gpt-5.4 → claude-sonnet-4-6");
   expect(markup).toContain('data-model-router-rerouted="true"');
 });
+
+it("shows a compact OpenRouter indicator only when guidance is configured", () => {
+  const hidden = renderToStaticMarkup(
+    <ModelRouterControl
+      decision={decision}
+      mode="auto"
+      onModeChange={() => {}}
+      openRouter={{ mode: "off", connectionStatus: "not_configured" }}
+    />,
+  );
+  expect(hidden).not.toContain("data-openrouter-guidance");
+  const shown = renderToStaticMarkup(
+    <ModelRouterControl
+      decision={decision}
+      mode="auto"
+      onModeChange={() => {}}
+      openRouter={{ mode: "shadow", connectionStatus: "connected" }}
+    />,
+  );
+  expect(shown).toContain("OR shadow");
+  expect(shown).not.toContain("sk-");
+});
