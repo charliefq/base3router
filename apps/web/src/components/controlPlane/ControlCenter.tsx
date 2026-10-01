@@ -38,6 +38,37 @@ export function ControlCenter(props: {
           data-control-center-environment={props.model.selectedEnvironmentId ?? ""}
           data-control-center-surface={props.model.surface}
         >
+          <OperationalStatusCard
+            title="Environment"
+            tone={statusTone(
+              props.model.surface === "ready"
+                ? "ready"
+                : props.model.surface === "loading"
+                  ? "loading"
+                  : props.model.surface === "offline"
+                    ? "offline"
+                    : "unavailable",
+            )}
+            value={
+              props.model.surface === "ready"
+                ? "Ready"
+                : props.model.surface === "loading"
+                  ? "Loading"
+                  : props.model.surface === "offline"
+                    ? "Offline"
+                    : "Unpaired"
+            }
+            detail={
+              props.model.environmentLabel ??
+              (props.model.selectedEnvironmentId
+                ? props.model.selectedEnvironmentId
+                : "No environment selected")
+            }
+          >
+            <p className="mt-1 text-2xs text-muted-foreground">
+              {props.model.projects.length} projects · {props.model.recentTasks.length} recent tasks
+            </p>
+          </OperationalStatusCard>
           {props.model.surface === "unpaired" ? (
             <OperationalStatusCard
               title="Offline"
@@ -157,6 +188,7 @@ function TaskCard(props: { readonly task: ControlCenterTaskItem }) {
         <p className="mt-1 text-2xs text-muted-foreground">
           {props.task.routeLabel ?? "No bound route"} · {props.task.runnerKind}
         </p>
+        <p className="text-2xs text-muted-foreground">Open to inspect this task.</p>
       </OperationalStatusCard>
     </Link>
   );

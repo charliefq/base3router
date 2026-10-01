@@ -123,11 +123,25 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --workspace-gutter: 0.75rem;
   --workspace-gutter-start: calc(env(safe-area-inset-left) + var(--workspace-gutter));
   --workspace-gutter-end: calc(env(safe-area-inset-right) + var(--workspace-gutter));
+  /*
+   * Base3Router control-plane tokens. Use these roles instead of literal
+   * colors in the rail, Inspector, Control Center, and router controls.
+   * --route-auto is model routing mode, not RuntimeMode Access Auto.
+   */
   --control-plane-accent: oklch(0.62 0.12 264);
   --control-plane-rail-width: 3.75rem;
   --control-plane-inspector-width: 20rem;
   --control-plane-card-radius: 0.625rem;
   --control-plane-rail-background: color-mix(in oklab, var(--background) 92%, black);
+  --control-plane-control-height: 1.75rem;
+  --control-plane-focus-ring: var(--ring);
+  --route-auto: oklch(0.62 0.12 264);
+  --route-manual: oklch(0.55 0.08 230);
+  --status-pending: oklch(0.72 0.12 75);
+  --status-running: oklch(0.62 0.12 264);
+  --status-success: var(--success-foreground);
+  --status-warning: var(--warning-foreground);
+  --status-failure: var(--error-foreground);
 
   @variant sm {
     --workspace-gutter: 1.25rem;
@@ -141,6 +155,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --glass-saturation: 1.08;
     --control-plane-accent: oklch(0.72 0.1 264);
     --control-plane-rail-background: color-mix(in oklab, var(--background) 88%, black);
+    --route-auto: oklch(0.72 0.1 264);
+    --route-manual: oklch(0.7 0.06 230);
   }
 }
 
@@ -219,6 +235,13 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-update-surface: var(--update-surface);
   --color-success-foreground: var(--success-foreground);
   --color-success: var(--success);
+  --color-route-auto: var(--route-auto);
+  --color-route-manual: var(--route-manual);
+  --color-status-pending: var(--status-pending);
+  --color-status-running: var(--status-running);
+  --color-status-success: var(--status-success);
+  --color-status-warning: var(--status-warning);
+  --color-status-failure: var(--status-failure);
   --color-diff-addition: var(--diff-addition);
   --color-diff-deletion: var(--diff-deletion);
   --color-diff-addition-foreground: var(--diff-addition-foreground);

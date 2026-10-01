@@ -74,7 +74,11 @@ export const ModelRouterControl = memo(function ModelRouterControl(props: {
               />
             }
           >
-            <ComposerControlIcon icon={RouteIcon} size={size} />
+            <ComposerControlIcon
+              className={props.mode === "auto" ? "text-route-auto" : "text-route-manual"}
+              icon={RouteIcon}
+              size={size}
+            />
             <SelectValue data-composer-control-label>{MODE_LABEL[props.mode]}</SelectValue>
           </TooltipTrigger>
           <SelectPopup align="start" {...composerFloatingLayerProps}>
@@ -84,8 +88,8 @@ export const ModelRouterControl = memo(function ModelRouterControl(props: {
         </Select>
         <TooltipPopup side="top">
           {props.mode === "auto"
-            ? "Automatically select an available, authorized model."
-            : "Use the model chosen in the picker."}
+            ? "Auto Route: Base3Router selects an available, authorized model. No learned routing, classification, or measured cost."
+            : "Manual: use the model chosen in the picker. Failover stays off."}
         </TooltipPopup>
       </Tooltip>
       {props.mode === "auto" ? (

@@ -26,8 +26,9 @@ export const RUNTIME_MODE_CHOICES: ReadonlyArray<{
   },
   {
     mode: "auto",
-    label: "Auto",
-    description: "Supported providers approve routine actions; others still ask.",
+    label: "Access Auto",
+    description:
+      "Supported providers approve routine actions; others still ask. This is access policy, not Auto Route.",
   },
   {
     mode: "full-access",

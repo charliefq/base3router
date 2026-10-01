@@ -37,6 +37,7 @@ const empty: ControlCenterModel = {
   failedOrCancelled: [],
   empty: true,
   capabilityOff: false,
+  environmentLabel: "Lab environment",
 };
 
 it("renders the empty Control Center", async () => {
@@ -46,6 +47,7 @@ it("renders the empty Control Center", async () => {
 
   expect(renderedText()).toContain("Control Center");
   expect(renderedText()).toContain("Create a project");
+  expect(renderedText()).toContain("Lab environment");
 });
 
 it("renders capability-off, approvals, and terminal run states", async () => {

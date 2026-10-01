@@ -622,6 +622,7 @@ export const DeviceToolkitRegistrationLive = Layer.mergeAll(
 );
 
 const McpTransportLive = McpServer.layerHttp({
+  // MCP server name is an integration contract; keep the upstream identifier.
   name: "T3 Code",
   version: packageJson.version,
   path: "/mcp",

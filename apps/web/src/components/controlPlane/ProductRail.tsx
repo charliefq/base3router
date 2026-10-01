@@ -49,7 +49,7 @@ export function ProductRail(props: {
   return (
     <nav
       aria-label="Base3Router"
-      className="hidden h-full w-15 shrink-0 flex-col border-r border-border/80 bg-sidebar md:flex"
+      className="hidden h-full w-(--control-plane-rail-width) shrink-0 flex-col border-r border-border/80 bg-(--control-plane-rail-background) md:flex"
       data-control-plane="rail"
     >
       <div className="flex h-(--workspace-topbar-height) items-center justify-center">
@@ -67,7 +67,7 @@ export function ProductRail(props: {
           const target = productSectionTarget(section);
           const selected = active === section;
           const className = cn(
-            "flex size-9 items-center justify-center rounded-md text-muted-foreground outline-hidden ring-ring hover:bg-muted/60 hover:text-foreground focus-visible:ring-2",
+            "flex size-9 items-center justify-center rounded-md text-muted-foreground outline-hidden ring-(--control-plane-focus-ring) hover:bg-muted/60 hover:text-foreground focus-visible:ring-2",
             selected && "bg-muted text-foreground",
           );
           const link = target.search ? (

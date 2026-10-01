@@ -3223,7 +3223,7 @@ export function GeneralSettingsPanel() {
         />
         <SettingsRow
           {...searchableSetting("open-source-licenses")}
-          description="Notices for dependencies, assets, and optional tools used by T3 Code."
+          description="Notices for dependencies, assets, and optional tools used by Base3Router."
           control={
             <Button
               render={<Link to="/settings/open-source-licenses" />}

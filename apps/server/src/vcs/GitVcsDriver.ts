@@ -792,6 +792,8 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       const commitEnv: NodeJS.ProcessEnv = {
         ...process.env,
         GIT_INDEX_FILE: tempIndexPath,
+        // Checkpoint identity stays on the upstream git author so existing
+        // hidden refs keep a stable committer. This is not the product title.
         GIT_AUTHOR_NAME: "T3 Code",
         GIT_AUTHOR_EMAIL: "t3code@users.noreply.github.com",
         GIT_COMMITTER_NAME: "T3 Code",

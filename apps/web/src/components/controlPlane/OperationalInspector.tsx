@@ -6,7 +6,10 @@ import {
   resolveCursorCloudInspectorActions,
   type CursorCloudInspectorActionHandlers,
 } from "~/controlPlane/inspectorActions";
-import type { OperationalInspectorModel } from "~/controlPlane/presentOperationalInspector";
+import type {
+  InspectorRouteModel,
+  OperationalInspectorModel,
+} from "~/controlPlane/presentOperationalInspector";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { OperationalStatusCard, statusTone } from "./OperationalStatusCard";
@@ -43,7 +46,7 @@ export function OperationalInspector(props: {
 
   return (
     <aside
-      className="flex h-full min-h-0 w-80 shrink-0 flex-col overflow-hidden border-l border-border/80 bg-background"
+      className="flex h-full min-h-0 w-(--control-plane-inspector-width) shrink-0 flex-col overflow-hidden border-l border-border/80 bg-background"
       data-control-plane="inspector"
     >
       <header className="flex h-(--workspace-topbar-height) items-center justify-between gap-2 px-3">
@@ -88,7 +91,7 @@ function InspectorBody(props: {
     return (
       <OperationalStatusCard
         title="Selection"
-        detail="Select a project or task to inspect route, runner, and workflow state."
+        detail="No project or task is selected. Auto Route and Manual traces appear here after a thread is open."
       />
     );
   }
@@ -111,94 +114,7 @@ function InspectorBody(props: {
         title="Project"
         detail={model.projectTitle ?? "No project selected."}
       />
-      <OperationalStatusCard
-        title={model.route.kind === "bound" ? "Bound route" : "Provisional route"}
-        tone={statusTone(model.route.gateDecision)}
-        value={model.route.kind === "none" ? null : model.route.kind}
-        detail={
-          model.route.provider && model.route.model
-            ? `${model.route.provider} · ${model.route.model}`
-            : model.route.reason
-        }
-      >
-        <p className="mt-1 text-2xs text-muted-foreground">{model.route.reason}</p>
-        {model.route.mode ? (
-          <p className="text-2xs text-muted-foreground">
-            Mode: {model.route.mode === "auto" ? "Auto Route" : "Manual"}
-          </p>
-        ) : null}
-        {model.route.policyVersion ? (
-          <p className="text-2xs text-muted-foreground">Policy: {model.route.policyVersion}</p>
-        ) : null}
-        {model.route.source ? (
-          <p className="text-2xs text-muted-foreground">Source: {model.route.source}</p>
-        ) : null}
-        {model.route.reasonCodes.length > 0 ? (
-          <p className="text-2xs text-muted-foreground">
-            Reasons: {model.route.reasonCodes.join(", ")}
-          </p>
-        ) : null}
-        {model.route.fallbacks.length > 0 ? (
-          <p className="text-2xs text-muted-foreground">
-            Fallbacks:{" "}
-            {model.route.fallbacks.map((entry) => `${entry.provider} · ${entry.model}`).join(", ")}
-          </p>
-        ) : null}
-        <p className="text-2xs text-muted-foreground">
-          Cost:{" "}
-          {model.route.estimatedCostUsd?.status === "known"
-            ? model.route.estimatedCostUsd.value
-            : "unknown"}
-          {" · "}
-          Latency:{" "}
-          {model.route.estimatedLatencyMs?.status === "known"
-            ? model.route.estimatedLatencyMs.value
-            : "unknown"}
-          {" · "}
-          Quality:{" "}
-          {model.route.estimatedQuality?.status === "known"
-            ? model.route.estimatedQuality.value
-            : "unknown"}
-        </p>
-        {model.route.executionStatus ? (
-          <p className="text-2xs text-muted-foreground">Execution: {model.route.executionStatus}</p>
-        ) : null}
-        {model.route.attemptBudget !== null ? (
-          <p className="text-2xs text-muted-foreground">
-            Attempt budget: {model.route.attemptBudget}
-          </p>
-        ) : null}
-        {model.route.rerouted && model.route.initialModel && model.route.executedModel ? (
-          <p className="text-2xs text-muted-foreground">
-            Rerouted from {model.route.initialProvider} · {model.route.initialModel} to{" "}
-            {model.route.executedProvider} · {model.route.executedModel}
-          </p>
-        ) : null}
-        {model.route.attempts.length > 0 ? (
-          <ol
-            className="mt-1 list-decimal pl-4 text-2xs text-muted-foreground"
-            data-model-router-attempts=""
-          >
-            {model.route.attempts.map((attempt) => (
-              <li
-                data-model-router-attempt={String(attempt.attempt)}
-                data-model-router-attempt-model={attempt.target.model}
-                data-model-router-attempt-outcome={attempt.outcome}
-                key={`${attempt.attempt}-${attempt.target.instanceId}-${attempt.target.model}`}
-              >
-                Attempt {attempt.attempt}: {attempt.target.instanceId} · {attempt.target.model} ·{" "}
-                {attempt.outcome}
-                {attempt.failureCategory ? ` · ${attempt.failureCategory}` : ""}
-                {attempt.failureScope ? ` · ${attempt.failureScope}` : ""}
-                {attempt.fallbackAllowed ? " · fallback allowed" : " · fallback blocked"}
-                {attempt.nextTarget
-                  ? ` · next ${attempt.nextTarget.instanceId} · ${attempt.nextTarget.model}`
-                  : ""}
-              </li>
-            ))}
-          </ol>
-        ) : null}
-      </OperationalStatusCard>
+      <RouteTraceCard route={model.route} />
       <OperationalStatusCard
         title="ActionGate"
         tone={statusTone(model.route.gateDecision)}
@@ -305,6 +221,145 @@ function InspectorBody(props: {
       ) : null}
       <OperationalStatusCard title="Git" detail={model.gitBranch ?? "No branch is recorded."} />
     </>
+  );
+}
+
+function routeModeLabel(mode: InspectorRouteModel["mode"]): string {
+  if (mode === "auto") return "Auto Route";
+  if (mode === "manual") return "Manual";
+  return "Unrouted";
+}
+
+function metricLabel(label: string, value: InspectorRouteModel["estimatedCostUsd"]): string {
+  if (value?.status === "known") return `${label} ${value.value}`;
+  return `${label} unknown`;
+}
+
+function RouteTraceCard(props: { readonly route: InspectorRouteModel }) {
+  const { route } = props;
+  const modeLabel = routeModeLabel(route.mode);
+  const title =
+    route.kind === "bound"
+      ? "Bound route"
+      : route.kind === "provisional"
+        ? "Provisional route"
+        : route.kind === "unavailable"
+          ? "Unavailable route"
+          : "Route";
+  const target =
+    route.provider && route.model ? `${route.provider} · ${route.model}` : route.reason;
+  const hasDetails =
+    route.policyVersion !== null ||
+    route.source !== null ||
+    route.reasonCodes.length > 0 ||
+    route.fallbacks.length > 0 ||
+    route.attempts.length > 0 ||
+    route.eligibleCount !== null ||
+    route.attemptBudget !== null;
+
+  return (
+    <OperationalStatusCard
+      detail={target}
+      title={title}
+      tone={statusTone(route.executionStatus ?? route.kind)}
+      value={modeLabel}
+    >
+      <p
+        className="mt-1 text-2xs text-muted-foreground"
+        data-inspector-route-mode={route.mode ?? ""}
+      >
+        {route.mode === "auto"
+          ? "Base3Router selected an eligible model. This is not Access Auto and not a provider slug named auto."
+          : route.mode === "manual"
+            ? "The user chose this model. Auto Route is off for this turn."
+            : "No Auto Route or Manual decision is bound yet."}
+      </p>
+      <p className="text-2xs text-muted-foreground">{route.reason}</p>
+      {route.executionStatus ? (
+        <p className="text-2xs text-muted-foreground" data-inspector-route-execution="">
+          Execution: {route.executionStatus}
+        </p>
+      ) : null}
+      {route.rerouted && route.initialModel && route.executedModel ? (
+        <p className="text-2xs text-muted-foreground">
+          Rerouted from {route.initialProvider} · {route.initialModel} to {route.executedProvider} ·{" "}
+          {route.executedModel}
+        </p>
+      ) : null}
+      {hasDetails ? (
+        <details
+          className="mt-2"
+          data-inspector-route-details=""
+          open={
+            route.attempts.length > 0 ||
+            route.rerouted ||
+            route.executionStatus === "failed" ||
+            route.kind === "unavailable"
+          }
+        >
+          <summary className="cursor-pointer text-2xs font-medium text-foreground">
+            Route details
+          </summary>
+          <div className="mt-1 space-y-1 text-2xs text-muted-foreground">
+            {route.policyVersion ? <p>Policy: {route.policyVersion}</p> : null}
+            {route.source ? <p>Decision source: {route.source}</p> : null}
+            {route.eligibleCount !== null ? (
+              <p>
+                Eligibility: {route.eligibleCount} eligible
+                {route.filteredCount !== null && route.filteredCount > 0
+                  ? ` · ${route.filteredCount} filtered`
+                  : ""}
+              </p>
+            ) : null}
+            {route.filteredReasonCodes.length > 0 ? (
+              <p>Constraints: {route.filteredReasonCodes.join(", ")}</p>
+            ) : null}
+            {route.reasonCodes.length > 0 ? (
+              <p>Tie-break / reasons: {route.reasonCodes.join(", ")}</p>
+            ) : null}
+            {route.fallbacks.length > 0 ? (
+              <p>
+                Fallback order:{" "}
+                {route.fallbacks.map((entry) => `${entry.provider} · ${entry.model}`).join(", ")}
+              </p>
+            ) : null}
+            {route.attemptBudget !== null ? <p>Attempt budget: {route.attemptBudget}</p> : null}
+            <p>
+              Metrics: {metricLabel("cost", route.estimatedCostUsd)} ·{" "}
+              {metricLabel("latency", route.estimatedLatencyMs)} ·{" "}
+              {metricLabel("quality", route.estimatedQuality)}
+            </p>
+            {route.attempts.length > 0 ? (
+              <ol className="list-decimal pl-4" data-model-router-attempts="">
+                {route.attempts.map((attempt) => (
+                  <li
+                    data-model-router-attempt={String(attempt.attempt)}
+                    data-model-router-attempt-model={attempt.target.model}
+                    data-model-router-attempt-outcome={attempt.outcome}
+                    key={`${attempt.attempt}-${attempt.target.instanceId}-${attempt.target.model}`}
+                  >
+                    Attempt {attempt.attempt}: {attempt.target.instanceId} · {attempt.target.model}{" "}
+                    · {attempt.outcome}
+                    {attempt.failureCategory ? ` · ${attempt.failureCategory}` : ""}
+                    {attempt.failureScope ? ` · ${attempt.failureScope}` : ""}
+                    {attempt.fallbackAllowed ? " · fallback allowed" : " · fallback blocked"}
+                    {attempt.nextTarget
+                      ? ` · next ${attempt.nextTarget.instanceId} · ${attempt.nextTarget.model}`
+                      : ""}
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+          </div>
+        </details>
+      ) : (
+        <p className="mt-1 text-2xs text-muted-foreground">
+          Metrics: {metricLabel("cost", route.estimatedCostUsd)} ·{" "}
+          {metricLabel("latency", route.estimatedLatencyMs)} ·{" "}
+          {metricLabel("quality", route.estimatedQuality)}
+        </p>
+      )}
+    </OperationalStatusCard>
   );
 }
 

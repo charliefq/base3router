@@ -33,7 +33,8 @@ export function LabWorkspace(props: {
   const executed =
     props.decision.executed?.target.model ?? props.decision.selected?.target.model ?? "";
   const search = location.search as { readonly section?: string };
-  const showControlCenter = location.pathname === "/control-center";
+  const showControlCenter =
+    location.pathname === "/control-center" || props.scenario.view === "control-center";
   const inspectorModel = inspectorModelFromLab({
     decision: props.decision,
     sessionStatus:
@@ -49,6 +50,13 @@ export function LabWorkspace(props: {
       props.scenario.id === "long-thread" ||
       props.scenario.id === "narrow-width" ||
       props.scenario.id === "reduced-height",
+    empty: props.scenario.inspectorEmpty,
+    ...(props.scenario.longNames
+      ? {
+          projectTitle: "Very-long-environment-project-name-that-must-truncate-without-overflow",
+          taskObjective: "A-unusually-long-thread-title-for-Inspector-truncation-checks",
+        }
+      : {}),
   });
 
   return (
@@ -69,7 +77,21 @@ export function LabWorkspace(props: {
         }
       >
         {showControlCenter ? (
-          <ControlCenter model={labControlCenterModel()} />
+          <ControlCenter
+            model={labControlCenterModel({
+              surface:
+                props.scenario.id === "disconnected"
+                  ? "offline"
+                  : props.scenario.id === "empty-workspace"
+                    ? "unpaired"
+                    : "ready",
+              empty: props.scenario.id === "empty-workspace",
+              longNames: props.scenario.longNames,
+              ...(props.scenario.id === "disconnected"
+                ? { environmentLabel: "Offline lab environment" }
+                : {}),
+            })}
+          />
         ) : (
           <>
             <LabConversation messages={props.messages} scenario={props.scenario} />

@@ -39,8 +39,8 @@ export function ControlCenterPage(props: {
     selectedEnvironmentId === null
       ? null
       : (serverConfigs.get(selectedEnvironmentId) ?? environment?.serverConfig ?? null);
-  const model = presentControlCenter(
-    selectControlCenterSource({
+  const model = presentControlCenter({
+    ...selectControlCenterSource({
       activeEnvironmentId,
       primaryEnvironmentId,
       catalogReady: isReady,
@@ -51,7 +51,8 @@ export function ControlCenterPage(props: {
       projects,
       threads,
     }),
-  );
+    environmentLabel: environment?.label ?? selectedEnvironmentId,
+  });
   const inspector = selectControlCenterInspectorTarget(model);
 
   return (
