@@ -441,6 +441,8 @@ describe("ProviderRuntimeIngestion", () => {
       },
       emitAndDrain,
       availability,
+      registerPending: (pending: Parameters<(typeof availability)["registerPending"]>[0]) =>
+        testRuntime.runPromise(availability.registerPending(pending)),
       sqlCount: sqlCounter.count,
       setProviderSession: provider.setSession,
       drain,
@@ -625,21 +627,19 @@ describe("ProviderRuntimeIngestion", () => {
         thread.session?.status === "running" && thread.session?.activeTurnId === "turn-sandbox",
     );
 
-    await Effect.runPromise(
-      harness.availability.registerPending({
-        threadId: asThreadId("thread-1"),
-        messageId: "message-sandbox",
-        messageText: "Run risky command",
-        attemptCount: 1,
-        attemptedInstanceIds: new Set(["codex"]),
-        attemptedTargetKeys: new Set(["codex\u0000gpt-5.5"]),
-        currentTarget: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.5" },
-        routingMode: "manual",
-        sideEffectsStarted: false,
-        retry: null,
-        onRuntimeFailure: () => Effect.succeed(true),
-      }),
-    );
+    await harness.registerPending({
+      threadId: asThreadId("thread-1"),
+      messageId: "message-sandbox",
+      messageText: "Run risky command",
+      attemptCount: 1,
+      attemptedInstanceIds: new Set(["codex"]),
+      attemptedTargetKeys: new Set(["codex\u0000gpt-5.5"]),
+      currentTarget: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.5" },
+      routingMode: "manual",
+      sideEffectsStarted: false,
+      retry: null,
+      onRuntimeFailure: () => Effect.succeed(true),
+    });
 
     harness.emit({
       type: "content.delta",
