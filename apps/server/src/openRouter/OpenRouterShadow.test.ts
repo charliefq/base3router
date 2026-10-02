@@ -1,4 +1,4 @@
-// @effect-diagnostics preferSchemaOverJson:off
+// @effect-diagnostics preferSchemaOverJson:off globalTimers:off
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";

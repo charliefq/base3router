@@ -402,7 +402,10 @@ never fetch catalog or classification endpoints.
 
 1. Lazy refresh when an authorized configured environment first reads
    OpenRouter status/priors (`ServerEnvironment.getDescriptor`). Optional
-   startup warm-up is not used; unconfigured processes make zero calls.
+   startup warm-up is not used. Unconfigured processes and guidance-off
+   settings make zero network calls. Background refresh is forked into the
+   catalog service scope (`Effect.forkIn`); descriptor reads do not require
+   Scope, and server shutdown interrupts in-flight HTTP.
 2. GET models with pagination; GET classifications `window=7d`.
 3. Normalize, cache with TTL (default 6 hours), keep last-known-good.
 4. Fresh cache returns immediately with no network call.

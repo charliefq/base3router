@@ -281,11 +281,17 @@ export const createOpenRouterClient = (config: OpenRouterClientConfig) => {
             acc = mergeChatJson(json, acc);
             const delta = acc.content.slice(before);
             if (input.requireAllowedActualModel === true) {
+              const streamModel = readModel(json) ?? acc.model;
+              const streamMetadataModel = selectedModelFromMetadata(
+                readMetadata(json) ?? acc.metadata,
+              );
               const next = applyTeacherContentChunk({
                 gate,
                 allowedModels: input.allowedModels,
-                model: readModel(json) ?? acc.model,
-                metadataModel: selectedModelFromMetadata(readMetadata(json) ?? acc.metadata),
+                ...(streamModel !== undefined ? { model: streamModel } : {}),
+                ...(streamMetadataModel !== undefined
+                  ? { metadataModel: streamMetadataModel }
+                  : {}),
                 contentDelta: delta,
                 terminal: false,
               });
@@ -300,11 +306,14 @@ export const createOpenRouterClient = (config: OpenRouterClientConfig) => {
           }
         }
         if (input.requireAllowedActualModel === true) {
+          const terminalMetadataModel = selectedModelFromMetadata(acc.metadata);
           const next = applyTeacherContentChunk({
             gate,
             allowedModels: input.allowedModels,
-            model: acc.model,
-            metadataModel: selectedModelFromMetadata(acc.metadata),
+            ...(acc.model !== undefined ? { model: acc.model } : {}),
+            ...(terminalMetadataModel !== undefined
+              ? { metadataModel: terminalMetadataModel }
+              : {}),
             contentDelta: "",
             terminal: true,
           });
@@ -316,11 +325,12 @@ export const createOpenRouterClient = (config: OpenRouterClientConfig) => {
       const json = parseJson(text);
       const merged = mergeChatJson(json, { status: response.status, content: "" });
       if (input.requireAllowedActualModel === true) {
+        const jsonMetadataModel = selectedModelFromMetadata(merged.metadata);
         const next = applyTeacherContentChunk({
           gate: emptyTeacherContentGate(),
           allowedModels: input.allowedModels,
-          model: merged.model,
-          metadataModel: selectedModelFromMetadata(merged.metadata),
+          ...(merged.model !== undefined ? { model: merged.model } : {}),
+          ...(jsonMetadataModel !== undefined ? { metadataModel: jsonMetadataModel } : {}),
           contentDelta: merged.content,
           terminal: true,
         });

@@ -282,7 +282,7 @@ export const make = Effect.gen(function* () {
           )
         : undefined;
       const catalog = yield* Effect.serviceOption(OpenRouterCatalogService);
-      const priors = Option.isSome(catalog)
+      const priors: OpenRouterCatalogFreshness = Option.isSome(catalog)
         ? yield* catalog.value.freshness.pipe(
             Effect.catch(() =>
               Effect.succeed({ status: "unknown" as const } satisfies OpenRouterCatalogFreshness),

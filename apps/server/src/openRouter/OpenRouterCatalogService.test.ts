@@ -1,6 +1,9 @@
+// @effect-diagnostics preferSchemaOverJson:off
+import { OPENROUTER_API_KEY_ENV, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
+import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import { createOpenRouterClient } from "./OpenRouterClient.ts";
 import { makeOpenRouterCatalogService } from "./OpenRouterCatalogService.ts";
 import type { OpenRouterTransport } from "./OpenRouterTransport.ts";
@@ -40,6 +43,33 @@ describe("OpenRouter catalog runtime lifecycle", () => {
       expect(freshness.status).toBe("unknown");
       expect(calls.count).toBe(0);
     }).pipe(Effect.scoped),
+  );
+
+  it.effect("makes zero network calls when guidance mode is off even with a key", () =>
+    Effect.gen(function* () {
+      const calls = { count: 0 };
+      const service = yield* makeOpenRouterCatalogService({
+        transport: okTransport(calls),
+      });
+      yield* service.ensureFresh;
+      yield* service.awaitIdle;
+      expect(calls.count).toBe(0);
+    }).pipe(
+      Effect.provide(
+        serverSettingsLayerTest({
+          openRouter: { guidanceMode: "off" },
+          providerInstances: {
+            [ProviderInstanceId.make("openrouter")]: {
+              driver: ProviderDriverKind.make("openrouter"),
+              environment: [
+                { name: OPENROUTER_API_KEY_ENV, value: "sk-or-v1-not-a-real-key", sensitive: true },
+              ],
+            },
+          },
+        }),
+      ),
+      Effect.scoped,
+    ),
   );
 
   it.effect("refreshes once on first configured access and deduplicates concurrent reads", () =>
@@ -142,7 +172,7 @@ describe("OpenRouter catalog runtime lifecycle", () => {
       const transport: OpenRouterTransport = async (request) => {
         entered = true;
         releaseEnter?.();
-        await new Promise<never>((_, reject) => {
+        return await new Promise((_, reject) => {
           request.signal?.addEventListener(
             "abort",
             () => {
