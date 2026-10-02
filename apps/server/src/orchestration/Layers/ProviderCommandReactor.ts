@@ -41,6 +41,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -284,6 +285,19 @@ const make = Effect.gen(function* () {
     }
   >();
   const stoppingThreadIds = new Set<ThreadId>();
+  const openRouterShadowAborts = yield* Ref.make(new Map<string, AbortController>());
+
+  const abortOpenRouterShadow = (threadId: ThreadId) =>
+    Ref.modify(openRouterShadowAborts, (current) => {
+      const next = new Map(current);
+      const controller = next.get(threadId);
+      next.delete(threadId);
+      return [controller, next] as const;
+    }).pipe(
+      Effect.map((controller) => {
+        controller?.abort("cancelled");
+      }),
+    );
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -1677,6 +1691,7 @@ const make = Effect.gen(function* () {
       );
 
     const maybeRunOpenRouterShadow = (input: {
+      readonly threadId: ThreadId;
       readonly routeBinding: DispatcherTaskRouteBinding | null;
       readonly prompt: string;
       readonly persist: (binding: DispatcherTaskRouteBinding) => Effect.Effect<void>;
@@ -1707,11 +1722,19 @@ const make = Effect.gen(function* () {
           });
           return;
         }
+        const abort = new AbortController();
+        yield* Ref.update(openRouterShadowAborts, (current) => {
+          const next = new Map(current);
+          current.get(input.threadId)?.abort("cancelled");
+          next.set(input.threadId, abort);
+          return next;
+        });
         yield* runOpenRouterShadowObservation({
           apiKey,
           prompt: input.prompt,
           allowedModels: observation.allowedModels,
           costTier: observation.costTier,
+          signal: abort.signal,
           ...(observation.base3Selected?.model !== undefined
             ? { base3Model: observation.base3Selected.model }
             : {}),
@@ -1728,16 +1751,36 @@ const make = Effect.gen(function* () {
             }),
           ),
           Effect.catch(() =>
-            input.persist({
-              ...binding,
-              openRouter: emptyOpenRouterObservation({
-                guidanceMode: "shadow",
-                status: "failed",
-                errorCategory: "unknown",
-                allowedModels: observation.allowedModels,
-                costTier: observation.costTier,
-                detail: "Shadow observation failed.",
-              }),
+            abort.signal.aborted
+              ? input.persist({
+                  ...binding,
+                  openRouter: emptyOpenRouterObservation({
+                    guidanceMode: "shadow",
+                    status: "skipped",
+                    skipReason: "cancelled",
+                    errorCategory: "cancelled",
+                    allowedModels: observation.allowedModels,
+                    costTier: observation.costTier,
+                    detail: "Shadow observation cancelled with the turn.",
+                  }),
+                })
+              : input.persist({
+                  ...binding,
+                  openRouter: emptyOpenRouterObservation({
+                    guidanceMode: "shadow",
+                    status: "failed",
+                    errorCategory: "unknown",
+                    allowedModels: observation.allowedModels,
+                    costTier: observation.costTier,
+                    detail: "Shadow observation failed.",
+                  }),
+                }),
+          ),
+          Effect.ensuring(
+            Ref.update(openRouterShadowAborts, (current) => {
+              const next = new Map(current);
+              if (next.get(input.threadId) === abort) next.delete(input.threadId);
+              return next;
             }),
           ),
         );
@@ -1986,6 +2029,7 @@ const make = Effect.gen(function* () {
       Effect.forkScoped,
     );
     yield* maybeRunOpenRouterShadow({
+      threadId: event.payload.threadId,
       routeBinding,
       prompt: messageText,
       persist: persistAttemptedRoute,
@@ -1995,6 +2039,7 @@ const make = Effect.gen(function* () {
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>,
   ) {
+    yield* abortOpenRouterShadow(event.payload.threadId);
     yield* cancelTurnsAfterCompaction(
       event.payload.threadId,
       "Context compaction was interrupted. Send this message again to continue.",

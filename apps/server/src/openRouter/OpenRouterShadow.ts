@@ -29,11 +29,14 @@ export const runOpenRouterShadowObservation = Effect.fn("runOpenRouterShadowObse
     readonly base3Model?: string;
     readonly transport?: OpenRouterTransport;
     readonly baseUrl?: string;
+    readonly signal?: AbortSignal;
+    readonly timeoutMs?: number;
   }) {
     const client = createOpenRouterClient({
       apiKey: input.apiKey,
       ...(input.transport !== undefined ? { transport: input.transport } : {}),
       ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
+      ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
     });
     const started = yield* Effect.map(DateTime.now, DateTime.formatIso);
     const costTier = input.costTier ?? OPENROUTER_DEFAULT_COST_TIER;
@@ -45,17 +48,30 @@ export const runOpenRouterShadowObservation = Effect.fn("runOpenRouterShadowObse
           costTier,
           stream: false,
           shadow: true,
+          ...(input.signal !== undefined ? { signal: input.signal } : {}),
         }),
       catch: (cause) => {
         const message = cause instanceof Error ? cause.message : String(cause);
-        return /timeout/i.test(message)
-          ? ("timeout" as const)
-          : /abort|cancel/i.test(message)
-            ? ("cancelled" as const)
-            : ("invalid_response" as const);
+        const name = cause instanceof Error ? cause.name : "";
+        if (/timeout/i.test(message) || /timeout/i.test(name)) return "timeout" as const;
+        if (
+          /abort|cancel/i.test(message) ||
+          /abort|cancel/i.test(name) ||
+          input.signal?.aborted === true
+        ) {
+          return "cancelled" as const;
+        }
+        return "invalid_response" as const;
       },
     }).pipe(
       Effect.catch((reason) => {
+        if (reason === "cancelled" || reason === "timeout") {
+          return Effect.succeed({
+            status: 0,
+            content: "",
+            skip: reason,
+          } as const);
+        }
         const normalized = normalizeOpenRouterTransportFailure(reason);
         return Effect.succeed({
           status: 0,
@@ -64,6 +80,20 @@ export const runOpenRouterShadowObservation = Effect.fn("runOpenRouterShadowObse
         });
       }),
     );
+    if ("skip" in result) {
+      return emptyOpenRouterObservation({
+        guidanceMode: "shadow",
+        status: "skipped",
+        skipReason: result.skip,
+        errorCategory: result.skip,
+        allowedModels: input.allowedModels,
+        costTier,
+        detail:
+          result.skip === "cancelled"
+            ? "Shadow observation cancelled with the turn."
+            : "Shadow observation timed out.",
+      });
+    }
     if ("category" in result) {
       return emptyOpenRouterObservation({
         guidanceMode: "shadow",
