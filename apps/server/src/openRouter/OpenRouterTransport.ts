@@ -18,6 +18,11 @@ export type OpenRouterTransport = (
   request: OpenRouterTransportRequest,
 ) => Promise<OpenRouterTransportResponse>;
 
+/**
+ * Production fetch transport. Ordinary unit tests and CI inject
+ * `OpenRouterTransport` instead of calling this. Never point it at live
+ * OpenRouter from a test.
+ */
 export const fetchOpenRouterTransport: OpenRouterTransport = async (request) => {
   const response = await fetch(request.url, {
     method: request.method,

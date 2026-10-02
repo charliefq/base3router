@@ -50,7 +50,10 @@ export const UI_LAB_SCENARIO_IDS = [
   "openrouter-teacher",
   "openrouter-teacher-actual-differs",
   "openrouter-teacher-unavailable",
+  "openrouter-teacher-policy-violation",
+  "openrouter-shadow-cancelled",
   "openrouter-stale-priors",
+  "openrouter-unknown-priors",
   "openrouter-unknown-task",
   "openrouter-nested-fallback",
   "openrouter-long-names",
@@ -712,6 +715,40 @@ export function createLabScenario(id: UiLabScenarioId): LabScenarioState {
         }),
         openRouterControl: { mode: "teacher", connectionStatus: "unavailable" },
       };
+    case "openrouter-teacher-policy-violation":
+      return {
+        ...defaults,
+        label: "Teacher policy violation",
+        description: "Out-of-policy actual model failed closed with no completion content.",
+        decision: labDecision({ executionStatus: "failed" }),
+        threadStatus: "failed",
+        error: "OpenRouter returned a model outside the allowed set.",
+        messages: [],
+        openRouter: labOpenRouter({
+          mode: "teacher",
+          status: "policy_violation",
+          errorCategory: "policy_violation",
+          agreement: "inapplicable",
+        }),
+        openRouterControl: { mode: "teacher", connectionStatus: "connected" },
+      };
+    case "openrouter-shadow-cancelled":
+      return {
+        ...defaults,
+        label: "Shadow cancelled with the turn",
+        description: "Stopping the turn cancelled Shadow. The live route is unchanged.",
+        decision: labDecision({ executionStatus: "completed" }),
+        threadStatus: "completed",
+        error: null,
+        messages: [],
+        openRouter: labOpenRouter({
+          mode: "shadow",
+          status: "skipped",
+          skipReason: "cancelled",
+          agreement: "inapplicable",
+        }),
+        openRouterControl: { mode: "shadow", connectionStatus: "connected" },
+      };
     case "openrouter-stale-priors":
       return {
         ...defaults,
@@ -725,6 +762,22 @@ export function createLabScenario(id: UiLabScenarioId): LabScenarioState {
           mode: "shadow",
           freshness: "stale",
           asOf: "2026-06-17",
+        }),
+        openRouterControl: { mode: "shadow", connectionStatus: "connected" },
+      };
+    case "openrouter-unknown-priors":
+      return {
+        ...defaults,
+        label: "Unknown market priors",
+        description: "No last-known-good catalog snapshot. Freshness stays unknown, not zero.",
+        decision: labDecision({ executionStatus: "completed" }),
+        threadStatus: "completed",
+        error: null,
+        messages: [],
+        openRouter: labOpenRouter({
+          mode: "shadow",
+          freshness: "unknown",
+          asOf: null,
         }),
         openRouterControl: { mode: "shadow", connectionStatus: "connected" },
       };

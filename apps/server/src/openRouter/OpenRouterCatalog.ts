@@ -34,14 +34,21 @@ export const refreshOpenRouterCatalog = async (input: {
   readonly client: OpenRouterClient;
   readonly nowIso: string;
   readonly previous: OpenRouterMarketPriorV0 | null;
+  readonly signal?: AbortSignal;
 }): Promise<OpenRouterMarketPriorV0> => {
   try {
     const [models, classifications] = await Promise.all([
-      input.client.listModels(),
-      input.client.classifications(),
+      input.client.listModels(input.signal),
+      input.client.classifications(input.signal),
     ]);
-    if (models.status >= 400 && classifications.status >= 400 && input.previous !== null) {
-      return { ...input.previous, freshness: "stale" };
+    if (models.status >= 400 && classifications.status >= 400) {
+      if (input.previous !== null) return { ...input.previous, freshness: "stale" };
+      return buildOpenRouterMarketPrior({
+        observedAt: input.nowIso,
+        freshness: "unknown",
+        classifications: [],
+        catalog: [],
+      });
     }
     const classificationData =
       classifications.data !== null &&
@@ -97,6 +104,7 @@ export const loadOpenRouterCatalog = Effect.fn("loadOpenRouterCatalog")(function
   readonly store: OpenRouterCatalogStore;
   readonly ttlMs?: number;
   readonly nowMs: number;
+  readonly signal?: AbortSignal;
 }) {
   const current = yield* input.store.get;
   const freshness = catalogFreshness({
@@ -112,6 +120,7 @@ export const loadOpenRouterCatalog = Effect.fn("loadOpenRouterCatalog")(function
         client: input.client,
         nowIso,
         previous: current.snapshot,
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
       }),
     catch: () => "catalog_refresh_failed" as const,
   }).pipe(

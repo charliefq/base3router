@@ -419,3 +419,31 @@ it("presents sanitized OpenRouter Teacher observations without prompt text", () 
   expect(JSON.stringify(model.openRouter)).not.toContain("sk-");
   expect(JSON.stringify(model.openRouter)).not.toContain("Draft the dispatcher note");
 });
+
+it("presents catalog freshness timestamps from runtime capability state", () => {
+  const model = presentOperationalInspector({
+    selected: true,
+    projectTitle: "Portfolio",
+    taskObjective: "Draft the dispatcher note",
+    gitBranch: "cursor/phase-7",
+    sessionStatus: "running",
+    sessionError: null,
+    capabilities: { dispatcher: true, workflow: true, cursorCloud: false },
+    providers: [],
+    preview: { status: "idle" },
+    boundRoute: {
+      ...boundRoute,
+      openRouter: emptyOpenRouterObservation({
+        guidanceMode: "shadow",
+        status: "observed",
+      }),
+    },
+    workflowRun: null,
+    workflowTemplate: null,
+    cursorCloudBinding: null,
+    openRouterPriors: { freshness: "stale", asOf: "2026-06-17" },
+  });
+
+  expect(model.openRouter?.freshness).toBe("stale");
+  expect(model.openRouter?.asOf).toBe("2026-06-17");
+});

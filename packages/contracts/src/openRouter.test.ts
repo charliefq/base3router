@@ -7,8 +7,10 @@ import {
   OPENROUTER_DEFAULT_GUIDANCE_MODE,
   OPENROUTER_GUIDANCE_POLICY_VERSION,
   OPENROUTER_OBSERVATION_VERSION,
+  OPENROUTER_SKIP_REASONS,
   OpenRouterGuidanceMode,
   OpenRouterMarketPriorV0,
+  OpenRouterSkipReason,
   OpenRouterTeacherObservationV0,
   TaskProfileV0,
   emptyOpenRouterObservation,
@@ -80,6 +82,21 @@ describe("openrouter guidance contracts", () => {
     expect(encoded).not.toContain("Authorization");
     expect(encoded).not.toMatch(/"messages"|"content":/);
     expect(observation.privacyPolicy).toBe("zdr_deny_collection");
+  });
+
+  it("accepts every remaining skip reason and rejects removed privacy_blocked", () => {
+    const decodeSkip = Schema.decodeUnknownExit(OpenRouterSkipReason);
+    expect(OPENROUTER_SKIP_REASONS).not.toContain("privacy_blocked");
+    for (const reason of OPENROUTER_SKIP_REASONS) {
+      expect(Exit.isSuccess(decodeSkip(reason))).toBe(true);
+      const observation = emptyOpenRouterObservation({
+        guidanceMode: "shadow",
+        status: "skipped",
+        skipReason: reason,
+      });
+      expect(Exit.isSuccess(decodeObservation(observation))).toBe(true);
+    }
+    expect(Exit.isSuccess(decodeSkip("privacy_blocked"))).toBe(false);
   });
 
   it("decodes pre-Phase-10 settings and bindings without guidance fields", () => {

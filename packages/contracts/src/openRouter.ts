@@ -149,12 +149,11 @@ const OBSERVATION_STATUSES = [
 export const OpenRouterObservationStatus = Schema.Literals(OBSERVATION_STATUSES);
 export type OpenRouterObservationStatus = typeof OpenRouterObservationStatus.Type;
 
-const SKIP_REASONS = [
+export const OPENROUTER_SKIP_REASONS = [
   "guidance_off",
   "not_configured",
   "missing_api_key",
   "consent_required",
-  "privacy_blocked",
   "likely_credentials",
   "manual_selection",
   "timeout",
@@ -163,7 +162,7 @@ const SKIP_REASONS = [
   "unresolved_mapping",
   "empty_allowlist",
 ] as const;
-export const OpenRouterSkipReason = Schema.Literals(SKIP_REASONS);
+export const OpenRouterSkipReason = Schema.Literals(OPENROUTER_SKIP_REASONS);
 export type OpenRouterSkipReason = typeof OpenRouterSkipReason.Type;
 
 const SANITIZED_ERROR_CATEGORIES = [

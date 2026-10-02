@@ -308,8 +308,17 @@ Base3Router bind (Phase 8 eligibility + ActionGate)
 
 Shadow observation and Teacher execution share the privacy payload. Shadow
 discards completion content. Teacher streams completion through the existing
-provider event path and still does not persist prompt/completion in the
-observation record.
+provider event path only after a trustworthy actual model is identified and
+allowlisted. Official OpenRouter docs (retrieved 2026-10-02) place
+`openrouter_metadata` on the terminal SSE chunk before `data: [DONE]`. Chat
+stream chunks may include `model` earlier, but Auto Router identity is not
+guaranteed before content. Teacher therefore buffers completion text until a
+non-empty slug other than `openrouter/auto` (or a selected nested attempt on
+terminal metadata) is verified against the allowed set. Only then are content
+deltas forwarded. Missing, unresolved (`openrouter/auto`), or out-of-policy
+models fail closed and emit zero user-visible content. Outbound
+`allowed_models` is not sufficient; the response is still validated. Shadow
+and Off streaming are ungated and unchanged.
 
 ## Task taxonomy
 
@@ -349,9 +358,15 @@ It is not machine-learned confidence.
 - An optional OpenRouter Auto observation may run independently.
 - The observation must not change the current turn's selected model,
   provider, response, fallback chain, or user-visible answer.
+- Shadow failure cannot fail or delay the real turn.
+- Shadow lifecycle is supervised by the originating turn. User Stop /
+  interruption aborts the in-flight OpenRouter `AbortController`
+  immediately and does not wait for Shadow cleanup.
+- A 15-second timeout remains a secondary upper bound.
+- User cancellation records `skipped` / `cancelled`, not a provider
+  failure, and does not retry.
 - Store only sanitized structured observation data.
 - Discard Shadow completion content.
-- Shadow failure must never fail or delay the real turn.
 - Requests are bounded, cancellable, timeout-limited, and budget-limited.
 - Disabled by default. Enabling requires explicit consent because it sends
   another copy of task content and may incur cost. UI warns before activation.
@@ -371,7 +386,8 @@ It is not machine-learned confidence.
 - Map the actual model into the route trace without rewriting historical
   policy input.
 - An actual model outside the allowed set is a policy violation and fails
-  safely.
+  safely, including when identity arrives after content was produced by
+  the provider. Buffered content is discarded; the user sees none.
 - If OpenRouter is unavailable, use bounded Base3Router failover only when
   `teacherFallbackToBase3` is true. That is Auto Route failover, not Shadow.
 - Never silently convert Teacher into Shadow or Shadow into Teacher.
@@ -381,15 +397,29 @@ Base3Router routing.
 
 ## Market-prior lifecycle
 
-1. Credential present and guidance not Off → catalog service may refresh.
+Owner: `OpenRouterCatalogService`, a server-scoped Effect service. Clients
+never fetch catalog or classification endpoints.
+
+1. Lazy refresh when an authorized configured environment first reads
+   OpenRouter status/priors (`ServerEnvironment.getDescriptor`). Optional
+   startup warm-up is not used; unconfigured processes make zero calls.
 2. GET models with pagination; GET classifications `window=7d`.
 3. Normalize, cache with TTL (default 6 hours), keep last-known-good.
-4. On failure, serve stale snapshot marked `stale`. Do not block Phase 8.
-5. Absent scores stay `{ status: "unknown" }`.
-6. Sampled shares are priors, not objective quality.
-7. Teacher may use priors only after hard eligibility filters, and only as
+4. Fresh cache returns immediately with no network call.
+5. Expired cache returns last-known-good immediately (marked `stale`) and
+   refreshes in the background. One in-flight refresh per environment.
+6. On failure, serve stale snapshot marked `stale`. No last-known-good
+   data produces `unknown`, never a fabricated zero. Do not block Phase 8.
+7. Absent scores stay `{ status: "unknown" }`.
+8. Sampled shares are priors, not objective quality.
+9. Teacher may use priors only after hard eligibility filters, and only as
    candidate ordering hints. Shadow treats them as observational.
-8. Avoid frequent polling. Rate-limit classification calls.
+10. Avoid frequent polling. Do not refresh on every turn. Rate-limit
+    classification calls.
+11. Shutdown/interrupt aborts in-flight catalog HTTP via `AbortController`.
+
+Tests inject `OpenRouterTransport`. `fetchOpenRouterTransport` is the
+production default and is never pointed at live OpenRouter in CI.
 
 ## Credential handling
 
@@ -421,8 +451,9 @@ Shadow and Teacher require explicit environment consent distinct from merely
 having a key. Off needs no consent.
 
 Likely credentials in the prompt (including `sk-or-…` and other secret
-shapes) skip Shadow and fail Teacher safely with a sanitized skip/failure
-reason.
+shapes) skip Shadow and fail Teacher safely with skip reason
+`likely_credentials`. There is no unused `privacy_blocked` skip; ZDR and
+`data_collection: "deny"` are request fields, not skip states.
 
 ## Cost implications
 
@@ -510,6 +541,11 @@ automatic weight changes, user-rework scoring, or quality judgment.
 ## Testing matrix
 
 Deterministic fake transport only. No real OpenRouter key in CI.
+`createOpenRouterClient` uses `fetchOpenRouterTransport` only when a test
+or production caller omits `transport`. Every OpenRouter unit test in this
+repo injects `OpenRouterTransport`; none call the live API. Catalog runtime
+tests inject transport and never schedule the live server layer with a
+real key. `fetchOpenRouterTransport` itself is production-only.
 
 - Off mode exact compatibility
 - Shadow cannot alter execution

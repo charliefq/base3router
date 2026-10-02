@@ -69,10 +69,20 @@ const teacherAllowlistFromDecision = (input: {
 }): {
   readonly allowedModels: ReadonlyArray<string>;
   readonly empty: boolean;
+  readonly unresolved: boolean;
 } => {
   const mapped = mapEligibleCandidatesToOpenRouter({ candidates: input.candidates });
-  return { allowedModels: mapped.allowedModels, empty: mapped.allowedModels.length === 0 };
+  return {
+    allowedModels: mapped.allowedModels,
+    empty: mapped.allowedModels.length === 0,
+    unresolved: mapped.unresolved.length > 0,
+  };
 };
+
+const emptyAllowlistSkip = (allowlist: {
+  readonly empty: boolean;
+  readonly unresolved: boolean;
+}): OpenRouterSkipReason => (allowlist.unresolved ? "unresolved_mapping" : "empty_allowlist");
 
 export const observationForSkip = (input: {
   readonly guidanceMode: OpenRouterGuidanceMode;
@@ -135,7 +145,9 @@ export const applyOpenRouterGuidanceToBinding = (input: {
 
   if (resolved.mode === "shadow") {
     const skipReason =
-      privacyBlock ?? resolved.skipReason ?? (allowlist.empty ? "empty_allowlist" : undefined);
+      privacyBlock ??
+      resolved.skipReason ??
+      (allowlist.empty ? emptyAllowlistSkip(allowlist) : undefined);
     const observation = skipReason
       ? observationForSkip({
           guidanceMode: "shadow",
@@ -174,7 +186,7 @@ export const applyOpenRouterGuidanceToBinding = (input: {
 
   const skipReason = privacyBlock ?? resolved.skipReason;
   if (skipReason !== undefined || allowlist.empty) {
-    const reason = skipReason ?? "empty_allowlist";
+    const reason = skipReason ?? emptyAllowlistSkip(allowlist);
     const observation = observationForSkip({
       guidanceMode: "teacher",
       skipReason: reason,
@@ -182,17 +194,13 @@ export const applyOpenRouterGuidanceToBinding = (input: {
       costTier,
       base3Selected,
     });
-    if (settings.teacherFallbackToBase3) {
-      return {
-        binding: { ...input.binding, openRouter: observation },
-        executionTarget: input.binding.target,
-        failed: reason === "empty_allowlist" ? "empty_allowlist" : "teacher_unavailable",
-      };
-    }
     return {
       binding: { ...input.binding, openRouter: observation },
       executionTarget: input.binding.target,
-      failed: reason === "empty_allowlist" ? "empty_allowlist" : "teacher_unavailable",
+      failed:
+        reason === "empty_allowlist" || reason === "unresolved_mapping"
+          ? "empty_allowlist"
+          : "teacher_unavailable",
     };
   }
 

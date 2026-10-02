@@ -28,6 +28,10 @@ import {
   openRouterCapabilitySnapshot,
   resolveOpenRouterApiKey,
 } from "../openRouter/OpenRouterCredentials.ts";
+import {
+  OpenRouterCatalogService,
+  type OpenRouterCatalogFreshness,
+} from "../openRouter/OpenRouterCatalogService.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 
 export class ServerEnvironmentIdPersistenceError extends Schema.TaggedError<ServerEnvironmentIdPersistenceError>()(
@@ -277,6 +281,14 @@ export const make = Effect.gen(function* () {
             Effect.catch(() => Effect.succeed(undefined)),
           )
         : undefined;
+      const catalog = yield* Effect.serviceOption(OpenRouterCatalogService);
+      const priors = Option.isSome(catalog)
+        ? yield* catalog.value.freshness.pipe(
+            Effect.catch(() =>
+              Effect.succeed({ status: "unknown" as const } satisfies OpenRouterCatalogFreshness),
+            ),
+          )
+        : { status: "unknown" as const };
       return {
         ...descriptor,
         capabilities: {
@@ -290,6 +302,8 @@ export const make = Effect.gen(function* () {
                   ? { providerInstances: settings.providerInstances }
                   : {}),
               }) !== undefined,
+            marketPriorFreshness: priors.status,
+            ...(priors.asOf !== undefined ? { marketPriorAsOf: priors.asOf } : {}),
           }),
         },
       };

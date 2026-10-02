@@ -210,6 +210,13 @@ export function OpenRouterGuidanceSettings() {
         off. Set OPENROUTER_API_KEY on the server or provider instance environment. Never paste a
         key into chat.
       </p>
+      <p
+        className="text-2xs text-muted-foreground"
+        data-openrouter-freshness={capability.marketPriorFreshness}
+      >
+        Market priors {capability.marketPriorFreshness}
+        {capability.marketPriorAsOf ? ` · ${capability.marketPriorAsOf}` : ""}
+      </p>
     </SettingsSection>
   );
 }

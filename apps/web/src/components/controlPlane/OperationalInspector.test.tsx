@@ -408,3 +408,54 @@ it("renders OpenRouter guidance observations without raw prompts or keys", async
   expect(renderedText()).not.toContain("sk-or-");
   expect(renderedText()).not.toContain("OPENROUTER_API_KEY");
 });
+
+it("renders every remaining OpenRouter skip status", async () => {
+  const skipReasons = [
+    "guidance_off",
+    "not_configured",
+    "missing_api_key",
+    "consent_required",
+    "likely_credentials",
+    "manual_selection",
+    "timeout",
+    "cancelled",
+    "provider_error",
+    "unresolved_mapping",
+    "empty_allowlist",
+  ] as const;
+  for (const skipReason of skipReasons) {
+    await act(async () => {
+      renderer?.unmount();
+      renderer = create(
+        <OperationalInspector
+          collapsed={false}
+          model={model({
+            openRouter: {
+              mode: skipReason === "guidance_off" ? "off" : "shadow",
+              status: "skipped",
+              connection: "connected",
+              privacyPolicy: "zdr_deny_collection",
+              taskTag: null,
+              taskSource: "unknown",
+              base3Model: "gpt-5.4",
+              openRouterModel: null,
+              requestedRouterTarget: null,
+              actualModel: null,
+              agreement: "inapplicable",
+              skipReason,
+              errorCategory: null,
+              nestedFallbacks: [],
+              freshness: "unknown",
+              asOf: null,
+            },
+          })}
+          onToggle={() => {}}
+        />,
+      );
+    });
+    expect(renderedText()).toContain("data-openrouter-skip");
+    expect(renderedText()).toContain(skipReason);
+    expect(renderedText()).not.toContain("privacy_blocked");
+    expect(renderedText()).not.toContain("sk-or-");
+  }
+});

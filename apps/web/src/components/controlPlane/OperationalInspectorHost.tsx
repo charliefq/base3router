@@ -186,6 +186,18 @@ export function OperationalInspectorHost(props: {
     workflowRun,
     workflowTemplate,
     cursorCloudBinding,
+    ...(environment?.serverConfig?.environment.capabilities.openRouterGuidance !== undefined
+      ? {
+          openRouterPriors: {
+            freshness:
+              environment.serverConfig.environment.capabilities.openRouterGuidance
+                .marketPriorFreshness,
+            asOf:
+              environment.serverConfig.environment.capabilities.openRouterGuidance
+                .marketPriorAsOf ?? null,
+          },
+        }
+      : {}),
   });
 
   const toggle = () => {

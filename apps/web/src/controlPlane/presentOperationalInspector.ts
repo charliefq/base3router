@@ -136,6 +136,10 @@ export type OperationalInspectorInput = {
   readonly workflowRun: WorkflowRun | null;
   readonly workflowTemplate: WorkflowTemplate | null;
   readonly cursorCloudBinding: CursorCloudRunnerBinding | null;
+  readonly openRouterPriors?: {
+    readonly freshness: string;
+    readonly asOf: string | null;
+  };
 };
 
 const EMPTY_ROUTE: InspectorRouteModel = {
@@ -393,6 +397,7 @@ function resolveEmptyReason(input: OperationalInspectorInput): InspectorEmptyRea
 
 function presentOpenRouter(
   observation: OpenRouterTeacherObservationV0 | undefined,
+  priors?: OperationalInspectorInput["openRouterPriors"],
 ): InspectorOpenRouterModel | null {
   if (observation === undefined) return null;
   return {
@@ -414,8 +419,8 @@ function presentOpenRouter(
         .filter((part) => part !== undefined)
         .join(" · "),
     ),
-    freshness: null,
-    asOf: observation.observedAt ?? null,
+    freshness: priors?.freshness ?? null,
+    asOf: priors?.asOf ?? observation.observedAt ?? null,
   };
 }
 
@@ -435,7 +440,7 @@ export function presentOperationalInspector(
     workflowStatus: input.workflowRun?.status ?? null,
     stages: presentStages(input.workflowRun, input.workflowTemplate),
     cursorCloud: presentCursorCloud(input.cursorCloudBinding, input.capabilities.cursorCloud),
-    openRouter: presentOpenRouter(input.boundRoute?.openRouter),
+    openRouter: presentOpenRouter(input.boundRoute?.openRouter, input.openRouterPriors),
     error: sanitizeDisplayText(input.sessionError),
     emptyReason: resolveEmptyReason(input),
   };
