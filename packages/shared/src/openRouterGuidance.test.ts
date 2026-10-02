@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   OPENROUTER_AUTO_SLUG,
   OPENROUTER_SHADOW_MAX_TOKENS,
+  OPENROUTER_SKIP_REASONS,
   ProviderDriverKind,
   ProviderInstanceId,
 } from "@t3tools/contracts";
@@ -35,6 +36,12 @@ import {
   openRouterShadowRequestBody,
   openRouterTeacherRequestBody,
 } from "./openRouterPrivacy.ts";
+import {
+  applyTeacherContentChunk,
+  emptyTeacherContentGate,
+  isTrustworthyActualModel,
+  selectedModelFromMetadata,
+} from "./openRouterTeacherGate.ts";
 import { serializedOmitsSecrets, textLooksLikeSecret } from "./openRouterRedaction.ts";
 import {
   extractOpenRouterTaskType,
@@ -299,5 +306,92 @@ describe("openrouter shared helpers", () => {
     expect(manual.executionTarget.model).toBe("gpt-5.5");
     expect(manual.binding.target.model).toBe("gpt-5.5");
     expect(manual.binding.openRouter?.skipReason).toBe("manual_selection");
+  });
+
+  it("gates Teacher content until a trustworthy allowed model is identified", () => {
+    const allowed = ["anthropic/claude-sonnet-4.5"];
+    expect(isTrustworthyActualModel("openrouter/auto")).toBe(false);
+    expect(isTrustworthyActualModel(undefined)).toBe(false);
+    expect(isTrustworthyActualModel("anthropic/claude-sonnet-4.5")).toBe(true);
+    expect(
+      selectedModelFromMetadata({
+        attempts: [{ provider: "Anthropic", model: "anthropic/claude-sonnet-4.5", selected: true }],
+      }),
+    ).toBe("anthropic/claude-sonnet-4.5");
+
+    const beforeContent = applyTeacherContentChunk({
+      gate: emptyTeacherContentGate(),
+      allowedModels: allowed,
+      model: "anthropic/claude-sonnet-4.5",
+      contentDelta: "Hello",
+      terminal: false,
+    });
+    expect(beforeContent.emit).toBe("Hello");
+    expect(beforeContent.gate.verified).toBe(true);
+
+    const buffered = applyTeacherContentChunk({
+      gate: emptyTeacherContentGate(),
+      allowedModels: allowed,
+      contentDelta: "secret-text",
+      terminal: false,
+    });
+    expect(buffered.emit).toBe("");
+    expect(buffered.gate.buffered).toBe("secret-text");
+    const flushed = applyTeacherContentChunk({
+      gate: buffered.gate,
+      allowedModels: allowed,
+      model: "anthropic/claude-sonnet-4.5",
+      contentDelta: " ok",
+      terminal: false,
+    });
+    expect(flushed.emit).toBe("secret-text ok");
+
+    const disallowed = applyTeacherContentChunk({
+      gate: emptyTeacherContentGate(),
+      allowedModels: allowed,
+      contentDelta: "leaked",
+      terminal: false,
+    });
+    const rejected = applyTeacherContentChunk({
+      gate: disallowed.gate,
+      allowedModels: allowed,
+      model: "openai/gpt-4o",
+      contentDelta: " more",
+      terminal: false,
+    });
+    expect(rejected.emit).toBe("");
+    expect(rejected.gate.failure).toBe("disallowed_model");
+
+    const missing = applyTeacherContentChunk({
+      gate: emptyTeacherContentGate(),
+      allowedModels: allowed,
+      contentDelta: "buffered-then-dropped",
+      terminal: true,
+    });
+    expect(missing.emit).toBe("");
+    expect(missing.gate.failure).toBe("missing_model");
+
+    const unresolved = applyTeacherContentChunk({
+      gate: emptyTeacherContentGate(),
+      allowedModels: allowed,
+      model: "openrouter/auto",
+      contentDelta: "alias-text",
+      terminal: true,
+    });
+    expect(unresolved.emit).toBe("");
+    expect(unresolved.gate.failure).toBe("unresolved_alias");
+  });
+
+  it("records every remaining skip reason without prompt or key material", () => {
+    for (const skipReason of OPENROUTER_SKIP_REASONS) {
+      const skipped = observationForSkip({
+        guidanceMode: skipReason === "guidance_off" ? "off" : "shadow",
+        skipReason,
+      });
+      expect(skipped.status).toBe("skipped");
+      expect(skipped.skipReason).toBe(skipReason);
+      expect(JSON.stringify(skipped)).not.toMatch(/sk-or-|Bearer /);
+    }
+    expect(promptBlocksOpenRouterUpload("use sk-or-v1-secretvalue")).toBe("likely_credentials");
   });
 });

@@ -71,6 +71,10 @@
       "types": "./src/openRouterMetadata.ts",
       "import": "./src/openRouterMetadata.ts"
     },
+    "./openRouterTeacherGate": {
+      "types": "./src/openRouterTeacherGate.ts",
+      "import": "./src/openRouterTeacherGate.ts"
+    },
     "./advertisedEndpoint": {
       "types": "./src/advertisedEndpoint.ts",
       "import": "./src/advertisedEndpoint.ts"

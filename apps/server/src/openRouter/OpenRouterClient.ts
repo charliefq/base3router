@@ -16,6 +16,13 @@ import {
   openRouterTeacherRequestBody,
 } from "@t3tools/shared/openRouterPrivacy";
 import { nextModelsPageOffset } from "@t3tools/shared/openRouterMarketPriors";
+import {
+  applyTeacherContentChunk,
+  emptyTeacherContentGate,
+  selectedModelFromMetadata,
+  type TeacherContentGate,
+  type TeacherPolicyFailure,
+} from "@t3tools/shared/openRouterTeacherGate";
 
 import {
   fetchOpenRouterTransport,
@@ -42,6 +49,7 @@ export type OpenRouterChatResult = {
     readonly cost?: number;
   };
   readonly rawError?: string;
+  readonly policyFailure?: TeacherPolicyFailure;
 };
 
 const headerRecord = (apiKey: string, extra?: Readonly<Record<string, string>>) => ({
@@ -204,6 +212,12 @@ export const createOpenRouterClient = (config: OpenRouterClientConfig) => {
       readonly shadow: boolean;
       readonly signal?: AbortSignal;
       readonly onDelta?: (delta: string) => void;
+      /**
+       * Teacher fail-closed gate. Content deltas stay buffered until a
+       * trustworthy actual model is identified and allowlisted. Shadow and Off
+       * leave this unset so streaming is unchanged.
+       */
+      readonly requireAllowedActualModel?: boolean;
     }): Promise<OpenRouterChatResult> => {
       const body = input.shadow
         ? openRouterShadowRequestBody({
@@ -228,9 +242,33 @@ export const createOpenRouterClient = (config: OpenRouterClientConfig) => {
       if (response.status >= 400) {
         return { status: response.status, content: "", rawError: await readError(response) };
       }
+
+      const finishGated = (
+        acc: OpenRouterChatResult,
+        gate: TeacherContentGate,
+        emit: string,
+      ): OpenRouterChatResult => {
+        if (emit.length > 0) input.onDelta?.(emit);
+        if (gate.failure !== null) {
+          return {
+            status: acc.status,
+            content: "",
+            policyFailure: gate.failure,
+            ...(gate.actualModel !== undefined ? { model: gate.actualModel } : {}),
+            ...(acc.metadata !== undefined ? { metadata: acc.metadata } : {}),
+            ...(acc.usage !== undefined ? { usage: acc.usage } : {}),
+          };
+        }
+        return {
+          ...acc,
+          ...(gate.actualModel !== undefined ? { model: gate.actualModel } : {}),
+        };
+      };
+
       if (input.stream && response.stream !== undefined) {
         let acc: OpenRouterChatResult = { status: response.status, content: "" };
         let buffer = "";
+        let gate = emptyTeacherContentGate();
         for await (const chunk of response.stream()) {
           buffer += chunk.replace(/\r\n/g, "\n");
           const parsed = parseSseFrames(buffer);
@@ -242,14 +280,54 @@ export const createOpenRouterClient = (config: OpenRouterClientConfig) => {
             const before = acc.content.length;
             acc = mergeChatJson(json, acc);
             const delta = acc.content.slice(before);
-            if (delta.length > 0) input.onDelta?.(delta);
+            if (input.requireAllowedActualModel === true) {
+              const next = applyTeacherContentChunk({
+                gate,
+                allowedModels: input.allowedModels,
+                model: readModel(json) ?? acc.model,
+                metadataModel: selectedModelFromMetadata(readMetadata(json) ?? acc.metadata),
+                contentDelta: delta,
+                terminal: false,
+              });
+              gate = next.gate;
+              if (next.emit.length > 0) input.onDelta?.(next.emit);
+              if (gate.failure !== null) {
+                return finishGated(acc, gate, "");
+              }
+            } else if (delta.length > 0) {
+              input.onDelta?.(delta);
+            }
           }
+        }
+        if (input.requireAllowedActualModel === true) {
+          const next = applyTeacherContentChunk({
+            gate,
+            allowedModels: input.allowedModels,
+            model: acc.model,
+            metadataModel: selectedModelFromMetadata(acc.metadata),
+            contentDelta: "",
+            terminal: true,
+          });
+          return finishGated(acc, next.gate, next.emit);
         }
         return acc;
       }
       const text = await response.text();
       const json = parseJson(text);
-      return mergeChatJson(json, { status: response.status, content: "" });
+      const merged = mergeChatJson(json, { status: response.status, content: "" });
+      if (input.requireAllowedActualModel === true) {
+        const next = applyTeacherContentChunk({
+          gate: emptyTeacherContentGate(),
+          allowedModels: input.allowedModels,
+          model: merged.model,
+          metadataModel: selectedModelFromMetadata(merged.metadata),
+          contentDelta: merged.content,
+          terminal: true,
+        });
+        return finishGated(merged, next.gate, next.emit);
+      }
+      if (merged.content.length > 0) input.onDelta?.(merged.content);
+      return merged;
     },
     listModels: async (
       signal?: AbortSignal,

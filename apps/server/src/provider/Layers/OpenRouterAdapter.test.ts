@@ -47,6 +47,26 @@ const collectCompletedTurn = (streamEvents: Stream.Stream<ProviderRuntimeEvent>)
     Stream.runCollect,
   );
 
+const collectTurnEvents = (streamEvents: Stream.Stream<ProviderRuntimeEvent>) =>
+  streamEvents.pipe(
+    Stream.takeUntil((event) => event.type === "turn.completed"),
+    Stream.runCollect,
+  );
+
+const streamTransport =
+  (chunks: ReadonlyArray<unknown>): OpenRouterTransport =>
+  async () => ({
+    status: 200,
+    headers: {},
+    text: async () => "",
+    stream: async function* () {
+      for (const chunk of chunks) {
+        yield `data: ${JSON.stringify(chunk)}\n\n`;
+      }
+      yield "data: [DONE]\n\n";
+    },
+  });
+
 describe("OpenRouter adapter", () => {
   it.effect("fails sendTurn without an API key", () =>
     Effect.gen(function* () {
@@ -108,6 +128,66 @@ describe("OpenRouter adapter", () => {
       expect(JSON.stringify(observation)).not.toContain("sk-or-");
       expect(JSON.stringify(observation)).not.toContain("debug this stack trace");
       expect(JSON.stringify(observation)).not.toContain('"ok"');
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("emits zero content deltas when a disallowed model follows content", () =>
+    Effect.gen(function* () {
+      const adapter = yield* makeOpenRouterAdapter({
+        instanceId,
+        apiKey: "sk-or-v1-not-a-real-key",
+        transport: streamTransport([
+          { choices: [{ delta: { content: "leaked-content" } }] },
+          { model: "openai/gpt-4o", choices: [{ delta: { content: " more" } }] },
+        ]),
+        allowedModels: ["anthropic/claude-sonnet-4.5"],
+      });
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const pending = yield* collectTurnEvents(adapter.streamEvents).pipe(Effect.forkChild);
+      yield* adapter.sendTurn({
+        threadId,
+        input: "hello",
+        openRouter: { allowedModels: ["anthropic/claude-sonnet-4.5"], costTier: "medium" },
+      });
+      const events = [...(yield* Fiber.join(pending))];
+      expect(events.some((event) => event.type === "content.delta")).toBe(false);
+      const completed = events.find((event) => event.type === "turn.completed");
+      expect(completed?.type === "turn.completed" ? completed.payload.state : undefined).toBe(
+        "failed",
+      );
+      expect(
+        completed?.type === "turn.completed" ? completed.payload.openRouter?.status : undefined,
+      ).toBe("policy_violation");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("streams content after an allowed actual model is identified", () =>
+    Effect.gen(function* () {
+      const adapter = yield* makeOpenRouterAdapter({
+        instanceId,
+        apiKey: "sk-or-v1-not-a-real-key",
+        transport: streamTransport([
+          { model: "anthropic/claude-sonnet-4.5", choices: [{ delta: { content: "Hel" } }] },
+          { choices: [{ delta: { content: "lo" } }] },
+        ]),
+        allowedModels: ["anthropic/claude-sonnet-4.5"],
+      });
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const pending = yield* collectTurnEvents(adapter.streamEvents).pipe(Effect.forkChild);
+      yield* adapter.sendTurn({
+        threadId,
+        input: "hello",
+        openRouter: { allowedModels: ["anthropic/claude-sonnet-4.5"], costTier: "low" },
+      });
+      const events = [...(yield* Fiber.join(pending))];
+      const deltas = events.flatMap((event) =>
+        event.type === "content.delta" ? [event.payload.delta] : [],
+      );
+      expect(deltas.join("")).toBe("Hello");
+      const completed = events.find((event) => event.type === "turn.completed");
+      expect(completed?.type === "turn.completed" ? completed.payload.state : undefined).toBe(
+        "completed",
+      );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

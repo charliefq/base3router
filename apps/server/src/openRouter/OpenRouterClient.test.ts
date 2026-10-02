@@ -78,6 +78,112 @@ describe("OpenRouter client", () => {
     expect(JSON.stringify(result)).not.toContain("sk-or-v1-not-a-real-key");
   });
 
+  it("keeps Off/Shadow streaming ungated and Teacher gated until the actual model is allowed", async () => {
+    const frames = (chunks: ReadonlyArray<unknown>) => ({
+      status: 200,
+      headers: {},
+      text: async () => "",
+      stream: async function* () {
+        for (const chunk of chunks) {
+          yield `data: ${JSON.stringify(chunk)}\n\n`;
+        }
+        yield "data: [DONE]\n\n";
+      },
+    });
+    const makeClient = (chunks: ReadonlyArray<unknown>) =>
+      createOpenRouterClient({
+        apiKey: "sk-or-v1-not-a-real-key",
+        transport: fakeTransport(async () => frames(chunks)),
+      });
+
+    const ungated: string[] = [];
+    await makeClient([{ choices: [{ delta: { content: "Hel" } }] }, chatFixture]).chat({
+      prompt: "debug",
+      allowedModels: ["anthropic/claude-sonnet-4.5"],
+      costTier: "medium",
+      stream: true,
+      shadow: false,
+      onDelta: (delta) => ungated.push(delta),
+    });
+    expect(ungated.join("")).toContain("Hel");
+
+    const allowed: string[] = [];
+    const allowedResult = await makeClient([
+      { model: "anthropic/claude-sonnet-4.5", choices: [{ delta: { content: "Hel" } }] },
+      { choices: [{ delta: { content: "lo" } }] },
+    ]).chat({
+      prompt: "debug",
+      allowedModels: ["anthropic/claude-sonnet-4.5"],
+      costTier: "medium",
+      stream: true,
+      shadow: false,
+      requireAllowedActualModel: true,
+      onDelta: (delta) => allowed.push(delta),
+    });
+    expect(allowed.join("")).toBe("Hello");
+    expect(allowedResult.policyFailure).toBeUndefined();
+
+    const buffered: string[] = [];
+    await makeClient([
+      { choices: [{ delta: { content: "Hel" } }] },
+      { model: "anthropic/claude-sonnet-4.5", choices: [{ delta: { content: "lo" } }] },
+    ]).chat({
+      prompt: "debug",
+      allowedModels: ["anthropic/claude-sonnet-4.5"],
+      costTier: "medium",
+      stream: true,
+      shadow: false,
+      requireAllowedActualModel: true,
+      onDelta: (delta) => buffered.push(delta),
+    });
+    expect(buffered[0]).toBe("Hello");
+
+    const leaked: string[] = [];
+    const denied = await makeClient([
+      { choices: [{ delta: { content: "leaked-content" } }] },
+      { model: "openai/gpt-4o", choices: [{ delta: { content: " more" } }] },
+    ]).chat({
+      prompt: "debug",
+      allowedModels: ["anthropic/claude-sonnet-4.5"],
+      costTier: "medium",
+      stream: true,
+      shadow: false,
+      requireAllowedActualModel: true,
+      onDelta: (delta) => leaked.push(delta),
+    });
+    expect(leaked).toEqual([]);
+    expect(denied.content).toBe("");
+    expect(denied.policyFailure).toBe("disallowed_model");
+
+    const missingDeltas: string[] = [];
+    const missing = await makeClient([{ choices: [{ delta: { content: "no-model" } }] }]).chat({
+      prompt: "debug",
+      allowedModels: ["anthropic/claude-sonnet-4.5"],
+      costTier: "medium",
+      stream: true,
+      shadow: false,
+      requireAllowedActualModel: true,
+      onDelta: (delta) => missingDeltas.push(delta),
+    });
+    expect(missingDeltas).toEqual([]);
+    expect(missing.policyFailure).toBe("missing_model");
+
+    const unresolvedDeltas: string[] = [];
+    const unresolved = await makeClient([
+      { model: OPENROUTER_AUTO_SLUG, choices: [{ delta: { content: "alias" } }] },
+    ]).chat({
+      prompt: "debug",
+      allowedModels: ["anthropic/claude-sonnet-4.5"],
+      costTier: "medium",
+      stream: true,
+      shadow: false,
+      requireAllowedActualModel: true,
+      onDelta: (delta) => unresolvedDeltas.push(delta),
+    });
+    expect(unresolvedDeltas).toEqual([]);
+    expect(unresolved.policyFailure).toBe("unresolved_alias");
+  });
+
   it("paginates models and keeps last-known-good stale catalog", async () => {
     const pages = [
       Array.from({ length: 500 }, (_, index) => ({ id: `openai/page-0-${index}` })),

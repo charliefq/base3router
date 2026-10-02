@@ -231,6 +231,7 @@ export const makeOpenRouterAdapter = Effect.fn("makeOpenRouterAdapter")(function
               stream: true,
               shadow: false,
               signal: abort.signal,
+              requireAllowedActualModel: true,
               onDelta: (delta) => {
                 deltaSeq += 1;
                 void Effect.runPromise(
@@ -294,8 +295,22 @@ export const makeOpenRouterAdapter = Effect.fn("makeOpenRouterAdapter")(function
           });
           return { threadId: input.threadId, turnId } satisfies ProviderTurnStartResult;
         }
-        const actual = result.model ?? OPENROUTER_AUTO_SLUG;
-        if (allowedModels.length > 0 && !actualModelIsAllowed(actual, allowedModels)) {
+        const actual = result.model;
+        const policyFailure = result.policyFailure;
+        const disallowed =
+          policyFailure === "disallowed_model" ||
+          (actual !== undefined &&
+            allowedModels.length > 0 &&
+            !actualModelIsAllowed(actual, allowedModels));
+        const unresolved = policyFailure === "unresolved_alias";
+        const missing = policyFailure === "missing_model" || actual === undefined;
+        if (disallowed || unresolved || missing) {
+          const detail =
+            unresolved || actual === OPENROUTER_AUTO_SLUG
+              ? "Returned model was an unresolved OpenRouter alias."
+              : missing
+                ? "OpenRouter did not identify the actual execution model."
+                : "Returned model was outside the Base3Router allowlist.";
           yield* emit({
             ...base,
             eventId: EventId.make(yield* newId),
@@ -312,13 +327,13 @@ export const makeOpenRouterAdapter = Effect.fn("makeOpenRouterAdapter")(function
                   errorCategory: "policy_violation",
                   allowedModels,
                   costTier,
-                  detail: "Returned model was outside the Base3Router allowlist.",
+                  detail,
                 }),
-                actualExecutionModel: actual,
+                ...(actual !== undefined ? { actualExecutionModel: actual } : {}),
                 requestedRouterTarget: OPENROUTER_AUTO_SLUG,
                 agreement: openRouterAgreement({
                   base3Model: OPENROUTER_AUTO_SLUG,
-                  openRouterModel: actual,
+                  ...(actual !== undefined ? { openRouterModel: actual } : {}),
                 }),
               },
             },
