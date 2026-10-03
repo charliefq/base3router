@@ -1122,5 +1122,34 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId }) => environmentId,
       },
     }),
+    routerInsights: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:router-insights",
+      tag: WS_METHODS.routerGetInsights,
+      staleTimeMs: 15_000,
+    }),
+    routerSubmitFeedback: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:router-submit-feedback",
+      tag: WS_METHODS.routerSubmitFeedback,
+    }),
+    routerActivatePolicy: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:router-activate-policy",
+      tag: WS_METHODS.routerActivatePolicy,
+    }),
+    routerShadowPolicy: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:router-shadow-policy",
+      tag: WS_METHODS.routerShadowPolicy,
+    }),
+    routerRollbackPolicy: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:router-rollback-policy",
+      tag: WS_METHODS.routerRollbackPolicy,
+    }),
+    routerExportObservations: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:router-export-observations",
+      tag: WS_METHODS.routerExportObservations,
+    }),
+    routerDeleteObservations: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:router-delete-observations",
+      tag: WS_METHODS.routerDeleteObservations,
+    }),
   };
 }

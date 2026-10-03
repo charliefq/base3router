@@ -3,14 +3,17 @@ import type { ReactNode } from "react";
 
 import type {
   ControlCenterModel,
+  ControlCenterRouterActions,
   ControlCenterTaskItem,
 } from "~/controlPlane/presentControlCenter";
+import { Button } from "../ui/button";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { OperationalStatusCard, statusTone } from "./OperationalStatusCard";
 
 export function ControlCenter(props: {
   readonly model: ControlCenterModel;
   readonly section?: "overview" | "workflows" | "agents";
+  readonly actions?: ControlCenterRouterActions;
 }) {
   const section = props.section ?? "overview";
   return (
@@ -111,41 +114,7 @@ export function ControlCenter(props: {
               }
               tone={props.model.routerInsights.insufficientData ? "warning" : "neutral"}
             >
-              <div
-                className="mt-1 space-y-1 text-2xs text-muted-foreground"
-                data-router-insights=""
-              >
-                <p data-router-insights-count="">
-                  Observations {props.model.routerInsights.observationCount}
-                </p>
-                {props.model.routerInsights.candidatePolicy ? (
-                  <p data-router-insights-candidate="">
-                    Candidate {props.model.routerInsights.candidatePolicy}
-                  </p>
-                ) : null}
-                <p>Explicit feedback {props.model.routerInsights.explicitFeedback}</p>
-                <p>Rework proxies {props.model.routerInsights.reworkProxies}</p>
-                {props.model.routerInsights.mixedProvenance ? (
-                  <p data-mixed-provenance="">
-                    Reported and estimated cost are labeled separately.
-                  </p>
-                ) : null}
-                {props.model.routerInsights.confirmation === "activate" ? (
-                  <p data-policy-activate-confirm="">
-                    Activate candidate? This does not happen automatically.
-                  </p>
-                ) : null}
-                {props.model.routerInsights.confirmation === "rollback" ? (
-                  <p data-policy-rollback-confirm="">
-                    Rollback restores the previous policy immediately.
-                  </p>
-                ) : null}
-                {props.model.routerInsights.confirmation === "delete" ? (
-                  <p data-observations-delete-confirm="">
-                    Delete observations for this environment? Confirmation required.
-                  </p>
-                ) : null}
-              </div>
+              <RouterInsightsBody model={props.model} actions={props.actions} />
             </OperationalStatusCard>
           ) : null}
           {props.model.empty ? (
@@ -198,6 +167,163 @@ export function ControlCenter(props: {
           ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+function RouterInsightsBody(props: {
+  readonly model: ControlCenterModel;
+  readonly actions?: ControlCenterRouterActions;
+}) {
+  const insights = props.model.routerInsights;
+  if (!insights) return null;
+  const canOperate = insights.canOperate === true;
+  const actions = props.actions;
+  return (
+    <div className="mt-1 space-y-1 text-2xs text-muted-foreground" data-router-insights="">
+      <p data-router-insights-count="">Observations {insights.observationCount}</p>
+      {insights.coverage ? (
+        <p data-router-insights-coverage="">Coverage {insights.coverage}</p>
+      ) : null}
+      {insights.freshness ? (
+        <p data-router-insights-freshness="">Freshness {insights.freshness}</p>
+      ) : null}
+      {insights.candidatePolicy ? (
+        <p data-router-insights-candidate="">
+          {insights.candidatePolicyState === "shadow" ? "Shadow" : "Candidate"}{" "}
+          {insights.candidatePolicy}
+        </p>
+      ) : null}
+      <p>Explicit feedback {insights.explicitFeedback}</p>
+      <p>Rework proxies {insights.reworkProxies}</p>
+      {insights.verification ? (
+        <p data-router-insights-verification="">Verification {insights.verification}</p>
+      ) : null}
+      {insights.latency ? <p data-router-insights-latency="">Latency {insights.latency}</p> : null}
+      {insights.reportedCost ? (
+        <p data-reported-cost="">Reported cost {insights.reportedCost}</p>
+      ) : null}
+      {insights.estimatedCost ? (
+        <p data-estimated-cost="">Estimated cost {insights.estimatedCost}</p>
+      ) : null}
+      {insights.challengerAgreement ? (
+        <p data-challenger-agreement="">Challenger agreement {insights.challengerAgreement}</p>
+      ) : null}
+      {insights.mixedProvenance ? (
+        <p data-mixed-provenance="">Reported and estimated cost are labeled separately.</p>
+      ) : null}
+      {insights.confirmation === "activate" ? (
+        <p data-policy-activate-confirm="">
+          Activate candidate? This does not happen automatically.
+        </p>
+      ) : null}
+      {insights.confirmation === "shadow" ? (
+        <p data-policy-shadow-confirm="">
+          Move the candidate into Policy Shadow? Execution stays on the active policy.
+        </p>
+      ) : null}
+      {insights.confirmation === "rollback" ? (
+        <p data-policy-rollback-confirm="">Rollback restores the previous policy immediately.</p>
+      ) : null}
+      {insights.confirmation === "delete" ? (
+        <p data-observations-delete-confirm="">
+          Delete observations for this environment? Confirmation required.
+        </p>
+      ) : null}
+      {actions?.onExport ? (
+        <div className="flex flex-wrap gap-1 pt-1">
+          <Button size="xs" variant="outline" data-router-export="" onClick={actions.onExport}>
+            Export
+          </Button>
+        </div>
+      ) : null}
+      {canOperate && actions?.onFeedback && insights.latestObservationId ? (
+        <div className="flex flex-wrap gap-1 pt-1" data-router-feedback="">
+          <Button size="xs" variant="outline" onClick={() => actions.onFeedback?.("helpful")}>
+            Helpful
+          </Button>
+          <Button size="xs" variant="outline" onClick={() => actions.onFeedback?.("not_helpful")}>
+            Not helpful
+          </Button>
+          <Button size="xs" variant="outline" onClick={() => actions.onFeedback?.("too_slow")}>
+            Too slow
+          </Button>
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => actions.onFeedback?.("wrong_model_choice")}
+          >
+            Wrong model
+          </Button>
+        </div>
+      ) : null}
+      {canOperate && actions?.onRequestConfirm ? (
+        <div className="flex flex-wrap gap-1 pt-1">
+          {insights.candidatePolicyId && insights.candidatePolicyState === "candidate" ? (
+            <Button
+              size="xs"
+              variant="outline"
+              data-policy-shadow=""
+              onClick={() => actions.onRequestConfirm?.("shadow")}
+            >
+              Shadow
+            </Button>
+          ) : null}
+          {insights.candidatePolicyId && insights.candidatePolicyState === "shadow" ? (
+            <Button
+              size="xs"
+              variant="outline"
+              data-policy-activate=""
+              onClick={() => actions.onRequestConfirm?.("activate")}
+            >
+              Activate
+            </Button>
+          ) : null}
+          <Button
+            size="xs"
+            variant="outline"
+            data-policy-rollback=""
+            onClick={() => actions.onRequestConfirm?.("rollback")}
+          >
+            Rollback
+          </Button>
+          <Button
+            size="xs"
+            variant="destructive-outline"
+            data-observations-delete=""
+            onClick={() => actions.onRequestConfirm?.("delete")}
+          >
+            Delete
+          </Button>
+        </div>
+      ) : null}
+      {canOperate && insights.confirmation && actions ? (
+        <div className="flex flex-wrap gap-1 pt-1">
+          {insights.confirmation === "activate" ? (
+            <Button size="xs" variant="default" onClick={actions.onConfirmActivate}>
+              Confirm activate
+            </Button>
+          ) : null}
+          {insights.confirmation === "shadow" ? (
+            <Button size="xs" variant="default" onClick={actions.onConfirmShadow}>
+              Confirm shadow
+            </Button>
+          ) : null}
+          {insights.confirmation === "rollback" ? (
+            <Button size="xs" variant="default" onClick={actions.onConfirmRollback}>
+              Confirm rollback
+            </Button>
+          ) : null}
+          {insights.confirmation === "delete" ? (
+            <Button size="xs" variant="destructive" onClick={actions.onConfirmDelete}>
+              Confirm delete
+            </Button>
+          ) : null}
+          <Button size="xs" variant="ghost" onClick={actions.onCancelConfirm}>
+            Cancel
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -119,3 +119,64 @@ it("renders capability-off, approvals, and terminal run states", async () => {
   expect(renderedText()).toContain("Cancelled run");
   expect(renderedText()).not.toContain("sk-");
 });
+
+it("renders live Router Insights counts and hides mutations without operate access", async () => {
+  await act(async () => {
+    renderer = create(
+      <ControlCenter
+        model={{
+          ...empty,
+          empty: false,
+          routerInsights: {
+            observationCount: 12,
+            activePolicy: "model-router.v0",
+            candidatePolicy: "hybrid-router.v1.0.0",
+            candidatePolicyState: "shadow",
+            insufficientData: false,
+            mixedProvenance: true,
+            explicitFeedback: "1/2 (insufficient, n=2)",
+            reworkProxies: "0/12 (insufficient, n=12)",
+            verification: "unknown",
+            coverage: "12/12 (reliable, n=12)",
+            freshness: "fresh",
+            latency: "140 ms (n=8, insufficient)",
+            reportedCost: "0.02 usd (n=8, insufficient)",
+            estimatedCost: "unknown",
+            canOperate: false,
+            confirmation: null,
+          },
+        }}
+      />,
+    );
+  });
+
+  expect(renderedText()).toContain("Observations 12");
+  expect(renderedText()).toContain("1/2");
+  expect(renderedText()).toContain("labeled separately");
+  expect(renderedText()).not.toContain("Confirm activate");
+});
+
+it("shows destructive confirmation copy for activate, rollback, and delete", async () => {
+  await act(async () => {
+    renderer = create(
+      <ControlCenter
+        model={{
+          ...empty,
+          empty: false,
+          routerInsights: {
+            observationCount: 24,
+            activePolicy: "hybrid-router.v1.0.0",
+            candidatePolicy: "model-router.v0",
+            insufficientData: false,
+            mixedProvenance: false,
+            explicitFeedback: "none recorded",
+            reworkProxies: "none recorded",
+            confirmation: "activate",
+          },
+        }}
+      />,
+    );
+  });
+
+  expect(renderedText()).toContain("Activate candidate");
+});
