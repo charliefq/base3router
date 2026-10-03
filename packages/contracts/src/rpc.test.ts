@@ -45,6 +45,8 @@ describe("router evaluation RPC", () => {
     expect(WsRpcGroup.requests.has(WS_METHODS.routerActivatePolicy)).toBe(true);
     expect(WsRpcGroup.requests.has(WS_METHODS.routerShadowPolicy)).toBe(true);
     expect(WsRpcGroup.requests.has(WS_METHODS.routerRollbackPolicy)).toBe(true);
+    expect(WsRpcGroup.requests.has(WS_METHODS.actionGateGetGovernance)).toBe(true);
+    expect(WsRpcGroup.requests.has(WS_METHODS.actionGateRespondApproval)).toBe(true);
   });
 });
 
