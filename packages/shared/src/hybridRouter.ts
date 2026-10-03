@@ -521,7 +521,7 @@ export function routeHybridModel(input: HybridRouterInput): HybridRouterOutput {
   const decision: ModelRouterDecision = applyHybrid
     ? {
         ...v0,
-        policyVersion: v0.policyVersion,
+        policyVersion: applyHybrid ? HYBRID_ROUTER_POLICY_VERSION : v0.policyVersion,
         selected: {
           ...hybridSelected,
           reasonCodes: uniqueReasons([...hybridSelected.reasonCodes, "HYBRID_RANKED", "SELECTED"]),

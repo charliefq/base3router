@@ -6,6 +6,7 @@ import {
   RouterEvaluationError,
   RouterPolicyId as RouterPolicyIdSchema,
 } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 
 const BASELINE_POLICY_VERSION = MODEL_ROUTER_POLICY_VERSION;
 
@@ -22,37 +23,75 @@ export const canTransitionPolicy = (from: RouterPolicyState, to: RouterPolicySta
     case "active":
       return to === "retired";
     case "retired":
-      return false;
+      return to === "active";
   }
 };
 
-export const activatePolicy = (input: {
+const deny = (reason: RouterEvaluationError["reason"], detail: string) =>
+  new RouterEvaluationError({ reason, detail });
+
+export const shadowPolicy = Effect.fn("shadowPolicy")(function* (input: {
+  readonly candidate: RouterPolicySnapshotV0;
+  readonly confirmShadow: boolean;
+  readonly authorized: boolean;
+  readonly now: string;
+  readonly actor?: string;
+}) {
+  if (!input.authorized) {
+    return yield* deny("unauthorized_activation", "Policy shadow requires orchestration:operate.");
+  }
+  if (input.confirmShadow !== true) {
+    return yield* deny(
+      "confirmation_required",
+      "Shadow requires confirmShadow=true. A candidate cannot shadow itself.",
+    );
+  }
+  if (!canTransitionPolicy(input.candidate.state, "shadow")) {
+    return yield* deny(
+      "illegal_transition",
+      `Policy in state ${input.candidate.state} cannot become shadow.`,
+    );
+  }
+  return {
+    active: {
+      ...input.candidate,
+      state: "shadow",
+      ...(input.actor !== undefined ? { activatedBy: input.actor } : {}),
+    },
+  };
+});
+
+export const activatePolicy = Effect.fn("activatePolicy")(function* (input: {
   readonly candidate: RouterPolicySnapshotV0;
   readonly currentActive: RouterPolicySnapshotV0 | null;
   readonly confirmActivation: boolean;
   readonly authorized: boolean;
   readonly now: string;
-}): {
-  readonly active: RouterPolicySnapshotV0;
-  readonly previous?: RouterPolicySnapshotV0;
-} => {
+  readonly actor?: string;
+}) {
   if (!input.authorized) {
-    throw new RouterEvaluationError({
-      reason: "unauthorized_activation",
-      detail: "Policy activation requires orchestration:operate.",
-    });
+    return yield* deny(
+      "unauthorized_activation",
+      "Policy activation requires orchestration:operate.",
+    );
   }
   if (input.confirmActivation !== true) {
-    throw new RouterEvaluationError({
-      reason: "confirmation_required",
-      detail: "Activation requires confirmActivation=true. A candidate cannot activate itself.",
-    });
+    return yield* deny(
+      "confirmation_required",
+      "Activation requires confirmActivation=true. A candidate cannot activate itself.",
+    );
   }
-  if (input.candidate.state !== "shadow" && input.candidate.state !== "candidate") {
-    throw new RouterEvaluationError({
-      reason: "malformed_policy",
-      detail: `Policy in state ${input.candidate.state} cannot become active.`,
-    });
+  if (!canTransitionPolicy(input.candidate.state, "active")) {
+    return yield* deny(
+      "illegal_transition",
+      `Policy in state ${input.candidate.state} cannot become active.`,
+    );
+  }
+  if (input.currentActive !== null && !canTransitionPolicy(input.currentActive.state, "retired")) {
+    return yield* deny(
+      "illegal_transition",
+      `Active policy in state ${input.currentActive.state} cannot be retired.`,
+    );
   }
   const previous =
     input.currentActive === null
@@ -63,45 +102,52 @@ export const activatePolicy = (input: {
     state: "active",
     activatedAt: input.now,
     activationConfirmed: true,
+    ...(input.actor !== undefined ? { activatedBy: input.actor } : {}),
     ...(input.currentActive !== undefined && input.currentActive !== null
       ? { priorActivePolicyId: input.currentActive.policyId }
       : {}),
   };
   return previous === undefined ? { active } : { active, previous };
-};
+});
 
-export const rollbackPolicy = (input: {
+export const rollbackPolicy = Effect.fn("rollbackPolicy")(function* (input: {
   readonly currentActive: RouterPolicySnapshotV0;
   readonly prior: RouterPolicySnapshotV0 | null;
   readonly confirmRollback: boolean;
   readonly authorized: boolean;
   readonly now: string;
   readonly baseline: RouterPolicySnapshotV0;
-}): {
-  readonly active: RouterPolicySnapshotV0;
-  readonly previous: RouterPolicySnapshotV0;
-} => {
+  readonly actor?: string;
+}) {
   if (!input.authorized) {
-    throw new RouterEvaluationError({
-      reason: "unauthorized_activation",
-      detail: "Policy rollback requires orchestration:operate.",
-    });
+    return yield* deny(
+      "unauthorized_activation",
+      "Policy rollback requires orchestration:operate.",
+    );
   }
   if (input.confirmRollback !== true) {
-    throw new RouterEvaluationError({
-      reason: "confirmation_required",
-      detail: "Rollback requires confirmRollback=true.",
-    });
+    return yield* deny("confirmation_required", "Rollback requires confirmRollback=true.");
   }
-  const restored =
-    input.prior ??
-    (input.currentActive.priorActivePolicyId !== undefined ? input.prior : input.baseline);
+  if (!canTransitionPolicy(input.currentActive.state, "retired")) {
+    return yield* deny(
+      "illegal_transition",
+      `Active policy in state ${input.currentActive.state} cannot be retired.`,
+    );
+  }
+  const restored = input.prior ?? input.baseline;
+  if (restored.state !== "active" && !canTransitionPolicy(restored.state, "active")) {
+    return yield* deny(
+      "illegal_transition",
+      `Prior policy in state ${restored.state} cannot become active.`,
+    );
+  }
   const active: RouterPolicySnapshotV0 = {
-    ...(restored ?? input.baseline),
+    ...restored,
     state: "active",
     activatedAt: input.now,
     activationConfirmed: true,
-    policyVersion: restored?.policyVersion ?? BASELINE_POLICY_VERSION,
+    policyVersion: restored.policyVersion ?? BASELINE_POLICY_VERSION,
+    ...(input.actor !== undefined ? { activatedBy: input.actor } : {}),
   };
   const previous: RouterPolicySnapshotV0 = {
     ...input.currentActive,
@@ -109,7 +155,7 @@ export const rollbackPolicy = (input: {
     retiredAt: input.now,
   };
   return { active, previous };
-};
+});
 
 export const baselinePolicyId = RouterPolicyIdSchema.make("policy-model-router-v0");
 

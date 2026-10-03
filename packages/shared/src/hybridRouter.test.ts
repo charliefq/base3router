@@ -58,6 +58,7 @@ describe("routeHybridModel", () => {
     });
     expect(result.hybrid.usedHybridRanking).toBe(false);
     expect(result.hybrid.fallbackToV0).toBe(true);
+    expect(result.decision.policyVersion).toBe(MODEL_ROUTER_POLICY_VERSION);
     expect(result.decision.reasonCodes).toContain("HYBRID_INSUFFICIENT_EVIDENCE");
     expect(result.decision.selected?.target.instanceId).toBe("codex");
   });
@@ -86,6 +87,7 @@ describe("routeHybridModel", () => {
     });
     expect(result.decision.reasonCodes).toContain("MANUAL_OVERRIDE");
     expect(result.hybrid.usedHybridRanking).toBe(false);
+    expect(result.decision.policyVersion).toBe(MODEL_ROUTER_POLICY_VERSION);
     expect(result.decision.selected?.target.model).toBe("claude-sonnet-4-6");
   });
 
@@ -100,6 +102,7 @@ describe("routeHybridModel", () => {
       ]),
     });
     expect(result.hybrid.usedHybridRanking).toBe(true);
+    expect(result.decision.policyVersion).toBe(HYBRID_ROUTER_POLICY_VERSION);
     expect(result.decision.selected?.target.model).toBe("claude-sonnet-4-6");
     expect(result.decision.reasonCodes).toContain("HYBRID_RANKED");
     expect(result.hybrid.explanation).toContain(HYBRID_ROUTER_POLICY_VERSION);
@@ -118,6 +121,7 @@ describe("routeHybridModel", () => {
       ]),
     });
     expect(result.hybrid.usedHybridRanking).toBe(false);
+    expect(result.decision.policyVersion).toBe(MODEL_ROUTER_POLICY_VERSION);
     expect(result.decision.selected?.target.instanceId).toBe("codex");
     expect(result.hybrid.challenger?.kind).toBe("policy_shadow");
     expect(result.hybrid.challenger?.selected?.model).toBe("claude-sonnet-4-6");
