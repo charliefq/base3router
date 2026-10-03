@@ -15,7 +15,7 @@ import * as DateTime from "effect/DateTime";
 import { MODEL_ROUTER_SECRET_REDACTION, modelRouterTargetKey } from "./modelRouter.ts";
 
 const SECRET_SHAPED =
-  /Bearer\s+\S+|crsr[_-][A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]+|CURSOR_API_KEY\s*=|api[_-]?key\s*[=:]|Authorization\s*:/i;
+  /Bearer\s+\S+|crsr[_-][A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]+|OPENROUTER_API_KEY\s*=|CURSOR_API_KEY\s*=|api[_-]?key\s*[=:]|Authorization\s*:/i;
 
 const USAGE_LIMIT_DETAIL = /usage limit reached/i;
 const RATE_LIMIT_DETAIL = /rate limit|too many requests|429\b/i;
@@ -63,6 +63,7 @@ function providerLabel(instanceId: string): string {
   if (instanceId.startsWith("grok")) return "Grok";
   if (instanceId.startsWith("opencode")) return "OpenCode";
   if (instanceId.startsWith("antigravity")) return "Antigravity";
+  if (instanceId.startsWith("openrouter")) return "OpenRouter";
   return instanceId;
 }
 

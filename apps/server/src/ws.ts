@@ -51,6 +51,7 @@ import {
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
+  ProviderInstanceId,
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
@@ -1942,6 +1943,26 @@ const makeWsRpcLayer = (
                     const availabilityCooldowns = Option.isSome(availability)
                       ? yield* availability.value.snapshot(availabilityNowMs)
                       : [];
+                    const openRouterDeps = yield* Effect.gen(function* () {
+                      const settings = yield* serverSettings.getSettings;
+                      const providers = yield* providerRegistry.getProviders;
+                      const openRouterProvider = providers.find(
+                        (provider) => provider.driver === "openrouter",
+                      );
+                      const credentialPresent = openRouterProvider?.auth.status === "authenticated";
+                      const configured =
+                        credentialPresent === true ||
+                        settings.openRouter.guidanceMode !== "off" ||
+                        settings.openRouter.shadowConsent === true ||
+                        settings.openRouter.teacherEnabled === true;
+                      if (!configured) return undefined;
+                      return {
+                        settings: settings.openRouter,
+                        credentialPresent: credentialPresent === true,
+                        instanceId:
+                          openRouterProvider?.instanceId ?? ProviderInstanceId.make("openrouter"),
+                      };
+                    });
                     return yield* Dispatcher.bindDispatcherTurnStartCommand(handoffBound, {
                       enabled: config.dispatcherEnabled === true,
                       environmentId: serverEnvironment.getEnvironmentId,
@@ -1952,6 +1973,7 @@ const makeWsRpcLayer = (
                       sql,
                       availabilityCooldowns,
                       availabilityNowMs,
+                      ...(openRouterDeps !== undefined ? { openRouter: openRouterDeps } : {}),
                     });
                   }),
                 ),

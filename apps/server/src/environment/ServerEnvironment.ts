@@ -10,6 +10,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
@@ -23,6 +24,15 @@ import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
+import {
+  openRouterCapabilitySnapshot,
+  resolveOpenRouterApiKey,
+} from "../openRouter/OpenRouterCredentials.ts";
+import {
+  OpenRouterCatalogService,
+  type OpenRouterCatalogFreshness,
+} from "../openRouter/OpenRouterCatalogService.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 
 export class ServerEnvironmentIdPersistenceError extends Schema.TaggedError<ServerEnvironmentIdPersistenceError>()(
   "ServerEnvironmentIdPersistenceError",
@@ -263,12 +273,41 @@ export const make = Effect.gen(function* () {
     // The publish opt-in and relay link change at runtime (`t3 connect
     // publish`, the client settings toggle), so the capability is read per
     // descriptor request rather than baked in at startup.
-    getDescriptor: readAgentActivityPublishingActive(secrets).pipe(
-      Effect.map((agentActivityPublishing) => ({
+    getDescriptor: Effect.gen(function* () {
+      const agentActivityPublishing = yield* readAgentActivityPublishingActive(secrets);
+      const settingsService = yield* Effect.serviceOption(ServerSettingsService);
+      const settings = Option.isSome(settingsService)
+        ? yield* settingsService.value.getSettings.pipe(
+            Effect.catch(() => Effect.succeed(undefined)),
+          )
+        : undefined;
+      const catalog = yield* Effect.serviceOption(OpenRouterCatalogService);
+      const priors: OpenRouterCatalogFreshness = Option.isSome(catalog)
+        ? yield* catalog.value.freshness.pipe(
+            Effect.catch(() =>
+              Effect.succeed({ status: "unknown" as const } satisfies OpenRouterCatalogFreshness),
+            ),
+          )
+        : { status: "unknown" as const };
+      return {
         ...descriptor,
-        capabilities: { ...descriptor.capabilities, agentActivityPublishing },
-      })),
-    ),
+        capabilities: {
+          ...descriptor.capabilities,
+          agentActivityPublishing,
+          openRouterGuidance: openRouterCapabilitySnapshot({
+            ...(settings !== undefined ? { settings: settings.openRouter } : {}),
+            credentialPresent:
+              resolveOpenRouterApiKey({
+                ...(settings !== undefined
+                  ? { providerInstances: settings.providerInstances }
+                  : {}),
+              }) !== undefined,
+            marketPriorFreshness: priors.status,
+            ...(priors.asOf !== undefined ? { marketPriorAsOf: priors.asOf } : {}),
+          }),
+        },
+      };
+    }),
   });
 });
 

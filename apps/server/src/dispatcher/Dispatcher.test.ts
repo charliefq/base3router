@@ -7,8 +7,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
   ComposerContextId,
+  DEFAULT_OPENROUTER_GUIDANCE_SETTINGS,
   EnvironmentId,
   MessageId,
+  OPENROUTER_AUTO_SLUG,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -348,6 +350,92 @@ it.effect("manual routing keeps the user model and still records a route decisio
         modelRoute: { mode: "manual", policyVersion: "model-router.v0" },
       },
     });
+    if (bound.type === "thread.turn.start") {
+      expect(bound.routeBinding?.openRouter).toBeUndefined();
+    }
+  }).pipe(Effect.provide(SqlitePersistenceMemory)),
+);
+
+it.effect("OpenRouter Off and Shadow leave Auto Route execution unchanged", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO projection_projects
+      (project_id, title, workspace_root, default_model_selection_json, scripts_json, created_at, updated_at, deleted_at)
+      VALUES
+      ('project-a', 'Dispatcher', '/workspace/a', '{"instanceId":"opencode","model":"openai/gpt-5"}', '[]', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL)`;
+    yield* sql`INSERT INTO projection_threads
+      (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at, deleted_at)
+      VALUES ('thread-a', 'project-a', 'Thread', '{"instanceId":"opencode","model":"openai/gpt-5"}', 'full-access', 'default', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL)`;
+
+    const command = {
+      type: "thread.turn.start" as const,
+      commandId: CommandId.make("openrouter-auto-turn"),
+      threadId: threadA,
+      message: {
+        messageId: MessageId.make("openrouter-auto-message"),
+        role: "user" as const,
+        text: "Implement the helper.",
+        attachments: [],
+      },
+      routingMode: "auto" as const,
+      runtimeMode: "full-access" as const,
+      interactionMode: "default" as const,
+      createdAt: "2026-09-24T00:00:00.000Z",
+    };
+    const dependencies = {
+      enabled: false,
+      environmentId: Effect.succeed(environmentId),
+      providers: Effect.succeed([
+        provider({ instanceId: "opencode", driver: "opencode", models: ["openai/gpt-5"] }),
+        provider({
+          instanceId: "openrouter",
+          driver: "openrouter",
+          models: [OPENROUTER_AUTO_SLUG],
+        }),
+      ]),
+      environmentDefaultModelSelection: Effect.succeed(null),
+      sql,
+    };
+
+    const off = yield* bindDispatcherTurnStartCommand(command, dependencies);
+    if (off.type !== "thread.turn.start") throw new Error("expected turn start");
+    expect(off.routeBinding?.target.model).toBe("openai/gpt-5");
+    expect(off.routeBinding?.openRouter).toBeUndefined();
+
+    const shadow = yield* bindDispatcherTurnStartCommand(command, {
+      ...dependencies,
+      openRouter: {
+        settings: {
+          ...DEFAULT_OPENROUTER_GUIDANCE_SETTINGS,
+          guidanceMode: "shadow",
+          shadowConsent: true,
+        },
+        credentialPresent: true,
+        instanceId: ProviderInstanceId.make("openrouter"),
+      },
+    });
+    if (shadow.type !== "thread.turn.start") throw new Error("expected turn start");
+    expect(shadow.routeBinding?.target.model).toBe("openai/gpt-5");
+    expect(shadow.modelSelection?.model).toBe("openai/gpt-5");
+    expect(shadow.routeBinding?.openRouter?.guidanceMode).toBe("shadow");
+    expect(shadow.routeBinding?.openRouter?.status).toBe("pending");
+
+    const teacher = yield* bindDispatcherTurnStartCommand(command, {
+      ...dependencies,
+      openRouter: {
+        settings: {
+          ...DEFAULT_OPENROUTER_GUIDANCE_SETTINGS,
+          guidanceMode: "teacher",
+          teacherEnabled: true,
+        },
+        credentialPresent: true,
+        instanceId: ProviderInstanceId.make("openrouter"),
+      },
+    });
+    if (teacher.type !== "thread.turn.start") throw new Error("expected turn start");
+    expect(teacher.routeBinding?.target.model).toBe(OPENROUTER_AUTO_SLUG);
+    expect(teacher.routeBinding?.driver).toBe("openrouter");
+    expect(teacher.routeBinding?.openRouter?.allowedModels).toEqual(["openai/gpt-5"]);
   }).pipe(Effect.provide(SqlitePersistenceMemory)),
 );
 

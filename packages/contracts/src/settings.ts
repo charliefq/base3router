@@ -41,6 +41,12 @@ import {
   type ProviderDriverKind,
 } from "./providerInstance.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
+import {
+  OPENROUTER_DEFAULT_BASE_URL,
+  OpenRouterCostTier,
+  OpenRouterGuidanceMode,
+  OpenRouterGuidanceSettings,
+} from "./openRouter.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -829,6 +835,32 @@ export const AntigravitySettings = makeProviderSettingsSchema(
 );
 export type AntigravitySettings = typeof AntigravitySettings.Type;
 
+export const OpenRouterSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    apiEndpoint: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed(OPENROUTER_DEFAULT_BASE_URL)),
+      Schema.annotateKey({
+        title: "API endpoint",
+        description: "OpenRouter API origin. Leave the default unless you use a private gateway.",
+        providerSettingsForm: {
+          placeholder: OPENROUTER_DEFAULT_BASE_URL,
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  { order: ["apiEndpoint"] },
+);
+export type OpenRouterSettings = typeof OpenRouterSettings.Type;
+
 export const OpenCodeSettings = makeProviderSettingsSchema(
   {
     // Off by default (like Cursor and Grok): the binding is not yet stable
@@ -1264,6 +1296,7 @@ export const ServerSettings = Schema.Struct({
     grok: GrokSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     antigravity: AntigravitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    openrouter: OpenRouterSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // New driver-agnostic instance map. Keyed by `ProviderInstanceId`; values
   // are `ProviderInstanceConfig` envelopes. The driver-specific config blob
@@ -1273,6 +1306,11 @@ export const ServerSettings = Schema.Struct({
   providerInstances: Schema.Record(ProviderInstanceId, ProviderInstanceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  /**
+   * Environment-level OpenRouter guidance. Distinct from Auto Route, Manual,
+   * Access Auto, and the OpenRouter Auto slug. Default Off.
+   */
+  openRouter: OpenRouterGuidanceSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Keyed by a user-chosen id so a source keeps its rows across edits. Entries
   // this build cannot decode round-trip untouched, as provider instances do.
@@ -1437,6 +1475,21 @@ const OpenCodeSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
 });
 
+const OpenRouterSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  apiEndpoint: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
+});
+
+const OpenRouterGuidanceSettingsPatch = Schema.Struct({
+  guidanceMode: Schema.optionalKey(OpenRouterGuidanceMode),
+  shadowConsent: Schema.optionalKey(Schema.Boolean),
+  teacherEnabled: Schema.optionalKey(Schema.Boolean),
+  teacherFallbackToBase3: Schema.optionalKey(Schema.Boolean),
+  costTier: Schema.optionalKey(OpenRouterCostTier),
+  catalogTtlMs: Schema.optionalKey(Schema.Int),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   worktreeCleanup: Schema.optionalKey(
     Schema.NullOr(
@@ -1539,6 +1592,7 @@ export const ServerSettingsPatch = Schema.Struct({
       grok: Schema.optionalKey(GrokSettingsPatch),
       opencode: Schema.optionalKey(OpenCodeSettingsPatch),
       antigravity: Schema.optionalKey(AntigravitySettingsPatch),
+      openrouter: Schema.optionalKey(OpenRouterSettingsPatch),
     }),
   ),
   // Whole-map replacement for the new instance config. Patching individual
@@ -1546,6 +1600,7 @@ export const ServerSettingsPatch = Schema.Struct({
   // patches risk leaving driver-specific config in a half-merged state.
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  openRouter: Schema.optionalKey(OpenRouterGuidanceSettingsPatch),
   // Per-entry, unlike `providerInstances`: a client only ever adds or removes
   // one source, and sending the whole map races another edit that has not
   // echoed back yet. `null` removes; the server merges into its current map.

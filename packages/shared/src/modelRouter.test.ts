@@ -9,6 +9,7 @@ import {
 import {
   MODEL_ROUTER_SECRET_REDACTION,
   applyModelRouterCooldowns,
+  modelRouterCatalogForMode,
   modelRouterCatalogFromProviders,
   modelRouterDecisionOmitsSecrets,
   routeModel,
@@ -264,5 +265,19 @@ describe("routeModel", () => {
     });
     expect(decision.selected?.target.instanceId).toBe("codex");
     expect(decision.candidates.some((candidate) => candidate.driver === "qwen")).toBe(true);
+  });
+
+  it("excludes OpenRouter from Auto Route ranking", () => {
+    const catalog = [
+      entry({ instanceId: "openrouter", model: "openrouter/auto", driver: driver("openrouter") }),
+      entry({ instanceId: "codex", model: "gpt-5.4", driver: driver("codex") }),
+    ];
+    expect(modelRouterCatalogForMode(catalog, "auto").map((item) => item.driver)).toEqual([
+      "codex",
+    ]);
+    expect(modelRouterCatalogForMode(catalog, "manual").map((item) => item.instanceId)).toEqual([
+      "openrouter",
+      "codex",
+    ]);
   });
 });

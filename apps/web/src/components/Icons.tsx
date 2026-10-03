@@ -735,6 +735,19 @@ export const OpenCodeIcon: Icon = (props) => (
   </svg>
 );
 
+export const OpenRouterIcon: Icon = (props) => (
+  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+    <path
+      d="M5 12h14M13 6l6 6-6 6"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <circle cx="5" cy="12" r="2" fill="currentColor" />
+  </svg>
+);
+
 export const GithubCopilotIcon: Icon = ({ className, ...props }) => (
   <svg
     {...props}

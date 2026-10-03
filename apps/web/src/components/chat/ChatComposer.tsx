@@ -1,6 +1,6 @@
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { usePrimaryEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
 import { runtimeModeConfig, runtimeModeOptions } from "./runtimeModeConfig";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { AttachmentFilePreview } from "../files/AttachmentFilePreview";
@@ -1592,6 +1592,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onFileOpen,
   } = props;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const primaryEnvironment = usePrimaryEnvironment();
+  const openRouterGuidance =
+    primaryEnvironment?.serverConfig?.environment.capabilities.openRouterGuidance;
   const activeTasksProgress = props.threadSyncPhase === null ? props.activeTasksProgress : null;
   const activeTaskSteps = props.threadSyncPhase === null ? props.activeTaskSteps : null;
   // ------------------------------------------------------------------
@@ -5068,6 +5071,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         size={composerControlsInStrip ? "xs" : "sm"}
         disabled={providerCatalogPending || isSendBusy}
         onModeChange={handleModelRoutingModeChange}
+        {...(openRouterGuidance !== undefined &&
+        (openRouterGuidance.available || openRouterGuidance.configuredGuidanceMode !== "off")
+          ? {
+              openRouter: {
+                mode: openRouterGuidance.configuredGuidanceMode,
+                connectionStatus: openRouterGuidance.connectionStatus,
+              },
+            }
+          : {})}
       />
       {modelRoutingMode === "manual" ? (
         <ProviderModelPicker

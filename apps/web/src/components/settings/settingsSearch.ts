@@ -173,6 +173,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "openrouter-guidance",
+    title: "OpenRouter guidance",
+    to: "/settings/general",
+    scope: "environment",
+    searchTerms: ["openrouter teacher shadow auto router zdr privacy cost tier openrouter/auto"],
+  },
+  {
     id: "color-scheme",
     title: "Color scheme",
     to: "/settings/appearance",

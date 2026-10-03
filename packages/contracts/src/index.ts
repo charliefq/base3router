@@ -40,6 +40,7 @@ export * from "./browserProfile.ts";
 export * from "./device.ts";
 export * from "./dispatcher.ts";
 export * from "./modelRouter.ts";
+export * from "./openRouter.ts";
 export * from "./cloudRunner.ts";
 export * from "./workflow.ts";
 export * from "./preview.ts";

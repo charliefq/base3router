@@ -16,6 +16,7 @@ import type {
   ModelRouterMetricValue,
   ModelRouterMode,
   ModelRouterRouteAttempt,
+  OpenRouterTeacherObservationV0,
   ServerProvider,
   WorkflowRun,
   WorkflowTemplate,
@@ -85,6 +86,25 @@ export type InspectorCursorCloudModel = {
   readonly refreshEnabled: boolean;
 };
 
+export type InspectorOpenRouterModel = {
+  readonly mode: string;
+  readonly status: string;
+  readonly connection: string | null;
+  readonly privacyPolicy: string;
+  readonly taskTag: string | null;
+  readonly taskSource: string;
+  readonly base3Model: string | null;
+  readonly openRouterModel: string | null;
+  readonly requestedRouterTarget: string | null;
+  readonly actualModel: string | null;
+  readonly agreement: string;
+  readonly skipReason: string | null;
+  readonly errorCategory: string | null;
+  readonly nestedFallbacks: ReadonlyArray<string>;
+  readonly freshness: string | null;
+  readonly asOf: string | null;
+};
+
 export type OperationalInspectorModel = {
   readonly projectTitle: string | null;
   readonly taskObjective: string | null;
@@ -97,6 +117,7 @@ export type OperationalInspectorModel = {
   readonly workflowStatus: string | null;
   readonly stages: ReadonlyArray<InspectorStageModel>;
   readonly cursorCloud: InspectorCursorCloudModel | null;
+  readonly openRouter: InspectorOpenRouterModel | null;
   readonly error: string | null;
   readonly emptyReason: InspectorEmptyReason;
 };
@@ -115,6 +136,10 @@ export type OperationalInspectorInput = {
   readonly workflowRun: WorkflowRun | null;
   readonly workflowTemplate: WorkflowTemplate | null;
   readonly cursorCloudBinding: CursorCloudRunnerBinding | null;
+  readonly openRouterPriors?: {
+    readonly freshness: string;
+    readonly asOf: string | null;
+  };
 };
 
 const EMPTY_ROUTE: InspectorRouteModel = {
@@ -370,6 +395,35 @@ function resolveEmptyReason(input: OperationalInspectorInput): InspectorEmptyRea
   return null;
 }
 
+function presentOpenRouter(
+  observation: OpenRouterTeacherObservationV0 | undefined,
+  priors?: OperationalInspectorInput["openRouterPriors"],
+): InspectorOpenRouterModel | null {
+  if (observation === undefined) return null;
+  return {
+    mode: observation.guidanceMode,
+    status: observation.status,
+    connection: null,
+    privacyPolicy: observation.privacyPolicy,
+    taskTag: observation.taskProfile.rawExternalTag ?? null,
+    taskSource: observation.taskProfile.source,
+    base3Model: observation.base3Selected?.model ?? null,
+    openRouterModel: observation.openRouterSuggested ?? null,
+    requestedRouterTarget: observation.requestedRouterTarget ?? null,
+    actualModel: observation.actualExecutionModel ?? null,
+    agreement: observation.agreement,
+    skipReason: observation.skipReason ?? null,
+    errorCategory: observation.errorCategory ?? null,
+    nestedFallbacks: observation.nestedFallbacks.map((attempt) =>
+      [attempt.origin, attempt.provider, attempt.model, attempt.status]
+        .filter((part) => part !== undefined)
+        .join(" · "),
+    ),
+    freshness: priors?.freshness ?? null,
+    asOf: priors?.asOf ?? observation.observedAt ?? null,
+  };
+}
+
 export function presentOperationalInspector(
   input: OperationalInspectorInput,
 ): OperationalInspectorModel {
@@ -386,6 +440,7 @@ export function presentOperationalInspector(
     workflowStatus: input.workflowRun?.status ?? null,
     stages: presentStages(input.workflowRun, input.workflowTemplate),
     cursorCloud: presentCursorCloud(input.cursorCloudBinding, input.capabilities.cursorCloud),
+    openRouter: presentOpenRouter(input.boundRoute?.openRouter, input.openRouterPriors),
     error: sanitizeDisplayText(input.sessionError),
     emptyReason: resolveEmptyReason(input),
   };
