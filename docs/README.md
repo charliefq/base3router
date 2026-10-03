@@ -37,6 +37,7 @@ source alone does not explain. Most code changes do not need an internal documen
 - [Base3Router Phase 8 Auto Model Router](./architecture/base3router-phase-8.md)
 - [Base3Router Phase 9 product rebrand](./architecture/base3router-phase-9.md)
 - [Base3Router Phase 10 OpenRouter Teacher/Shadow](./architecture/base3router-phase-10.md)
+- [Base3Router Phase 11 evaluation and Hybrid Router V1](./architecture/base3router-phase-11.md)
 - [Glossary](./internals/glossary.md)
 - [Connection runtime](./internals/connection-runtime.md)
 - [Providers](./internals/providers.md)
