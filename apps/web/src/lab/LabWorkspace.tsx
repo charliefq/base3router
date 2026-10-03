@@ -9,6 +9,8 @@ import { inspectorModelFromLab, labControlCenterModel } from "./fixtures";
 import { LabComposer } from "./LabComposer";
 import { LabConversation } from "./LabConversation";
 import { LabSidebar } from "./LabSidebar";
+import type { ActionApprovalDecision } from "~/components/controlPlane/ActionApprovalControls";
+import type { InspectorApprovalModel } from "~/controlPlane/presentOperationalInspector";
 import type { LabMessage, LabScenarioState, UiLabScenarioId } from "./scenarios";
 
 export function LabWorkspace(props: {
@@ -26,6 +28,11 @@ export function LabWorkspace(props: {
   readonly onSubmit: () => void;
   readonly onDismissError: () => void;
   readonly onToggleInspector: () => void;
+  readonly liveApproval?: InspectorApprovalModel | null;
+  readonly approvalSubmitting?: ActionApprovalDecision | null;
+  readonly approvalError?: string | null;
+  readonly onApprovalRespond?: (decision: ActionApprovalDecision) => void;
+  readonly toolExecutions?: number;
 }) {
   const location = useLocation();
   const selected =
@@ -35,6 +42,7 @@ export function LabWorkspace(props: {
   const search = location.search as { readonly section?: string };
   const showControlCenter =
     location.pathname === "/control-center" || props.scenario.view === "control-center";
+  const governance = props.scenario.actionGovernance;
   const inspectorModel = inspectorModelFromLab({
     decision: props.decision,
     sessionStatus:
@@ -65,7 +73,11 @@ export function LabWorkspace(props: {
       ? { executionPlan: props.scenario.executionPlan }
       : {}),
     ...(props.scenario.actionGate !== undefined ? { actionGate: props.scenario.actionGate } : {}),
-    ...(props.scenario.approval !== undefined ? { approval: props.scenario.approval } : {}),
+    ...(props.liveApproval !== undefined
+      ? { approval: props.liveApproval }
+      : props.scenario.approval !== undefined
+        ? { approval: props.scenario.approval }
+        : {}),
     ...(props.scenario.toolExecution !== undefined
       ? { toolExecution: props.scenario.toolExecution }
       : {}),
@@ -85,7 +97,13 @@ export function LabWorkspace(props: {
           <OperationalInspector
             collapsed={props.inspectorCollapsed}
             model={inspectorModel}
+            canOperate={true}
+            approvalSubmitting={props.approvalSubmitting ?? null}
+            approvalError={props.approvalError ?? null}
             onToggle={props.onToggleInspector}
+            {...(props.onApprovalRespond !== undefined
+              ? { onApprovalRespond: props.onApprovalRespond }
+              : {})}
           />
         }
       >
@@ -109,10 +127,32 @@ export function LabWorkspace(props: {
               ...(props.scenario.routerInsights !== undefined
                 ? { routerInsights: props.scenario.routerInsights }
                 : {}),
-              ...(props.scenario.actionGovernance !== undefined
-                ? { actionGovernance: props.scenario.actionGovernance }
+              ...(governance !== undefined && governance !== null
+                ? {
+                    actionGovernance: {
+                      configuredSkills: governance.configuredSkills,
+                      configuredMcp: governance.configuredMcp,
+                      pendingApprovals: governance.pendingApprovals,
+                      deniedExpired: governance.deniedExpired,
+                      recentOutcomes: governance.recentOutcomes,
+                      costExposure: governance.costExposure,
+                      compliance: governance.compliance,
+                      pendingCards:
+                        props.liveApproval != null ? [props.liveApproval] : governance.pendingCards,
+                    },
+                  }
                 : {}),
             })}
+            {...(props.onApprovalRespond !== undefined
+              ? {
+                  approvalActions: {
+                    canOperate: true,
+                    submittingDecision: props.approvalSubmitting ?? null,
+                    error: props.approvalError ?? null,
+                    onRespond: (_approvalId, decision) => props.onApprovalRespond?.(decision),
+                  },
+                }
+              : {})}
           />
         ) : (
           <>
@@ -138,6 +178,9 @@ export function LabWorkspace(props: {
         </span>
         <span className="sr-only" data-ui-lab-selected-model>
           {selected}
+        </span>
+        <span className="sr-only" data-ui-lab-tool-executions>
+          {String(props.toolExecutions ?? 0)}
         </span>
       </WorkspaceScrollPane>
     </div>

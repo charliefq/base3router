@@ -24,7 +24,9 @@ import type {
 } from "@t3tools/contracts";
 
 import { sanitizeDisplayText } from "./sanitizeDisplayText";
+import type { InspectorApprovalModel } from "./presentActionApproval";
 
+export type { InspectorApprovalModel } from "./presentActionApproval";
 export type InspectorRouteKind = "provisional" | "bound" | "unavailable" | "none";
 export type InspectorRunnerKind = "local" | "cursor-cloud" | "unavailable" | "unknown";
 export type InspectorGateDecision = "ALLOW" | "DENY" | "unavailable";
@@ -187,16 +189,6 @@ export type InspectorSideEffectGateModel = {
   readonly riskClass: string;
   readonly reasonCodes: ReadonlyArray<string>;
   readonly fingerprint: string;
-};
-
-export type InspectorApprovalModel = {
-  readonly status: string;
-  readonly reuse: string;
-  readonly expiresAt: string | null;
-  readonly oneTime: boolean;
-  readonly actionType: string;
-  readonly destination: string;
-  readonly argumentSummary: string;
 };
 
 export type InspectorToolExecutionModel = {

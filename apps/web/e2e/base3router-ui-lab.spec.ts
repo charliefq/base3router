@@ -248,6 +248,10 @@ test.describe("Base3Router UI Lab", () => {
     await expect(page.locator("[data-action-approval]")).toBeVisible();
     await expect(page.locator('[data-control-plane="inspector"]')).toContainText("One-time");
     await expect(page.getByText("Changed arguments require a new approval.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Grant once" })).toBeVisible();
+    await page.getByRole("button", { name: "Grant once" }).click();
+    await expect(page.locator("[data-action-approval-status=consumed]")).toBeVisible();
+    await expect(page.locator("[data-ui-lab-tool-executions]")).toHaveText("1");
     await assertNoSecrets(page);
     await capture(page, "phase12-inspector");
   });

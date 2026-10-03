@@ -216,6 +216,7 @@ it("projects Action governance without fabricating known cost", () => {
     knownCostUsd: MODEL_ROUTER_UNKNOWN_METRIC,
     estimatedCostUsd: MODEL_ROUTER_UNKNOWN_METRIC,
     compliance: "attention",
+    pending: [],
   });
 
   expect(governance.configuredSkills).toBe("1/2 skills enabled");

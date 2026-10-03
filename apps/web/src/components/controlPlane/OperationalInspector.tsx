@@ -12,6 +12,8 @@ import type {
   InspectorRouteModel,
   OperationalInspectorModel,
 } from "~/controlPlane/presentOperationalInspector";
+import type { ActionApprovalDecision } from "./ActionApprovalControls";
+import { ActionApprovalControls } from "./ActionApprovalControls";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { OperationalStatusCard, statusTone } from "./OperationalStatusCard";
@@ -27,6 +29,11 @@ export function OperationalInspector(props: {
   readonly onFollowUp?: () => void;
   readonly onCancel?: () => void;
   readonly onRefresh?: () => void;
+  readonly canOperate?: boolean;
+  readonly disconnected?: boolean;
+  readonly approvalSubmitting?: ActionApprovalDecision | null;
+  readonly approvalError?: string | null;
+  readonly onApprovalRespond?: (decision: ActionApprovalDecision) => void;
 }) {
   if (props.collapsed) {
     return (
@@ -86,6 +93,11 @@ function InspectorBody(props: {
   readonly onFollowUp?: () => void;
   readonly onCancel?: () => void;
   readonly onRefresh?: () => void;
+  readonly canOperate?: boolean;
+  readonly disconnected?: boolean;
+  readonly approvalSubmitting?: ActionApprovalDecision | null;
+  readonly approvalError?: string | null;
+  readonly onApprovalRespond?: (decision: ActionApprovalDecision) => void;
 }) {
   const { model } = props;
 
@@ -186,15 +198,26 @@ function InspectorBody(props: {
       {model.approval ? (
         <OperationalStatusCard
           title="Approval"
-          tone={model.approval.status === "granted" ? "neutral" : "warning"}
+          tone={
+            model.approval.status === "granted" || model.approval.status === "consumed"
+              ? "neutral"
+              : model.approval.status === "denied" || model.approval.status === "expired"
+                ? "danger"
+                : "warning"
+          }
           value={model.approval.status}
           detail={`${model.approval.actionType} on ${model.approval.destination}. ${model.approval.oneTime ? "One-time" : model.approval.reuse}.`}
         >
-          <div className="mt-1 space-y-1 text-2xs text-muted-foreground" data-action-approval="">
-            <p>Args {model.approval.argumentSummary || "none"}</p>
-            {model.approval.expiresAt ? <p>Expires {model.approval.expiresAt}</p> : null}
-            <p>Changed arguments require a new approval.</p>
-          </div>
+          <ActionApprovalControls
+            approval={model.approval}
+            canOperate={props.canOperate === true}
+            disconnected={props.disconnected === true}
+            error={props.approvalError ?? null}
+            submitting={props.approvalSubmitting ?? null}
+            {...(props.onApprovalRespond !== undefined
+              ? { onRespond: props.onApprovalRespond }
+              : {})}
+          />
         </OperationalStatusCard>
       ) : null}
       {model.toolExecution ? (

@@ -13,6 +13,7 @@ import type {
   WorkflowCatalog,
 } from "@t3tools/contracts";
 
+import { presentActionApproval, type InspectorApprovalModel } from "./presentActionApproval";
 import type { ControlCenterSurface } from "./controlCenterProjection";
 import { sanitizeDisplayText } from "./sanitizeDisplayText";
 
@@ -73,6 +74,7 @@ export type ControlCenterActionGovernance = {
   readonly recentOutcomes: string;
   readonly costExposure: string;
   readonly compliance: string;
+  readonly pendingCards: ReadonlyArray<InspectorApprovalModel>;
 };
 
 export type ControlCenterRouterInsights = {
@@ -96,6 +98,15 @@ export type ControlCenterRouterInsights = {
   readonly canOperate?: boolean;
   readonly latestObservationId?: string;
   readonly confirmation?: "activate" | "shadow" | "rollback" | "delete" | null;
+};
+
+export type ControlCenterApprovalActions = {
+  readonly canOperate: boolean;
+  readonly disconnected?: boolean;
+  readonly submittingId?: string | null;
+  readonly submittingDecision?: "grant" | "deny" | "cancel" | null;
+  readonly error?: string | null;
+  readonly onRespond: (approvalId: string, decision: "grant" | "deny" | "cancel") => void;
 };
 
 export type ControlCenterRouterActions = {
@@ -267,6 +278,7 @@ export function presentActionGovernance(
         : snapshot.recentOutcomes.join(", "),
     costExposure: `Known ${known} · ${estimated}`,
     compliance: snapshot.compliance,
+    pendingCards: snapshot.pending.map(presentActionApproval),
   };
 }
 

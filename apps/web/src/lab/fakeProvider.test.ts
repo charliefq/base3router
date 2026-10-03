@@ -10,6 +10,7 @@ import {
   labDocumentContainsSecretProbe,
   simulateRoutedTurn,
 } from "./fakeProvider";
+import { applyLabApprovalDecision } from "./labActionGate";
 import { UI_LAB_SCENARIO_IDS, createLabScenario } from "./scenarios";
 
 describe("Base3Router UI Lab fake providers", () => {
@@ -145,5 +146,15 @@ describe("Base3Router UI Lab fake providers", () => {
     expect(JSON.stringify(createLabScenario("approval-granted").approval)).not.toMatch(
       /sk-|Bearer /,
     );
+    const pending = createLabScenario("action-requires-approval").approval;
+    expect(pending).toBeTruthy();
+    if (pending) {
+      expect(applyLabApprovalDecision(pending, "grant").toolExecutions).toBe(1);
+      expect(applyLabApprovalDecision(pending, "deny").toolExecutions).toBe(0);
+      expect(applyLabApprovalDecision(pending, "cancel").toolExecutions).toBe(0);
+      expect(applyLabApprovalDecision({ ...pending, status: "consumed" }, "grant").error).toMatch(
+        /consumed/,
+      );
+    }
   });
 });

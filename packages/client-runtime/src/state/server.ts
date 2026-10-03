@@ -1154,7 +1154,7 @@ export function createServerEnvironmentAtoms<R, E>(
     actionGovernance: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:action-governance",
       tag: WS_METHODS.actionGateGetGovernance,
-      staleTimeMs: 15_000,
+      staleTimeMs: 2_000,
     }),
     actionGateRespondApproval: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:action-gate-respond-approval",

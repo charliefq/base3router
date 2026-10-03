@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  ActionApprovalId,
   AuthOrchestrationOperateScope,
   type AuthSessionState,
   type ExplicitFeedbackKind,
@@ -94,6 +95,14 @@ export function ControlCenterPage(props: {
   const rollbackPolicy = useAtomCommand(serverEnvironment.routerRollbackPolicy, {
     reportFailure: true,
   });
+  const respondApproval = useAtomCommand(serverEnvironment.actionGateRespondApproval, {
+    reportFailure: true,
+  });
+  const [approvalSubmitting, setApprovalSubmitting] = useState<{
+    readonly id: string;
+    readonly decision: "grant" | "deny" | "cancel";
+  } | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
   const exportObservations = useAtomCommand(serverEnvironment.routerExportObservations, {
     reportFailure: true,
   });
@@ -160,6 +169,35 @@ export function ControlCenterPage(props: {
       <ControlCenter
         model={model}
         section={props.section ?? "overview"}
+        {...(selectedEnvironmentId !== null
+          ? {
+              approvalActions: {
+                canOperate,
+                disconnected: environment?.connection.phase !== "connected",
+                submittingId: approvalSubmitting?.id ?? null,
+                submittingDecision: approvalSubmitting?.decision ?? null,
+                error: approvalError,
+                onRespond: (approvalId, decision) => {
+                  setApprovalSubmitting({ id: approvalId, decision });
+                  setApprovalError(null);
+                  void respondApproval({
+                    environmentId: selectedEnvironmentId,
+                    input: {
+                      approvalId: ActionApprovalId.make(approvalId),
+                      decision,
+                    },
+                  }).then((result) => {
+                    setApprovalSubmitting(null);
+                    if (result._tag === "Success") {
+                      governanceQuery.refresh();
+                      return;
+                    }
+                    setApprovalError("The server rejected that approval decision.");
+                  });
+                },
+              },
+            }
+          : {})}
         {...(selectedEnvironmentId !== null && routerInsights !== undefined
           ? {
               actions: {

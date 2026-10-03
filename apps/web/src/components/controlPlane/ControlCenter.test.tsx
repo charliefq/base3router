@@ -135,6 +135,7 @@ it("renders Action governance as a projection of server counts", async () => {
             recentOutcomes: "denied, timeout",
             costExposure: "Known unknown · estimated unknown",
             compliance: "attention",
+            pendingCards: [],
           },
         }}
       />,

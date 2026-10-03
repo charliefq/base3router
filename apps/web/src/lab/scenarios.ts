@@ -304,6 +304,7 @@ function labGate(input: Partial<InspectorSideEffectGateModel> = {}): InspectorSi
 
 function labApproval(input: Partial<InspectorApprovalModel> = {}): InspectorApprovalModel {
   return {
+    approvalId: "apr-lab-1",
     status: "pending",
     reuse: "one-time",
     expiresAt: "2026-10-03T00:05:00.000Z",
@@ -311,6 +312,14 @@ function labApproval(input: Partial<InspectorApprovalModel> = {}): InspectorAppr
     actionType: "preview_evaluate",
     destination: "t3-preview / preview_evaluate",
     argumentSummary: "expression=1, token=[redacted]",
+    riskClass: "destructive",
+    sideEffectClass: "network",
+    environmentId: "lab-environment",
+    projectId: "project-lab",
+    threadId: "thread-lab",
+    scope: "exact-action",
+    fingerprint: "a1b2c3d4e5f6",
+    askReason: "Destructive actions require a one-time exact-action approval.",
     ...input,
   };
 }
@@ -344,6 +353,7 @@ function labGovernance(
     recentOutcomes: "No recent action outcomes",
     costExposure: "Known unknown · estimated unknown",
     compliance: "compliant",
+    pendingCards: [],
     ...input,
   };
 }
@@ -1821,6 +1831,7 @@ export function createLabScenario(id: UiLabScenarioId): LabScenarioState {
           deniedExpired: "1 denied · 1 expired",
           recentOutcomes: "denied, timeout, success",
           compliance: "attention",
+          pendingCards: [labApproval(), labApproval({ approvalId: "apr-lab-2" })],
         }),
       };
   }
