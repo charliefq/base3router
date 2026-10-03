@@ -3,19 +3,30 @@ import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 
 import {
+  ACTION_AUDIT_EVENT_KINDS,
+  ACTION_GATE_DECISIONS,
   ACTION_GATE_POLICY_VERSION,
+  ACTION_GATE_REASON_CODES,
   ACTION_RISK_CLASSES,
+  APPROVAL_REUSE_POLICIES,
+  APPROVAL_STATUSES,
   ActionGateDecision,
   ActionGateDecisionKind,
   ActionGovernanceSnapshotV0,
+  SIDE_EFFECT_CLASSES,
 } from "./actionGate.ts";
 import {
+  SKILL_ROUTER_MODES,
   SKILL_ROUTER_POLICY_VERSION,
+  SKILL_ROUTER_REASON_CODES,
+  SKILL_UNKNOWN_COST,
   SkillManifestV0,
   SkillRouterDecision,
 } from "./skillRouter.ts";
 import {
+  MCP_ROUTER_MODES,
   MCP_ROUTER_POLICY_VERSION,
+  MCP_ROUTER_REASON_CODES,
   McpServerDescriptorV0,
   McpRouterDecision,
 } from "./mcpRouter.ts";
@@ -99,6 +110,17 @@ describe("Phase 12 contracts", () => {
     expect(EXECUTION_PLAN_VERSION).toBe("execution-plan.v0");
     expect(ACTION_RISK_CLASSES).toContain("unclassified");
     expect(ACTION_RISK_CLASSES).toContain("destructive");
+    expect(SIDE_EFFECT_CLASSES).toContain("unknown");
+    expect(ACTION_GATE_DECISIONS).toEqual(["ALLOW", "DENY", "ASK"]);
+    expect(ACTION_GATE_REASON_CODES).toContain("REPLAY_REJECTED");
+    expect(APPROVAL_STATUSES).toContain("consumed");
+    expect(APPROVAL_REUSE_POLICIES).toContain("one-time");
+    expect(ACTION_AUDIT_EVENT_KINDS).toContain("action.gate.decided");
+    expect(SKILL_ROUTER_MODES).toEqual(["auto", "manual"]);
+    expect(SKILL_ROUTER_REASON_CODES).toContain("NO_SKILL_REQUIRED");
+    expect(MCP_ROUTER_MODES).toEqual(["auto", "manual"]);
+    expect(MCP_ROUTER_REASON_CODES).toContain("PROMPT_INJECTION_SHAPED");
+    expect(SKILL_UNKNOWN_COST.status).toBe("unknown");
     expect(Exit.isSuccess(decodeKind("ASK"))).toBe(true);
     expect(Exit.isSuccess(decodeKind("ALLOW"))).toBe(true);
     expect(Exit.isSuccess(decodeKind("DENY"))).toBe(true);

@@ -12,6 +12,7 @@ import {
   type SkillSourceKind,
   type SkillTrustState,
   MODEL_ROUTER_UNKNOWN_METRIC,
+  SKILL_UNKNOWN_COST,
   SKILL_MANIFEST_VERSION,
 } from "@t3tools/contracts";
 
@@ -66,7 +67,7 @@ export const skillManifestFromProviderSkill = (input: {
     requiredMcpTools: [],
     riskClass: "unclassified",
     requiredPermissions: [...(input.requiredPermissions ?? [])],
-    costHint: MODEL_ROUTER_UNKNOWN_METRIC,
+    costHint: SKILL_UNKNOWN_COST,
     resourceHint: MODEL_ROUTER_UNKNOWN_METRIC,
     instructionsTrust: input.instructionsTrust ?? "not-executable",
   };

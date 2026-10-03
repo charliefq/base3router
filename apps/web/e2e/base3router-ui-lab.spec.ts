@@ -245,7 +245,8 @@ test.describe("Base3Router UI Lab", () => {
     await expect(page.locator("[data-action-approval]")).toBeVisible();
     await expect(page.getByText("Route Gate", { exact: true })).toBeVisible();
     await expect(page.getByText("ASK", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("One-time")).toBeVisible();
+    await expect(page.locator("[data-action-approval]")).toBeVisible();
+    await expect(page.locator('[data-control-plane="inspector"]')).toContainText("One-time");
     await expect(page.getByText("Changed arguments require a new approval.")).toBeVisible();
     await assertNoSecrets(page);
     await capture(page, "phase12-inspector");
@@ -264,7 +265,7 @@ test.describe("Base3Router UI Lab", () => {
   }) => {
     await openScenario(page, "control-center-action-governance");
     await expect(page.locator("[data-action-governance]")).toBeVisible();
-    await expect(page.getByText("Action governance")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Action governance" })).toBeVisible();
     await expect(page.getByText("2 pending approvals")).toBeVisible();
     await expect(page.getByText(/Known unknown/)).toBeVisible();
     await assertNoSecrets(page);

@@ -54,6 +54,7 @@ import {
   metadataLooksLikePromptInjection,
 } from "./mcpCatalog.ts";
 import {
+  MCP_FAILURE_CATEGORIES,
   circuitIsOpen,
   emptyCircuit,
   outcomeClassFromFailure,
@@ -606,6 +607,7 @@ describe("mcp lifecycle and audit redaction", () => {
     ).toBe(false);
     expect(terminalOutcomeIsSuccess("failure")).toBe(false);
     expect(outcomeClassFromFailure("timeout", false)).toBe("timeout");
+    expect(MCP_FAILURE_CATEGORIES).toContain("policy_denial");
     const attempts = planMcpAttempts({
       policy: { ...MCP_DEFAULT_RETRY_POLICY, circuitBreakerThreshold: 1, maxAttempts: 2 },
       failures: ["transient_transport", "transient_transport"],

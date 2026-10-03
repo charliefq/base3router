@@ -40,7 +40,7 @@ export type PlannedActionInput = {
 
 export const argumentDigestOf = (value: unknown): string => digestCanonical(value);
 
-export const buildPlannedAction = (input: {
+const buildPlannedAction = (input: {
   readonly planId: string;
   readonly environmentId: string;
   readonly action: PlannedActionInput;
