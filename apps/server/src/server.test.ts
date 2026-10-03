@@ -18,6 +18,7 @@ import {
   GitCommandError,
   KeybindingRule,
   MessageId,
+  ObservationId,
   ExternalLauncherCommandNotFoundError,
   OrchestrationShellSnapshot,
   type OrchestrationShellStreamItem,
@@ -37,6 +38,7 @@ import {
   type ProviderInstallState,
   ProviderSetupError,
   ResolvedKeybindingRule,
+  RouterPolicyId,
   type ServerLifecycleStreamEvent,
   ThreadId,
   TurnId,
@@ -5667,15 +5669,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               assert.equal(insights.activePolicyVersion, "model-router.v0");
               const errors = [
                 yield* client[WS_METHODS.routerActivatePolicy]({
-                  policyId: "policy-hybrid-router-v1",
+                  policyId: RouterPolicyId.make("policy-hybrid-router-v1"),
                   confirmActivation: true,
                 }).pipe(Effect.flip),
                 yield* client[WS_METHODS.routerShadowPolicy]({
-                  policyId: "policy-hybrid-router-v1",
+                  policyId: RouterPolicyId.make("policy-hybrid-router-v1"),
                   confirmShadow: true,
                 }).pipe(Effect.flip),
                 yield* client[WS_METHODS.routerSubmitFeedback]({
-                  observationId: "syn-obs-missing",
+                  observationId: ObservationId.make("syn-obs-missing"),
                   kind: "helpful",
                 }).pipe(Effect.flip),
                 yield* client[WS_METHODS.routerDeleteObservations]({

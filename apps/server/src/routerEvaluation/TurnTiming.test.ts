@@ -44,8 +44,9 @@ it.effect("records TTFT and total duration from monotonic nanos", () => {
     const size = yield* timing.size;
     assert.equal(size, 0);
   }).pipe(
-    Effect.provide(turnTimingLayer),
-    Effect.provide(Layer.succeed(Clock.Clock, fakeClock(clock))),
+    Effect.provide(
+      turnTimingLayer.pipe(Layer.provideMerge(Layer.succeed(Clock.Clock, fakeClock(clock)))),
+    ),
   );
 });
 
@@ -59,8 +60,9 @@ it.effect("leaves TTFT unknown when the turn fails before first output", () => {
     assert.equal(snapshot?.firstOutputNanos, undefined);
     assert.equal(nanosToDurationMs(snapshot?.routeStartNanos, snapshot?.terminalNanos), 120);
   }).pipe(
-    Effect.provide(turnTimingLayer),
-    Effect.provide(Layer.succeed(Clock.Clock, fakeClock(clock))),
+    Effect.provide(
+      turnTimingLayer.pipe(Layer.provideMerge(Layer.succeed(Clock.Clock, fakeClock(clock)))),
+    ),
   );
 });
 
@@ -80,7 +82,8 @@ it.effect("records first output once for streaming deltas", () => {
       40,
     );
   }).pipe(
-    Effect.provide(turnTimingLayer),
-    Effect.provide(Layer.succeed(Clock.Clock, fakeClock(clock))),
+    Effect.provide(
+      turnTimingLayer.pipe(Layer.provideMerge(Layer.succeed(Clock.Clock, fakeClock(clock)))),
+    ),
   );
 });

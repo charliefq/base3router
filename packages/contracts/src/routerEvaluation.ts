@@ -227,7 +227,7 @@ export type ReworkProxyKind = typeof ReworkProxyKind.Type;
 export const ReworkSignalV0 = Schema.Struct({
   kind: ReworkProxyKind,
   labeledAs: Schema.Literal("proxy"),
-  rawEventType: ReworkProxyKind,
+  rawEventType: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
   detectionWindowMs: NonNegativeInt,
   recordedAt: BoundedIso,
   deduped: Schema.Boolean,

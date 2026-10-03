@@ -49,26 +49,26 @@ export const buildTurnOutcomeObservation = (input: {
 }): TurnOutcomeObservationV0 => {
   const event = input.event;
   const binding = input.binding;
+  const aborted = event.type === "turn.aborted" ? event.payload : undefined;
+  const completed = event.type === "turn.completed" ? event.payload : undefined;
   const classification = classifyTurnTerminal(
-    event.type === "turn.aborted"
-      ? { eventType: "turn.aborted", abortReason: event.payload.reason }
+    aborted !== undefined
+      ? { eventType: "turn.aborted", abortReason: aborted.reason }
       : {
           eventType: "turn.completed",
-          state: event.payload.state,
-          ...(event.payload.failureCategory !== undefined
-            ? { failureCategory: event.payload.failureCategory }
+          ...(completed?.state !== undefined ? { state: completed.state } : {}),
+          ...(completed?.failureCategory !== undefined
+            ? { failureCategory: completed.failureCategory }
             : {}),
-          ...(event.payload.stopReason !== undefined
-            ? { stopReason: event.payload.stopReason }
+          ...(completed?.stopReason !== undefined ? { stopReason: completed.stopReason } : {}),
+          ...(completed?.errorMessage !== undefined
+            ? { errorMessage: completed.errorMessage }
             : {}),
-          ...(event.payload.errorMessage !== undefined
-            ? { errorMessage: event.payload.errorMessage }
+          ...(completed?.openRouter?.errorCategory !== undefined
+            ? { openRouterErrorCategory: completed.openRouter.errorCategory }
             : {}),
-          ...(event.payload.openRouter?.errorCategory !== undefined
-            ? { openRouterErrorCategory: event.payload.openRouter.errorCategory }
-            : {}),
-          ...(event.payload.openRouter?.status !== undefined
-            ? { openRouterStatus: event.payload.openRouter.status }
+          ...(completed?.openRouter?.status !== undefined
+            ? { openRouterStatus: completed.openRouter.status }
             : {}),
         },
   );
@@ -76,12 +76,10 @@ export const buildTurnOutcomeObservation = (input: {
     classification.cancelled ||
     classification.timedOut ||
     classification.terminalCategory === "infrastructure_failure" ||
-    (event.type === "turn.completed" &&
-      (event.payload.state === "interrupted" || event.payload.state === "cancelled"));
-  const tokenUsage =
-    event.type === "turn.completed" ? event.payload.tokenUsage : event.payload.tokenUsage;
-  const openRouter =
-    binding.openRouter ?? (event.type === "turn.completed" ? event.payload.openRouter : undefined);
+    completed?.state === "interrupted" ||
+    completed?.state === "cancelled";
+  const tokenUsage = completed?.tokenUsage ?? aborted?.tokenUsage;
+  const openRouter = binding.openRouter ?? completed?.openRouter;
   const usage =
     openRouter?.promptTokens?.status === "known" || openRouter?.completionTokens?.status === "known"
       ? usageFromOpenRouter({
@@ -100,14 +98,14 @@ export const buildTurnOutcomeObservation = (input: {
             : {}),
         })
       : usageFromTurnTokenUsage({
-          tokenUsage,
+          ...(tokenUsage === undefined ? {} : { tokenUsage }),
           completeAccounting: !incompleteStream,
           observedAt: input.nowIso,
         });
   const reportedOpenRouterCost =
     openRouter?.reportedCostUsd?.status === "known" ? openRouter.reportedCostUsd.value : undefined;
   const providerCost =
-    event.type === "turn.completed" && !incompleteStream ? event.payload.totalCostUsd : undefined;
+    completed !== undefined && !incompleteStream ? completed.totalCostUsd : undefined;
   const cost =
     reportedOpenRouterCost !== undefined
       ? costFromReportedAndEstimate({
@@ -134,8 +132,12 @@ export const buildTurnOutcomeObservation = (input: {
     environmentId: input.environmentId,
     recordedAt: input.nowIso,
     policyVersion: effectivePolicyVersion({
-      usedHybridRanking: binding.hybrid?.usedHybridRanking,
-      modelRoutePolicyVersion: binding.modelRoute?.policyVersion,
+      ...(binding.hybrid?.usedHybridRanking === undefined
+        ? {}
+        : { usedHybridRanking: binding.hybrid.usedHybridRanking }),
+      ...(binding.modelRoute?.policyVersion === undefined
+        ? {}
+        : { modelRoutePolicyVersion: binding.modelRoute.policyVersion }),
     }),
     routingMode: binding.modelRoute?.mode ?? "auto",
     model: binding.target.model,

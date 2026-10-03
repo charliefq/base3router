@@ -91,14 +91,14 @@ export class ObservationRepository extends Context.Service<
     ) => Effect.Effect<void, PersistenceSqlError | PersistenceDecodeError>;
     readonly deleteByEnvironment: (
       environmentId: EnvironmentId,
-    ) => Effect.Effect<number, PersistenceSqlError>;
+    ) => Effect.Effect<number, PersistenceSqlError | PersistenceDecodeError>;
     readonly pruneBefore: (
       environmentId: EnvironmentId,
       cutoffIso: string,
-    ) => Effect.Effect<number, PersistenceSqlError>;
+    ) => Effect.Effect<number, PersistenceSqlError | PersistenceDecodeError>;
     readonly countByEnvironment: (
       environmentId: EnvironmentId,
-    ) => Effect.Effect<number, PersistenceSqlError>;
+    ) => Effect.Effect<number, PersistenceSqlError | PersistenceDecodeError>;
     readonly upsertPolicy: (
       policy: RouterPolicySnapshotV0,
     ) => Effect.Effect<void, PersistenceSqlError | PersistenceDecodeError>;
@@ -125,7 +125,7 @@ export class ObservationRepository extends Context.Service<
     >;
     readonly nextEventSequence: (
       environmentId: EnvironmentId,
-    ) => Effect.Effect<number, PersistenceSqlError>;
+    ) => Effect.Effect<number, PersistenceSqlError | PersistenceDecodeError>;
   }
 >()("t3/routerEvaluation/ObservationRepository") {}
 
