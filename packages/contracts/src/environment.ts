@@ -199,6 +199,20 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
    * pre-Phase-10 servers, so clients hide the guidance surface.
    */
   openRouterGuidance: Schema.optionalKey(OpenRouterCapabilitySnapshot),
+  /**
+   * Server can persist local routing observations and Hybrid policy state.
+   * Absent on pre-Phase-11 servers, so clients hide evaluation controls.
+   */
+  routerEvaluation: Schema.optionalKey(
+    Schema.Struct({
+      available: Schema.Boolean,
+      measurementEnabled: Schema.Boolean,
+      retentionDays: Schema.Int,
+      challengerShadowEnabled: Schema.Boolean,
+      activePolicyVersion: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+      observationCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    }),
+  ),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

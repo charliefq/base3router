@@ -47,6 +47,7 @@ import {
   OpenRouterGuidanceMode,
   OpenRouterGuidanceSettings,
 } from "./openRouter.ts";
+import { RouterEvaluationSettings } from "./routerEvaluation.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -1311,6 +1312,11 @@ export const ServerSettings = Schema.Struct({
    * Access Auto, and the OpenRouter Auto slug. Default Off.
    */
   openRouter: OpenRouterGuidanceSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  /**
+   * Local evaluation-loop controls. Measurement is environment-scoped and
+   * never uploaded. Default on, 90-day retention, challenger off.
+   */
+  routerEvaluation: RouterEvaluationSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Keyed by a user-chosen id so a source keeps its rows across edits. Entries
   // this build cannot decode round-trip untouched, as provider instances do.
@@ -1490,6 +1496,12 @@ const OpenRouterGuidanceSettingsPatch = Schema.Struct({
   catalogTtlMs: Schema.optionalKey(Schema.Int),
 });
 
+const RouterEvaluationSettingsPatch = Schema.Struct({
+  measurementEnabled: Schema.optionalKey(Schema.Boolean),
+  retentionDays: Schema.optionalKey(Schema.Int),
+  challengerShadowEnabled: Schema.optionalKey(Schema.Boolean),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   worktreeCleanup: Schema.optionalKey(
     Schema.NullOr(
@@ -1601,6 +1613,7 @@ export const ServerSettingsPatch = Schema.Struct({
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
   openRouter: Schema.optionalKey(OpenRouterGuidanceSettingsPatch),
+  routerEvaluation: Schema.optionalKey(RouterEvaluationSettingsPatch),
   // Per-entry, unlike `providerInstances`: a client only ever adds or removes
   // one source, and sending the whole map races another edit that has not
   // echoed back yet. `null` removes; the server merges into its current map.

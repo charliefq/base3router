@@ -13,6 +13,7 @@ import {
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ModelRouterDecision } from "./modelRouter.ts";
 import { OpenRouterTeacherObservationV0 } from "./openRouter.ts";
+import { HybridRouteDecisionV1 } from "./routerEvaluation.ts";
 
 export const DISPATCHER_POLICY_VERSION = "dispatcher.phase-1a.v1" as const;
 export const DISPATCHER_MAX_CANDIDATES = 32;
@@ -138,6 +139,8 @@ export const DispatcherTaskRouteBinding = Schema.Struct({
   modelRoute: Schema.optional(ModelRouterDecision),
   /** Phase 10 sanitized OpenRouter observation. Absent on pre-Phase-10 bindings. */
   openRouter: Schema.optional(OpenRouterTeacherObservationV0),
+  /** Phase 11 Hybrid / policy-shadow decision. Absent on pre-Phase-11 bindings. */
+  hybrid: Schema.optional(HybridRouteDecisionV1),
 });
 export type DispatcherTaskRouteBinding = typeof DispatcherTaskRouteBinding.Type;
 

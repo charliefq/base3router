@@ -283,6 +283,23 @@ import {
 import { UsagePricing, UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
 import {
+  RouterActivatePolicyRequest,
+  RouterDeleteObservationsRequest,
+  RouterDeleteObservationsResult,
+  RouterEvaluationError,
+  RouterExportObservationsRequest,
+  RouterExportObservationsResult,
+  RouterInspectPolicyRequest,
+  RouterInsightsRequest,
+  RouterInsightsSnapshotV0,
+  RouterListPoliciesResult,
+  RouterPolicyMutationResult,
+  RouterPolicySnapshotV0,
+  RouterRollbackPolicyRequest,
+  RouterSubmitFeedbackRequest,
+  RouterSubmitFeedbackResult,
+} from "./routerEvaluation.ts";
+import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
   ProjectCloneListEvent,
@@ -426,6 +443,15 @@ export const WS_METHODS = {
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
+
+  routerGetInsights: "router.getInsights",
+  routerExportObservations: "router.exportObservations",
+  routerDeleteObservations: "router.deleteObservations",
+  routerSubmitFeedback: "router.submitFeedback",
+  routerListPolicies: "router.listPolicies",
+  routerInspectPolicy: "router.inspectPolicy",
+  routerActivatePolicy: "router.activatePolicy",
+  routerRollbackPolicy: "router.rollbackPolicy",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -753,6 +779,59 @@ const WsServerRefreshUsageRatesRpc = Rpc.make(WS_METHODS.serverRefreshUsageRates
   payload: Schema.Struct({}),
   success: UsagePricing,
   error: EnvironmentAuthorizationError,
+});
+
+const RouterEvaluationRpcError = Schema.Union([
+  EnvironmentAuthorizationError,
+  RouterEvaluationError,
+]);
+
+const WsRouterGetInsightsRpc = Rpc.make(WS_METHODS.routerGetInsights, {
+  payload: RouterInsightsRequest,
+  success: RouterInsightsSnapshotV0,
+  error: RouterEvaluationRpcError,
+});
+
+const WsRouterExportObservationsRpc = Rpc.make(WS_METHODS.routerExportObservations, {
+  payload: RouterExportObservationsRequest,
+  success: RouterExportObservationsResult,
+  error: RouterEvaluationRpcError,
+});
+
+const WsRouterDeleteObservationsRpc = Rpc.make(WS_METHODS.routerDeleteObservations, {
+  payload: RouterDeleteObservationsRequest,
+  success: RouterDeleteObservationsResult,
+  error: RouterEvaluationRpcError,
+});
+
+const WsRouterSubmitFeedbackRpc = Rpc.make(WS_METHODS.routerSubmitFeedback, {
+  payload: RouterSubmitFeedbackRequest,
+  success: RouterSubmitFeedbackResult,
+  error: RouterEvaluationRpcError,
+});
+
+const WsRouterListPoliciesRpc = Rpc.make(WS_METHODS.routerListPolicies, {
+  payload: Schema.Struct({}),
+  success: RouterListPoliciesResult,
+  error: RouterEvaluationRpcError,
+});
+
+const WsRouterInspectPolicyRpc = Rpc.make(WS_METHODS.routerInspectPolicy, {
+  payload: RouterInspectPolicyRequest,
+  success: RouterPolicySnapshotV0,
+  error: RouterEvaluationRpcError,
+});
+
+const WsRouterActivatePolicyRpc = Rpc.make(WS_METHODS.routerActivatePolicy, {
+  payload: RouterActivatePolicyRequest,
+  success: RouterPolicyMutationResult,
+  error: RouterEvaluationRpcError,
+});
+
+const WsRouterRollbackPolicyRpc = Rpc.make(WS_METHODS.routerRollbackPolicy, {
+  payload: RouterRollbackPolicyRequest,
+  success: RouterPolicyMutationResult,
+  error: RouterEvaluationRpcError,
 });
 
 const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
@@ -1534,6 +1613,14 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRetryResourceTelemetryRpc,
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,
+  WsRouterGetInsightsRpc,
+  WsRouterExportObservationsRpc,
+  WsRouterDeleteObservationsRpc,
+  WsRouterSubmitFeedbackRpc,
+  WsRouterListPoliciesRpc,
+  WsRouterInspectPolicyRpc,
+  WsRouterActivatePolicyRpc,
+  WsRouterRollbackPolicyRpc,
   WsServerSignalProcessRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
