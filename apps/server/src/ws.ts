@@ -90,6 +90,7 @@ import {
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
+import { firstPartyMcpCatalog } from "@t3tools/shared/mcpCatalog";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
@@ -186,6 +187,7 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import { RouterEvaluationService } from "./routerEvaluation/RouterEvaluationService.ts";
+import { ActionGateService } from "./actionGate/ActionGateService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
@@ -707,6 +709,7 @@ const makeWsRpcLayer = (
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
       const routerEvaluation = yield* RouterEvaluationService;
+      const actionGate = yield* ActionGateService;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -3545,6 +3548,38 @@ const makeWsRpcLayer = (
                 now,
                 currentSession.subject,
               );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.actionGateGetGovernance]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.actionGateGetGovernance,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const providers = yield* providerRegistry.getProviders;
+              const skills = providers.flatMap((provider) => provider.skills);
+              const enabledSkills = skills.filter((skill) => skill.enabled);
+              const now = yield* nowIso;
+              const catalog = firstPartyMcpCatalog(now);
+              return yield* actionGate.governance(environmentId, {
+                configuredSkillCount: skills.length,
+                enabledSkillCount: enabledSkills.length,
+                configuredMcpServerCount: catalog.length,
+                enabledMcpServerCount: catalog.filter((server) => server.enabled).length,
+                degradedMcpServerCount: catalog.filter(
+                  (server) => server.runtimeState === "degraded",
+                ).length,
+              });
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.actionGateRespondApproval]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.actionGateRespondApproval,
+            Effect.gen(function* () {
+              const now = yield* nowIso;
+              const approval = yield* actionGate.respond(input, now);
+              return { approval };
             }),
             { "rpc.aggregate": "server" },
           ),

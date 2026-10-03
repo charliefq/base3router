@@ -28,6 +28,7 @@ import {
   type OpenRouterGuidanceSettings,
   ProviderInstanceId,
   type HybridRouteDecisionV1,
+  TurnId,
 } from "@t3tools/contracts";
 import {
   applyModelRouterCooldowns,
@@ -37,6 +38,7 @@ import {
 } from "@t3tools/shared/modelRouter";
 import { routeHybridModel, type LocalModelEvidence } from "@t3tools/shared/hybridRouter";
 import { applyOpenRouterGuidanceToBinding } from "@t3tools/shared/openRouterGuidance";
+import { attachPhase12Routes } from "@t3tools/shared/phase12Bind";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -612,6 +614,18 @@ export const previewDispatcherRoute = (
 ): Effect.Effect<DispatcherRouteDecision> =>
   resolveDispatcherRouteObserved("dispatcher.route_preview", input);
 
+function withPhase12Binding(input: {
+  readonly binding: DispatcherTaskRouteBindingType;
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly nowIso: string;
+  readonly turnId: TurnId;
+  readonly threadId: ThreadId;
+  readonly projectId: ProjectId;
+  readonly environmentId: EnvironmentId;
+}): DispatcherTaskRouteBindingType {
+  return attachPhase12Routes(input);
+}
+
 export function taskRouteBindingFromDecision(
   decision: DispatcherRouteDecision,
 ): DispatcherTaskRouteBindingType | null {
@@ -881,12 +895,22 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
         }
         return routed;
       }
+      const nowIso = new Date(yield* Clock.currentTimeMillis).toISOString();
+      const phase12Binding = withPhase12Binding({
+        binding: routeBinding,
+        providers: resolution.providers,
+        nowIso,
+        turnId: TurnId.make(command.message.messageId),
+        threadId: command.threadId,
+        projectId: project?.id ?? thread?.projectId ?? ProjectId.make("unbound"),
+        environmentId: resolution.environmentId,
+      });
       const openRouter = dependencies.openRouter;
       if (openRouter === undefined) {
-        return { ...routed, routeBinding };
+        return { ...routed, routeBinding: phase12Binding };
       }
       const guided = applyOpenRouterGuidanceToBinding({
-        binding: routeBinding,
+        binding: phase12Binding,
         ...(command.openRouterGuidanceMode !== undefined
           ? { requestedMode: command.openRouterGuidanceMode }
           : {}),
@@ -941,7 +965,23 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
         message: `Dispatcher denied turn start (${decision.gate.reasonCodes.join(",")}).`,
       });
     }
-    return { ...command, routeBinding };
+    const nowIso = new Date(yield* Clock.currentTimeMillis).toISOString();
+    return {
+      ...command,
+      routeBinding: withPhase12Binding({
+        binding: routeBinding,
+        providers: resolution.providers,
+        nowIso,
+        turnId: TurnId.make(command.message.messageId),
+        threadId: command.threadId,
+        projectId:
+          createThread?.projectId ??
+          resolution.projected.threads.find((candidate) => candidate.id === command.threadId)
+            ?.projectId ??
+          ProjectId.make("unbound"),
+        environmentId: resolution.environmentId,
+      }),
+    };
   },
   Effect.mapError((cause) =>
     isOrchestrationDispatchCommandError(cause)

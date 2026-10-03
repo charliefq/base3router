@@ -15,8 +15,13 @@ import { Tool, Toolkit } from "effect/unstable/ai";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
+import { ActionGateService } from "../../../actionGate/ActionGateService.ts";
 
-const dependencies = [McpInvocationContext.McpInvocationContext, DeviceService.DeviceService];
+const dependencies = [
+  McpInvocationContext.McpInvocationContext,
+  DeviceService.DeviceService,
+  ActionGateService,
+];
 
 /**
  * Deliberately a small surface: lifecycle, visibility for the user, and one

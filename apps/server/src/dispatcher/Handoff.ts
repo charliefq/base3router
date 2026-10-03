@@ -17,7 +17,10 @@ import {
   type TaskHandoffId,
   ThreadId,
   TurnId,
+  ProjectId,
 } from "@t3tools/contracts";
+import { attachPhase12Routes } from "@t3tools/shared/phase12Bind";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -512,12 +515,23 @@ export const bindTaskHandoffTurnStart = Effect.fn("DispatcherHandoff.bindTurnSta
       message: "The selected provider runner is unavailable on this environment.",
     });
   }
+  const nowIso = new Date(yield* Clock.currentTimeMillis).toISOString();
+  const thread = projected.threads.find((candidate) => candidate.id === command.threadId);
+  const phase12Binding = attachPhase12Routes({
+    binding: routeBinding,
+    providers: dependencies.providers,
+    nowIso,
+    turnId: TurnId.make(command.message.messageId),
+    threadId: command.threadId,
+    projectId: thread?.projectId ?? ProjectId.make("unbound"),
+    environmentId: dependencies.environmentId,
+  });
   const { handoffRequest: _, ...rest } = command;
   return {
     ...rest,
     message: { ...command.message, text: request.packetText },
     modelSelection: request.target,
-    routeBinding,
+    routeBinding: phase12Binding,
     handoff: {
       handoffId: request.handoffId,
       sourceTurnId: request.sourceTurnId,

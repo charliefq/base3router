@@ -25,11 +25,13 @@ import { Tool, Toolkit } from "effect/unstable/ai";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
+import { ActionGateService } from "../../../actionGate/ActionGateService.ts";
 import * as ServerConfig from "../../../config.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
   PreviewAutomationBroker.PreviewAutomationBroker,
+  ActionGateService,
 ];
 
 const presentationFields = { toolIcon: Schema.optional(ToolActivityIcon) };

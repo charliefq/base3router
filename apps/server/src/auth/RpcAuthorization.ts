@@ -81,6 +81,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.routerActivatePolicy]: AuthOrchestrationOperateScope,
   [WS_METHODS.routerShadowPolicy]: AuthOrchestrationOperateScope,
   [WS_METHODS.routerRollbackPolicy]: AuthOrchestrationOperateScope,
+  [WS_METHODS.actionGateGetGovernance]: AuthOrchestrationReadScope,
+  [WS_METHODS.actionGateRespondApproval]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverSignalProcess]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverReportClientActivity]: AuthOrchestrationReadScope,
   [WS_METHODS.serverReportHostPowerState]: AuthOrchestrationOperateScope,
