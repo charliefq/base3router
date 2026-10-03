@@ -41,6 +41,7 @@ import { applyOpenRouterGuidanceToBinding } from "@t3tools/shared/openRouterGuid
 import { attachPhase12Routes } from "@t3tools/shared/phase12Bind";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -895,7 +896,7 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
         }
         return routed;
       }
-      const nowIso = new Date(yield* Clock.currentTimeMillis).toISOString();
+      const nowIso = yield* Effect.map(DateTime.now, DateTime.formatIso);
       const phase12Binding = withPhase12Binding({
         binding: routeBinding,
         providers: resolution.providers,
@@ -965,7 +966,7 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
         message: `Dispatcher denied turn start (${decision.gate.reasonCodes.join(",")}).`,
       });
     }
-    const nowIso = new Date(yield* Clock.currentTimeMillis).toISOString();
+    const nowIso = yield* Effect.map(DateTime.now, DateTime.formatIso);
     return {
       ...command,
       routeBinding: withPhase12Binding({

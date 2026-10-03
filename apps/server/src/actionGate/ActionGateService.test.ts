@@ -1,5 +1,6 @@
 import {
   ActionApprovalId,
+  ActionGateError,
   ActionIdempotencyKey,
   EnvironmentId,
   ProjectId,
@@ -15,6 +16,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ActionGateService, layer as actionGateLayer } from "./ActionGateService.ts";
@@ -91,7 +93,7 @@ it.effect("consumes a granted one-time approval once under concurrent callers", 
     const replay = yield* service
       .consume(pending.approvalId, action.fingerprint, "2026-10-03T00:00:01.000Z")
       .pipe(Effect.flip);
-    assert.equal(replay.reason, "replay");
+    assert.equal(Schema.is(ActionGateError)(replay) && replay.reason === "replay", true);
     const snapshot = yield* service.governance(environmentId, {
       configuredSkillCount: 0,
       enabledSkillCount: 0,

@@ -83,6 +83,7 @@ import {
   type PullRequestRef,
   DEFAULT_ROUTER_EVALUATION_SETTINGS,
   AuthOrchestrationOperateScope,
+  ActionGateError,
   WS_METHODS,
   WsRpcGroup,
   WORKTREE_SETUP_ACTIVITY_KIND,
@@ -3561,15 +3562,26 @@ const makeWsRpcLayer = (
               const enabledSkills = skills.filter((skill) => skill.enabled);
               const now = yield* nowIso;
               const catalog = firstPartyMcpCatalog(now);
-              return yield* actionGate.governance(environmentId, {
-                configuredSkillCount: skills.length,
-                enabledSkillCount: enabledSkills.length,
-                configuredMcpServerCount: catalog.length,
-                enabledMcpServerCount: catalog.filter((server) => server.enabled).length,
-                degradedMcpServerCount: catalog.filter(
-                  (server) => server.runtimeState === "degraded",
-                ).length,
-              });
+              return yield* actionGate
+                .governance(environmentId, {
+                  configuredSkillCount: skills.length,
+                  enabledSkillCount: enabledSkills.length,
+                  configuredMcpServerCount: catalog.length,
+                  enabledMcpServerCount: catalog.filter((server) => server.enabled).length,
+                  degradedMcpServerCount: catalog.filter(
+                    (server) => server.runtimeState === "degraded",
+                  ).length,
+                })
+                .pipe(
+                  Effect.mapError((error) =>
+                    Schema.is(ActionGateError)(error)
+                      ? error
+                      : new ActionGateError({
+                          reason: "invalid",
+                          detail: "ActionGate could not load governance.",
+                        }),
+                  ),
+                );
             }),
             { "rpc.aggregate": "server" },
           ),
@@ -3578,7 +3590,16 @@ const makeWsRpcLayer = (
             WS_METHODS.actionGateRespondApproval,
             Effect.gen(function* () {
               const now = yield* nowIso;
-              const approval = yield* actionGate.respond(input, now);
+              const approval = yield* actionGate.respond(input, now).pipe(
+                Effect.mapError((error) =>
+                  Schema.is(ActionGateError)(error)
+                    ? error
+                    : new ActionGateError({
+                        reason: "invalid",
+                        detail: "ActionGate could not record the approval decision.",
+                      }),
+                ),
+              );
               return { approval };
             }),
             { "rpc.aggregate": "server" },

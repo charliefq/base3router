@@ -35,7 +35,7 @@ import {
 } from "@t3tools/shared/mcpCatalog";
 import { routeMcp } from "@t3tools/shared/mcpRouter";
 import { routeSkills } from "@t3tools/shared/skillRouter";
-import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import { PersistenceDecodeError, PersistenceSqlError } from "../persistence/Errors.ts";
 
 const ApprovalRow = Schema.Struct({
@@ -50,14 +50,17 @@ const ApprovalJson = Schema.fromJsonString(ActionApprovalRecord);
 const encodeApproval = Schema.encodeEffect(ApprovalJson);
 const decodeApproval = Schema.decodeUnknownEffect(ApprovalJson);
 
+const toPersistenceError =
+  (operation: string) =>
+  (cause: unknown): PersistenceSqlError | PersistenceDecodeError =>
+    Schema.isSchemaError(cause)
+      ? PersistenceDecodeError.fromSchemaError(`${operation}:codec`, cause)
+      : new PersistenceSqlError({ operation, cause });
+
 const toError =
   (operation: string) =>
   (cause: unknown): PersistenceSqlError | PersistenceDecodeError | ActionGateError =>
-    Schema.is(ActionGateError)(cause)
-      ? cause
-      : Schema.isSchemaError(cause)
-        ? PersistenceDecodeError.fromSchemaError(`${operation}:codec`, cause)
-        : new PersistenceSqlError({ operation, cause });
+    Schema.is(ActionGateError)(cause) ? cause : toPersistenceError(operation)(cause);
 
 export class ActionGateService extends Context.Service<
   ActionGateService,
@@ -128,7 +131,7 @@ const make = Effect.gen(function* () {
         if (row === undefined) return Effect.succeed(Option.none());
         return decodeApproval(row.payloadJson).pipe(Effect.map(Option.some));
       }),
-      Effect.mapError(toError("ActionGateService.getApproval")),
+      Effect.mapError(toPersistenceError("ActionGateService.getApproval")),
     );
 
   const putApproval: ActionGateService["Service"]["putApproval"] = (record) =>
@@ -275,7 +278,7 @@ const make = Effect.gen(function* () {
           decision: event.decision,
         })}
       )
-    `.pipe(Effect.asVoid, Effect.mapError(toError("ActionGateService.appendAudit")));
+    `.pipe(Effect.asVoid, Effect.mapError(toPersistenceError("ActionGateService.appendAudit")));
 
   const countStatus = (environmentId: EnvironmentId, status: string) =>
     sql<typeof CountRow.Type>`
@@ -325,7 +328,7 @@ const make = Effect.gen(function* () {
         estimatedCostUsd: MODEL_ROUTER_UNKNOWN_METRIC,
         compliance: pending > 0 ? ("attention" as const) : ("compliant" as const),
       } satisfies ActionGovernanceSnapshotV0;
-    }).pipe(Effect.mapError(toError("ActionGateService.governance")));
+    }).pipe(Effect.mapError(toPersistenceError("ActionGateService.governance")));
 
   const FIRST_PARTY_TOOLS = [
     ...FIRST_PARTY_PREVIEW_TOOLS,
@@ -335,8 +338,9 @@ const make = Effect.gen(function* () {
 
   const authorizeTool: ActionGateService["Service"]["authorizeTool"] = (input) =>
     Effect.gen(function* () {
-      const nowMs = yield* Clock.currentTimeMillis;
-      const nowIso = new Date(nowMs).toISOString();
+      const now = yield* DateTime.now;
+      const nowIso = DateTime.formatIso(now);
+      const expiresAt = DateTime.formatIso(DateTime.add(now, { minutes: 5 }));
       const spec = FIRST_PARTY_TOOLS.find((tool) => tool.name === input.toolName);
       const serverId =
         spec?.capability === "device"
@@ -357,7 +361,7 @@ const make = Effect.gen(function* () {
         projectId: ProjectId.make("unbound"),
         environmentId: input.environmentId,
         nowIso,
-        expiresAt: new Date(nowMs + 5 * 60_000).toISOString(),
+        expiresAt,
         modelRoute: null,
         skillRoute,
         mcpRoute,
@@ -437,7 +441,7 @@ const make = Effect.gen(function* () {
           plan,
           action,
           nowIso,
-          expiresAt: plan.expiresAt ?? new Date(nowMs + 5 * 60_000).toISOString(),
+          expiresAt: plan.expiresAt ?? expiresAt,
         }),
       );
       yield* appendAudit(
