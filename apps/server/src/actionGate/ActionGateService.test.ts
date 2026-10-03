@@ -1,6 +1,5 @@
 import {
   ActionApprovalId,
-  ActionFingerprint,
   ActionGateError,
   ActionIdempotencyKey,
   EnvironmentId,
