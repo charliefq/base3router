@@ -60,6 +60,8 @@ import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ModelRouterAvailability } from "../Services/ModelRouterAvailability.ts";
 import { persistOpenRouterObservationFromRuntimeEvent } from "../../openRouter/OpenRouterObservationPersist.ts";
+import { persistTurnOutcomeFromRuntimeEvent } from "../../routerEvaluation/persistTurnOutcome.ts";
+import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
 
@@ -1818,6 +1820,30 @@ const make = Effect.gen(function* () {
             message: "failed to persist OpenRouter Teacher observation",
           }),
         );
+      }
+      if (
+        (event.type === "turn.completed" || event.type === "turn.aborted") &&
+        Option.isSome(pendingTurnStart)
+      ) {
+        const environment = yield* Effect.serviceOption(ServerEnvironment);
+        if (Option.isSome(environment)) {
+          const environmentId = yield* environment.value.getEnvironmentId;
+          const settings = yield* serverSettingsService.getSettings.pipe(
+            Effect.catch(() => Effect.succeed({ routerEvaluation: { measurementEnabled: true } })),
+          );
+          yield* persistTurnOutcomeFromRuntimeEvent({
+            environmentId,
+            threadId: thread.id,
+            messageId: pendingTurnStart.value.messageId,
+            event,
+            measurementEnabled: settings.routerEvaluation.measurementEnabled !== false,
+          }).pipe(
+            Effect.ignore({
+              log: true,
+              message: "failed to persist turn outcome observation",
+            }),
+          );
+        }
       }
       const hasPendingTurnStart =
         Option.isSome(pendingTurnStart) && thread.session?.status === "starting";

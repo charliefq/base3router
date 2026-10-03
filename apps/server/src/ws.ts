@@ -81,6 +81,7 @@ import {
   type TerminalEvent,
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
+  DEFAULT_ROUTER_EVALUATION_SETTINGS,
   WS_METHODS,
   WsRpcGroup,
   WORKTREE_SETUP_ACTIVITY_KIND,
@@ -183,6 +184,7 @@ import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
+import { RouterEvaluationService } from "./routerEvaluation/RouterEvaluationService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
@@ -703,6 +705,7 @@ const makeWsRpcLayer = (
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
+      const routerEvaluation = yield* RouterEvaluationService;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -1974,6 +1977,29 @@ const makeWsRpcLayer = (
                       availabilityCooldowns,
                       availabilityNowMs,
                       ...(openRouterDeps !== undefined ? { openRouter: openRouterDeps } : {}),
+                      hybrid: yield* Effect.gen(function* () {
+                        const environmentId = yield* serverEnvironment.getEnvironmentId;
+                        const evaluationSettings = yield* serverSettings.getSettings.pipe(
+                          Effect.orElseSucceed(() => ({
+                            routerEvaluation: DEFAULT_ROUTER_EVALUATION_SETTINGS,
+                          })),
+                        );
+                        return {
+                          activePolicyVersion:
+                            yield* routerEvaluation.activePolicyVersion(environmentId),
+                          challengerEnabled:
+                            evaluationSettings.routerEvaluation.challengerShadowEnabled === true,
+                          evidenceByTarget: yield* routerEvaluation.evidenceMap(environmentId),
+                        };
+                      }).pipe(
+                        Effect.catch(() =>
+                          Effect.succeed({
+                            activePolicyVersion: "model-router.v0",
+                            challengerEnabled: false,
+                            evidenceByTarget: new Map(),
+                          }),
+                        ),
+                      ),
                     });
                   }),
                 ),
@@ -3409,6 +3435,81 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverRefreshUsageRates, usage.refreshRates, {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.routerGetInsights]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.routerGetInsights,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const evaluationSettings = yield* serverSettings.getSettings.pipe(
+                Effect.map((settings) => settings.routerEvaluation),
+                Effect.orElseSucceed(() => DEFAULT_ROUTER_EVALUATION_SETTINGS),
+              );
+              return yield* routerEvaluation.insights(environmentId, evaluationSettings);
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.routerExportObservations]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.routerExportObservations,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap(routerEvaluation.exportObservations),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.routerDeleteObservations]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.routerDeleteObservations,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              return yield* routerEvaluation.deleteObservations(environmentId, input);
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.routerSubmitFeedback]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.routerSubmitFeedback,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const now = yield* nowIso;
+              return yield* routerEvaluation.submitFeedback(environmentId, input, now);
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.routerListPolicies]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.routerListPolicies,
+            serverEnvironment.getEnvironmentId.pipe(Effect.flatMap(routerEvaluation.listPolicies)),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.routerInspectPolicy]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.routerInspectPolicy,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              return yield* routerEvaluation.inspectPolicy(environmentId, input.policyId);
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.routerActivatePolicy]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.routerActivatePolicy,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const now = yield* nowIso;
+              return yield* routerEvaluation.activate(environmentId, input, true, now);
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.routerRollbackPolicy]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.routerRollbackPolicy,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const now = yield* nowIso;
+              return yield* routerEvaluation.rollback(environmentId, input, true, now);
+            }),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverRetryResourceTelemetry]: (_input) =>
           observeRpcEffect(WS_METHODS.serverRetryResourceTelemetry, resourceTelemetry.retry, {
             "rpc.aggregate": "server",
