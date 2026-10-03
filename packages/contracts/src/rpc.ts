@@ -296,6 +296,7 @@ import {
   RouterPolicyMutationResult,
   RouterPolicySnapshotV0,
   RouterRollbackPolicyRequest,
+  RouterShadowPolicyRequest,
   RouterSubmitFeedbackRequest,
   RouterSubmitFeedbackResult,
 } from "./routerEvaluation.ts";
@@ -451,6 +452,7 @@ export const WS_METHODS = {
   routerListPolicies: "router.listPolicies",
   routerInspectPolicy: "router.inspectPolicy",
   routerActivatePolicy: "router.activatePolicy",
+  routerShadowPolicy: "router.shadowPolicy",
   routerRollbackPolicy: "router.rollbackPolicy",
 
   // Cloud environment methods
@@ -824,6 +826,12 @@ const WsRouterInspectPolicyRpc = Rpc.make(WS_METHODS.routerInspectPolicy, {
 
 const WsRouterActivatePolicyRpc = Rpc.make(WS_METHODS.routerActivatePolicy, {
   payload: RouterActivatePolicyRequest,
+  success: RouterPolicyMutationResult,
+  error: RouterEvaluationRpcError,
+});
+
+const WsRouterShadowPolicyRpc = Rpc.make(WS_METHODS.routerShadowPolicy, {
+  payload: RouterShadowPolicyRequest,
   success: RouterPolicyMutationResult,
   error: RouterEvaluationRpcError,
 });
@@ -1620,6 +1628,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsRouterListPoliciesRpc,
   WsRouterInspectPolicyRpc,
   WsRouterActivatePolicyRpc,
+  WsRouterShadowPolicyRpc,
   WsRouterRollbackPolicyRpc,
   WsServerSignalProcessRpc,
   WsServerReportClientActivityRpc,

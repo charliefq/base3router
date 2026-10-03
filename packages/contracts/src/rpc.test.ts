@@ -43,6 +43,7 @@ describe("router evaluation RPC", () => {
     expect(WsRpcGroup.requests.has(WS_METHODS.routerListPolicies)).toBe(true);
     expect(WsRpcGroup.requests.has(WS_METHODS.routerInspectPolicy)).toBe(true);
     expect(WsRpcGroup.requests.has(WS_METHODS.routerActivatePolicy)).toBe(true);
+    expect(WsRpcGroup.requests.has(WS_METHODS.routerShadowPolicy)).toBe(true);
     expect(WsRpcGroup.requests.has(WS_METHODS.routerRollbackPolicy)).toBe(true);
   });
 });

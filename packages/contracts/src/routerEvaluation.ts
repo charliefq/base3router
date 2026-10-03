@@ -125,7 +125,8 @@ export const ExecutionTimingV0 = Schema.Struct({
   terminalAt: Schema.optional(BoundedIso),
   timeToFirstTokenMs: MeasuredQuantityV0,
   totalDurationMs: MeasuredQuantityV0,
-  clock: Schema.Literal("effect_clock_millis"),
+  /** Wall timestamps use Effect millis. Durations use a monotonic source. */
+  clock: Schema.Literals(["effect_clock_millis", "monotonic_nanos"]),
 });
 export type ExecutionTimingV0 = typeof ExecutionTimingV0.Type;
 
@@ -374,6 +375,8 @@ export const RouterPolicySnapshotV0 = Schema.Struct({
   activatedAt: Schema.optional(BoundedIso),
   retiredAt: Schema.optional(BoundedIso),
   activationConfirmed: Schema.optional(Schema.Boolean),
+  /** Pairing subject or session id. Never a credential. */
+  activatedBy: Schema.optional(BoundedSlug),
 });
 export type RouterPolicySnapshotV0 = typeof RouterPolicySnapshotV0.Type;
 
@@ -466,6 +469,8 @@ export const RouterInsightsSnapshotV0 = Schema.Struct({
   coverage: EvaluationMetricV0,
   activePolicyVersion: BoundedPolicyVersion,
   candidatePolicyVersion: Schema.optional(BoundedPolicyVersion),
+  candidatePolicyId: Schema.optional(RouterPolicyId),
+  candidatePolicyState: Schema.optional(RouterPolicyState),
   challengerEnabled: Schema.Boolean,
   measurementEnabled: Schema.Boolean,
   retentionDays: NonNegativeInt,
@@ -473,6 +478,7 @@ export const RouterInsightsSnapshotV0 = Schema.Struct({
   metrics: Schema.Array(EvaluationMetricV0).check(Schema.isMaxLength(32)),
   mixedProvenanceWarning: Schema.Boolean,
   insufficientData: Schema.Boolean,
+  latestObservationId: Schema.optional(ObservationId),
 });
 export type RouterInsightsSnapshotV0 = typeof RouterInsightsSnapshotV0.Type;
 
@@ -496,7 +502,7 @@ export const emptyCostMeasurement = (): CostMeasurementV0 => ({
 export const emptyTiming = (): ExecutionTimingV0 => ({
   timeToFirstTokenMs: unknownQuantity("ms", "monotonic_clock"),
   totalDurationMs: unknownQuantity("ms", "monotonic_clock"),
-  clock: "effect_clock_millis",
+  clock: "monotonic_nanos",
 });
 
 export const emptyOutcomeEvidence = (): OutcomeEvidenceV0 => ({
@@ -535,6 +541,7 @@ export class RouterEvaluationError extends Schema.TaggedError<RouterEvaluationEr
       "unauthorized_activation",
       "confirmation_required",
       "malformed_policy",
+      "illegal_transition",
       "empty",
     ]),
     detail: TrimmedNonEmptyString,
@@ -597,6 +604,12 @@ export const RouterActivatePolicyRequest = Schema.Struct({
 });
 export type RouterActivatePolicyRequest = typeof RouterActivatePolicyRequest.Type;
 
+export const RouterShadowPolicyRequest = Schema.Struct({
+  policyId: RouterPolicyId,
+  confirmShadow: Schema.Boolean,
+});
+export type RouterShadowPolicyRequest = typeof RouterShadowPolicyRequest.Type;
+
 export const RouterRollbackPolicyRequest = Schema.Struct({
   confirmRollback: Schema.Boolean,
 });
@@ -607,3 +620,51 @@ export const RouterPolicyMutationResult = Schema.Struct({
   previous: Schema.optional(RouterPolicySnapshotV0),
 });
 export type RouterPolicyMutationResult = typeof RouterPolicyMutationResult.Type;
+
+export const ROUTER_OBSERVATION_EVENT_VERSION = "router-observation-event.v0" as const;
+export const ObservationEventId = TrimmedNonEmptyString.check(Schema.isMaxLength(128)).pipe(
+  Schema.brand("ObservationEventId"),
+);
+export type ObservationEventId = typeof ObservationEventId.Type;
+
+const OBSERVATION_EVENT_TYPES = [
+  "terminal_recorded",
+  "usage_enriched",
+  "explicit_feedback",
+  "rework_proxy",
+  "verification",
+  "conflict_rejected",
+  "retention_pruned",
+  "observations_deleted",
+  "policy_activated",
+  "policy_shadowed",
+  "policy_rolled_back",
+] as const;
+export const RouterObservationEventType = Schema.Literals(OBSERVATION_EVENT_TYPES);
+export type RouterObservationEventType = typeof RouterObservationEventType.Type;
+
+export const RouterObservationEventV0 = Schema.Struct({
+  version: Schema.Literal(ROUTER_OBSERVATION_EVENT_VERSION),
+  eventId: ObservationEventId,
+  environmentId: EnvironmentId,
+  observationId: Schema.optional(ObservationId),
+  eventType: RouterObservationEventType,
+  recordedAt: BoundedIso,
+  idempotencyKey: BoundedSlug,
+  sequence: NonNegativeInt,
+  schemaVersion: BoundedSlug,
+  actor: Schema.optional(BoundedSlug),
+  terminalCategory: Schema.optional(TerminalOutcomeCategory),
+  detail: Schema.optional(BoundedExplanation),
+});
+export type RouterObservationEventV0 = typeof RouterObservationEventV0.Type;
+
+/** Higher rank cannot be overwritten by a lower rank. Success is lowest. */
+export const TERMINAL_CATEGORY_RANK: Readonly<Record<TerminalOutcomeCategory, number>> = {
+  success: 1,
+  unknown: 2,
+  provider_failure: 3,
+  infrastructure_failure: 4,
+  timeout: 5,
+  cancelled: 6,
+};

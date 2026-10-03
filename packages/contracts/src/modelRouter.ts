@@ -209,7 +209,7 @@ export const ModelRouterAvailabilityCooldown = Schema.Struct({
 export type ModelRouterAvailabilityCooldown = typeof ModelRouterAvailabilityCooldown.Type;
 
 export const ModelRouterDecision = Schema.Struct({
-  policyVersion: ModelRouterPolicyVersion,
+  policyVersion: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
   mode: ModelRouterMode,
   task: ModelRouterTaskCharacteristics,
   policy: ModelRouterPolicy,
