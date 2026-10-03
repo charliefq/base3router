@@ -391,9 +391,9 @@ export const mergeTerminalWrite = (
   if (existing.terminalCategory === incoming.terminalCategory) {
     const observation = withEnrichedFacts(existing, incoming);
     const unchanged =
-      observation.usage === existing.usage &&
-      observation.timing === existing.timing &&
-      observation.cost === existing.cost;
+      JSON.stringify(observation.usage) === JSON.stringify(existing.usage) &&
+      JSON.stringify(observation.timing) === JSON.stringify(existing.timing) &&
+      JSON.stringify(observation.cost) === JSON.stringify(existing.cost);
     return { kind: unchanged ? "idempotent" : "enriched", observation };
   }
   if (LOCKED_TERMINALS.has(existing.terminalCategory) && incoming.terminalCategory === "success") {

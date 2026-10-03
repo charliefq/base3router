@@ -150,7 +150,7 @@ it("renders live Router Insights counts and hides mutations without operate acce
     );
   });
 
-  expect(renderedText()).toContain("Observations 12");
+  expect(renderedText()).toContain("12 observations");
   expect(renderedText()).toContain("1/2");
   expect(renderedText()).toContain("labeled separately");
   expect(renderedText()).not.toContain("Confirm activate");
