@@ -2,7 +2,15 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/models";
-import type { EnvironmentId, ProjectId, ThreadId, WorkflowCatalog } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  EvaluationMetricV0,
+  ExplicitFeedbackKind,
+  ProjectId,
+  RouterInsightsSnapshotV0,
+  ThreadId,
+  WorkflowCatalog,
+} from "@t3tools/contracts";
 
 import type { ControlCenterSurface } from "./controlCenterProjection";
 import { sanitizeDisplayText } from "./sanitizeDisplayText";
@@ -52,6 +60,43 @@ export type ControlCenterModel = {
   readonly empty: boolean;
   readonly capabilityOff: boolean;
   readonly environmentLabel: string | null;
+  readonly routerInsights?: ControlCenterRouterInsights | null;
+};
+
+export type ControlCenterRouterInsights = {
+  readonly observationCount: number;
+  readonly activePolicy: string;
+  readonly candidatePolicy: string | null;
+  readonly candidatePolicyState?: string | null;
+  readonly candidatePolicyId?: string | null;
+  readonly insufficientData: boolean;
+  readonly mixedProvenance: boolean;
+  readonly explicitFeedback: string;
+  readonly reworkProxies: string;
+  readonly verification?: string;
+  readonly freshness?: string;
+  readonly coverage?: string;
+  readonly latency?: string;
+  readonly reportedCost?: string;
+  readonly estimatedCost?: string;
+  readonly challengerAgreement?: string;
+  readonly canRead?: boolean;
+  readonly canOperate?: boolean;
+  readonly latestObservationId?: string;
+  readonly confirmation?: "activate" | "shadow" | "rollback" | "delete" | null;
+};
+
+export type ControlCenterRouterActions = {
+  readonly onRequestConfirm?: (
+    kind: NonNullable<ControlCenterRouterInsights["confirmation"]>,
+  ) => void;
+  readonly onCancelConfirm?: () => void;
+  readonly onConfirmActivate?: () => void;
+  readonly onConfirmShadow?: () => void;
+  readonly onConfirmRollback?: () => void;
+  readonly onConfirmDelete?: () => void;
+  readonly onExport?: () => void;
+  readonly onFeedback?: (kind: ExplicitFeedbackKind) => void;
 };
 
 export type ControlCenterInput = {
@@ -62,6 +107,7 @@ export type ControlCenterInput = {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly catalogs?: ReadonlyArray<WorkflowCatalog>;
   readonly environmentLabel?: string | null;
+  readonly routerInsights?: ControlCenterModel["routerInsights"];
 };
 
 export type ControlCenterInspectorTarget = {
@@ -167,6 +213,67 @@ export function presentControlCenter(input: ControlCenterInput): ControlCenterMo
     empty: ready && projects.length === 0 && tasks.length === 0,
     capabilityOff,
     environmentLabel: sanitizeDisplayText(input.environmentLabel ?? null),
+    ...(input.routerInsights !== undefined ? { routerInsights: input.routerInsights } : {}),
+  };
+}
+
+function metricLine(metric: EvaluationMetricV0 | undefined, unknownLabel: string): string {
+  if (metric === undefined) return unknownLabel;
+  if (metric.unit === "rate") {
+    return `${metric.numerator}/${metric.denominator} (${metric.status}, n=${metric.sampleCount})`;
+  }
+  if (metric.sampleCount === 0 || metric.status === "unknown") return unknownLabel;
+  return `${metric.numerator} ${metric.unit} (n=${metric.sampleCount}, ${metric.status})`;
+}
+
+function metricById(
+  metrics: ReadonlyArray<EvaluationMetricV0>,
+  id: string,
+): EvaluationMetricV0 | undefined {
+  return metrics.find((metric) => metric.id === id);
+}
+
+export function presentRouterInsights(
+  snapshot: RouterInsightsSnapshotV0,
+  options: {
+    readonly canOperate?: boolean;
+    readonly confirmation?: ControlCenterRouterInsights["confirmation"];
+  } = {},
+): ControlCenterRouterInsights {
+  const feedback = metricById(snapshot.metrics, "explicit_positive_feedback_rate");
+  const rework = metricById(snapshot.metrics, "rework_proxy_rate");
+  const verification = metricById(snapshot.metrics, "verification_pass_rate");
+  const latency = metricById(snapshot.metrics, "median_latency_ms");
+  const reported = metricById(snapshot.metrics, "reported_cost_per_success_usd");
+  const estimated = metricById(snapshot.metrics, "estimated_cost_per_success_usd");
+  const agreement = metricById(snapshot.metrics, "base3_openrouter_agreement_rate");
+  return {
+    observationCount: snapshot.observationCount,
+    activePolicy: snapshot.activePolicyVersion,
+    candidatePolicy: snapshot.candidatePolicyVersion ?? null,
+    insufficientData: snapshot.insufficientData,
+    mixedProvenance: snapshot.mixedProvenanceWarning,
+    explicitFeedback: metricLine(feedback, "none recorded"),
+    reworkProxies: metricLine(rework, "none recorded"),
+    verification: metricLine(verification, "unknown"),
+    freshness: snapshot.freshness,
+    coverage: metricLine(snapshot.coverage, "unknown"),
+    latency: metricLine(latency, "unknown"),
+    reportedCost: metricLine(reported, "unknown"),
+    estimatedCost: metricLine(estimated, "unknown"),
+    challengerAgreement: metricLine(agreement, "unknown"),
+    canRead: true,
+    canOperate: options.canOperate === true,
+    confirmation: options.confirmation ?? null,
+    ...(snapshot.candidatePolicyState !== undefined
+      ? { candidatePolicyState: snapshot.candidatePolicyState }
+      : {}),
+    ...(snapshot.candidatePolicyId !== undefined
+      ? { candidatePolicyId: snapshot.candidatePolicyId }
+      : {}),
+    ...(snapshot.latestObservationId !== undefined
+      ? { latestObservationId: snapshot.latestObservationId }
+      : {}),
   };
 }
 

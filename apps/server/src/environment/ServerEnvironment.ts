@@ -33,6 +33,12 @@ import {
   type OpenRouterCatalogFreshness,
 } from "../openRouter/OpenRouterCatalogService.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { RouterEvaluationService } from "../routerEvaluation/RouterEvaluationService.ts";
+import {
+  DEFAULT_OBSERVATION_RETENTION_DAYS,
+  DEFAULT_ROUTER_EVALUATION_SETTINGS,
+  MODEL_ROUTER_POLICY_VERSION,
+} from "@t3tools/contracts";
 
 export class ServerEnvironmentIdPersistenceError extends Schema.TaggedError<ServerEnvironmentIdPersistenceError>()(
   "ServerEnvironmentIdPersistenceError",
@@ -289,6 +295,18 @@ export const make = Effect.gen(function* () {
             ),
           )
         : { status: "unknown" as const };
+      const evaluation = yield* Effect.serviceOption(RouterEvaluationService);
+      const evaluationSettings = settings?.routerEvaluation ?? DEFAULT_ROUTER_EVALUATION_SETTINGS;
+      const observationCount = Option.isSome(evaluation)
+        ? yield* evaluation.value
+            .observationCount(environmentId)
+            .pipe(Effect.catch(() => Effect.succeed(0)))
+        : 0;
+      const activePolicyVersion = Option.isSome(evaluation)
+        ? yield* evaluation.value
+            .activePolicyVersion(environmentId)
+            .pipe(Effect.catch(() => Effect.succeed(MODEL_ROUTER_POLICY_VERSION)))
+        : MODEL_ROUTER_POLICY_VERSION;
       return {
         ...descriptor,
         capabilities: {
@@ -305,6 +323,14 @@ export const make = Effect.gen(function* () {
             marketPriorFreshness: priors.status,
             ...(priors.asOf !== undefined ? { marketPriorAsOf: priors.asOf } : {}),
           }),
+          routerEvaluation: {
+            available: true,
+            measurementEnabled: evaluationSettings.measurementEnabled,
+            retentionDays: evaluationSettings.retentionDays ?? DEFAULT_OBSERVATION_RETENTION_DAYS,
+            challengerShadowEnabled: evaluationSettings.challengerShadowEnabled,
+            activePolicyVersion,
+            observationCount,
+          },
         },
       };
     }),

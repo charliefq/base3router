@@ -71,6 +71,8 @@ import Migration0056 from "./Migrations/056_ProjectionWorkflowOs.ts";
 import Migration0057 from "./Migrations/057_CursorCloudOperations.ts";
 import Migration0058 from "./Migrations/058_CursorCloudOperationScope.ts";
 import Migration0059 from "./Migrations/059_CursorCloudOperationRejected.ts";
+import Migration0060 from "./Migrations/060_RouterEvaluationObservations.ts";
+import Migration0061 from "./Migrations/061_RouterObservationEvents.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -142,6 +144,8 @@ const migrationEntries = [
   [57, "CursorCloudOperations", Migration0057],
   [58, "CursorCloudOperationScope", Migration0058],
   [59, "CursorCloudOperationRejected", Migration0059],
+  [60, "RouterEvaluationObservations", Migration0060],
+  [61, "RouterObservationEvents", Migration0061],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

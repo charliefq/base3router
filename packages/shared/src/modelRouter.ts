@@ -292,6 +292,13 @@ function compareForSelection(
   const leftScore = policyScore(left, policy, qualityActive, costActive, latencyActive);
   const rightScore = policyScore(right, policy, qualityActive, costActive, latencyActive);
   if (leftScore !== rightScore) return rightScore - leftScore;
+  return compareModelRouterTieBreak(left, right);
+}
+
+export function compareModelRouterTieBreak(
+  left: ModelRouterCandidate,
+  right: ModelRouterCandidate,
+): number {
   if (left.preferredDefault !== right.preferredDefault) {
     return left.preferredDefault ? -1 : 1;
   }

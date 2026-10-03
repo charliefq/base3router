@@ -5,7 +5,7 @@ import type {
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { expect, it } from "vite-plus/test";
 
-import { presentControlCenter } from "./presentControlCenter";
+import { presentControlCenter, presentRouterInsights } from "./presentControlCenter";
 
 const environmentId = EnvironmentId.make("environment-1");
 const projectId = ProjectId.make("project-1");
@@ -116,4 +116,75 @@ it("redacts secret-shaped titles before they reach the dashboard", () => {
 
   expect(model.projects[0]?.title).toBe("[redacted]");
   expect(model.recentTasks[0]?.title).toBe("[redacted]");
+});
+
+it("maps live Router Insights with numerator/denominator instead of fake percentages", () => {
+  const insights = presentRouterInsights({
+    observationCount: 3,
+    coverage: {
+      id: "coverage",
+      numerator: 3,
+      denominator: 3,
+      sampleCount: 3,
+      status: "insufficient",
+      provenance: "observed",
+      unit: "rate",
+    },
+    activePolicyVersion: "model-router.v0",
+    candidatePolicyVersion: "hybrid-router.v1.0.0",
+    candidatePolicyState: "shadow",
+    challengerEnabled: true,
+    measurementEnabled: true,
+    retentionDays: 90,
+    freshness: "fresh",
+    metrics: [
+      {
+        id: "explicit_positive_feedback_rate",
+        numerator: 1,
+        denominator: 2,
+        sampleCount: 2,
+        status: "insufficient",
+        provenance: "observed",
+        unit: "rate",
+      },
+      {
+        id: "rework_proxy_rate",
+        numerator: 0,
+        denominator: 3,
+        sampleCount: 3,
+        status: "insufficient",
+        provenance: "observed",
+        unit: "rate",
+      },
+      {
+        id: "reported_cost_per_success_usd",
+        numerator: 0.02,
+        denominator: 1,
+        sampleCount: 2,
+        status: "insufficient",
+        provenance: "observed",
+        unit: "usd",
+      },
+      {
+        id: "estimated_cost_per_success_usd",
+        numerator: 0.04,
+        denominator: 1,
+        sampleCount: 1,
+        status: "insufficient",
+        provenance: "estimated",
+        unit: "usd",
+      },
+    ],
+    mixedProvenanceWarning: true,
+    insufficientData: true,
+  });
+
+  expect(insights.explicitFeedback).toContain("1/2");
+  expect(insights.reworkProxies).toContain("0/3");
+  expect(insights.reportedCost).toContain("usd");
+  expect(insights.estimatedCost).toContain("usd");
+  expect(insights.mixedProvenance).toBe(true);
+  expect(insights.activePolicy).toBe("model-router.v0");
+  expect(insights.candidatePolicy).toBe("hybrid-router.v1.0.0");
+  expect(insights.canOperate).toBe(false);
 });

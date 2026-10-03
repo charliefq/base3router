@@ -75,6 +75,26 @@
       "types": "./src/openRouterTeacherGate.ts",
       "import": "./src/openRouterTeacherGate.ts"
     },
+    "./hybridRouter": {
+      "types": "./src/hybridRouter.ts",
+      "import": "./src/hybridRouter.ts"
+    },
+    "./routerEvaluation": {
+      "types": "./src/routerEvaluation.ts",
+      "import": "./src/routerEvaluation.ts"
+    },
+    "./routerEvaluation.fixture": {
+      "types": "./src/routerEvaluation.fixture.ts",
+      "import": "./src/routerEvaluation.fixture.ts"
+    },
+    "./routerPolicy": {
+      "types": "./src/routerPolicy.ts",
+      "import": "./src/routerPolicy.ts"
+    },
+    "./turnOutcome": {
+      "types": "./src/turnOutcome.ts",
+      "import": "./src/turnOutcome.ts"
+    },
     "./advertisedEndpoint": {
       "types": "./src/advertisedEndpoint.ts",
       "import": "./src/advertisedEndpoint.ts"

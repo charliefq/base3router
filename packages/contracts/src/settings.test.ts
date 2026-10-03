@@ -755,6 +755,9 @@ describe("provider enabled defaults", () => {
     expect(decoded.providers.opencode.enabled).toBe(false);
     expect(decoded.providers.openrouter.enabled).toBe(false);
     expect(decoded.openRouter.guidanceMode).toBe("off");
+    expect(decoded.routerEvaluation.measurementEnabled).toBe(true);
+    expect(decoded.routerEvaluation.retentionDays).toBe(90);
+    expect(decoded.routerEvaluation.challengerShadowEnabled).toBe(false);
   });
 
   it("keeps Cursor enabled when an existing user explicitly opted in", () => {

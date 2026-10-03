@@ -47,6 +47,8 @@ export type OpenRouterChatResult = {
     readonly completionTokens?: number;
     readonly totalTokens?: number;
     readonly cost?: number;
+    readonly reasoningTokens?: number;
+    readonly cacheReadTokens?: number;
   };
   readonly rawError?: string;
   readonly policyFailure?: TeacherPolicyFailure;
@@ -98,6 +100,25 @@ const readUsage = (raw: unknown): OpenRouterChatResult["usage"] => {
       : {}),
     ...(typeof usage.total_tokens === "number" ? { totalTokens: usage.total_tokens } : {}),
     ...(typeof usage.cost === "number" ? { cost: usage.cost } : {}),
+    ...(typeof usage.completion_tokens_details === "object" &&
+    usage.completion_tokens_details !== null &&
+    typeof (usage.completion_tokens_details as { readonly reasoning_tokens?: unknown })
+      .reasoning_tokens === "number"
+      ? {
+          reasoningTokens: (
+            usage.completion_tokens_details as { readonly reasoning_tokens: number }
+          ).reasoning_tokens,
+        }
+      : {}),
+    ...(typeof usage.prompt_tokens_details === "object" &&
+    usage.prompt_tokens_details !== null &&
+    typeof (usage.prompt_tokens_details as { readonly cached_tokens?: unknown }).cached_tokens ===
+      "number"
+      ? {
+          cacheReadTokens: (usage.prompt_tokens_details as { readonly cached_tokens: number })
+            .cached_tokens,
+        }
+      : {}),
   };
 };
 

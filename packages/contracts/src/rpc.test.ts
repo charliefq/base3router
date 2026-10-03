@@ -34,6 +34,20 @@ describe("subscribeServerConfig payload compatibility", () => {
   });
 });
 
+describe("router evaluation RPC", () => {
+  it("registers insights, export, delete, feedback, and policy lifecycle", () => {
+    expect(WsRpcGroup.requests.has(WS_METHODS.routerGetInsights)).toBe(true);
+    expect(WsRpcGroup.requests.has(WS_METHODS.routerExportObservations)).toBe(true);
+    expect(WsRpcGroup.requests.has(WS_METHODS.routerDeleteObservations)).toBe(true);
+    expect(WsRpcGroup.requests.has(WS_METHODS.routerSubmitFeedback)).toBe(true);
+    expect(WsRpcGroup.requests.has(WS_METHODS.routerListPolicies)).toBe(true);
+    expect(WsRpcGroup.requests.has(WS_METHODS.routerInspectPolicy)).toBe(true);
+    expect(WsRpcGroup.requests.has(WS_METHODS.routerActivatePolicy)).toBe(true);
+    expect(WsRpcGroup.requests.has(WS_METHODS.routerShadowPolicy)).toBe(true);
+    expect(WsRpcGroup.requests.has(WS_METHODS.routerRollbackPolicy)).toBe(true);
+  });
+});
+
 describe("dispatcher route preview RPC", () => {
   it("is registered as a bounded unary request", () => {
     expect(WsRpcGroup.requests.has(WS_METHODS.dispatcherRoutePreview)).toBe(true);

@@ -27,6 +27,7 @@ import {
   type OpenRouterGuidanceMode,
   type OpenRouterGuidanceSettings,
   ProviderInstanceId,
+  type HybridRouteDecisionV1,
 } from "@t3tools/contracts";
 import {
   applyModelRouterCooldowns,
@@ -34,6 +35,7 @@ import {
   modelRouterCatalogFromProviders,
   routeModel,
 } from "@t3tools/shared/modelRouter";
+import { routeHybridModel, type LocalModelEvidence } from "@t3tools/shared/hybridRouter";
 import { applyOpenRouterGuidanceToBinding } from "@t3tools/shared/openRouterGuidance";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import * as Clock from "effect/Clock";
@@ -657,6 +659,7 @@ function taskRouteBindingFromModelRoute(input: {
   readonly decision: ModelRouterDecision;
   readonly projectDefault: ModelSelection | null;
   readonly environmentDefault: ModelSelection | null;
+  readonly hybrid?: HybridRouteDecisionV1;
 }): DispatcherTaskRouteBindingType | null {
   const selected = input.decision.selected;
   if (selected === null || selected.driver === null || !selected.eligible) {
@@ -682,6 +685,7 @@ function taskRouteBindingFromModelRoute(input: {
     }),
     gate: { decision: "ALLOW", reasonCodes: ["ACTION_ALLOWED"] },
     modelRoute: boundDecision,
+    ...(input.hybrid !== undefined ? { hybrid: input.hybrid } : {}),
   };
 }
 
@@ -736,6 +740,11 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
         readonly settings: OpenRouterGuidanceSettings;
         readonly credentialPresent: boolean;
         readonly instanceId: ProviderInstanceId;
+      };
+      readonly hybrid?: {
+        readonly activePolicyVersion: string;
+        readonly challengerEnabled: boolean;
+        readonly evidenceByTarget: ReadonlyMap<string, LocalModelEvidence>;
       };
     },
   ): Effect.fn.Return<OrchestrationCommand, OrchestrationDispatchCommandError> {
@@ -794,30 +803,61 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
             ]
           : []),
       ];
-      const decision = routeModel({
-        mode: routingMode,
-        catalog: applyModelRouterCooldowns(
-          modelRouterCatalogForMode(
-            modelRouterCatalogFromProviders(resolution.providers),
-            routingMode,
+      const routedDecision = dependencies.hybrid
+        ? routeHybridModel({
+            mode: routingMode,
+            catalog: applyModelRouterCooldowns(
+              modelRouterCatalogForMode(
+                modelRouterCatalogFromProviders(resolution.providers),
+                routingMode,
+              ),
+              dependencies.availabilityCooldowns ?? [],
+              dependencies.availabilityNowMs ?? (yield* Clock.currentTimeMillis),
+            ),
+            preferredTargets,
+            ...(command.modelRouteConstraints === undefined
+              ? {}
+              : { constraints: command.modelRouteConstraints }),
+            ...(routingMode === "manual" && preferredModelSelection !== undefined
+              ? {
+                  manualOverride: {
+                    instanceId: preferredModelSelection.instanceId,
+                    model: preferredModelSelection.model,
+                  },
+                }
+              : {}),
+            executionStatus: "bound",
+            activePolicyVersion: dependencies.hybrid.activePolicyVersion,
+            challengerEnabled: dependencies.hybrid.challengerEnabled,
+            evidenceByTarget: dependencies.hybrid.evidenceByTarget,
+          })
+        : null;
+      const decision =
+        routedDecision?.decision ??
+        routeModel({
+          mode: routingMode,
+          catalog: applyModelRouterCooldowns(
+            modelRouterCatalogForMode(
+              modelRouterCatalogFromProviders(resolution.providers),
+              routingMode,
+            ),
+            dependencies.availabilityCooldowns ?? [],
+            dependencies.availabilityNowMs ?? (yield* Clock.currentTimeMillis),
           ),
-          dependencies.availabilityCooldowns ?? [],
-          dependencies.availabilityNowMs ?? (yield* Clock.currentTimeMillis),
-        ),
-        preferredTargets,
-        ...(command.modelRouteConstraints === undefined
-          ? {}
-          : { constraints: command.modelRouteConstraints }),
-        ...(routingMode === "manual" && preferredModelSelection !== undefined
-          ? {
-              manualOverride: {
-                instanceId: preferredModelSelection.instanceId,
-                model: preferredModelSelection.model,
-              },
-            }
-          : {}),
-        executionStatus: "bound",
-      });
+          preferredTargets,
+          ...(command.modelRouteConstraints === undefined
+            ? {}
+            : { constraints: command.modelRouteConstraints }),
+          ...(routingMode === "manual" && preferredModelSelection !== undefined
+            ? {
+                manualOverride: {
+                  instanceId: preferredModelSelection.instanceId,
+                  model: preferredModelSelection.model,
+                },
+              }
+            : {}),
+          executionStatus: "bound",
+        });
       if (routingMode === "auto" && decision.selected === null) {
         return yield* new OrchestrationDispatchCommandError({
           message: `Auto Route could not select a model (${decision.reasonCodes.join(",")}).`,
@@ -831,6 +871,7 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
         decision,
         projectDefault: project?.defaultModelSelection ?? null,
         environmentDefault: resolution.environmentDefaultModelSelection,
+        ...(routedDecision?.hybrid !== undefined ? { hybrid: routedDecision.hybrid } : {}),
       });
       if (routeBinding === null) {
         if (routingMode === "auto") {

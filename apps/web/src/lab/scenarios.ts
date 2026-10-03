@@ -1,5 +1,9 @@
 import type { ModelRouterMode } from "@t3tools/contracts";
-import type { InspectorOpenRouterModel } from "~/controlPlane/presentOperationalInspector";
+import type { ControlCenterModel } from "~/controlPlane/presentControlCenter";
+import type {
+  InspectorHybridModel,
+  InspectorOpenRouterModel,
+} from "~/controlPlane/presentOperationalInspector";
 
 import {
   LAB_CLAUDE,
@@ -58,6 +62,26 @@ export const UI_LAB_SCENARIO_IDS = [
   "openrouter-nested-fallback",
   "openrouter-long-names",
   "openrouter-compact-height",
+  "eval-no-observations",
+  "eval-insufficient-data",
+  "eval-measured-outcome",
+  "eval-estimated-cost",
+  "eval-explicit-positive",
+  "eval-explicit-negative",
+  "eval-rework-proxy",
+  "eval-verification-passed",
+  "eval-verification-failed",
+  "eval-active-v0",
+  "eval-hybrid-candidate",
+  "eval-challenger-agrees",
+  "eval-challenger-disagrees",
+  "eval-activate-confirm",
+  "eval-rollback",
+  "eval-stale-market-prior",
+  "eval-mixed-provenance",
+  "eval-export-delete",
+  "eval-compact-height",
+  "eval-long-names",
 ] as const;
 
 export type UiLabScenarioId = (typeof UI_LAB_SCENARIO_IDS)[number];
@@ -94,6 +118,8 @@ export type LabScenarioState = {
   readonly inspectorEmpty: boolean;
   readonly longNames: boolean;
   readonly openRouter?: InspectorOpenRouterModel | null;
+  readonly hybrid?: InspectorHybridModel | null;
+  readonly routerInsights?: ControlCenterModel["routerInsights"];
   readonly openRouterControl?: {
     readonly mode: "off" | "shadow" | "teacher";
     readonly connectionStatus: "not_configured" | "connected" | "unavailable";
@@ -145,6 +171,37 @@ function labOpenRouter(
     nestedFallbacks: [],
     freshness: "fresh",
     asOf: "2026-06-17",
+    ...input,
+  };
+}
+
+function labHybrid(input: Partial<InspectorHybridModel> = {}): InspectorHybridModel {
+  return {
+    policyVersion: "hybrid-router.v1.0.0",
+    usedHybridRanking: false,
+    fallbackToV0: true,
+    fallbackReason: "Insufficient local evidence; Router V0 was used.",
+    selected: "codex · gpt-5.5",
+    explanation: "Selected codex · gpt-5.5. Hybrid evidence is insufficient; Router V0 was used.",
+    components: [],
+    challenger: null,
+    insufficient: true,
+    ...input,
+  };
+}
+
+function labInsights(
+  input: Partial<NonNullable<ControlCenterModel["routerInsights"]>> = {},
+): NonNullable<ControlCenterModel["routerInsights"]> {
+  return {
+    observationCount: 0,
+    activePolicy: "model-router.v0",
+    candidatePolicy: "hybrid-router.v1.0.0",
+    insufficientData: true,
+    mixedProvenance: false,
+    explicitFeedback: "none recorded",
+    reworkProxies: "none recorded",
+    confirmation: null,
     ...input,
   };
 }
@@ -843,6 +900,312 @@ export function createLabScenario(id: UiLabScenarioId): LabScenarioState {
           actualModel: "gpt-5.5",
         }),
         openRouterControl: { mode: "shadow", connectionStatus: "connected" },
+      };
+    case "eval-no-observations":
+      return {
+        ...createLabScenario("empty-workspace"),
+        id: "eval-no-observations",
+        label: "No observations",
+        description: "Router Insights with an empty local observation store.",
+        view: "control-center",
+        routerInsights: labInsights(),
+        hybrid: labHybrid(),
+      };
+    case "eval-insufficient-data":
+      return {
+        ...createLabScenario("inspector-success"),
+        id: "eval-insufficient-data",
+        label: "Insufficient Hybrid evidence",
+        description: "Hybrid falls back to Router V0 when n is below threshold.",
+        hybrid: labHybrid(),
+        routerInsights: labInsights({ observationCount: 3 }),
+      };
+    case "eval-measured-outcome":
+      return {
+        ...createLabScenario("inspector-success"),
+        id: "eval-measured-outcome",
+        label: "Measured outcome",
+        description: "Inspector shows measured latency with a sample size.",
+        hybrid: labHybrid({
+          usedHybridRanking: true,
+          fallbackToV0: false,
+          fallbackReason: null,
+          insufficient: false,
+          explanation:
+            "Selected claude · claude-sonnet-4-6. Passed all hard constraints. Median latency: measured, n=24. Policy: hybrid-router.v1.0.0.",
+          selected: "claude · claude-sonnet-4-6",
+          components: [
+            {
+              id: "latency",
+              label: "Median latency (measured)",
+              sampleSize: 24,
+              status: "used",
+              provenance: "observed",
+            },
+          ],
+        }),
+      };
+    case "eval-estimated-cost":
+      return {
+        ...createLabScenario("inspector-success"),
+        id: "eval-estimated-cost",
+        label: "Estimated cost",
+        description: "Catalog estimate is labeled estimated and does not overwrite reported cost.",
+        hybrid: labHybrid({
+          usedHybridRanking: true,
+          fallbackToV0: false,
+          insufficient: false,
+          fallbackReason: null,
+          components: [
+            {
+              id: "cost",
+              label: "Median cost (catalog_estimate)",
+              sampleSize: 12,
+              status: "used",
+              provenance: "estimated",
+            },
+          ],
+        }),
+        routerInsights: labInsights({
+          mixedProvenance: true,
+          observationCount: 12,
+          insufficientData: false,
+        }),
+      };
+    case "eval-explicit-positive":
+      return {
+        ...createLabScenario("inspector-success"),
+        id: "eval-explicit-positive",
+        label: "Explicit positive feedback",
+        description: "Helpful is explicit feedback, not inferred from silence.",
+        hybrid: labHybrid({
+          components: [
+            {
+              id: "explicit_positive",
+              label: "Explicit positive feedback",
+              sampleSize: 9,
+              status: "used",
+              provenance: "observed",
+            },
+          ],
+        }),
+      };
+    case "eval-explicit-negative":
+      return {
+        ...createLabScenario("inspector-success"),
+        id: "eval-explicit-negative",
+        label: "Explicit negative feedback",
+        description: "Not helpful is explicit negative feedback.",
+        hybrid: labHybrid({
+          components: [
+            {
+              id: "explicit_negative",
+              label: "Explicit negative feedback",
+              sampleSize: 9,
+              status: "used",
+              provenance: "observed",
+            },
+          ],
+        }),
+      };
+    case "eval-rework-proxy":
+      return {
+        ...createLabScenario("inspector-success"),
+        id: "eval-rework-proxy",
+        label: "Rework proxy",
+        description: "Regenerate is a proxy, not proof of poor quality.",
+        hybrid: labHybrid({
+          components: [
+            {
+              id: "rework_proxy",
+              label: "Rework proxy rate (proxy, not quality)",
+              sampleSize: 19,
+              status: "used",
+              provenance: "observed",
+            },
+          ],
+        }),
+      };
+    case "eval-verification-passed":
+      return {
+        ...createLabScenario("inspector-success"),
+        id: "eval-verification-passed",
+        label: "Verification passed",
+        description: "Coding verification evidence from a real command.",
+        hybrid: labHybrid({
+          usedHybridRanking: true,
+          fallbackToV0: false,
+          insufficient: false,
+          fallbackReason: null,
+          components: [
+            {
+              id: "verification",
+              label: "Coding verification pass rate",
+              sampleSize: 21,
+              status: "used",
+              provenance: "observed",
+            },
+          ],
+        }),
+      };
+    case "eval-verification-failed":
+      return {
+        ...createLabScenario("inspector-failure"),
+        id: "eval-verification-failed",
+        label: "Verification failed",
+        description: "Failed verification is recorded as failed, never fabricated.",
+        hybrid: labHybrid({
+          components: [
+            {
+              id: "verification",
+              label: "Coding verification pass rate",
+              sampleSize: 8,
+              status: "used",
+              provenance: "observed",
+            },
+          ],
+        }),
+      };
+    case "eval-active-v0":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "eval-active-v0",
+        label: "Active Router V0",
+        description: "Baseline policy remains active until an explicit activation.",
+        view: "control-center",
+        routerInsights: labInsights({ observationCount: 24, insufficientData: false }),
+        hybrid: labHybrid(),
+      };
+    case "eval-hybrid-candidate":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "eval-hybrid-candidate",
+        label: "Hybrid candidate",
+        description: "A Hybrid candidate is inspectable and not self-activating.",
+        view: "control-center",
+        routerInsights: labInsights({
+          observationCount: 24,
+          insufficientData: false,
+          candidatePolicy: "hybrid-router.v1.0.0",
+        }),
+      };
+    case "eval-challenger-agrees":
+      return {
+        ...createLabScenario("inspector-success"),
+        id: "eval-challenger-agrees",
+        label: "Policy Shadow agrees",
+        description: "Policy Shadow is distinct from OpenRouter Shadow.",
+        hybrid: labHybrid({
+          challenger: { selected: "codex · gpt-5.5", agreement: "agreement" },
+        }),
+      };
+    case "eval-challenger-disagrees":
+      return {
+        ...createLabScenario("inspector-success"),
+        id: "eval-challenger-disagrees",
+        label: "Policy Shadow disagrees",
+        description: "Disagreement does not change the live execution target.",
+        hybrid: labHybrid({
+          challenger: { selected: "claude · claude-sonnet-4-6", agreement: "disagreement" },
+        }),
+      };
+    case "eval-activate-confirm":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "eval-activate-confirm",
+        label: "Activate candidate confirmation",
+        description: "Activation requires an explicit confirmation.",
+        view: "control-center",
+        routerInsights: labInsights({
+          observationCount: 24,
+          insufficientData: false,
+          confirmation: "activate",
+        }),
+      };
+    case "eval-rollback":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "eval-rollback",
+        label: "Policy rollback",
+        description: "Rollback restores the previous policy immediately.",
+        view: "control-center",
+        routerInsights: labInsights({
+          confirmation: "rollback",
+          observationCount: 24,
+          insufficientData: false,
+        }),
+      };
+    case "eval-stale-market-prior":
+      return {
+        ...createLabScenario("openrouter-stale-priors"),
+        id: "eval-stale-market-prior",
+        label: "Stale market prior",
+        description: "Market popularity is a prior, not objective quality.",
+        hybrid: labHybrid({
+          components: [
+            {
+              id: "market_prior",
+              label: "OpenRouter 7-day sampled spend share (prior, not quality)",
+              sampleSize: 1,
+              status: "used",
+              provenance: "estimated",
+            },
+          ],
+        }),
+      };
+    case "eval-mixed-provenance":
+      return {
+        ...createLabScenario("eval-estimated-cost"),
+        id: "eval-mixed-provenance",
+        label: "Mixed cost provenance",
+        description: "Reported and estimated cost are never compared unlabeled.",
+        view: "control-center",
+        routerInsights: labInsights({
+          mixedProvenance: true,
+          observationCount: 20,
+          insufficientData: false,
+        }),
+      };
+    case "eval-export-delete":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "eval-export-delete",
+        label: "Export and delete controls",
+        description: "Deletion is environment-scoped and requires confirmation.",
+        view: "control-center",
+        routerInsights: labInsights({
+          confirmation: "delete",
+          observationCount: 12,
+          insufficientData: false,
+        }),
+      };
+    case "eval-compact-height":
+      return {
+        ...createLabScenario("compact-height"),
+        id: "eval-compact-height",
+        label: "Compact Router Insights",
+        description: "Router Insights remain readable at compact height.",
+        view: "control-center",
+        viewport: "compact-height",
+        routerInsights: labInsights({ observationCount: 24, insufficientData: false }),
+      };
+    case "eval-long-names":
+      return {
+        ...createLabScenario("long-names"),
+        id: "eval-long-names",
+        label: "Long Hybrid policy names",
+        description: "Long model and policy names truncate without overflow.",
+        hybrid: labHybrid({
+          selected: "very-long-provider-instance · very-long-hybrid-model-slug-name-for-truncation",
+          explanation:
+            "Selected very-long-provider-instance · very-long-hybrid-model-slug-name-for-truncation. Policy: hybrid-router.v1.0.0.",
+        }),
+        routerInsights: labInsights({
+          activePolicy: "hybrid-router.v1.0.0-very-long-policy-name-for-truncation",
+          candidatePolicy: "hybrid-router.v1.0.0-another-very-long-candidate-name",
+          observationCount: 24,
+          insufficientData: false,
+        }),
       };
   }
 }

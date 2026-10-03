@@ -61,6 +61,10 @@ export const MODEL_ROUTER_REASON_CODES = [
   "FALLBACK_BLOCKED_SIDE_EFFECT",
   "MANUAL_NO_FAILOVER",
   "NO_ALTERNATE_PROVIDER",
+  "HYBRID_RANKED",
+  "HYBRID_INSUFFICIENT_EVIDENCE",
+  "HYBRID_FALLBACK_V0",
+  "POLICY_SHADOW_RECORDED",
 ] as const;
 export const ModelRouterReasonCode = Schema.Literals(MODEL_ROUTER_REASON_CODES);
 export type ModelRouterReasonCode = typeof ModelRouterReasonCode.Type;
@@ -205,7 +209,7 @@ export const ModelRouterAvailabilityCooldown = Schema.Struct({
 export type ModelRouterAvailabilityCooldown = typeof ModelRouterAvailabilityCooldown.Type;
 
 export const ModelRouterDecision = Schema.Struct({
-  policyVersion: ModelRouterPolicyVersion,
+  policyVersion: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
   mode: ModelRouterMode,
   task: ModelRouterTaskCharacteristics,
   policy: ModelRouterPolicy,

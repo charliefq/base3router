@@ -60,6 +60,9 @@ import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ModelRouterAvailability } from "../Services/ModelRouterAvailability.ts";
 import { persistOpenRouterObservationFromRuntimeEvent } from "../../openRouter/OpenRouterObservationPersist.ts";
+import { persistTurnOutcomeFromRuntimeEvent } from "../../routerEvaluation/persistTurnOutcome.ts";
+import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
+import { TurnTiming, layer as turnTimingLayer } from "../../routerEvaluation/TurnTiming.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
 
@@ -1036,6 +1039,7 @@ const make = Effect.gen(function* () {
   const serverSettingsService = yield* ServerSettingsService;
   const modelRouterAvailability = yield* ModelRouterAvailability;
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
+  const turnTiming = yield* TurnTiming;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
     crypto.randomUUIDv4.pipe(
       Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)),
@@ -1776,6 +1780,32 @@ const make = Effect.gen(function* () {
       const thread = yield* resolveThreadRuntimeContext(event.threadId);
       if (!thread) return;
 
+      const timingTurnId = toTurnId(event.turnId);
+      if (timingTurnId !== undefined && timingTurnId !== null) {
+        const environment = yield* Effect.serviceOption(ServerEnvironment);
+        if (Option.isSome(environment)) {
+          const environmentId = yield* environment.value.getEnvironmentId;
+          const timingKey = {
+            environmentId,
+            threadId: thread.id,
+            turnId: timingTurnId,
+          };
+          if (event.type === "turn.started") {
+            yield* turnTiming.markRouteStart(timingKey);
+            yield* turnTiming.markProviderRequestStart(timingKey);
+          }
+          if (
+            (event.type === "content.delta" &&
+              event.payload.streamKind === "assistant_text" &&
+              event.payload.delta.length > 0) ||
+            (event.type === "item.completed" && event.payload.itemType === "assistant_message") ||
+            (event.type === "turn.completed" && event.payload.state === "completed")
+          ) {
+            yield* turnTiming.markFirstOutput(timingKey);
+          }
+        }
+      }
+
       if (
         (event.type === "content.delta" &&
           event.payload.streamKind === "assistant_text" &&
@@ -1818,6 +1848,30 @@ const make = Effect.gen(function* () {
             message: "failed to persist OpenRouter Teacher observation",
           }),
         );
+      }
+      if (
+        (event.type === "turn.completed" || event.type === "turn.aborted") &&
+        Option.isSome(pendingTurnStart)
+      ) {
+        const environment = yield* Effect.serviceOption(ServerEnvironment);
+        if (Option.isSome(environment)) {
+          const environmentId = yield* environment.value.getEnvironmentId;
+          const settings = yield* serverSettingsService.getSettings.pipe(
+            Effect.catch(() => Effect.succeed({ routerEvaluation: { measurementEnabled: true } })),
+          );
+          yield* persistTurnOutcomeFromRuntimeEvent({
+            environmentId,
+            threadId: thread.id,
+            messageId: pendingTurnStart.value.messageId,
+            event,
+            measurementEnabled: settings.routerEvaluation.measurementEnabled !== false,
+          }).pipe(
+            Effect.ignore({
+              log: true,
+              message: "failed to persist turn outcome observation",
+            }),
+          );
+        }
       }
       const hasPendingTurnStart =
         Option.isSome(pendingTurnStart) && thread.session?.status === "starting";
@@ -2807,4 +2861,5 @@ export const ProviderRuntimeIngestionLive = Layer.effect(
   Layer.provide(ProjectionThreadMessageRepositoryLive),
   Layer.provide(ProjectionThreadProposedPlanRepositoryLive),
   Layer.provide(ProjectionTurnRepositoryLive),
+  Layer.provideMerge(turnTimingLayer),
 );

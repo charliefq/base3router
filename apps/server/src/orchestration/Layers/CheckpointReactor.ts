@@ -40,6 +40,8 @@ import type { OrchestrationDispatchError } from "../Errors.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
 import * as PullRequestService from "../../pullRequest/PullRequestService.ts";
+import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
+import { RouterEvaluationService } from "../../routerEvaluation/RouterEvaluationService.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -93,6 +95,8 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const pullRequests = yield* PullRequestService.PullRequestService;
+  const routerEvaluation = yield* Effect.serviceOption(RouterEvaluationService);
+  const serverEnvironment = yield* Effect.serviceOption(ServerEnvironment);
   const queuedEntryRefreshes = new Set<string>();
   const entryRefreshWorker = yield* makeDrainableWorker((cwd: string) =>
     Effect.sync(() => queuedEntryRefreshes.delete(cwd)).pipe(
@@ -912,6 +916,31 @@ const make = Effect.gen(function* () {
         ),
         Effect.asVoid,
       );
+
+    if (
+      rolledBackTurns > 0 &&
+      Option.isSome(routerEvaluation) &&
+      Option.isSome(serverEnvironment)
+    ) {
+      const environmentId = yield* serverEnvironment.value.getEnvironmentId;
+      const latest = yield* routerEvaluation.value
+        .latestObservationForThread(environmentId, event.payload.threadId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+      if (Option.isSome(latest)) {
+        yield* routerEvaluation.value
+          .recordReworkProxy(environmentId, latest.value.observationId, {
+            kind: "undo_revert",
+            labeledAs: "proxy",
+            rawEventType: "thread.checkpoint-revert-requested",
+            detectionWindowMs: 0,
+            recordedAt: now,
+            deduped: latest.value.evidence.reworkProxies.some(
+              (entry) => entry.kind === "undo_revert",
+            ),
+          })
+          .pipe(Effect.catch(() => Effect.void));
+      }
+    }
   });
 
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (event: OrchestrationEvent) {

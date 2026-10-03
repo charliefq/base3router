@@ -15,6 +15,7 @@ import {
 
 import type { ControlCenterModel } from "~/controlPlane/presentControlCenter";
 import type {
+  InspectorHybridModel,
   InspectorOpenRouterModel,
   OperationalInspectorModel,
 } from "~/controlPlane/presentOperationalInspector";
@@ -112,6 +113,7 @@ export function inspectorModelFromLab(input: {
   readonly projectTitle?: string;
   readonly taskObjective?: string;
   readonly openRouter?: InspectorOpenRouterModel | null;
+  readonly hybrid?: InspectorHybridModel | null;
 }): OperationalInspectorModel {
   if (input.empty === true) {
     return {
@@ -153,6 +155,7 @@ export function inspectorModelFromLab(input: {
       stages: [],
       cursorCloud: null,
       openRouter: null,
+      hybrid: null,
       error: null,
       emptyReason: "no-selection",
     };
@@ -219,6 +222,7 @@ export function inspectorModelFromLab(input: {
         : [],
     cursorCloud: null,
     openRouter: input.openRouter ?? null,
+    hybrid: input.hybrid ?? null,
     error: input.error,
     emptyReason: null,
   };
@@ -229,6 +233,7 @@ export function labControlCenterModel(input?: {
   readonly empty?: boolean;
   readonly environmentLabel?: string;
   readonly longNames?: boolean;
+  readonly routerInsights?: ControlCenterModel["routerInsights"];
 }): ControlCenterModel {
   const environmentId = EnvironmentId.make("lab-environment");
   const projectId = ProjectId.make("lab-project");
@@ -292,6 +297,7 @@ export function labControlCenterModel(input?: {
     empty,
     capabilityOff: false,
     environmentLabel: input?.environmentLabel ?? (empty ? null : "UI Lab environment"),
+    ...(input?.routerInsights !== undefined ? { routerInsights: input.routerInsights } : {}),
   };
 }
 

@@ -18,6 +18,7 @@ import {
   GitCommandError,
   KeybindingRule,
   MessageId,
+  ObservationId,
   ExternalLauncherCommandNotFoundError,
   OrchestrationShellSnapshot,
   type OrchestrationShellStreamItem,
@@ -37,6 +38,7 @@ import {
   type ProviderInstallState,
   ProviderSetupError,
   ResolvedKeybindingRule,
+  RouterPolicyId,
   type ServerLifecycleStreamEvent,
   ThreadId,
   TurnId,
@@ -190,6 +192,7 @@ import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClien
 import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
+import * as RouterEvaluationService from "./routerEvaluation/RouterEvaluationService.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as Data from "effect/Data";
 
@@ -1073,7 +1076,7 @@ const buildAppUnderTest = (options?: {
 
     const appLayer = servedRoutesLayer.pipe(
       Layer.provide(resourceTelemetryLayer),
-      Layer.provide(UsageService.layerTest),
+      Layer.provide(Layer.mergeAll(UsageService.layerTest, RouterEvaluationService.layerTest)),
       Layer.provide(
         Layer.mock(AnalyticsService.AnalyticsService)({
           record: () => Effect.void,
@@ -5643,6 +5646,55 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.deepStrictEqual(response, { feedbackId: "codex-thread-feedback" });
       assert.deepStrictEqual(uploadFeedback.mock.calls, [[input]]);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "authorizes Router Insights reads and rejects crafted policy mutations without operate",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest();
+        const token = yield* exchangeAccessToken(defaultDesktopBootstrapToken, {
+          scope: "orchestration:read",
+        });
+        assert.equal(token.response.status, 200);
+        const ticketResponse = yield* HttpClient.post("/api/auth/websocket-ticket", {
+          headers: { authorization: `Bearer ${token.body.access_token ?? ""}` },
+        });
+        const { ticket } = yield* responseJsonEffect<{ readonly ticket: string }>(ticketResponse);
+        const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(ticket)}`;
+        yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            Effect.gen(function* () {
+              const insights = yield* client[WS_METHODS.routerGetInsights]({});
+              assert.equal(insights.activePolicyVersion, "model-router.v0");
+              const errors = [
+                yield* client[WS_METHODS.routerActivatePolicy]({
+                  policyId: RouterPolicyId.make("policy-hybrid-router-v1"),
+                  confirmActivation: true,
+                }).pipe(Effect.flip),
+                yield* client[WS_METHODS.routerShadowPolicy]({
+                  policyId: RouterPolicyId.make("policy-hybrid-router-v1"),
+                  confirmShadow: true,
+                }).pipe(Effect.flip),
+                yield* client[WS_METHODS.routerSubmitFeedback]({
+                  observationId: ObservationId.make("syn-obs-missing"),
+                  kind: "helpful",
+                }).pipe(Effect.flip),
+                yield* client[WS_METHODS.routerDeleteObservations]({
+                  confirmDelete: true,
+                  scope: "environment",
+                }).pipe(Effect.flip),
+              ];
+              for (const error of errors) {
+                assert.equal(error._tag, "EnvironmentAuthorizationError");
+                if (error._tag === "EnvironmentAuthorizationError") {
+                  assert.equal(error.requiredScope, "orchestration:operate");
+                }
+              }
+            }),
+          ),
+        );
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("serves absolute host media without a local thread and rejects relative media", () =>
