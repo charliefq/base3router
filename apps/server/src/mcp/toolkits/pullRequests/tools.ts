@@ -12,11 +12,13 @@ import * as Toolkit from "effect/unstable/ai/Toolkit";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ActionGateService } from "../../../actionGate/ActionGateService.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
   OrchestrationEngine.OrchestrationEngineService,
   ProjectionSnapshotQuery.ProjectionSnapshotQuery,
+  ActionGateService,
 ];
 
 const REGISTER_EVERY_PR =

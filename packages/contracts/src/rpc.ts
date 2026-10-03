@@ -301,6 +301,12 @@ import {
   RouterSubmitFeedbackResult,
 } from "./routerEvaluation.ts";
 import {
+  ActionGateError,
+  ActionGateRespondApprovalRequest,
+  ActionGateRespondApprovalResult,
+  ActionGovernanceSnapshotV0,
+} from "./actionGate.ts";
+import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
   ProjectCloneListEvent,
@@ -454,6 +460,9 @@ export const WS_METHODS = {
   routerActivatePolicy: "router.activatePolicy",
   routerShadowPolicy: "router.shadowPolicy",
   routerRollbackPolicy: "router.rollbackPolicy",
+
+  actionGateGetGovernance: "actionGate.getGovernance",
+  actionGateRespondApproval: "actionGate.respondApproval",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -834,6 +843,20 @@ const WsRouterShadowPolicyRpc = Rpc.make(WS_METHODS.routerShadowPolicy, {
   payload: RouterShadowPolicyRequest,
   success: RouterPolicyMutationResult,
   error: RouterEvaluationRpcError,
+});
+
+const ActionGateRpcError = Schema.Union([EnvironmentAuthorizationError, ActionGateError]);
+
+const WsActionGateGetGovernanceRpc = Rpc.make(WS_METHODS.actionGateGetGovernance, {
+  payload: Schema.Struct({}),
+  success: ActionGovernanceSnapshotV0,
+  error: ActionGateRpcError,
+});
+
+const WsActionGateRespondApprovalRpc = Rpc.make(WS_METHODS.actionGateRespondApproval, {
+  payload: ActionGateRespondApprovalRequest,
+  success: ActionGateRespondApprovalResult,
+  error: ActionGateRpcError,
 });
 
 const WsRouterRollbackPolicyRpc = Rpc.make(WS_METHODS.routerRollbackPolicy, {
@@ -1630,6 +1653,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsRouterActivatePolicyRpc,
   WsRouterShadowPolicyRpc,
   WsRouterRollbackPolicyRpc,
+  WsActionGateGetGovernanceRpc,
+  WsActionGateRespondApprovalRpc,
   WsServerSignalProcessRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,

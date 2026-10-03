@@ -15,6 +15,7 @@ import { HttpBody, HttpClient, HttpRouter, HttpServerResponse } from "effect/uns
 
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ActionGateService from "../actionGate/ActionGateService.ts";
 import * as ServerConfig from "../config.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -48,6 +49,7 @@ const client = McpSchema.McpServerClient.of({
 const TestLayer = McpHttpServer.PreviewToolkitRegistrationLive.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(PreviewAutomationBroker.layer),
+  Layer.provideMerge(ActionGateService.layerTest),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-http-server-test-" })),
   Layer.provideMerge(NodeServices.layer),
 );
@@ -59,6 +61,7 @@ const PullRequestsTestLayer = McpHttpServer.PullRequestsToolkitRegistrationLive.
         getThreadShellById: () => Effect.succeed(Option.none()),
       }),
       Layer.mock(OrchestrationEngineService)({}),
+      ActionGateService.layerTest,
       NodeServices.layer,
     ),
   ),

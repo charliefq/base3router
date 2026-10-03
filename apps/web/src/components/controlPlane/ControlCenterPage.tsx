@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  ActionApprovalId,
   AuthOrchestrationOperateScope,
   type AuthSessionState,
   type ExplicitFeedbackKind,
@@ -14,6 +15,7 @@ import {
   selectControlCenterSource,
 } from "~/controlPlane/controlCenterProjection";
 import {
+  presentActionGovernance,
   presentControlCenter,
   presentRouterInsights,
   selectControlCenterInspectorTarget,
@@ -66,6 +68,11 @@ export function ControlCenterPage(props: {
       ? null
       : serverEnvironment.routerInsights({ environmentId: selectedEnvironmentId, input: {} }),
   );
+  const governanceQuery = useEnvironmentQuery(
+    selectedEnvironmentId === null
+      ? null
+      : serverEnvironment.actionGovernance({ environmentId: selectedEnvironmentId, input: {} }),
+  );
   const session = useAtomValue(
     selectedEnvironmentId === null
       ? EMPTY_SESSION_STATE_ATOM
@@ -88,6 +95,14 @@ export function ControlCenterPage(props: {
   const rollbackPolicy = useAtomCommand(serverEnvironment.routerRollbackPolicy, {
     reportFailure: true,
   });
+  const respondApproval = useAtomCommand(serverEnvironment.actionGateRespondApproval, {
+    reportFailure: true,
+  });
+  const [approvalSubmitting, setApprovalSubmitting] = useState<{
+    readonly id: string;
+    readonly decision: "grant" | "deny" | "cancel";
+  } | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
   const exportObservations = useAtomCommand(serverEnvironment.routerExportObservations, {
     reportFailure: true,
   });
@@ -130,6 +145,9 @@ export function ControlCenterPage(props: {
     }),
     environmentLabel: environment?.label ?? selectedEnvironmentId,
     ...(routerInsights !== undefined ? { routerInsights } : {}),
+    ...(governanceQuery.data !== null
+      ? { actionGovernance: presentActionGovernance(governanceQuery.data) }
+      : {}),
   });
   const inspector = selectControlCenterInspectorTarget(model);
 
@@ -151,6 +169,35 @@ export function ControlCenterPage(props: {
       <ControlCenter
         model={model}
         section={props.section ?? "overview"}
+        {...(selectedEnvironmentId !== null
+          ? {
+              approvalActions: {
+                canOperate,
+                disconnected: environment?.connection.phase !== "connected",
+                submittingId: approvalSubmitting?.id ?? null,
+                submittingDecision: approvalSubmitting?.decision ?? null,
+                error: approvalError,
+                onRespond: (approvalId, decision) => {
+                  setApprovalSubmitting({ id: approvalId, decision });
+                  setApprovalError(null);
+                  void respondApproval({
+                    environmentId: selectedEnvironmentId,
+                    input: {
+                      approvalId: ActionApprovalId.make(approvalId),
+                      decision,
+                    },
+                  }).then((result) => {
+                    setApprovalSubmitting(null);
+                    if (result._tag === "Success") {
+                      governanceQuery.refresh();
+                      return;
+                    }
+                    setApprovalError("The server rejected that approval decision.");
+                  });
+                },
+              },
+            }
+          : {})}
         {...(selectedEnvironmentId !== null && routerInsights !== undefined
           ? {
               actions: {

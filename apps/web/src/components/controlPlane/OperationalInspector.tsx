@@ -12,6 +12,8 @@ import type {
   InspectorRouteModel,
   OperationalInspectorModel,
 } from "~/controlPlane/presentOperationalInspector";
+import type { ActionApprovalDecision } from "./ActionApprovalControls";
+import { ActionApprovalControls } from "./ActionApprovalControls";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { OperationalStatusCard, statusTone } from "./OperationalStatusCard";
@@ -27,6 +29,11 @@ export function OperationalInspector(props: {
   readonly onFollowUp?: () => void;
   readonly onCancel?: () => void;
   readonly onRefresh?: () => void;
+  readonly canOperate?: boolean;
+  readonly disconnected?: boolean;
+  readonly approvalSubmitting?: ActionApprovalDecision | null;
+  readonly approvalError?: string | null;
+  readonly onApprovalRespond?: (decision: ActionApprovalDecision) => void;
 }) {
   if (props.collapsed) {
     return (
@@ -86,6 +93,11 @@ function InspectorBody(props: {
   readonly onFollowUp?: () => void;
   readonly onCancel?: () => void;
   readonly onRefresh?: () => void;
+  readonly canOperate?: boolean;
+  readonly disconnected?: boolean;
+  readonly approvalSubmitting?: ActionApprovalDecision | null;
+  readonly approvalError?: string | null;
+  readonly onApprovalRespond?: (decision: ActionApprovalDecision) => void;
 }) {
   const { model } = props;
 
@@ -119,14 +131,117 @@ function InspectorBody(props: {
       <RouteTraceCard route={model.route} />
       {model.openRouter ? <OpenRouterGuidanceCard model={model.openRouter} /> : null}
       {model.hybrid ? <HybridRouterCard model={model.hybrid} /> : null}
+      {model.executionPlan ? (
+        <OperationalStatusCard
+          title="Execution Plan"
+          value={`${model.executionPlan.actionCount} actions`}
+          detail={model.executionPlan.policyVersions}
+        >
+          <div className="mt-1 space-y-1 text-2xs text-muted-foreground" data-execution-plan="">
+            <p data-plan-id="">Plan {model.executionPlan.planId}</p>
+            {model.executionPlan.expiresAt ? <p>Expires {model.executionPlan.expiresAt}</p> : null}
+          </div>
+        </OperationalStatusCard>
+      ) : null}
+      {model.skillRoute ? (
+        <OperationalStatusCard
+          title="Skill Route"
+          value={model.skillRoute.selected ?? "No skill selected"}
+          detail={model.skillRoute.explanation}
+        >
+          <div className="mt-1 space-y-1 text-2xs text-muted-foreground" data-skill-route="">
+            <p data-skill-policy="">Policy {model.skillRoute.policyVersion}</p>
+            <p>Mode {model.skillRoute.mode}</p>
+            <p>Eligible {model.skillRoute.eligibleCount}</p>
+            {model.skillRoute.filteredReasonCodes.length > 0 ? (
+              <p data-skill-filtered="">
+                Filtered {model.skillRoute.filteredReasonCodes.join(", ")}
+              </p>
+            ) : null}
+            <p>{model.skillRoute.tieBreak}</p>
+          </div>
+        </OperationalStatusCard>
+      ) : null}
+      {model.mcpRoute ? (
+        <OperationalStatusCard
+          title="MCP Route"
+          value={model.mcpRoute.selected ?? "No tool selected"}
+          detail={model.mcpRoute.explanation}
+        >
+          <div className="mt-1 space-y-1 text-2xs text-muted-foreground" data-mcp-route="">
+            <p data-mcp-server="">Server {model.mcpRoute.server ?? "none"}</p>
+            <p>Policy {model.mcpRoute.policyVersion}</p>
+            {model.mcpRoute.filteredReasonCodes.length > 0 ? (
+              <p data-mcp-filtered="">Filtered {model.mcpRoute.filteredReasonCodes.join(", ")}</p>
+            ) : null}
+          </div>
+        </OperationalStatusCard>
+      ) : null}
+      {model.actionGate ? (
+        <OperationalStatusCard
+          title="ActionGate"
+          tone={
+            model.actionGate.decision === "DENY"
+              ? "danger"
+              : model.actionGate.decision === "ASK"
+                ? "warning"
+                : "neutral"
+          }
+          value={model.actionGate.decision}
+          detail={`Risk ${model.actionGate.riskClass}. ${model.actionGate.reasonCodes.join(", ")}`}
+        >
+          <p className="mt-1 text-2xs text-muted-foreground" data-action-gate="">
+            Fingerprint {model.actionGate.fingerprint}
+          </p>
+        </OperationalStatusCard>
+      ) : null}
+      {model.approval ? (
+        <OperationalStatusCard
+          title="Approval"
+          tone={
+            model.approval.status === "granted" || model.approval.status === "consumed"
+              ? "neutral"
+              : model.approval.status === "denied" || model.approval.status === "expired"
+                ? "danger"
+                : "warning"
+          }
+          value={model.approval.status}
+          detail={`${model.approval.actionType} on ${model.approval.destination}. ${model.approval.oneTime ? "One-time" : model.approval.reuse}.`}
+        >
+          <ActionApprovalControls
+            approval={model.approval}
+            canOperate={props.canOperate === true}
+            disconnected={props.disconnected === true}
+            error={props.approvalError ?? null}
+            submitting={props.approvalSubmitting ?? null}
+            {...(props.onApprovalRespond !== undefined
+              ? { onRespond: props.onApprovalRespond }
+              : {})}
+          />
+        </OperationalStatusCard>
+      ) : null}
+      {model.toolExecution ? (
+        <OperationalStatusCard
+          title="Tool Execution"
+          value={model.toolExecution.status}
+          detail={`Retry ${model.toolExecution.retry}. Circuit ${model.toolExecution.circuit}. Fallback ${model.toolExecution.fallback}.`}
+        />
+      ) : null}
+      {model.outcome ? (
+        <OperationalStatusCard
+          title="Outcome"
+          value={model.outcome.classification}
+          detail={model.outcome.evidence}
+        />
+      ) : null}
       <OperationalStatusCard
-        title="ActionGate"
+        title="Route Gate"
         tone={statusTone(model.route.gateDecision)}
         value={model.route.gateDecision}
         detail={
           model.route.gateReasons.length > 0
             ? model.route.gateReasons.join(", ")
-            : "No ActionGate reasons."
+            : "No route-gate reasons."
         }
       />
       <OperationalStatusCard

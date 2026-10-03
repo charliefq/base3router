@@ -2,12 +2,15 @@ import {
   createDispatcherPreviewController,
   type DispatcherPreviewState,
 } from "@t3tools/client-runtime/dispatcher";
-import type {
-  DispatcherRoutePreviewRequest,
-  EnvironmentId,
-  ProjectId,
-  ThreadId,
-  WorkflowCatalog,
+import {
+  ActionApprovalId,
+  AuthOrchestrationOperateScope,
+  type AuthSessionState,
+  type DispatcherRoutePreviewRequest,
+  type EnvironmentId,
+  type ProjectId,
+  type ThreadId,
+  type WorkflowCatalog,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -17,7 +20,13 @@ import {
   INSPECTOR_OPEN_STORAGE_KEY,
   shouldCollapseInspector,
 } from "~/controlPlane/productNavigation";
+import { presentActionApproval } from "~/controlPlane/presentActionApproval";
 import { presentOperationalInspector } from "~/controlPlane/presentOperationalInspector";
+import { useEnvironmentQuery } from "~/state/query";
+import { environmentSession } from "~/state/session";
+import { serverEnvironment } from "~/state/server";
+import { useAtomValue } from "@effect/atom-react";
+import { Atom } from "effect/unstable/reactivity";
 import { useProject, useThreadDetail, useThreadShell } from "~/state/entities";
 import { useEnvironment } from "~/state/environments";
 import { dispatcherEnvironment } from "~/state/dispatcher";
@@ -30,6 +39,10 @@ import * as Schema from "effect/Schema";
 import { OperationalInspector } from "./OperationalInspector";
 
 const IDLE_PREVIEW: DispatcherPreviewState = { status: "idle" };
+
+const EMPTY_SESSION_STATE_ATOM = Atom.make<AuthSessionState | null>(null).pipe(
+  Atom.withLabel("web-inspector-session-empty"),
+);
 
 function subscribeViewport(onChange: () => void): () => void {
   window.addEventListener("resize", onChange);
@@ -98,6 +111,26 @@ export function OperationalInspectorHost(props: {
   const [catalog, setCatalog] = useState<WorkflowCatalog | null>(null);
   const [followUp, setFollowUp] = useState("");
   const [busy, setBusy] = useState(false);
+  const [approvalSubmitting, setApprovalSubmitting] = useState<"grant" | "deny" | "cancel" | null>(
+    null,
+  );
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+  const governanceQuery = useEnvironmentQuery(
+    props.environmentId === null
+      ? null
+      : serverEnvironment.actionGovernance({ environmentId: props.environmentId, input: {} }),
+  );
+  const respondApproval = useAtomCommand(serverEnvironment.actionGateRespondApproval, {
+    reportFailure: true,
+  });
+  const session = useAtomValue(
+    props.environmentId === null
+      ? EMPTY_SESSION_STATE_ATOM
+      : environmentSession.sessionStateValueAtom(props.environmentId),
+  );
+  const canOperate =
+    session?.authenticated === true &&
+    session.scopes?.includes(AuthOrchestrationOperateScope) === true;
 
   const previewInput = useMemo<DispatcherRoutePreviewRequest | null>(
     () =>
@@ -172,6 +205,13 @@ export function OperationalInspectorHost(props: {
     workflowRun?.attempts.findLast((attempt) => attempt.runnerBinding) ?? null;
   const cursorCloudBinding = cursorCloudAttempt?.runnerBinding ?? null;
 
+  const pendingApproval = governanceQuery.data?.pending.find((record) =>
+    props.threadId === null
+      ? true
+      : record.threadId === undefined || record.threadId === props.threadId,
+  );
+  const approval = pendingApproval === undefined ? null : presentActionApproval(pendingApproval);
+
   const model = presentOperationalInspector({
     selected: props.projectId !== null || props.threadId !== null,
     projectTitle: project?.title ?? null,
@@ -186,6 +226,7 @@ export function OperationalInspectorHost(props: {
     workflowRun,
     workflowTemplate,
     cursorCloudBinding,
+    ...(approval !== null ? { approval } : {}),
     ...(environment?.serverConfig?.environment.capabilities.openRouterGuidance !== undefined
       ? {
           openRouterPriors: {
@@ -260,10 +301,36 @@ export function OperationalInspectorHost(props: {
     <OperationalInspector
       binding={cursorCloudBinding}
       busy={busy}
+      canOperate={canOperate}
       collapsed={collapsed}
+      disconnected={environment?.connection.phase !== "connected"}
       followUp={followUp}
       model={model}
+      approvalError={approvalError}
+      approvalSubmitting={approvalSubmitting}
       onToggle={toggle}
+      {...(approval !== null && props.environmentId !== null
+        ? {
+            onApprovalRespond: (decision) => {
+              setApprovalSubmitting(decision);
+              setApprovalError(null);
+              void respondApproval({
+                environmentId: props.environmentId!,
+                input: {
+                  approvalId: ActionApprovalId.make(approval.approvalId),
+                  decision,
+                },
+              }).then((result) => {
+                setApprovalSubmitting(null);
+                if (result._tag === "Success") {
+                  governanceQuery.refresh();
+                  return;
+                }
+                setApprovalError("The server rejected that approval decision.");
+              });
+            },
+          }
+        : {})}
       {...mutationHandlers}
     />
   );

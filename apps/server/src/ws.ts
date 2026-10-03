@@ -83,6 +83,7 @@ import {
   type PullRequestRef,
   DEFAULT_ROUTER_EVALUATION_SETTINGS,
   AuthOrchestrationOperateScope,
+  ActionGateError,
   WS_METHODS,
   WsRpcGroup,
   WORKTREE_SETUP_ACTIVITY_KIND,
@@ -90,6 +91,7 @@ import {
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
+import { firstPartyMcpCatalog } from "@t3tools/shared/mcpCatalog";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
@@ -186,6 +188,7 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import { RouterEvaluationService } from "./routerEvaluation/RouterEvaluationService.ts";
+import { ActionGateService } from "./actionGate/ActionGateService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
@@ -208,6 +211,7 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+const isActionGateError = Schema.is(ActionGateError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -707,6 +711,7 @@ const makeWsRpcLayer = (
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
       const routerEvaluation = yield* RouterEvaluationService;
+      const actionGate = yield* ActionGateService;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -3545,6 +3550,58 @@ const makeWsRpcLayer = (
                 now,
                 currentSession.subject,
               );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.actionGateGetGovernance]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.actionGateGetGovernance,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const providers = yield* providerRegistry.getProviders;
+              const skills = providers.flatMap((provider) => provider.skills);
+              const enabledSkills = skills.filter((skill) => skill.enabled);
+              const now = yield* nowIso;
+              const catalog = firstPartyMcpCatalog(now);
+              return yield* actionGate
+                .governance(environmentId, {
+                  configuredSkillCount: skills.length,
+                  enabledSkillCount: enabledSkills.length,
+                  configuredMcpServerCount: catalog.length,
+                  enabledMcpServerCount: catalog.filter((server) => server.enabled).length,
+                  degradedMcpServerCount: catalog.filter(
+                    (server) => server.runtimeState === "degraded",
+                  ).length,
+                })
+                .pipe(
+                  Effect.mapError((error) =>
+                    isActionGateError(error)
+                      ? error
+                      : new ActionGateError({
+                          reason: "invalid",
+                          detail: "ActionGate could not load governance.",
+                        }),
+                  ),
+                );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.actionGateRespondApproval]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.actionGateRespondApproval,
+            Effect.gen(function* () {
+              const now = yield* nowIso;
+              const approval = yield* actionGate.respond(input, now).pipe(
+                Effect.mapError((error) =>
+                  isActionGateError(error)
+                    ? error
+                    : new ActionGateError({
+                        reason: "invalid",
+                        detail: "ActionGate could not record the approval decision.",
+                      }),
+                ),
+              );
+              return { approval };
             }),
             { "rpc.aggregate": "server" },
           ),

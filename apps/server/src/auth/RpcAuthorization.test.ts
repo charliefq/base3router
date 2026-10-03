@@ -109,6 +109,12 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.routerInspectPolicy)).toBe(
       AuthOrchestrationReadScope,
     );
+    expect(requiredScopeForRpcMethod(WS_METHODS.actionGateGetGovernance)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.actionGateRespondApproval)).toBe(
+      AuthOrchestrationOperateScope,
+    );
     for (const method of [
       WS_METHODS.routerDeleteObservations,
       WS_METHODS.routerSubmitFeedback,

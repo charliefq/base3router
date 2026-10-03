@@ -16,6 +16,7 @@ import { nodeRuntimeUnavailableMessage } from "@t3tools/shared/nodeRuntime";
 
 import * as DeviceService from "../../../device/DeviceService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { requireAllowedMcpTool } from "../../McpActionAuthorization.ts";
 import { DeviceScreenshotToolkit, DeviceStandardToolkit, DeviceToolkit } from "./tools.ts";
 
 /** The flags that pin every agent-device command to one device. */
@@ -75,6 +76,20 @@ const requireDeviceAccess = McpInvocationContext.requireMcpCapability("device").
   ),
 );
 
+const requireDeviceTool = (toolName: string, args: unknown) =>
+  Effect.gen(function* () {
+    const scope = yield* requireDeviceAccess;
+    yield* requireAllowedMcpTool(toolName, args).pipe(
+      Effect.mapError(
+        (error) =>
+          new DeviceToolUnavailableError({
+            reason: error.detail,
+          }),
+      ),
+    );
+    return scope;
+  });
+
 const pickDevice = (
   devices: ReadonlyArray<DeviceSummary>,
   input: {
@@ -121,7 +136,7 @@ const toolError = (error: DeviceError | DeviceToolUnavailableError) => error;
 const handlers = {
   device_list: (input) =>
     Effect.gen(function* () {
-      const scope = yield* requireDeviceAccess;
+      const scope = yield* requireDeviceTool("device_list", input ?? {});
       const devices = yield* DeviceService.DeviceService;
       const state = yield* devices.list;
       if (state.hostStatus === "disabled") {
@@ -147,7 +162,7 @@ const handlers = {
     }).pipe(Effect.mapError(toolError)),
   device_open: (input) =>
     Effect.gen(function* () {
-      const scope = yield* requireDeviceAccess;
+      const scope = yield* requireDeviceTool("device_open", input);
       const devices = yield* DeviceService.DeviceService;
       const state = yield* devices.list;
       if (state.hostStatus === "disabled") {
@@ -205,7 +220,7 @@ const handlers = {
     }).pipe(Effect.mapError(toolError)),
   device_screenshot: (input) =>
     Effect.gen(function* () {
-      const scope = yield* requireDeviceAccess;
+      const scope = yield* requireDeviceTool("device_screenshot", input);
       const devices = yield* DeviceService.DeviceService;
       const sessions = yield* devices.sessionsForThread(scope.threadId);
       const target =
@@ -231,7 +246,7 @@ const handlers = {
     }).pipe(Effect.mapError(toolError)),
   device_close: (input) =>
     Effect.gen(function* () {
-      const scope = yield* requireDeviceAccess;
+      const scope = yield* requireDeviceTool("device_close", input);
       const devices = yield* DeviceService.DeviceService;
       yield* devices.close({
         threadId: scope.threadId,

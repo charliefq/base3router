@@ -3,6 +3,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/models";
 import type {
+  ActionGovernanceSnapshotV0,
   EnvironmentId,
   EvaluationMetricV0,
   ExplicitFeedbackKind,
@@ -12,6 +13,7 @@ import type {
   WorkflowCatalog,
 } from "@t3tools/contracts";
 
+import { presentActionApproval, type InspectorApprovalModel } from "./presentActionApproval";
 import type { ControlCenterSurface } from "./controlCenterProjection";
 import { sanitizeDisplayText } from "./sanitizeDisplayText";
 
@@ -61,6 +63,18 @@ export type ControlCenterModel = {
   readonly capabilityOff: boolean;
   readonly environmentLabel: string | null;
   readonly routerInsights?: ControlCenterRouterInsights | null;
+  readonly actionGovernance?: ControlCenterActionGovernance | null;
+};
+
+export type ControlCenterActionGovernance = {
+  readonly configuredSkills: string;
+  readonly configuredMcp: string;
+  readonly pendingApprovals: string;
+  readonly deniedExpired: string;
+  readonly recentOutcomes: string;
+  readonly costExposure: string;
+  readonly compliance: string;
+  readonly pendingCards: ReadonlyArray<InspectorApprovalModel>;
 };
 
 export type ControlCenterRouterInsights = {
@@ -86,6 +100,15 @@ export type ControlCenterRouterInsights = {
   readonly confirmation?: "activate" | "shadow" | "rollback" | "delete" | null;
 };
 
+export type ControlCenterApprovalActions = {
+  readonly canOperate: boolean;
+  readonly disconnected?: boolean;
+  readonly submittingId?: string | null;
+  readonly submittingDecision?: "grant" | "deny" | "cancel" | null;
+  readonly error?: string | null;
+  readonly onRespond: (approvalId: string, decision: "grant" | "deny" | "cancel") => void;
+};
+
 export type ControlCenterRouterActions = {
   readonly onRequestConfirm?: (
     kind: NonNullable<ControlCenterRouterInsights["confirmation"]>,
@@ -108,6 +131,7 @@ export type ControlCenterInput = {
   readonly catalogs?: ReadonlyArray<WorkflowCatalog>;
   readonly environmentLabel?: string | null;
   readonly routerInsights?: ControlCenterModel["routerInsights"];
+  readonly actionGovernance?: ControlCenterModel["actionGovernance"];
 };
 
 export type ControlCenterInspectorTarget = {
@@ -214,6 +238,7 @@ export function presentControlCenter(input: ControlCenterInput): ControlCenterMo
     capabilityOff,
     environmentLabel: sanitizeDisplayText(input.environmentLabel ?? null),
     ...(input.routerInsights !== undefined ? { routerInsights: input.routerInsights } : {}),
+    ...(input.actionGovernance !== undefined ? { actionGovernance: input.actionGovernance } : {}),
   };
 }
 
@@ -231,6 +256,30 @@ function metricById(
   id: string,
 ): EvaluationMetricV0 | undefined {
   return metrics.find((metric) => metric.id === id);
+}
+
+export function presentActionGovernance(
+  snapshot: ActionGovernanceSnapshotV0,
+): ControlCenterActionGovernance {
+  const known =
+    snapshot.knownCostUsd.status === "known" ? `$${snapshot.knownCostUsd.value}` : "unknown";
+  const estimated =
+    snapshot.estimatedCostUsd.status === "known"
+      ? `estimated $${snapshot.estimatedCostUsd.value}`
+      : "estimated unknown";
+  return {
+    configuredSkills: `${snapshot.enabledSkillCount}/${snapshot.configuredSkillCount} skills enabled`,
+    configuredMcp: `${snapshot.enabledMcpServerCount}/${snapshot.configuredMcpServerCount} MCP servers enabled (${snapshot.degradedMcpServerCount} degraded)`,
+    pendingApprovals: `${snapshot.pendingApprovalCount} pending approvals`,
+    deniedExpired: `${snapshot.deniedCount} denied · ${snapshot.expiredCount} expired`,
+    recentOutcomes:
+      snapshot.recentOutcomes.length === 0
+        ? "No recent action outcomes"
+        : snapshot.recentOutcomes.join(", "),
+    costExposure: `Known ${known} · ${estimated}`,
+    compliance: snapshot.compliance,
+    pendingCards: snapshot.pending.map(presentActionApproval),
+  };
 }
 
 export function presentRouterInsights(

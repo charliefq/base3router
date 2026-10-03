@@ -22,6 +22,7 @@ import * as Option from "effect/Option";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { requireAllowedMcpTool } from "../../McpActionAuthorization.ts";
 import {
   type ListThreadPullRequestsResult,
   PullRequestLinkFailedError,
@@ -159,8 +160,13 @@ const make = Effect.gen(function* () {
       | typeof PullRequestLinkFailedError
       | typeof PullRequestUnlinkFailedError
       | typeof PullRequestListFailedError,
+    toolName: string,
+    args: unknown,
   ) {
     const scope = yield* McpInvocationContext.requireMcpCapability("pull-requests");
+    yield* requireAllowedMcpTool(toolName, args).pipe(
+      Effect.mapError((error) => new Failure({ cause: error })),
+    );
     const thread = yield* snapshots
       .getThreadShellById(scope.threadId)
       .pipe(Effect.mapError((cause) => new Failure({ cause })));
@@ -191,7 +197,7 @@ const make = Effect.gen(function* () {
   return PullRequestsToolkit.of({
     link_pull_request: (input) =>
       Effect.gen(function* () {
-        const thread = yield* requireThread(PullRequestLinkFailedError);
+        const thread = yield* requireThread(PullRequestLinkFailedError, "link_pull_request", input);
         const project = yield* projectOf(thread, PullRequestLinkFailedError);
         const target = yield* resolveTarget(input, project);
         const alreadyLinked = yield* engine
@@ -216,7 +222,11 @@ const make = Effect.gen(function* () {
       }),
     unlink_pull_request: (input) =>
       Effect.gen(function* () {
-        const thread = yield* requireThread(PullRequestUnlinkFailedError);
+        const thread = yield* requireThread(
+          PullRequestUnlinkFailedError,
+          "unlink_pull_request",
+          input,
+        );
         const project = yield* projectOf(thread, PullRequestUnlinkFailedError);
         const target = yield* resolveTarget(input, project);
         const wasLinked = yield* engine
@@ -241,7 +251,9 @@ const make = Effect.gen(function* () {
         };
       }),
     list_thread_pull_requests: () =>
-      requireThread(PullRequestListFailedError).pipe(Effect.map(listThreadPullRequests)),
+      requireThread(PullRequestListFailedError, "list_thread_pull_requests", {}).pipe(
+        Effect.map(listThreadPullRequests),
+      ),
   });
 });
 

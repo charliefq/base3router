@@ -79,6 +79,46 @@
       "types": "./src/hybridRouter.ts",
       "import": "./src/hybridRouter.ts"
     },
+    "./actionCanonical": {
+      "types": "./src/actionCanonical.ts",
+      "import": "./src/actionCanonical.ts"
+    },
+    "./skillCatalog": {
+      "types": "./src/skillCatalog.ts",
+      "import": "./src/skillCatalog.ts"
+    },
+    "./skillRouter": {
+      "types": "./src/skillRouter.ts",
+      "import": "./src/skillRouter.ts"
+    },
+    "./mcpCatalog": {
+      "types": "./src/mcpCatalog.ts",
+      "import": "./src/mcpCatalog.ts"
+    },
+    "./mcpRouter": {
+      "types": "./src/mcpRouter.ts",
+      "import": "./src/mcpRouter.ts"
+    },
+    "./actionGate": {
+      "types": "./src/actionGate.ts",
+      "import": "./src/actionGate.ts"
+    },
+    "./executionPlan": {
+      "types": "./src/executionPlan.ts",
+      "import": "./src/executionPlan.ts"
+    },
+    "./mcpLifecycle": {
+      "types": "./src/mcpLifecycle.ts",
+      "import": "./src/mcpLifecycle.ts"
+    },
+    "./phase12Bind": {
+      "types": "./src/phase12Bind.ts",
+      "import": "./src/phase12Bind.ts"
+    },
+    "./actionAudit": {
+      "types": "./src/actionAudit.ts",
+      "import": "./src/actionAudit.ts"
+    },
     "./routerEvaluation": {
       "types": "./src/routerEvaluation.ts",
       "import": "./src/routerEvaluation.ts"

@@ -24,7 +24,9 @@ import type {
 } from "@t3tools/contracts";
 
 import { sanitizeDisplayText } from "./sanitizeDisplayText";
+import type { InspectorApprovalModel } from "./presentActionApproval";
 
+export type { InspectorApprovalModel } from "./presentActionApproval";
 export type InspectorRouteKind = "provisional" | "bound" | "unavailable" | "none";
 export type InspectorRunnerKind = "local" | "cursor-cloud" | "unavailable" | "unknown";
 export type InspectorGateDecision = "ALLOW" | "DENY" | "unavailable";
@@ -141,8 +143,64 @@ export type OperationalInspectorModel = {
   readonly cursorCloud: InspectorCursorCloudModel | null;
   readonly openRouter: InspectorOpenRouterModel | null;
   readonly hybrid: InspectorHybridModel | null;
+  readonly skillRoute: InspectorSkillRouteModel | null;
+  readonly mcpRoute: InspectorMcpRouteModel | null;
+  readonly executionPlan: InspectorPlanModel | null;
+  readonly actionGate: InspectorSideEffectGateModel | null;
+  readonly approval: InspectorApprovalModel | null;
+  readonly toolExecution: InspectorToolExecutionModel | null;
+  readonly outcome: InspectorOutcomeModel | null;
   readonly error: string | null;
   readonly emptyReason: InspectorEmptyReason;
+};
+
+export type InspectorSkillRouteModel = {
+  readonly policyVersion: string;
+  readonly selected: string | null;
+  readonly mode: string;
+  readonly reasonCodes: ReadonlyArray<string>;
+  readonly filteredReasonCodes: ReadonlyArray<string>;
+  readonly eligibleCount: number;
+  readonly explanation: string;
+  readonly tieBreak: string;
+};
+
+export type InspectorMcpRouteModel = {
+  readonly policyVersion: string;
+  readonly selected: string | null;
+  readonly server: string | null;
+  readonly mode: string;
+  readonly reasonCodes: ReadonlyArray<string>;
+  readonly filteredReasonCodes: ReadonlyArray<string>;
+  readonly eligibleCount: number;
+  readonly explanation: string;
+  readonly tieBreak: string;
+};
+
+export type InspectorPlanModel = {
+  readonly planId: string;
+  readonly actionCount: number;
+  readonly policyVersions: string;
+  readonly expiresAt: string | null;
+};
+
+export type InspectorSideEffectGateModel = {
+  readonly decision: string;
+  readonly riskClass: string;
+  readonly reasonCodes: ReadonlyArray<string>;
+  readonly fingerprint: string;
+};
+
+export type InspectorToolExecutionModel = {
+  readonly status: string;
+  readonly retry: string;
+  readonly circuit: string;
+  readonly fallback: string;
+};
+
+export type InspectorOutcomeModel = {
+  readonly classification: string;
+  readonly evidence: string;
 };
 
 export type OperationalInspectorInput = {
@@ -164,6 +222,13 @@ export type OperationalInspectorInput = {
     readonly asOf: string | null;
   };
   readonly hybrid?: InspectorHybridModel | null;
+  readonly skillRoute?: InspectorSkillRouteModel | null;
+  readonly mcpRoute?: InspectorMcpRouteModel | null;
+  readonly executionPlan?: InspectorPlanModel | null;
+  readonly actionGate?: InspectorSideEffectGateModel | null;
+  readonly approval?: InspectorApprovalModel | null;
+  readonly toolExecution?: InspectorToolExecutionModel | null;
+  readonly outcome?: InspectorOutcomeModel | null;
 };
 
 const EMPTY_ROUTE: InspectorRouteModel = {
@@ -479,6 +544,76 @@ function presentHybrid(decision: HybridRouteDecisionV1 | undefined): InspectorHy
   };
 }
 
+function presentSkillRoute(
+  decision: import("@t3tools/contracts").SkillRouterDecision | undefined,
+  override: InspectorSkillRouteModel | null | undefined,
+): InspectorSkillRouteModel | null {
+  if (override !== undefined) return override;
+  if (decision === undefined) return null;
+  return {
+    policyVersion: decision.policyVersion,
+    selected: decision.selected?.skillId ?? null,
+    mode: decision.mode,
+    reasonCodes: [...decision.reasonCodes],
+    filteredReasonCodes: [
+      ...new Set(decision.filtered.flatMap((candidate) => candidate.reasonCodes)),
+    ],
+    eligibleCount: decision.eligible.length,
+    explanation: sanitizeDisplayText(decision.explanation) ?? decision.explanation,
+    tieBreak: decision.tieBreak,
+  };
+}
+
+function presentMcpRoute(
+  decision: import("@t3tools/contracts").McpRouterDecision | undefined,
+  override: InspectorMcpRouteModel | null | undefined,
+): InspectorMcpRouteModel | null {
+  if (override !== undefined) return override;
+  if (decision === undefined) return null;
+  return {
+    policyVersion: decision.policyVersion,
+    selected: decision.selected?.toolId ?? null,
+    server: decision.selected?.serverId ?? null,
+    mode: decision.mode,
+    reasonCodes: [...decision.reasonCodes],
+    filteredReasonCodes: [
+      ...new Set(decision.filtered.flatMap((candidate) => candidate.reasonCodes)),
+    ],
+    eligibleCount: decision.eligible.length,
+    explanation: sanitizeDisplayText(decision.explanation) ?? decision.explanation,
+    tieBreak: decision.tieBreak,
+  };
+}
+
+function presentPlan(
+  plan: import("@t3tools/contracts").ExecutionPlanV0 | undefined,
+  override: InspectorPlanModel | null | undefined,
+): InspectorPlanModel | null {
+  if (override !== undefined) return override;
+  if (plan === undefined) return null;
+  return {
+    planId: plan.planId,
+    actionCount: plan.actions.length,
+    policyVersions: plan.policyVersions.join(" · "),
+    expiresAt: plan.expiresAt ?? null,
+  };
+}
+
+function presentActionGate(
+  plan: import("@t3tools/contracts").ExecutionPlanV0 | undefined,
+  override: InspectorSideEffectGateModel | null | undefined,
+): InspectorSideEffectGateModel | null {
+  if (override !== undefined) return override;
+  const action = plan?.actions[0];
+  if (action === undefined) return null;
+  return {
+    decision: action.requiresApproval ? "ASK" : "ALLOW",
+    riskClass: action.riskClass,
+    reasonCodes: action.requiresApproval ? ["APPROVAL_REQUIRED"] : ["ACTION_ALLOWED"],
+    fingerprint: action.fingerprint.slice(0, 12),
+  };
+}
+
 export function presentOperationalInspector(
   input: OperationalInspectorInput,
 ): OperationalInspectorModel {
@@ -497,6 +632,13 @@ export function presentOperationalInspector(
     cursorCloud: presentCursorCloud(input.cursorCloudBinding, input.capabilities.cursorCloud),
     openRouter: presentOpenRouter(input.boundRoute?.openRouter, input.openRouterPriors),
     hybrid: input.hybrid ?? presentHybrid(input.boundRoute?.hybrid),
+    skillRoute: presentSkillRoute(input.boundRoute?.skillRoute, input.skillRoute),
+    mcpRoute: presentMcpRoute(input.boundRoute?.mcpRoute, input.mcpRoute),
+    executionPlan: presentPlan(input.boundRoute?.executionPlan, input.executionPlan),
+    actionGate: presentActionGate(input.boundRoute?.executionPlan, input.actionGate),
+    approval: input.approval ?? null,
+    toolExecution: input.toolExecution ?? null,
+    outcome: input.outcome ?? null,
     error: sanitizeDisplayText(input.sessionError),
     emptyReason: resolveEmptyReason(input),
   };

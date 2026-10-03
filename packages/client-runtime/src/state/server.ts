@@ -1151,5 +1151,14 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:router-delete-observations",
       tag: WS_METHODS.routerDeleteObservations,
     }),
+    actionGovernance: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:action-governance",
+      tag: WS_METHODS.actionGateGetGovernance,
+      staleTimeMs: 2_000,
+    }),
+    actionGateRespondApproval: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:action-gate-respond-approval",
+      tag: WS_METHODS.actionGateRespondApproval,
+    }),
   };
 }

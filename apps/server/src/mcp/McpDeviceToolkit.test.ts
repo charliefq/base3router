@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 import { McpSchema, McpServer } from "effect/unstable/ai";
 
 import * as ServerConfig from "../config.ts";
+import * as ActionGateService from "../actionGate/ActionGateService.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -99,6 +100,7 @@ const DeviceServiceMock = Layer.mock(DeviceService.DeviceService)({
 const TestLayer = McpHttpServer.DeviceToolkitRegistrationLive.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(DeviceServiceMock),
+  Layer.provideMerge(ActionGateService.layerTest),
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-device-toolkit-test-" })),
   Layer.provide(NodeServices.layer),
 );
@@ -169,6 +171,7 @@ it.effect("rejects unavailable agent access before booting or opening a device",
       McpHttpServer.DeviceToolkitRegistrationLive.pipe(
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(unavailable),
+        Layer.provideMerge(ActionGateService.layerTest),
         Layer.provide(NodeServices.layer),
       ),
     ),
