@@ -339,23 +339,75 @@ real policy.
 
 ## Approvals
 
-Server-owned. Client claims are not authority.
+Server-owned. Client claims are not authority. Inspector and Control Center
+Grant / Deny / Cancel call `actionGate.respondApproval`. UI Lab uses the same
+controls through a handler; production chrome is never display-only.
 
 An approval binds to:
 
 - exact action fingerprint
 - canonical argument digest
 - tool and server identity
-- requesting user/environment
+- requesting environment, and thread/project when known
 - policy version
-- allowed scope
+- allowed scope (`exact-action`)
 - expiration
 - one-time (default) or explicitly declared reuse
+
+### Persistence
+
+Creation is database-enforced and transactional. `putApproval` inserts inside
+`sql.withTransaction` with `ON CONFLICT DO NOTHING RETURNING`. Uniqueness:
+
+- `(environment_id, idempotency_key)` where the key is present
+- `(environment_id, fingerprint)` while status is `pending` or `granted`
+
+ASK creation uses `ask:{fingerprint}` as the idempotency key so refresh and
+reconnect reuse the live row. Same key + same fingerprint returns the existing
+live approval. Same key + different fingerprint is a typed `conflict`. Terminal
+rows (`consumed`, `denied`, `cancelled`, `expired`, `invalidated`) are not
+resurrected. SQLite uniqueness errors are mapped to `ActionGateError` and are
+not thrown as uncaught driver errors. Audit inserts use `ON CONFLICT(event_id)
+DO NOTHING` so concurrent identical creates audit once.
+
+### State machine
+
+```text
+putApproval → pending
+pending + grant (UPDATE … WHERE status='pending') → granted
+pending + deny  → denied
+pending + cancel → cancelled
+pending|granted + expiresAt ≤ now → expired
+granted + consume (UPDATE … WHERE status='granted' AND fingerprint=…) → consumed
+granted + explicit-reuse consume → granted (unchanged)
+```
+
+Terminal: `denied`, `cancelled`, `expired`, `consumed`, `invalidated`.
+A late grant cannot revive a terminal row.
+
+### Concurrency winners
+
+- Identical concurrent `putApproval`: one row; both callers receive it.
+- Conflicting concurrent `putApproval` (same key, different fingerprint): one
+  insert wins; the other is `conflict`. The winner is never the wrong
+  fingerprint.
+- Two Grant RPCs: first `pending → granted` wins; a second Grant on `granted`
+  is idempotent. Consume still happens once (`UPDATE … WHERE status='granted'`).
+- Grant versus Deny: first `UPDATE … WHERE status='pending'` wins. The loser is
+  `conflict`. Exactly one terminal decision.
+- Two consume callers: one `consumed`; the other `replay`.
+- Replay after consume is `replay`. Changed arguments produce a new fingerprint
+  and cannot consume the old approval.
+
+`ASK` pauses MCP handlers in `requireAllowedMcpTool` before adapter execution.
+Grant consumes, then the original waiter resumes and the tool runs once. Deny,
+expire, and cancel terminate the waiter with a typed error and zero tool calls.
+Fiber interruption cancels the pending approval when no other waiter remains.
 
 Consumption:
 
 - expiry rejects
-- one-time: atomic consume (`UPDATE … WHERE status='granted' AND consumedAt IS NULL`)
+- one-time: atomic consume (`UPDATE … WHERE status='granted' AND fingerprint=…`)
   so a race cannot execute twice
 - replay of a consumed fingerprint is `REPLAY_REJECTED`
 - plan mutation invalidates
@@ -421,9 +473,14 @@ where known, and policy compliance. It remains a projection, not a second
 source of truth.
 
 Approval UX shows exact action type, destination/server/tool, material
-argument summary (redacted), risk, requested scope, expiry, and whether
-approval is one-time. Copy is never a deceptive broad “Allow”. Changed
-arguments require a new approval.
+argument summary (redacted), risk, side effects, environment/project/thread
+scope, requested scope, expiry, fingerprint abbreviation, and why ActionGate
+returned ASK. Live Grant once, Deny, and Cancel call
+`actionGate.respondApproval` and render server state after the RPC
+(pending, submitting, granted, denied, expired, cancelled, consumed, conflict,
+disconnected/error). Duplicate clicks are disabled while a response is in
+flight. Copy is never a deceptive broad “Allow” or persistent “always allow”.
+Changed arguments require a new approval.
 
 ## End-to-end path
 
@@ -477,9 +534,10 @@ unknown stays unknown):
 Phase 12 implements the local, deterministic, auditable control plane for
 skills, MCP tools, and per-action authorization.
 
-Phase 13+ may add: Dream Memory, concurrency budgets, team/enterprise
-policy enforcement, billing, marketplace (if ever allowed), stdio MCP,
-and mobile Auto Route. Those are residuals, not this phase.
+Phase 13+ may add: Dream Memory, global agent-concurrency budgets, and later
+governance/release work (team/enterprise policy enforcement, billing,
+marketplace if ever allowed, stdio MCP, mobile Auto Route). Atomic approval
+idempotency and live Grant/Deny chrome are Phase 12, not residuals.
 
 ## Validation
 
