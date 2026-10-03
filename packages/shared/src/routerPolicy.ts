@@ -52,13 +52,12 @@ export const shadowPolicy = Effect.fn("shadowPolicy")(function* (input: {
       `Policy in state ${input.candidate.state} cannot become shadow.`,
     );
   }
-  return {
-    active: {
-      ...input.candidate,
-      state: "shadow",
-      ...(input.actor !== undefined ? { activatedBy: input.actor } : {}),
-    },
+  const active: RouterPolicySnapshotV0 = {
+    ...input.candidate,
+    state: "shadow",
+    ...(input.actor !== undefined ? { activatedBy: input.actor } : {}),
   };
+  return { active };
 });
 
 export const activatePolicy = Effect.fn("activatePolicy")(function* (input: {
