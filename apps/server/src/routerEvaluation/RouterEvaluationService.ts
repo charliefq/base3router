@@ -381,3 +381,77 @@ const make = Effect.gen(function* () {
 export const layer = Layer.effect(RouterEvaluationService, make).pipe(
   Layer.provide(observationRepositoryLayer),
 );
+
+const emptyCoverage = {
+  id: "coverage",
+  numerator: 0,
+  denominator: 0,
+  sampleCount: 0,
+  status: "unknown" as const,
+  provenance: "unknown" as const,
+  unit: "rate" as const,
+};
+
+/** Empty insights, for suites that only need the RPC surface to resolve. */
+export const layerTest = Layer.succeed(
+  RouterEvaluationService,
+  RouterEvaluationService.of({
+    insights: (_environmentId, settings) =>
+      Effect.succeed({
+        observationCount: 0,
+        coverage: emptyCoverage,
+        activePolicyVersion: MODEL_ROUTER_POLICY_VERSION,
+        challengerEnabled: settings.challengerShadowEnabled,
+        measurementEnabled: settings.measurementEnabled,
+        retentionDays: settings.retentionDays,
+        freshness: "empty",
+        metrics: [],
+        mixedProvenanceWarning: false,
+        insufficientData: true,
+      }),
+    exportObservations: () =>
+      Effect.succeed({
+        manifest: {
+          version: "router-evaluation-dataset.v0",
+          synthetic: false,
+          recordCount: 0,
+          trainCount: 0,
+          evaluationCount: 0,
+          schemaVersion: "turn-outcome-observation.v0",
+          filters: {},
+          datasetHash: "empty",
+          holdout: "temporal_last_20_percent",
+        },
+        records: [],
+      }),
+    deleteObservations: () => Effect.succeed({ deleted: 0 }),
+    submitFeedback: (_environmentId, input) =>
+      Effect.succeed({ observationId: input.observationId, recorded: true }),
+    listPolicies: () => Effect.succeed({ policies: [] }),
+    inspectPolicy: () =>
+      Effect.fail(
+        new RouterEvaluationError({
+          reason: "malformed_policy",
+          detail: "Test layer has no stored policies.",
+        }),
+      ),
+    activate: () =>
+      Effect.fail(
+        new RouterEvaluationError({
+          reason: "unauthorized_activation",
+          detail: "Test layer cannot activate a policy.",
+        }),
+      ),
+    rollback: () =>
+      Effect.fail(
+        new RouterEvaluationError({
+          reason: "unauthorized_activation",
+          detail: "Test layer cannot roll back a policy.",
+        }),
+      ),
+    evidenceMap: () => Effect.succeed(new Map()),
+    recordObservation: () => Effect.void,
+    observationCount: () => Effect.succeed(0),
+    activePolicyVersion: () => Effect.succeed(MODEL_ROUTER_POLICY_VERSION),
+  }),
+);
