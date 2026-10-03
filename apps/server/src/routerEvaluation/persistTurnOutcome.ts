@@ -31,7 +31,7 @@ import * as Dispatcher from "../dispatcher/Dispatcher.ts";
 import { RouterEvaluationService } from "./RouterEvaluationService.ts";
 import { TurnTiming, type TurnTimingSnapshot } from "./TurnTiming.ts";
 
-export const observationIdForTurn = (
+const observationIdForTurn = (
   environmentId: EnvironmentId,
   threadId: ThreadId,
   messageId: MessageId,

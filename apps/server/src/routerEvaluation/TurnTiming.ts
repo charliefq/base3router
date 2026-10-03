@@ -34,7 +34,7 @@ type TimingEntry = {
   lastTouchMs: number;
 };
 
-export const turnTimingKey = (input: TurnTimingKey): string =>
+const turnTimingKey = (input: TurnTimingKey): string =>
   `${input.environmentId}\0${input.threadId}\0${input.turnId}`;
 
 export class TurnTiming extends Context.Service<

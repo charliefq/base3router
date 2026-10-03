@@ -251,8 +251,6 @@ export function presentRouterInsights(
     observationCount: snapshot.observationCount,
     activePolicy: snapshot.activePolicyVersion,
     candidatePolicy: snapshot.candidatePolicyVersion ?? null,
-    candidatePolicyState: snapshot.candidatePolicyState ?? null,
-    candidatePolicyId: snapshot.candidatePolicyId ?? null,
     insufficientData: snapshot.insufficientData,
     mixedProvenance: snapshot.mixedProvenanceWarning,
     explicitFeedback: metricLine(feedback, "none recorded"),
@@ -266,8 +264,16 @@ export function presentRouterInsights(
     challengerAgreement: metricLine(agreement, "unknown"),
     canRead: true,
     canOperate: options.canOperate === true,
-    latestObservationId: snapshot.latestObservationId,
     confirmation: options.confirmation ?? null,
+    ...(snapshot.candidatePolicyState !== undefined
+      ? { candidatePolicyState: snapshot.candidatePolicyState }
+      : {}),
+    ...(snapshot.candidatePolicyId !== undefined
+      ? { candidatePolicyId: snapshot.candidatePolicyId }
+      : {}),
+    ...(snapshot.latestObservationId !== undefined
+      ? { latestObservationId: snapshot.latestObservationId }
+      : {}),
   };
 }
 

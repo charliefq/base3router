@@ -112,7 +112,7 @@ export function ControlCenterPage(props: {
       explicitFeedback: "unknown",
       reworkProxies: "unknown",
       canOperate,
-      confirmation,
+      confirmation: confirmation ?? null,
     } satisfies ControlCenterRouterInsights;
   }, [canOperate, capability, confirmation, insightsQuery.data]);
 

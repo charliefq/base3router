@@ -114,7 +114,10 @@ export function ControlCenter(props: {
               }
               tone={props.model.routerInsights.insufficientData ? "warning" : "neutral"}
             >
-              <RouterInsightsBody model={props.model} actions={props.actions} />
+              <RouterInsightsBody
+                model={props.model}
+                {...(props.actions !== undefined ? { actions: props.actions } : {})}
+              />
             </OperationalStatusCard>
           ) : null}
           {props.model.empty ? (
