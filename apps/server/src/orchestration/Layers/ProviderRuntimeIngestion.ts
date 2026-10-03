@@ -62,7 +62,7 @@ import { ModelRouterAvailability } from "../Services/ModelRouterAvailability.ts"
 import { persistOpenRouterObservationFromRuntimeEvent } from "../../openRouter/OpenRouterObservationPersist.ts";
 import { persistTurnOutcomeFromRuntimeEvent } from "../../routerEvaluation/persistTurnOutcome.ts";
 import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
-import { TurnTiming } from "../../routerEvaluation/TurnTiming.ts";
+import { TurnTiming, layer as turnTimingLayer } from "../../routerEvaluation/TurnTiming.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
 
@@ -1039,7 +1039,7 @@ const make = Effect.gen(function* () {
   const serverSettingsService = yield* ServerSettingsService;
   const modelRouterAvailability = yield* ModelRouterAvailability;
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
-  const turnTiming = yield* Effect.serviceOption(TurnTiming);
+  const turnTiming = yield* TurnTiming;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
     crypto.randomUUIDv4.pipe(
       Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)),
@@ -1781,7 +1781,7 @@ const make = Effect.gen(function* () {
       if (!thread) return;
 
       const timingTurnId = toTurnId(event.turnId);
-      if (Option.isSome(turnTiming) && timingTurnId !== undefined && timingTurnId !== null) {
+      if (timingTurnId !== undefined && timingTurnId !== null) {
         const environment = yield* Effect.serviceOption(ServerEnvironment);
         if (Option.isSome(environment)) {
           const environmentId = yield* environment.value.getEnvironmentId;
@@ -1791,8 +1791,8 @@ const make = Effect.gen(function* () {
             turnId: timingTurnId,
           };
           if (event.type === "turn.started") {
-            yield* turnTiming.value.markRouteStart(timingKey);
-            yield* turnTiming.value.markProviderRequestStart(timingKey);
+            yield* turnTiming.markRouteStart(timingKey);
+            yield* turnTiming.markProviderRequestStart(timingKey);
           }
           if (
             (event.type === "content.delta" &&
@@ -1801,7 +1801,7 @@ const make = Effect.gen(function* () {
             (event.type === "item.completed" && event.payload.itemType === "assistant_message") ||
             (event.type === "turn.completed" && event.payload.state === "completed")
           ) {
-            yield* turnTiming.value.markFirstOutput(timingKey);
+            yield* turnTiming.markFirstOutput(timingKey);
           }
         }
       }
@@ -2861,5 +2861,5 @@ export const ProviderRuntimeIngestionLive = Layer.effect(
   Layer.provide(ProjectionThreadMessageRepositoryLive),
   Layer.provide(ProjectionThreadProposedPlanRepositoryLive),
   Layer.provide(ProjectionTurnRepositoryLive),
-  Layer.provideMerge(TurnTiming.layer),
+  Layer.provideMerge(turnTimingLayer),
 );
