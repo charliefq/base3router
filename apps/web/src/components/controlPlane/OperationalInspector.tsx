@@ -7,6 +7,7 @@ import {
   type CursorCloudInspectorActionHandlers,
 } from "~/controlPlane/inspectorActions";
 import type {
+  InspectorHybridModel,
   InspectorOpenRouterModel,
   InspectorRouteModel,
   OperationalInspectorModel,
@@ -117,6 +118,7 @@ function InspectorBody(props: {
       />
       <RouteTraceCard route={model.route} />
       {model.openRouter ? <OpenRouterGuidanceCard model={model.openRouter} /> : null}
+      {model.hybrid ? <HybridRouterCard model={model.hybrid} /> : null}
       <OperationalStatusCard
         title="ActionGate"
         tone={statusTone(model.route.gateDecision)}
@@ -361,6 +363,38 @@ function RouteTraceCard(props: { readonly route: InspectorRouteModel }) {
           {metricLabel("quality", route.estimatedQuality)}
         </p>
       )}
+    </OperationalStatusCard>
+  );
+}
+
+function HybridRouterCard(props: { readonly model: InspectorHybridModel }) {
+  const { model } = props;
+  return (
+    <OperationalStatusCard
+      title="Hybrid Router"
+      value={model.usedHybridRanking ? "hybrid-router.v1.0.0" : "Router V0"}
+      detail={model.explanation}
+      tone={model.insufficient ? "warning" : "neutral"}
+    >
+      <div className="mt-1 space-y-1 text-2xs text-muted-foreground" data-hybrid-inspector="">
+        <p data-hybrid-policy={model.policyVersion}>Policy {model.policyVersion}</p>
+        {model.selected ? <p data-hybrid-selected="">Selected {model.selected}</p> : null}
+        {model.fallbackReason ? <p data-hybrid-fallback=""> {model.fallbackReason}</p> : null}
+        {model.insufficient ? (
+          <p data-hybrid-insufficient="">Evidence is insufficient. Router V0 was used.</p>
+        ) : null}
+        {model.components.map((entry) => (
+          <p key={entry.id} data-hybrid-component={entry.id}>
+            {entry.label}: {entry.status}
+            {entry.sampleSize > 0 ? ` n=${entry.sampleSize}` : ""} ({entry.provenance})
+          </p>
+        ))}
+        {model.challenger ? (
+          <p data-policy-shadow-agreement={model.challenger.agreement}>
+            Policy Shadow: {model.challenger.selected ?? "none"} ({model.challenger.agreement})
+          </p>
+        ) : null}
+      </div>
     </OperationalStatusCard>
   );
 }

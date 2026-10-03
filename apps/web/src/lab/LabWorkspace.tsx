@@ -58,6 +58,7 @@ export function LabWorkspace(props: {
         }
       : {}),
     ...(props.scenario.openRouter !== undefined ? { openRouter: props.scenario.openRouter } : {}),
+    ...(props.scenario.hybrid !== undefined ? { hybrid: props.scenario.hybrid } : {}),
   });
 
   return (
@@ -83,13 +84,19 @@ export function LabWorkspace(props: {
               surface:
                 props.scenario.id === "disconnected"
                   ? "offline"
-                  : props.scenario.id === "empty-workspace"
+                  : props.scenario.id === "empty-workspace" ||
+                      props.scenario.id === "eval-no-observations"
                     ? "unpaired"
                     : "ready",
-              empty: props.scenario.id === "empty-workspace",
+              empty:
+                props.scenario.id === "empty-workspace" ||
+                props.scenario.id === "eval-no-observations",
               longNames: props.scenario.longNames,
               ...(props.scenario.id === "disconnected"
                 ? { environmentLabel: "Offline lab environment" }
+                : {}),
+              ...(props.scenario.routerInsights !== undefined
+                ? { routerInsights: props.scenario.routerInsights }
                 : {}),
             })}
           />

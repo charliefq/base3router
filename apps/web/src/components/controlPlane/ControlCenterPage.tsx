@@ -52,6 +52,22 @@ export function ControlCenterPage(props: {
       threads,
     }),
     environmentLabel: environment?.label ?? selectedEnvironmentId,
+    ...(serverConfig?.environment.capabilities.routerEvaluation !== undefined
+      ? {
+          routerInsights: {
+            observationCount:
+              serverConfig.environment.capabilities.routerEvaluation.observationCount,
+            activePolicy:
+              serverConfig.environment.capabilities.routerEvaluation.activePolicyVersion,
+            candidatePolicy: null,
+            insufficientData:
+              serverConfig.environment.capabilities.routerEvaluation.observationCount < 8,
+            mixedProvenance: false,
+            explicitFeedback: "local, optional",
+            reworkProxies: "labeled proxy",
+          },
+        }
+      : {}),
   });
   const inspector = selectControlCenterInspectorTarget(model);
 

@@ -100,6 +100,54 @@ export function ControlCenter(props: {
               }
             />
           ) : null}
+          {props.model.routerInsights ? (
+            <OperationalStatusCard
+              title="Router Insights"
+              value={props.model.routerInsights.activePolicy}
+              detail={
+                props.model.routerInsights.insufficientData
+                  ? "Insufficient local observations. Metrics are not shown as reliable."
+                  : `${props.model.routerInsights.observationCount} observations`
+              }
+              tone={props.model.routerInsights.insufficientData ? "warning" : "neutral"}
+            >
+              <div
+                className="mt-1 space-y-1 text-2xs text-muted-foreground"
+                data-router-insights=""
+              >
+                <p data-router-insights-count="">
+                  Observations {props.model.routerInsights.observationCount}
+                </p>
+                {props.model.routerInsights.candidatePolicy ? (
+                  <p data-router-insights-candidate="">
+                    Candidate {props.model.routerInsights.candidatePolicy}
+                  </p>
+                ) : null}
+                <p>Explicit feedback {props.model.routerInsights.explicitFeedback}</p>
+                <p>Rework proxies {props.model.routerInsights.reworkProxies}</p>
+                {props.model.routerInsights.mixedProvenance ? (
+                  <p data-mixed-provenance="">
+                    Reported and estimated cost are labeled separately.
+                  </p>
+                ) : null}
+                {props.model.routerInsights.confirmation === "activate" ? (
+                  <p data-policy-activate-confirm="">
+                    Activate candidate? This does not happen automatically.
+                  </p>
+                ) : null}
+                {props.model.routerInsights.confirmation === "rollback" ? (
+                  <p data-policy-rollback-confirm="">
+                    Rollback restores the previous policy immediately.
+                  </p>
+                ) : null}
+                {props.model.routerInsights.confirmation === "delete" ? (
+                  <p data-observations-delete-confirm="">
+                    Delete observations for this environment? Confirmation required.
+                  </p>
+                ) : null}
+              </div>
+            </OperationalStatusCard>
+          ) : null}
           {props.model.empty ? (
             <OperationalStatusCard
               title="Empty"

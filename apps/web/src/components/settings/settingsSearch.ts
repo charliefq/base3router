@@ -180,6 +180,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["openrouter teacher shadow auto router zdr privacy cost tier openrouter/auto"],
   },
   {
+    id: "router-evaluation",
+    title: "Router evaluation",
+    to: "/settings/general",
+    scope: "environment",
+    searchTerms: [
+      "hybrid router policy shadow challenger observations retention feedback measurement local evidence",
+    ],
+  },
+  {
     id: "color-scheme",
     title: "Color scheme",
     to: "/settings/appearance",

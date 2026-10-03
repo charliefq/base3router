@@ -52,6 +52,16 @@ export type ControlCenterModel = {
   readonly empty: boolean;
   readonly capabilityOff: boolean;
   readonly environmentLabel: string | null;
+  readonly routerInsights?: {
+    readonly observationCount: number;
+    readonly activePolicy: string;
+    readonly candidatePolicy: string | null;
+    readonly insufficientData: boolean;
+    readonly mixedProvenance: boolean;
+    readonly explicitFeedback: string;
+    readonly reworkProxies: string;
+    readonly confirmation?: "activate" | "rollback" | "delete" | null;
+  } | null;
 };
 
 export type ControlCenterInput = {
@@ -62,6 +72,7 @@ export type ControlCenterInput = {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly catalogs?: ReadonlyArray<WorkflowCatalog>;
   readonly environmentLabel?: string | null;
+  readonly routerInsights?: ControlCenterModel["routerInsights"];
 };
 
 export type ControlCenterInspectorTarget = {
@@ -167,6 +178,7 @@ export function presentControlCenter(input: ControlCenterInput): ControlCenterMo
     empty: ready && projects.length === 0 && tasks.length === 0,
     capabilityOff,
     environmentLabel: sanitizeDisplayText(input.environmentLabel ?? null),
+    ...(input.routerInsights !== undefined ? { routerInsights: input.routerInsights } : {}),
   };
 }
 

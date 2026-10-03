@@ -64,6 +64,7 @@ function model(overrides: Partial<OperationalInspectorModel> = {}): OperationalI
     stages: [],
     cursorCloud: null,
     openRouter: null,
+    hybrid: null,
     error: null,
     emptyReason: null,
     ...overrides,

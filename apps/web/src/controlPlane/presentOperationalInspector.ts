@@ -20,6 +20,7 @@ import type {
   ServerProvider,
   WorkflowRun,
   WorkflowTemplate,
+  HybridRouteDecisionV1,
 } from "@t3tools/contracts";
 
 import { sanitizeDisplayText } from "./sanitizeDisplayText";
@@ -86,6 +87,27 @@ export type InspectorCursorCloudModel = {
   readonly refreshEnabled: boolean;
 };
 
+export type InspectorHybridModel = {
+  readonly policyVersion: string;
+  readonly usedHybridRanking: boolean;
+  readonly fallbackToV0: boolean;
+  readonly fallbackReason: string | null;
+  readonly selected: string | null;
+  readonly explanation: string;
+  readonly components: ReadonlyArray<{
+    readonly id: string;
+    readonly label: string;
+    readonly sampleSize: number;
+    readonly status: string;
+    readonly provenance: string;
+  }>;
+  readonly challenger: {
+    readonly selected: string | null;
+    readonly agreement: string;
+  } | null;
+  readonly insufficient: boolean;
+};
+
 export type InspectorOpenRouterModel = {
   readonly mode: string;
   readonly status: string;
@@ -118,6 +140,7 @@ export type OperationalInspectorModel = {
   readonly stages: ReadonlyArray<InspectorStageModel>;
   readonly cursorCloud: InspectorCursorCloudModel | null;
   readonly openRouter: InspectorOpenRouterModel | null;
+  readonly hybrid: InspectorHybridModel | null;
   readonly error: string | null;
   readonly emptyReason: InspectorEmptyReason;
 };
@@ -140,6 +163,7 @@ export type OperationalInspectorInput = {
     readonly freshness: string;
     readonly asOf: string | null;
   };
+  readonly hybrid?: InspectorHybridModel | null;
 };
 
 const EMPTY_ROUTE: InspectorRouteModel = {
@@ -424,6 +448,37 @@ function presentOpenRouter(
   };
 }
 
+function presentHybrid(decision: HybridRouteDecisionV1 | undefined): InspectorHybridModel | null {
+  if (decision === undefined) return null;
+  return {
+    policyVersion: decision.policyVersion,
+    usedHybridRanking: decision.usedHybridRanking,
+    fallbackToV0: decision.fallbackToV0,
+    fallbackReason: decision.fallbackReason ?? null,
+    selected: decision.selected
+      ? `${decision.selected.instanceId} · ${decision.selected.model}`
+      : null,
+    explanation: decision.explanation,
+    components: decision.components.map((entry) => ({
+      id: entry.id,
+      label: entry.label,
+      sampleSize: entry.sampleSize,
+      status: entry.status,
+      provenance: entry.provenance,
+    })),
+    challenger:
+      decision.challenger === undefined
+        ? null
+        : {
+            selected: decision.challenger.selected
+              ? `${decision.challenger.selected.instanceId} · ${decision.challenger.selected.model}`
+              : null,
+            agreement: decision.challenger.agreement,
+          },
+    insufficient: decision.fallbackToV0,
+  };
+}
+
 export function presentOperationalInspector(
   input: OperationalInspectorInput,
 ): OperationalInspectorModel {
@@ -441,6 +496,7 @@ export function presentOperationalInspector(
     stages: presentStages(input.workflowRun, input.workflowTemplate),
     cursorCloud: presentCursorCloud(input.cursorCloudBinding, input.capabilities.cursorCloud),
     openRouter: presentOpenRouter(input.boundRoute?.openRouter, input.openRouterPriors),
+    hybrid: input.hybrid ?? presentHybrid(input.boundRoute?.hybrid),
     error: sanitizeDisplayText(input.sessionError),
     emptyReason: resolveEmptyReason(input),
   };

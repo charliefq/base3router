@@ -121,7 +121,8 @@ describe("Base3Router UI Lab fake providers", () => {
   it("exposes every required UI Lab scenario", () => {
     expect(UI_LAB_SCENARIO_IDS).toContain("empty-thread");
     expect(UI_LAB_SCENARIO_IDS).toContain("inspector-attempts");
-    expect(UI_LAB_SCENARIO_IDS).toContain("bounded-attempts");
+    expect(UI_LAB_SCENARIO_IDS).toContain("eval-no-observations");
+    expect(UI_LAB_SCENARIO_IDS).toContain("eval-challenger-disagrees");
     for (const id of UI_LAB_SCENARIO_IDS) {
       const scenario = createLabScenario(id);
       expect(scenario.id).toBe(id);

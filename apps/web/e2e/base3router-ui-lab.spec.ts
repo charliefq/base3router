@@ -7,10 +7,25 @@ import { UI_LAB_BEARER_PROBE, UI_LAB_SECRET_PROBE } from "../src/lab/fakeProvide
 
 const SCREENSHOT_DIR = NodePath.join(import.meta.dirname, "../playwright-results/screenshots");
 
-const CONTROL_CENTER_SCENARIOS = new Set<UiLabScenarioId>(["empty-workspace", "disconnected"]);
+const CONTROL_CENTER_SCENARIOS = new Set<UiLabScenarioId>([
+  "empty-workspace",
+  "disconnected",
+  "eval-no-observations",
+  "eval-active-v0",
+  "eval-hybrid-candidate",
+  "eval-activate-confirm",
+  "eval-rollback",
+  "eval-export-delete",
+  "eval-mixed-provenance",
+  "eval-compact-height",
+]);
 
 async function applyScenarioViewport(page: Page, id: UiLabScenarioId) {
-  if (id === "compact-height" || id === "openrouter-compact-height") {
+  if (
+    id === "compact-height" ||
+    id === "openrouter-compact-height" ||
+    id === "eval-compact-height"
+  ) {
     await page.setViewportSize({ width: 1280, height: 360 });
     return;
   }
