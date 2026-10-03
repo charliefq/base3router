@@ -15,8 +15,15 @@ import {
 
 import type { ControlCenterModel } from "~/controlPlane/presentControlCenter";
 import type {
+  InspectorApprovalModel,
   InspectorHybridModel,
+  InspectorMcpRouteModel,
   InspectorOpenRouterModel,
+  InspectorOutcomeModel,
+  InspectorPlanModel,
+  InspectorSideEffectGateModel,
+  InspectorSkillRouteModel,
+  InspectorToolExecutionModel,
   OperationalInspectorModel,
 } from "~/controlPlane/presentOperationalInspector";
 
@@ -114,6 +121,13 @@ export function inspectorModelFromLab(input: {
   readonly taskObjective?: string;
   readonly openRouter?: InspectorOpenRouterModel | null;
   readonly hybrid?: InspectorHybridModel | null;
+  readonly skillRoute?: InspectorSkillRouteModel | null;
+  readonly mcpRoute?: InspectorMcpRouteModel | null;
+  readonly executionPlan?: InspectorPlanModel | null;
+  readonly actionGate?: InspectorSideEffectGateModel | null;
+  readonly approval?: InspectorApprovalModel | null;
+  readonly toolExecution?: InspectorToolExecutionModel | null;
+  readonly outcome?: InspectorOutcomeModel | null;
 }): OperationalInspectorModel {
   if (input.empty === true) {
     return {
@@ -156,6 +170,13 @@ export function inspectorModelFromLab(input: {
       cursorCloud: null,
       openRouter: null,
       hybrid: null,
+      skillRoute: null,
+      mcpRoute: null,
+      executionPlan: null,
+      actionGate: null,
+      approval: null,
+      toolExecution: null,
+      outcome: null,
       error: null,
       emptyReason: "no-selection",
     };
@@ -223,6 +244,13 @@ export function inspectorModelFromLab(input: {
     cursorCloud: null,
     openRouter: input.openRouter ?? null,
     hybrid: input.hybrid ?? null,
+    skillRoute: input.skillRoute ?? null,
+    mcpRoute: input.mcpRoute ?? null,
+    executionPlan: input.executionPlan ?? null,
+    actionGate: input.actionGate ?? null,
+    approval: input.approval ?? null,
+    toolExecution: input.toolExecution ?? null,
+    outcome: input.outcome ?? null,
     error: input.error,
     emptyReason: null,
   };
@@ -234,6 +262,7 @@ export function labControlCenterModel(input?: {
   readonly environmentLabel?: string;
   readonly longNames?: boolean;
   readonly routerInsights?: ControlCenterModel["routerInsights"];
+  readonly actionGovernance?: ControlCenterModel["actionGovernance"];
 }): ControlCenterModel {
   const environmentId = EnvironmentId.make("lab-environment");
   const projectId = ProjectId.make("lab-project");
@@ -298,6 +327,7 @@ export function labControlCenterModel(input?: {
     capabilityOff: false,
     environmentLabel: input?.environmentLabel ?? (empty ? null : "UI Lab environment"),
     ...(input?.routerInsights !== undefined ? { routerInsights: input.routerInsights } : {}),
+    ...(input?.actionGovernance !== undefined ? { actionGovernance: input.actionGovernance } : {}),
   };
 }
 

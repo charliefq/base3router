@@ -18,13 +18,15 @@ const CONTROL_CENTER_SCENARIOS = new Set<UiLabScenarioId>([
   "eval-export-delete",
   "eval-mixed-provenance",
   "eval-compact-height",
+  "control-center-action-governance",
 ]);
 
 async function applyScenarioViewport(page: Page, id: UiLabScenarioId) {
   if (
     id === "compact-height" ||
     id === "openrouter-compact-height" ||
-    id === "eval-compact-height"
+    id === "eval-compact-height" ||
+    id === "phase12-compact-height"
   ) {
     await page.setViewportSize({ width: 1280, height: 360 });
     return;
@@ -33,7 +35,7 @@ async function applyScenarioViewport(page: Page, id: UiLabScenarioId) {
     await page.setViewportSize({ width: 1280, height: 520 });
     return;
   }
-  if (id === "narrow-width") {
+  if (id === "narrow-width" || id === "phase12-narrow-width") {
     await page.setViewportSize({ width: 1024, height: 640 });
     return;
   }
@@ -231,5 +233,46 @@ test.describe("Base3Router UI Lab", () => {
     await expect(page.getByLabel("Open operational inspector")).toBeVisible();
     await page.keyboard.press("Tab");
     await expect(page.locator(":focus")).toBeVisible();
+  });
+
+  test("Inspector shows Skill Route, MCP Route, and ActionGate ASK independently of Route Gate", async ({
+    page,
+  }) => {
+    await openScenario(page, "phase12-inspector");
+    await expect(page.locator("[data-skill-route]")).toBeVisible();
+    await expect(page.locator("[data-mcp-route]")).toBeVisible();
+    await expect(page.locator("[data-action-gate]")).toBeVisible();
+    await expect(page.locator("[data-action-approval]")).toBeVisible();
+    await expect(page.getByText("Route Gate", { exact: true })).toBeVisible();
+    await expect(page.getByText("ASK", { exact: true }).first()).toBeVisible();
+    await expect(page.locator("[data-action-approval]")).toBeVisible();
+    await expect(page.locator('[data-control-plane="inspector"]')).toContainText("One-time");
+    await expect(page.getByText("Changed arguments require a new approval.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Grant once" })).toBeVisible();
+    await page.getByRole("button", { name: "Grant once" }).click();
+    await expect(page.locator("[data-action-approval-status=consumed]")).toBeVisible();
+    await expect(page.locator("[data-ui-lab-tool-executions]")).toHaveText("1");
+    await assertNoSecrets(page);
+    await capture(page, "phase12-inspector");
+  });
+
+  test("prompt-injection-shaped MCP metadata is not shown as instructions", async ({ page }) => {
+    await openScenario(page, "mcp-prompt-injection");
+    await expect(page.locator("[data-mcp-filtered]")).toContainText("PROMPT_INJECTION_SHAPED");
+    await expect(page.locator("body")).not.toContainText("ignore previous instructions");
+    await assertNoSecrets(page);
+    await capture(page, "mcp-prompt-injection");
+  });
+
+  test("Control Center projects action governance without secrets or invented cost", async ({
+    page,
+  }) => {
+    await openScenario(page, "control-center-action-governance");
+    await expect(page.locator("[data-action-governance]")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Action governance" })).toBeVisible();
+    await expect(page.getByText("2 pending approvals")).toBeVisible();
+    await expect(page.getByText(/Known unknown/)).toBeVisible();
+    await assertNoSecrets(page);
+    await capture(page, "control-center-action-governance");
   });
 });

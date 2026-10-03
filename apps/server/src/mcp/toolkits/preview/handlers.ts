@@ -7,6 +7,7 @@ import {
   PreviewAutomationRecordingTransferError,
   PreviewAutomationRecordingDesktopUpdateRequiredError,
   PreviewAutomationRecordingArtifact,
+  McpActionGateBlockedError,
   type ToolActivityIcon,
   type ThreadId,
   type PreviewAutomationOperation,
@@ -19,6 +20,7 @@ import {
   type PreviewTabId,
 } from "@t3tools/contracts";
 
+import { ActionGateService } from "../../../actionGate/ActionGateService.ts";
 import {
   parseAttachmentUuid,
   parseAttachmentFileExtension,
@@ -28,6 +30,7 @@ import {
 import { resolveAttachmentRelativePath } from "../../../attachmentPaths.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { requireAllowedMcpTool } from "../../McpActionAuthorization.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
 
@@ -50,6 +53,23 @@ export function normalizePreviewOpenInput(
   };
 }
 
+const PREVIEW_TOOL_BY_OPERATION: Record<PreviewAutomationOperation, string> = {
+  status: "preview_status",
+  open: "preview_open",
+  navigate: "preview_navigate",
+  snapshot: "preview_snapshot",
+  click: "preview_click",
+  type: "preview_type",
+  press: "preview_press",
+  scroll: "preview_scroll",
+  evaluate: "preview_evaluate",
+  waitFor: "preview_wait_for",
+  recordingStart: "preview_recording_start",
+  recordingStop: "preview_recording_stop",
+  resize: "preview_resize",
+  setColorScheme: "preview_set_appearance",
+};
+
 const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   operation: PreviewAutomationOperation,
   input: unknown,
@@ -57,10 +77,13 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   tabId?: PreviewTabId,
 ): Effect.fn.Return<
   { result: A; toolIcon?: ToolActivityIcon },
-  import("@t3tools/contracts").PreviewAutomationError,
-  McpInvocationContext.McpInvocationContext | PreviewAutomationBroker.PreviewAutomationBroker
+  import("@t3tools/contracts").PreviewAutomationError | McpActionGateBlockedError,
+  | McpInvocationContext.McpInvocationContext
+  | PreviewAutomationBroker.PreviewAutomationBroker
+  | ActionGateService
 > {
   const scope = yield* McpInvocationContext.requireMcpCapability("preview");
+  yield* requireAllowedMcpTool(PREVIEW_TOOL_BY_OPERATION[operation], input);
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   let targetTabId = tabId;
   const result = yield* broker.invoke<A>({

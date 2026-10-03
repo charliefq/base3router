@@ -2,18 +2,21 @@ import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
 import type {
+  ControlCenterApprovalActions,
   ControlCenterModel,
   ControlCenterRouterActions,
   ControlCenterTaskItem,
 } from "~/controlPlane/presentControlCenter";
 import { Button } from "../ui/button";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { ActionApprovalControls } from "./ActionApprovalControls";
 import { OperationalStatusCard, statusTone } from "./OperationalStatusCard";
 
 export function ControlCenter(props: {
   readonly model: ControlCenterModel;
   readonly section?: "overview" | "workflows" | "agents";
   readonly actions?: ControlCenterRouterActions;
+  readonly approvalActions?: ControlCenterApprovalActions;
 }) {
   const section = props.section ?? "overview";
   return (
@@ -118,6 +121,55 @@ export function ControlCenter(props: {
                 model={props.model}
                 {...(props.actions !== undefined ? { actions: props.actions } : {})}
               />
+            </OperationalStatusCard>
+          ) : null}
+          {props.model.actionGovernance ? (
+            <OperationalStatusCard
+              title="Action governance"
+              value={props.model.actionGovernance.compliance}
+              detail={props.model.actionGovernance.configuredSkills}
+            >
+              <div
+                className="mt-1 space-y-1 text-2xs text-muted-foreground"
+                data-action-governance=""
+              >
+                <p>{props.model.actionGovernance.configuredMcp}</p>
+                <p>{props.model.actionGovernance.pendingApprovals}</p>
+                <p>{props.model.actionGovernance.deniedExpired}</p>
+                <p>{props.model.actionGovernance.recentOutcomes}</p>
+                <p>{props.model.actionGovernance.costExposure}</p>
+              </div>
+              {props.model.actionGovernance.pendingCards.map((approval) => (
+                <OperationalStatusCard
+                  key={approval.approvalId}
+                  title="Pending approval"
+                  tone="warning"
+                  value={approval.status}
+                  detail={`${approval.actionType} on ${approval.destination}`}
+                >
+                  <ActionApprovalControls
+                    approval={approval}
+                    canOperate={props.approvalActions?.canOperate === true}
+                    disconnected={props.approvalActions?.disconnected === true}
+                    error={
+                      props.approvalActions?.submittingId === approval.approvalId
+                        ? (props.approvalActions.error ?? null)
+                        : null
+                    }
+                    submitting={
+                      props.approvalActions?.submittingId === approval.approvalId
+                        ? (props.approvalActions.submittingDecision ?? null)
+                        : null
+                    }
+                    {...(props.approvalActions !== undefined
+                      ? {
+                          onRespond: (decision) =>
+                            props.approvalActions?.onRespond(approval.approvalId, decision),
+                        }
+                      : {})}
+                  />
+                </OperationalStatusCard>
+              ))}
             </OperationalStatusCard>
           ) : null}
           {props.model.empty ? (

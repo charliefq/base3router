@@ -2,10 +2,20 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/models";
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  MODEL_ROUTER_UNKNOWN_METRIC,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { expect, it } from "vite-plus/test";
 
-import { presentControlCenter, presentRouterInsights } from "./presentControlCenter";
+import {
+  presentActionGovernance,
+  presentControlCenter,
+  presentRouterInsights,
+} from "./presentControlCenter";
 
 const environmentId = EnvironmentId.make("environment-1");
 const projectId = ProjectId.make("project-1");
@@ -187,4 +197,31 @@ it("maps live Router Insights with numerator/denominator instead of fake percent
   expect(insights.activePolicy).toBe("model-router.v0");
   expect(insights.candidatePolicy).toBe("hybrid-router.v1.0.0");
   expect(insights.canOperate).toBe(false);
+});
+
+it("projects Action governance without fabricating known cost", () => {
+  const governance = presentActionGovernance({
+    environmentId,
+    policyVersion: "action-gate.v0",
+    configuredSkillCount: 2,
+    enabledSkillCount: 1,
+    configuredMcpServerCount: 3,
+    enabledMcpServerCount: 3,
+    degradedMcpServerCount: 0,
+    pendingApprovalCount: 1,
+    deniedCount: 2,
+    expiredCount: 0,
+    recentOutcomes: ["denied", "timeout"],
+    preventedUnsafeCount: 2,
+    knownCostUsd: MODEL_ROUTER_UNKNOWN_METRIC,
+    estimatedCostUsd: MODEL_ROUTER_UNKNOWN_METRIC,
+    compliance: "attention",
+    pending: [],
+  });
+
+  expect(governance.configuredSkills).toBe("1/2 skills enabled");
+  expect(governance.pendingApprovals).toBe("1 pending approvals");
+  expect(governance.costExposure).toContain("unknown");
+  expect(governance.costExposure).not.toMatch(/sk-|Bearer /);
+  expect(governance.compliance).toBe("attention");
 });

@@ -11,9 +11,12 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { ExecutionPlanV0 } from "./executionPlan.ts";
+import { McpRouterDecision } from "./mcpRouter.ts";
 import { ModelRouterDecision } from "./modelRouter.ts";
 import { OpenRouterTeacherObservationV0 } from "./openRouter.ts";
 import { HybridRouteDecisionV1 } from "./routerEvaluation.ts";
+import { SkillRouterDecision } from "./skillRouter.ts";
 
 export const DISPATCHER_POLICY_VERSION = "dispatcher.phase-1a.v1" as const;
 export const DISPATCHER_MAX_CANDIDATES = 32;
@@ -141,6 +144,12 @@ export const DispatcherTaskRouteBinding = Schema.Struct({
   openRouter: Schema.optional(OpenRouterTeacherObservationV0),
   /** Phase 11 Hybrid / policy-shadow decision. Absent on pre-Phase-11 bindings. */
   hybrid: Schema.optional(HybridRouteDecisionV1),
+  /** Phase 12 Skill Router decision. Absent on pre-Phase-12 bindings. */
+  skillRoute: Schema.optional(SkillRouterDecision),
+  /** Phase 12 MCP Router decision. Absent on pre-Phase-12 bindings. */
+  mcpRoute: Schema.optional(McpRouterDecision),
+  /** Phase 12 immutable execution plan. Absent on pre-Phase-12 bindings. */
+  executionPlan: Schema.optional(ExecutionPlanV0),
 });
 export type DispatcherTaskRouteBinding = typeof DispatcherTaskRouteBinding.Type;
 

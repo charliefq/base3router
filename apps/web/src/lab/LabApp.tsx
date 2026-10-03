@@ -14,6 +14,7 @@ import { TooltipProvider } from "~/components/ui/tooltip";
 import { labDecision } from "./fixtures";
 import { simulateRoutedTurn } from "./fakeProvider";
 import { LabWorkspace } from "./LabWorkspace";
+import { applyLabApprovalDecision } from "./labActionGate";
 import {
   UI_LAB_SCENARIOS,
   createLabScenario,
@@ -43,6 +44,12 @@ function LabShell() {
   const [prompt, setPrompt] = useState(scenario.prompt);
   const [error, setError] = useState(scenario.error);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(scenario.inspectorCollapsed);
+  const [liveApproval, setLiveApproval] = useState(scenario.approval ?? null);
+  const [approvalSubmitting, setApprovalSubmitting] = useState<"grant" | "deny" | "cancel" | null>(
+    null,
+  );
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [toolExecutions, setToolExecutions] = useState(0);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -62,6 +69,10 @@ function LabShell() {
     setPrompt(next.prompt);
     setError(next.error);
     setInspectorCollapsed(next.inspectorCollapsed);
+    setLiveApproval(next.approval ?? null);
+    setApprovalSubmitting(null);
+    setApprovalError(null);
+    setToolExecutions(0);
     writeScenarioId(id);
   };
 
@@ -136,6 +147,20 @@ function LabShell() {
           }));
         }}
         onToggleInspector={() => setInspectorCollapsed((current) => !current)}
+        liveApproval={liveApproval}
+        approvalSubmitting={approvalSubmitting}
+        approvalError={approvalError}
+        toolExecutions={toolExecutions}
+        onApprovalRespond={(decision) => {
+          if (liveApproval === null || approvalSubmitting !== null) return;
+          setApprovalSubmitting(decision);
+          setApprovalError(null);
+          const result = applyLabApprovalDecision(liveApproval, decision);
+          setLiveApproval(result.approval);
+          setApprovalError(result.error);
+          setToolExecutions((current) => current + result.toolExecutions);
+          setApprovalSubmitting(null);
+        }}
       />
     </div>
   );

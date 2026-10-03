@@ -10,6 +10,7 @@ import {
   labDocumentContainsSecretProbe,
   simulateRoutedTurn,
 } from "./fakeProvider";
+import { applyLabApprovalDecision } from "./labActionGate";
 import { UI_LAB_SCENARIO_IDS, createLabScenario } from "./scenarios";
 
 describe("Base3Router UI Lab fake providers", () => {
@@ -123,6 +124,9 @@ describe("Base3Router UI Lab fake providers", () => {
     expect(UI_LAB_SCENARIO_IDS).toContain("inspector-attempts");
     expect(UI_LAB_SCENARIO_IDS).toContain("eval-no-observations");
     expect(UI_LAB_SCENARIO_IDS).toContain("eval-challenger-disagrees");
+    expect(UI_LAB_SCENARIO_IDS).toContain("skill-none");
+    expect(UI_LAB_SCENARIO_IDS).toContain("action-requires-approval");
+    expect(UI_LAB_SCENARIO_IDS).toContain("control-center-action-governance");
     for (const id of UI_LAB_SCENARIO_IDS) {
       const scenario = createLabScenario(id);
       expect(scenario.id).toBe(id);
@@ -133,5 +137,24 @@ describe("Base3Router UI Lab fake providers", () => {
     );
     expect(createLabScenario("no-alternate").error ?? "").toMatch(/no eligible alternate/i);
     expect(createLabScenario("bounded-attempts").decision.attempts?.length).toBe(3);
+    expect(createLabScenario("skill-none").skillRoute?.selected).toBeNull();
+    expect(createLabScenario("action-requires-approval").actionGate?.decision).toBe("ASK");
+    expect(createLabScenario("approval-granted").approval?.oneTime).toBe(true);
+    expect(createLabScenario("mcp-prompt-injection").mcpRoute?.filteredReasonCodes).toContain(
+      "PROMPT_INJECTION_SHAPED",
+    );
+    expect(JSON.stringify(createLabScenario("approval-granted").approval)).not.toMatch(
+      /sk-|Bearer /,
+    );
+    const pending = createLabScenario("action-requires-approval").approval;
+    expect(pending).toBeTruthy();
+    if (pending) {
+      expect(applyLabApprovalDecision(pending, "grant").toolExecutions).toBe(1);
+      expect(applyLabApprovalDecision(pending, "deny").toolExecutions).toBe(0);
+      expect(applyLabApprovalDecision(pending, "cancel").toolExecutions).toBe(0);
+      expect(applyLabApprovalDecision({ ...pending, status: "consumed" }, "grant").error).toMatch(
+        /consumed/,
+      );
+    }
   });
 });
