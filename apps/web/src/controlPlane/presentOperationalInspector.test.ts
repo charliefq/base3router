@@ -447,3 +447,71 @@ it("presents catalog freshness timestamps from runtime capability state", () => 
   expect(model.openRouter?.freshness).toBe("stale");
   expect(model.openRouter?.asOf).toBe("2026-06-17");
 });
+
+it("projects Skill Route, MCP Route, ActionGate, and approval independently of Route Gate", () => {
+  const model = presentOperationalInspector({
+    selected: true,
+    projectTitle: "Portfolio",
+    taskObjective: "Inspect a planned tool action",
+    gitBranch: "cursor/phase-12",
+    sessionStatus: "idle",
+    sessionError: null,
+    capabilities: { dispatcher: true, workflow: true, cursorCloud: false },
+    providers: [],
+    preview: { status: "idle" },
+    boundRoute: boundRoute,
+    workflowRun: null,
+    workflowTemplate: null,
+    cursorCloudBinding: null,
+    skillRoute: {
+      policyVersion: "skill-router.v0",
+      selected: null,
+      mode: "auto",
+      reasonCodes: ["NO_SKILLS_CONFIGURED"],
+      filteredReasonCodes: [],
+      eligibleCount: 0,
+      explanation: "No skills are configured. Continuing without a skill.",
+      tieBreak: "skillId lexicographic",
+    },
+    mcpRoute: {
+      policyVersion: "mcp-router.v0",
+      selected: "t3-preview/preview_status",
+      server: "t3-preview",
+      mode: "auto",
+      reasonCodes: ["SELECTED"],
+      filteredReasonCodes: ["PROMPT_INJECTION_SHAPED"],
+      eligibleCount: 1,
+      explanation: "Selected t3-preview/preview_status by mcp-router.v0 tie-break.",
+      tieBreak: "toolId lexicographic",
+    },
+    executionPlan: {
+      planId: "plan-1",
+      actionCount: 1,
+      policyVersions: "action-gate.v0",
+      expiresAt: null,
+    },
+    actionGate: {
+      decision: "ALLOW",
+      riskClass: "read-only-local",
+      reasonCodes: ["ACTION_ALLOWED"],
+      fingerprint: "deadbeef",
+    },
+    approval: null,
+    toolExecution: {
+      status: "succeeded",
+      retry: "none",
+      circuit: "closed",
+      fallback: "none",
+    },
+    outcome: {
+      classification: "success",
+      evidence: "Measured local preview_status.",
+    },
+  });
+
+  expect(model.skillRoute?.selected).toBeNull();
+  expect(model.mcpRoute?.selected).toBe("t3-preview/preview_status");
+  expect(model.actionGate?.decision).toBe("ALLOW");
+  expect(model.route.gateDecision).toBe("ALLOW");
+  expect(model.outcome?.classification).toBe("success");
+});

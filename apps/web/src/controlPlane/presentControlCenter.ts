@@ -3,6 +3,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/models";
 import type {
+  ActionGovernanceSnapshotV0,
   EnvironmentId,
   EvaluationMetricV0,
   ExplicitFeedbackKind,
@@ -61,6 +62,17 @@ export type ControlCenterModel = {
   readonly capabilityOff: boolean;
   readonly environmentLabel: string | null;
   readonly routerInsights?: ControlCenterRouterInsights | null;
+  readonly actionGovernance?: ControlCenterActionGovernance | null;
+};
+
+export type ControlCenterActionGovernance = {
+  readonly configuredSkills: string;
+  readonly configuredMcp: string;
+  readonly pendingApprovals: string;
+  readonly deniedExpired: string;
+  readonly recentOutcomes: string;
+  readonly costExposure: string;
+  readonly compliance: string;
 };
 
 export type ControlCenterRouterInsights = {
@@ -108,6 +120,7 @@ export type ControlCenterInput = {
   readonly catalogs?: ReadonlyArray<WorkflowCatalog>;
   readonly environmentLabel?: string | null;
   readonly routerInsights?: ControlCenterModel["routerInsights"];
+  readonly actionGovernance?: ControlCenterModel["actionGovernance"];
 };
 
 export type ControlCenterInspectorTarget = {
@@ -214,6 +227,7 @@ export function presentControlCenter(input: ControlCenterInput): ControlCenterMo
     capabilityOff,
     environmentLabel: sanitizeDisplayText(input.environmentLabel ?? null),
     ...(input.routerInsights !== undefined ? { routerInsights: input.routerInsights } : {}),
+    ...(input.actionGovernance !== undefined ? { actionGovernance: input.actionGovernance } : {}),
   };
 }
 
@@ -231,6 +245,29 @@ function metricById(
   id: string,
 ): EvaluationMetricV0 | undefined {
   return metrics.find((metric) => metric.id === id);
+}
+
+export function presentActionGovernance(
+  snapshot: ActionGovernanceSnapshotV0,
+): ControlCenterActionGovernance {
+  const known =
+    snapshot.knownCostUsd.status === "known" ? `$${snapshot.knownCostUsd.value}` : "unknown";
+  const estimated =
+    snapshot.estimatedCostUsd.status === "known"
+      ? `estimated $${snapshot.estimatedCostUsd.value}`
+      : "estimated unknown";
+  return {
+    configuredSkills: `${snapshot.enabledSkillCount}/${snapshot.configuredSkillCount} skills enabled`,
+    configuredMcp: `${snapshot.enabledMcpServerCount}/${snapshot.configuredMcpServerCount} MCP servers enabled (${snapshot.degradedMcpServerCount} degraded)`,
+    pendingApprovals: `${snapshot.pendingApprovalCount} pending approvals`,
+    deniedExpired: `${snapshot.deniedCount} denied · ${snapshot.expiredCount} expired`,
+    recentOutcomes:
+      snapshot.recentOutcomes.length === 0
+        ? "No recent action outcomes"
+        : snapshot.recentOutcomes.join(", "),
+    costExposure: `Known ${known} · ${estimated}`,
+    compliance: snapshot.compliance,
+  };
 }
 
 export function presentRouterInsights(

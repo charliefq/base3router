@@ -120,6 +120,24 @@ export function ControlCenter(props: {
               />
             </OperationalStatusCard>
           ) : null}
+          {props.model.actionGovernance ? (
+            <OperationalStatusCard
+              title="Action governance"
+              value={props.model.actionGovernance.compliance}
+              detail={props.model.actionGovernance.configuredSkills}
+            >
+              <div
+                className="mt-1 space-y-1 text-2xs text-muted-foreground"
+                data-action-governance=""
+              >
+                <p>{props.model.actionGovernance.configuredMcp}</p>
+                <p>{props.model.actionGovernance.pendingApprovals}</p>
+                <p>{props.model.actionGovernance.deniedExpired}</p>
+                <p>{props.model.actionGovernance.recentOutcomes}</p>
+                <p>{props.model.actionGovernance.costExposure}</p>
+              </div>
+            </OperationalStatusCard>
+          ) : null}
           {props.model.empty ? (
             <OperationalStatusCard
               title="Empty"

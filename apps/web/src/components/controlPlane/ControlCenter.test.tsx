@@ -120,6 +120,34 @@ it("renders capability-off, approvals, and terminal run states", async () => {
   expect(renderedText()).not.toContain("sk-");
 });
 
+it("renders Action governance as a projection of server counts", async () => {
+  await act(async () => {
+    renderer = create(
+      <ControlCenter
+        model={{
+          ...empty,
+          empty: false,
+          actionGovernance: {
+            configuredSkills: "1/2 skills enabled",
+            configuredMcp: "3/3 MCP servers enabled (0 degraded)",
+            pendingApprovals: "1 pending approvals",
+            deniedExpired: "2 denied · 0 expired",
+            recentOutcomes: "denied, timeout",
+            costExposure: "Known unknown · estimated unknown",
+            compliance: "attention",
+          },
+        }}
+      />,
+    );
+  });
+
+  expect(renderedText()).toContain("Action governance");
+  expect(renderedText()).toContain("1 pending approvals");
+  expect(renderedText()).toContain("3/3 MCP servers enabled");
+  expect(renderedText()).toContain("Known unknown");
+  expect(renderedText()).not.toContain("sk-");
+});
+
 it("renders live Router Insights counts and hides mutations without operate access", async () => {
   await act(async () => {
     renderer = create(

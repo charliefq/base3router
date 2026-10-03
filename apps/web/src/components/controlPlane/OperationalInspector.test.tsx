@@ -65,6 +65,13 @@ function model(overrides: Partial<OperationalInspectorModel> = {}): OperationalI
     cursorCloud: null,
     openRouter: null,
     hybrid: null,
+    skillRoute: null,
+    mcpRoute: null,
+    executionPlan: null,
+    actionGate: null,
+    approval: null,
+    toolExecution: null,
+    outcome: null,
     error: null,
     emptyReason: null,
     ...overrides,
@@ -80,7 +87,7 @@ it("renders a provisional local route", async () => {
 
   expect(renderedText()).toContain("Provisional route");
   expect(renderedText()).toContain("gpt-5.4");
-  expect(renderedText()).toContain("ActionGate");
+  expect(renderedText()).toContain("Route Gate");
   expect(renderedText()).toContain("ALLOW");
   expect(renderedText()).toContain("local");
   expect(renderedText()).toContain("Auto Route");
@@ -88,6 +95,83 @@ it("renders a provisional local route", async () => {
   expect(renderedText()).toContain("Metrics:");
   expect(renderedText()).toContain("unknown");
   expect(renderedText()).not.toContain("sk-");
+});
+
+it("renders independent Skill Route, MCP Route, ActionGate, and approval cards", async () => {
+  await act(async () => {
+    renderer = create(
+      <OperationalInspector
+        collapsed={false}
+        model={model({
+          skillRoute: {
+            policyVersion: "skill-router.v0",
+            selected: "fake-lab:review",
+            mode: "auto",
+            reasonCodes: ["SELECTED"],
+            filteredReasonCodes: ["REQUIRED_CAPABILITY_MISSING"],
+            eligibleCount: 1,
+            explanation: "Selected fake-lab:review by skill-router.v0 tie-break.",
+            tieBreak: "skillId lexicographic",
+          },
+          mcpRoute: {
+            policyVersion: "mcp-router.v0",
+            selected: "t3-preview/preview_status",
+            server: "t3-preview",
+            mode: "auto",
+            reasonCodes: ["SELECTED"],
+            filteredReasonCodes: ["PROMPT_INJECTION_SHAPED"],
+            eligibleCount: 1,
+            explanation: "Selected t3-preview/preview_status by mcp-router.v0 tie-break.",
+            tieBreak: "toolId lexicographic",
+          },
+          executionPlan: {
+            planId: "plan-lab",
+            actionCount: 1,
+            policyVersions: "skill-router.v0 · mcp-router.v0 · action-gate.v0",
+            expiresAt: "2026-10-03T00:05:00.000Z",
+          },
+          actionGate: {
+            decision: "ASK",
+            riskClass: "destructive",
+            reasonCodes: ["APPROVAL_REQUIRED"],
+            fingerprint: "abcd1234efgh",
+          },
+          approval: {
+            status: "pending",
+            reuse: "one-time",
+            expiresAt: "2026-10-03T00:05:00.000Z",
+            oneTime: true,
+            actionType: "preview_evaluate",
+            destination: "t3-preview",
+            argumentSummary: "token=[redacted]",
+          },
+          toolExecution: {
+            status: "paused",
+            retry: "none",
+            circuit: "closed",
+            fallback: "none",
+          },
+          outcome: {
+            classification: "interrupted",
+            evidence: "Waiting on one-time approval.",
+          },
+        })}
+        onToggle={() => {}}
+      />,
+    );
+  });
+
+  expect(renderedText()).toContain("Skill Route");
+  expect(renderedText()).toContain("fake-lab:review");
+  expect(renderedText()).toContain("MCP Route");
+  expect(renderedText()).toContain("t3-preview/preview_status");
+  expect(renderedText()).toContain("ActionGate");
+  expect(renderedText()).toContain("ASK");
+  expect(renderedText()).toContain("One-time");
+  expect(renderedText()).toContain("Changed arguments require a new approval");
+  expect(renderedText()).toContain("Route Gate");
+  expect(renderedText()).not.toContain("sk-");
+  expect(renderedText()).not.toContain("Bearer");
 });
 
 it("renders a bound Cursor Cloud workflow and approval state", async () => {

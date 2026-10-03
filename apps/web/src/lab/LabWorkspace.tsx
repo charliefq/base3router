@@ -59,6 +59,17 @@ export function LabWorkspace(props: {
       : {}),
     ...(props.scenario.openRouter !== undefined ? { openRouter: props.scenario.openRouter } : {}),
     ...(props.scenario.hybrid !== undefined ? { hybrid: props.scenario.hybrid } : {}),
+    ...(props.scenario.skillRoute !== undefined ? { skillRoute: props.scenario.skillRoute } : {}),
+    ...(props.scenario.mcpRoute !== undefined ? { mcpRoute: props.scenario.mcpRoute } : {}),
+    ...(props.scenario.executionPlan !== undefined
+      ? { executionPlan: props.scenario.executionPlan }
+      : {}),
+    ...(props.scenario.actionGate !== undefined ? { actionGate: props.scenario.actionGate } : {}),
+    ...(props.scenario.approval !== undefined ? { approval: props.scenario.approval } : {}),
+    ...(props.scenario.toolExecution !== undefined
+      ? { toolExecution: props.scenario.toolExecution }
+      : {}),
+    ...(props.scenario.outcome !== undefined ? { outcome: props.scenario.outcome } : {}),
   });
 
   return (
@@ -97,6 +108,9 @@ export function LabWorkspace(props: {
                 : {}),
               ...(props.scenario.routerInsights !== undefined
                 ? { routerInsights: props.scenario.routerInsights }
+                : {}),
+              ...(props.scenario.actionGovernance !== undefined
+                ? { actionGovernance: props.scenario.actionGovernance }
                 : {}),
             })}
           />

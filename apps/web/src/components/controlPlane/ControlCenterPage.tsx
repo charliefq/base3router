@@ -14,6 +14,7 @@ import {
   selectControlCenterSource,
 } from "~/controlPlane/controlCenterProjection";
 import {
+  presentActionGovernance,
   presentControlCenter,
   presentRouterInsights,
   selectControlCenterInspectorTarget,
@@ -65,6 +66,11 @@ export function ControlCenterPage(props: {
     selectedEnvironmentId === null || capability === undefined
       ? null
       : serverEnvironment.routerInsights({ environmentId: selectedEnvironmentId, input: {} }),
+  );
+  const governanceQuery = useEnvironmentQuery(
+    selectedEnvironmentId === null
+      ? null
+      : serverEnvironment.actionGovernance({ environmentId: selectedEnvironmentId, input: {} }),
   );
   const session = useAtomValue(
     selectedEnvironmentId === null
@@ -130,6 +136,9 @@ export function ControlCenterPage(props: {
     }),
     environmentLabel: environment?.label ?? selectedEnvironmentId,
     ...(routerInsights !== undefined ? { routerInsights } : {}),
+    ...(governanceQuery.data !== null
+      ? { actionGovernance: presentActionGovernance(governanceQuery.data) }
+      : {}),
   });
   const inspector = selectControlCenterInspectorTarget(model);
 
