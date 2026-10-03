@@ -278,6 +278,7 @@ describe("Phase 12 contracts", () => {
       knownCostUsd: unknownMetric,
       estimatedCostUsd: unknownMetric,
       compliance: "unknown",
+      pending: [],
     });
     expect(Exit.isSuccess(snapshot)).toBe(true);
   });

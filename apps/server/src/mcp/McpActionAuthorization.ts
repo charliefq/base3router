@@ -1,8 +1,17 @@
-import { McpActionGateBlockedError, type ActionGateDecision } from "@t3tools/contracts";
+import {
+  ActionGateError,
+  McpActionGateBlockedError,
+  MODEL_ROUTER_UNKNOWN_METRIC,
+  type ActionGateDecision,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import { ActionGateService } from "../actionGate/ActionGateService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+
+const isActionGateError = Schema.is(ActionGateError);
 
 export const requireAllowedMcpTool = (
   toolName: string,
@@ -33,14 +42,71 @@ export const requireAllowedMcpTool = (
             }),
         ),
       );
-    if (decision.decision !== "ALLOW") {
+    if (decision.decision === "ALLOW") return decision;
+    if (decision.decision === "DENY") {
       return yield* new McpActionGateBlockedError({
         toolName,
-        decision: decision.decision,
+        decision: "DENY",
         reasonCodes: [...decision.reasonCodes],
         detail: decision.explanation,
         ...(decision.approvalId !== undefined ? { approvalId: decision.approvalId } : {}),
       });
     }
-    return decision;
+    if (decision.approvalId === undefined) {
+      return yield* new McpActionGateBlockedError({
+        toolName,
+        decision: "ASK",
+        reasonCodes: [...decision.reasonCodes],
+        detail: decision.explanation,
+      });
+    }
+    const now = yield* DateTime.now;
+    const nowIso = DateTime.formatIso(now);
+    const consumed = yield* actionGate
+      .waitForAuthorized(decision.approvalId, decision.fingerprint, nowIso)
+      .pipe(
+        Effect.mapError((error) => {
+          const reason = isActionGateError(error) ? error.reason : "invalid";
+          const detail = isActionGateError(error) ? error.detail : decision.explanation;
+          const codes =
+            reason === "expired"
+              ? (["APPROVAL_EXPIRED"] as const)
+              : reason === "replay"
+                ? (["REPLAY_REJECTED", "APPROVAL_CONSUMED"] as const)
+                : /denied/i.test(detail)
+                  ? (["APPROVAL_DENIED"] as const)
+                  : /cancel/i.test(detail)
+                    ? (["APPROVAL_CANCELLED"] as const)
+                    : (["ACTION_DENIED"] as const);
+          return new McpActionGateBlockedError({
+            toolName,
+            decision: "DENY",
+            reasonCodes: [...codes],
+            detail,
+            approvalId: decision.approvalId,
+          });
+        }),
+      );
+    yield* actionGate
+      .appendAudit({
+        eventId: consumed.approvalId,
+        kind: "action.started",
+        at: nowIso,
+        environmentId: invocation.environmentId,
+        planId: consumed.planId,
+        actionId: consumed.actionId,
+        decision: "ALLOW",
+        reasonCodes: ["ACTION_ALLOWED"],
+        fingerprint: consumed.fingerprint,
+        policyVersion: consumed.policyVersion,
+        cost: MODEL_ROUTER_UNKNOWN_METRIC,
+      })
+      .pipe(Effect.ignore);
+    return {
+      ...decision,
+      decision: "ALLOW" as const,
+      requiresApproval: false,
+      reasonCodes: ["ACTION_ALLOWED"],
+      explanation: "ActionGate allowed this action after a one-time approval.",
+    } satisfies ActionGateDecision;
   });

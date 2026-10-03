@@ -1,6 +1,7 @@
 import {
   ACTION_GATE_POLICY_VERSION,
   MODEL_ROUTER_UNKNOWN_METRIC,
+  type ActionApprovalId,
   type ActionAuditEventKind,
   type ActionAuditEventV0,
   type ActionFingerprint,
@@ -62,12 +63,14 @@ export const makeActionAuditEvent = (input: {
   readonly outcome?: ActionOutcomeClass;
   readonly reasonCodes?: ReadonlyArray<ActionGateReasonCode>;
   readonly fingerprint?: ActionFingerprint;
+  readonly approvalId?: ActionApprovalId;
 }): ActionAuditEventV0 => ({
   eventId: digestCanonical({
     kind: input.kind,
-    at: input.at,
+    at: input.approvalId === undefined ? input.at : "stable",
     planId: input.planId,
     actionId: input.actionId ?? null,
+    approvalId: input.approvalId ?? null,
   }).slice(0, 32),
   kind: input.kind,
   at: input.at,

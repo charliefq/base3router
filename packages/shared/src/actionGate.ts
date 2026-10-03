@@ -1,6 +1,7 @@
 import {
   ACTION_GATE_POLICY_VERSION,
   ActionFingerprint,
+  ActionIdempotencyKey,
   type ActionApprovalId,
   type ActionApprovalRecord,
   type ActionApprovalReusePolicy,
@@ -8,12 +9,14 @@ import {
   type ActionGateDecision,
   type ActionGateDecisionKind,
   type ActionGateReasonCode,
-  type ActionIdempotencyKey,
+  type ActionIdempotencyKey as ActionIdempotencyKeyType,
   type ActionRiskClass,
   type EnvironmentId,
   type ExecutionPlanV0,
   type PlannedActionV0,
+  type ProjectId,
   type SideEffectClass,
+  type ThreadId,
 } from "@t3tools/contracts";
 
 import { digestCanonical } from "./actionCanonical.ts";
@@ -24,6 +27,17 @@ export const HIGH_RISK_CLASSES: ReadonlySet<ActionRiskClass> = new Set([
   "credential",
   "administrative",
 ]);
+
+export const TERMINAL_APPROVAL_STATUSES: ReadonlySet<ActionApprovalStatus> = new Set([
+  "denied",
+  "expired",
+  "cancelled",
+  "consumed",
+  "invalidated",
+]);
+
+export const askIdempotencyKey = (fingerprint: ActionFingerprint): ActionIdempotencyKeyType =>
+  ActionIdempotencyKey.make(`ask:${fingerprint}`);
 
 export const defaultDecisionForRisk = (input: {
   readonly riskClass: ActionRiskClass;
@@ -210,7 +224,11 @@ export const createPendingApproval = (input: {
   readonly nowIso: string;
   readonly expiresAt: string;
   readonly reusePolicy?: ActionApprovalReusePolicy;
-  readonly idempotencyKey?: ActionIdempotencyKey;
+  readonly idempotencyKey?: ActionIdempotencyKeyType;
+  readonly threadId?: ThreadId;
+  readonly projectId?: ProjectId;
+  readonly argumentSummary?: string;
+  readonly askExplanation?: string;
 }): ActionApprovalRecord => ({
   approvalId: input.approvalId,
   actionId: input.action.actionId,
@@ -227,7 +245,15 @@ export const createPendingApproval = (input: {
   createdAt: input.nowIso,
   expiresAt: input.expiresAt,
   reasonCodes: ["APPROVAL_REQUIRED"],
+  riskClass: input.action.riskClass,
+  sideEffectClass: input.action.sideEffectClass,
+  argumentSummary: (input.argumentSummary ?? "none").slice(0, 512),
+  askExplanation:
+    input.askExplanation ??
+    "ActionGate requires a one-time exact-action approval before execution.",
   ...(input.idempotencyKey !== undefined ? { idempotencyKey: input.idempotencyKey } : {}),
+  ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+  ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
 });
 
 export class InMemoryActionApprovalStore {
@@ -247,14 +273,25 @@ export class InMemoryActionApprovalStore {
       (row) =>
         row.idempotencyKey !== undefined &&
         record.idempotencyKey !== undefined &&
-        row.idempotencyKey === record.idempotencyKey,
+        row.idempotencyKey === record.idempotencyKey &&
+        row.environmentId === record.environmentId,
     );
     if (existing) {
       if (existing.fingerprint !== record.fingerprint) {
         throw new Error("IDEMPOTENCY_CONFLICT");
       }
+      if (TERMINAL_APPROVAL_STATUSES.has(existing.status)) {
+        throw new Error("IDEMPOTENCY_CONFLICT");
+      }
       return existing;
     }
+    const live = [...this.#records.values()].find(
+      (row) =>
+        row.environmentId === record.environmentId &&
+        row.fingerprint === record.fingerprint &&
+        (row.status === "pending" || row.status === "granted"),
+    );
+    if (live) return live;
     this.#records.set(record.approvalId, record);
     return record;
   }

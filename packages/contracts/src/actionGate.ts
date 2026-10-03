@@ -9,7 +9,13 @@
  */
 import * as Schema from "effect/Schema";
 
-import { EnvironmentId, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { ModelRouterMetricValue } from "./modelRouter.ts";
 
 export const ACTION_GATE_POLICY_VERSION = "action-gate.v0" as const;
@@ -138,6 +144,12 @@ export const ActionApprovalRecord = Schema.Struct({
   consumedAt: Schema.optional(BoundedIso),
   idempotencyKey: Schema.optional(ActionIdempotencyKey),
   reasonCodes: BoundedReasonCodes,
+  riskClass: Schema.optional(ActionRiskClass),
+  sideEffectClass: Schema.optional(SideEffectClass),
+  argumentSummary: Schema.optional(BoundedExplanation),
+  threadId: Schema.optional(ThreadId),
+  projectId: Schema.optional(ProjectId),
+  askExplanation: Schema.optional(BoundedExplanation),
 });
 export type ActionApprovalRecord = typeof ActionApprovalRecord.Type;
 
@@ -207,6 +219,7 @@ export const ActionGovernanceSnapshotV0 = Schema.Struct({
   knownCostUsd: ModelRouterMetricValue,
   estimatedCostUsd: ModelRouterMetricValue,
   compliance: Schema.Literals(["compliant", "attention", "unknown"]),
+  pending: Schema.Array(ActionApprovalRecord).check(Schema.isMaxLength(32)),
 });
 export type ActionGovernanceSnapshotV0 = typeof ActionGovernanceSnapshotV0.Type;
 
