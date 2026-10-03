@@ -10,26 +10,33 @@ developed in many places). They cover the pre-provisioned VM environment and non
 
 ## Toolchain
 
-Pre-installed and wired into login shells (`~/.bashrc`/`~/.profile`): Node 24 (via nvm), the global
-`vp` (Vite+) CLI, and its bundled pnpm. `vp` is the package manager + task runner for this repo
-(`vp i`, `vp check`, `vp run typecheck`, `vp test`, `vp run --filter <pkg> <script>`).
+The Cloud Agent image provides Node 24.21.0 (`engines.node` is `^24.13.1`), the global `vp` (Vite+)
+CLI with bundled pnpm 11.10.0, and Rust stable (edition 2024 for `native/resource-monitor`).
+`libsecret-1-dev` and `pkg-config` are installed for the Linux desktop secret helper.
 
-- Node gotcha: the base image also ships an older Node on `/exec-daemon` that wins on `PATH` in
-  non-login shells. Run commands in a login shell (`bash -lc '...'`) or prepend
-  `$HOME/.nvm/versions/node/v24.13.1/bin` so Node 24 (`engines.node: ^24.13.1`) is used.
+- `node`, `npm`, and `npx` on `PATH` are Node 24.21.0 via symlinks in `/usr/local/cargo/bin`, which
+  is ahead of `/exec-daemon/node` (Node 22.14.0). Calling `/exec-daemon/node` directly is still Node 22.
+  The nvm install lives at `$HOME/.nvm/versions/node/v24.21.0`.
+- `vp` is `/usr/local/bin/vp`. Use it as the package manager and task runner (`vp i`, `vp check`,
+  `vp run typecheck`, `vp test`, `vp run --filter <pkg> <script>`).
 - `vp check` also runs the formatter (not just lint); markdown edits must be formatter-clean. Run
   `vp check --fix` before committing.
 
 ## Running the web app
 
-- `npm run dev` (from repo root) starts contracts (watch), web (Vite, port 5733), and the server
-  (`node --watch`, port 13773) together, auto-wiring `VITE_HTTP_URL`/`VITE_WS_URL`. Use
-  `npm run dev:server` / `npm run dev:web` for one side. If base ports are taken it auto-offsets to
-  the next free pair, so read the actual ports from stdout. Avoid production `build`/`start` in dev.
-- Auth/pairing: the server is unauthenticated by default and prints a pairing URL to stdout on startup
+- `vp run dev` (from repo root; `npm run dev` is the same script) starts contracts (watch), web
+  (Vite, port 5733), and the server (`node --watch`, port 13773). Use `vp run dev:server` /
+  `vp run dev:web` for one side. If base ports are taken it auto-offsets to the next free pair, so
+  read the actual ports from stdout. Avoid production `build`/`start` in dev.
+- Browser dev is single-origin. Leave `VITE_HTTP_URL` and `VITE_WS_URL` unset; the dev runner deletes
+  them and sets `T3CODE_SINGLE_ORIGIN_DEV=1` so Vite proxies `/api` and `/ws`.
+- Vite listens on IPv6 `localhost` (`::1`). Open `http://localhost:5733`. `http://127.0.0.1:5733`
+  is connection refused. The server process listens on `127.0.0.1`.
+- Auth/pairing: the server prints a pairing URL to stdout on startup
   (e.g. `http://localhost:5733/pair#token=XXXX`). Open that URL in the browser to pair before the web
-  UI can talk to the server. Server state (SQLite, auth, projects) lives under `~/.t3`
-  (`T3CODE_HOME`); multiple `npm run dev` instances bind different ports but share that same DB.
+  UI can talk to the server. For an isolated run, pass `--home-dir` (a worktree's gitignored `.t3`,
+  or an explicit directory). The main checkout otherwise uses `~/.t3/dev`. Never point a server at
+  `~/.t3/userdata`.
 - Agent providers are external CLIs (`codex`, `claude`, `cursor-agent`, `opencode`) probed on `PATH`.
   Without one installed the UI loads but no agent can run. Claude Code
   (`npm i -g @anthropic-ai/claude-code`) works headlessly using `ANTHROPIC_API_KEY` from the
@@ -37,34 +44,12 @@ Pre-installed and wired into login shells (`~/.bashrc`/`~/.profile`): Node 24 (v
   needed). Provider probing runs at startup and refreshes roughly every 5 minutes — restart the dev
   server to pick up a newly installed provider CLI immediately.
 
-## Android native builds (apps/mobile)
+## Mobile native builds
 
-The Android toolchain is pre-installed and wired into login shells: OpenJDK 17
-(`JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64`; the base image's default `java` is 21, so builds must
-use `JAVA_HOME`), and the Android SDK at `$HOME/Android/Sdk` (`ANDROID_HOME`/`ANDROID_SDK_ROOT`) with
-platform-tools, `platforms;android-36`, `build-tools;36.0.0`, `ndk;27.1.12297006`, and `cmake;3.22.1`.
-Gradle auto-downloads any additional pinned SDK packages on demand.
-
-- Generate the native project first: from `apps/mobile`,
-  `EXPO_NO_GIT_STATUS=1 APP_VARIANT=development npx expo prebuild --clean --platform android`
-  (the `android/` folder is generated, not committed). RN 0.85 defaults: compileSdk/targetSdk 36,
-  minSdk 24, NDK `27.1.12297006` (see `react-native/gradle/libs.versions.toml`).
-- Build with Gradle from `apps/mobile/android`, e.g. `./gradlew :app:assembleDebug`. First build is
-  slow (Kotlin + C++/NDK codegen). Limit ABIs to speed things up, e.g.
-  `-PreactNativeArchitectures=arm64-v8a`. Verified working end-to-end on a native module:
-  `./gradlew :react-native-worklets:assembleDebug` compiles Kotlin + C++ and emits an AAR + `.so`s.
-- No emulator: this VM has no `/dev/kvm` (nested virtualization), so a hardware-accelerated Android
-  emulator will not run. Use a physical device (`adb`) or EAS cloud builds (`vp run eas:android:*`) to
-  actually run the app. The full IDE GUI is unnecessary here — the SDK/NDK/Gradle toolchain that
-  Android Studio bundles is what is installed.
-- Known blocker for the full-app `:app:assembleDebug` (pre-existing, app-level — not the environment):
-  `:react-native-screens:compileDebugKotlin` fails because `patches/react-native-screens@4.25.2.patch`
-  adds new codegen props (`subtitle`, `largeSubtitle`, `navigationItemStyle`,
-  `headerCenterBarButtonItems`, `headerToolbarItems`) to the JS spec + iOS native code but includes no
-  Android Kotlin setters, so the generated `ScreenStackHeaderConfigManagerInterface` is unimplemented.
-  The mobile README documents only iOS for local builds and routes Android through EAS. Fixing local
-  Android app builds requires an app/patch change (add the Android Kotlin setters), which is out of
-  scope for environment setup.
+This environment does not include the Android SDK, a JDK 17 `JAVA_HOME`, or an Android emulator.
+The VM has no `/dev/kvm`, so a hardware-accelerated emulator cannot run. iOS builds need macOS.
+Use EAS (`vp run eas:android:*`) or a machine with the native toolchain for device builds. Web and
+server development, `vp test`, and `vp run lint:mobile` do not need that toolchain.
 
 ## Known flaky tests (unrelated to setup)
 
