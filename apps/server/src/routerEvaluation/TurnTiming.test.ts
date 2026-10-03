@@ -12,18 +12,15 @@ const environmentId = EnvironmentId.make("lab-environment");
 const threadId = ThreadId.make("thread-timing");
 const key = { environmentId, threadId, turnId: "turn-1" };
 
-const fakeClock = (state: { millis: number; nanos: bigint }): Clock.Clock => {
-  const real = Effect.runSync(Effect.service(Clock.Clock));
-  return {
-    currentTimeMillisUnsafe: () => state.millis,
-    currentTimeMillis: Effect.sync(() => state.millis),
-    currentTimeNanosUnsafe: () => state.nanos,
-    currentTimeNanos: Effect.sync(() => state.nanos),
-    monotonicTimeNanosUnsafe: () => state.nanos,
-    monotonicTimeNanos: Effect.sync(() => state.nanos),
-    sleep: (duration) => real.sleep(duration),
-  };
-};
+const fakeClock = (state: { millis: number; nanos: bigint }): Clock.Clock => ({
+  currentTimeMillisUnsafe: () => state.millis,
+  currentTimeMillis: Effect.sync(() => state.millis),
+  currentTimeNanosUnsafe: () => state.nanos,
+  currentTimeNanos: Effect.sync(() => state.nanos),
+  monotonicTimeNanosUnsafe: () => state.nanos,
+  monotonicTimeNanos: Effect.sync(() => state.nanos),
+  sleep: () => Effect.void,
+});
 
 it.effect("records TTFT and total duration from monotonic nanos", () => {
   const clock = { millis: 1_000, nanos: 1_000_000_000n };
