@@ -82,6 +82,7 @@ import {
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
   DEFAULT_ROUTER_EVALUATION_SETTINGS,
+  AuthOrchestrationOperateScope,
   WS_METHODS,
   WsRpcGroup,
   WORKTREE_SETUP_ACTIVITY_KIND,
@@ -3461,7 +3462,11 @@ const makeWsRpcLayer = (
             WS_METHODS.routerDeleteObservations,
             Effect.gen(function* () {
               const environmentId = yield* serverEnvironment.getEnvironmentId;
-              return yield* routerEvaluation.deleteObservations(environmentId, input);
+              return yield* routerEvaluation.deleteObservations(
+                environmentId,
+                input,
+                currentSession.subject,
+              );
             }),
             { "rpc.aggregate": "server" },
           ),
@@ -3471,7 +3476,12 @@ const makeWsRpcLayer = (
             Effect.gen(function* () {
               const environmentId = yield* serverEnvironment.getEnvironmentId;
               const now = yield* nowIso;
-              return yield* routerEvaluation.submitFeedback(environmentId, input, now);
+              return yield* routerEvaluation.submitFeedback(
+                environmentId,
+                input,
+                now,
+                currentSession.subject,
+              );
             }),
             { "rpc.aggregate": "server" },
           ),
@@ -3496,7 +3506,29 @@ const makeWsRpcLayer = (
             Effect.gen(function* () {
               const environmentId = yield* serverEnvironment.getEnvironmentId;
               const now = yield* nowIso;
-              return yield* routerEvaluation.activate(environmentId, input, true, now);
+              return yield* routerEvaluation.activate(
+                environmentId,
+                input,
+                currentSession.scopes.includes(AuthOrchestrationOperateScope),
+                now,
+                currentSession.subject,
+              );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.routerShadowPolicy]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.routerShadowPolicy,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const now = yield* nowIso;
+              return yield* routerEvaluation.shadow(
+                environmentId,
+                input,
+                currentSession.scopes.includes(AuthOrchestrationOperateScope),
+                now,
+                currentSession.subject,
+              );
             }),
             { "rpc.aggregate": "server" },
           ),
@@ -3506,7 +3538,13 @@ const makeWsRpcLayer = (
             Effect.gen(function* () {
               const environmentId = yield* serverEnvironment.getEnvironmentId;
               const now = yield* nowIso;
-              return yield* routerEvaluation.rollback(environmentId, input, true, now);
+              return yield* routerEvaluation.rollback(
+                environmentId,
+                input,
+                currentSession.scopes.includes(AuthOrchestrationOperateScope),
+                now,
+                currentSession.subject,
+              );
             }),
             { "rpc.aggregate": "server" },
           ),

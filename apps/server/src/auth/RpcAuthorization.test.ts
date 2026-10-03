@@ -96,6 +96,30 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("requires read for Router Insights and operate for policy mutations", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.routerGetInsights)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.routerExportObservations)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.routerListPolicies)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.routerInspectPolicy)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    for (const method of [
+      WS_METHODS.routerDeleteObservations,
+      WS_METHODS.routerSubmitFeedback,
+      WS_METHODS.routerActivatePolicy,
+      WS_METHODS.routerShadowPolicy,
+      WS_METHODS.routerRollbackPolicy,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+    }
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(

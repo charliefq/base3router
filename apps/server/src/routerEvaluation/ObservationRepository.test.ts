@@ -9,6 +9,7 @@ import {
   emptyUsageMeasurement,
   type TurnOutcomeObservationV0,
 } from "@t3tools/contracts";
+import { knownQuantity } from "@t3tools/shared/turnOutcome";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -69,5 +70,118 @@ it.effect("upserts idempotently, scopes by environment, and deletes", () =>
     assert.strictEqual(pruned, 1);
     const afterPrune = yield* store.listByEnvironment(EnvironmentId.make("lab-environment"));
     assert.strictEqual(afterPrune.length, 0);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("locks cancelled and failed terminals against later success", () =>
+  Effect.gen(function* () {
+    const store = yield* ObservationRepository;
+    const cancelled = {
+      ...observation("syn-obs-race"),
+      terminalCategory: "cancelled" as const,
+      cancelled: true,
+      finishReason: "cancelled" as const,
+    };
+    yield* store.upsert(cancelled);
+    const successWrite = yield* store.upsert(observation("syn-obs-race"));
+    assert.strictEqual(successWrite.kind, "rejected");
+    const stored = yield* store.get("syn-obs-race");
+    assert.equal(Option.isSome(stored) && stored.value.terminalCategory === "cancelled", true);
+    const failed = {
+      ...observation("syn-obs-failed"),
+      terminalCategory: "provider_failure" as const,
+      finishReason: "error" as const,
+    };
+    yield* store.upsert(failed);
+    const failedThenSuccess = yield* store.upsert(observation("syn-obs-failed"));
+    assert.strictEqual(failedThenSuccess.kind, "rejected");
+    const duplicate = yield* store.upsert(observation("syn-obs-ok"));
+    assert.strictEqual(duplicate.kind, "inserted");
+    const again = yield* store.upsert(observation("syn-obs-ok"));
+    assert.strictEqual(again.kind, "idempotent");
+    const enriched = yield* store.upsert({
+      ...observation("syn-obs-ok"),
+      usage: {
+        ...emptyUsageMeasurement(),
+        promptTokens: knownQuantity({
+          value: 9,
+          unit: "token",
+          source: "provider_reported",
+          provenance: "observed",
+          observedAt: "2026-10-03T00:00:01.000Z",
+        }),
+      },
+    });
+    assert.strictEqual(enriched.kind, "enriched");
+    assert.strictEqual(enriched.observation.terminalCategory, "success");
+    const writers = yield* Effect.all(
+      [
+        store.upsert({
+          ...observation("syn-obs-compete"),
+          terminalCategory: "cancelled",
+          cancelled: true,
+          finishReason: "cancelled",
+        }),
+        store.upsert(observation("syn-obs-compete")),
+      ],
+      { concurrency: "unbounded" },
+    );
+    const afterRace = yield* store.get("syn-obs-compete");
+    assert.equal(Option.isSome(afterRace), true);
+    if (Option.isSome(afterRace)) {
+      assert.notEqual(afterRace.value.terminalCategory, "success");
+    }
+    const events = yield* store.listEvents(EnvironmentId.make("lab-environment"));
+    assert.equal(
+      events.some((event) => event.eventType === "conflict_rejected"),
+      true,
+    );
+    const beforeRestart = yield* store.get("syn-obs-race");
+    const reread = yield* store.get("syn-obs-race");
+    assert.deepEqual(beforeRestart, reread);
+    void writers;
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("rebuilds terminal facts from append-only events", () =>
+  Effect.gen(function* () {
+    const store = yield* ObservationRepository;
+    yield* store.upsert(observation("syn-obs-events"));
+    yield* store.replaceEvidence({
+      ...observation("syn-obs-events"),
+      evidence: {
+        explicitFeedback: [
+          {
+            kind: "helpful",
+            recordedAt: "2026-10-03T00:01:00.000Z",
+            freeTextIncluded: false,
+          },
+        ],
+        reworkProxies: [],
+        verification: [],
+      },
+    });
+    const events = yield* store.listEvents(EnvironmentId.make("lab-environment"));
+    const projected = events.reduce(
+      (category, event) => event.terminalCategory ?? category,
+      "unknown" as string,
+    );
+    const stored = yield* store.get("syn-obs-events");
+    assert.equal(Option.isSome(stored) && stored.value.terminalCategory, "success");
+    assert.equal(projected, "success");
+    assert.equal(
+      Option.isSome(stored) && stored.value.evidence.explicitFeedback[0]?.kind,
+      "helpful",
+    );
+    yield* store.replaceEvidence({
+      ...observation("syn-obs-events"),
+      terminalCategory: "cancelled",
+      cancelled: true,
+      finishReason: "cancelled",
+      evidence: { explicitFeedback: [], reworkProxies: [], verification: [] },
+    });
+    const still = yield* store.get("syn-obs-events");
+    assert.equal(Option.isSome(still) && still.value.terminalCategory, "success");
+    assert.equal(Option.isSome(still) && still.value.evidence.explicitFeedback[0]?.kind, "helpful");
   }).pipe(Effect.provide(layer)),
 );
