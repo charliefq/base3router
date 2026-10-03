@@ -211,6 +211,7 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+const isActionGateError = Schema.is(ActionGateError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -3574,7 +3575,7 @@ const makeWsRpcLayer = (
                 })
                 .pipe(
                   Effect.mapError((error) =>
-                    Schema.is(ActionGateError)(error)
+                    isActionGateError(error)
                       ? error
                       : new ActionGateError({
                           reason: "invalid",
@@ -3592,7 +3593,7 @@ const makeWsRpcLayer = (
               const now = yield* nowIso;
               const approval = yield* actionGate.respond(input, now).pipe(
                 Effect.mapError((error) =>
-                  Schema.is(ActionGateError)(error)
+                  isActionGateError(error)
                     ? error
                     : new ActionGateError({
                         reason: "invalid",

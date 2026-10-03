@@ -49,6 +49,7 @@ const CountRow = Schema.Struct({
 const ApprovalJson = Schema.fromJsonString(ActionApprovalRecord);
 const encodeApproval = Schema.encodeEffect(ApprovalJson);
 const decodeApproval = Schema.decodeUnknownEffect(ApprovalJson);
+const isActionGateError = Schema.is(ActionGateError);
 
 const toPersistenceError =
   (operation: string) =>
@@ -60,7 +61,7 @@ const toPersistenceError =
 const toError =
   (operation: string) =>
   (cause: unknown): PersistenceSqlError | PersistenceDecodeError | ActionGateError =>
-    Schema.is(ActionGateError)(cause) ? cause : toPersistenceError(operation)(cause);
+    isActionGateError(cause) ? cause : toPersistenceError(operation)(cause);
 
 export class ActionGateService extends Context.Service<
   ActionGateService,
