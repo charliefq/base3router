@@ -231,7 +231,7 @@ export const routeMcp = (input: McpRouterInput): McpRouterDecision => {
       ? pairs.length === 0
         ? "No MCP servers are configured. Continuing without a tool."
         : "No eligible MCP tool. Continuing without a tool."
-      : `Selected ${selected.toolId} by ${MCP_ROUTER_POLICY_VERSION} tie-break.`,
+      : `Selected ${selected?.toolId ?? "none"} by ${MCP_ROUTER_POLICY_VERSION} tie-break.`,
     evidenceUsed,
     tieBreak:
       "ascending risk class, then namespaced toolId lexicographic, then serverId. Display names and discovery order are ignored.",

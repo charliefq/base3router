@@ -301,12 +301,12 @@ export const fakeMcpServer = (input: {
     transportKind: input.transportKind ?? "in-process",
     trustState: input.trustState ?? "trusted",
     runtimeState: input.runtimeState ?? "connected",
-    configured: input.configured,
-    enabled: input.enabled,
-    connected: input.connected,
+    configured: input.configured ?? true,
+    enabled: input.enabled ?? true,
+    connected: input.connected ?? true,
     authRequired: false,
     freshness: input.freshness,
-    stale: input.stale,
+    stale: input.stale ?? false,
   });
   return {
     ...server,

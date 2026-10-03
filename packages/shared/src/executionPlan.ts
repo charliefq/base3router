@@ -180,7 +180,7 @@ export const rebuildPlanForFallback = (
     projectId: previous.projectId,
     environmentId: previous.environmentId,
     nowIso,
-    expiresAt: previous.expiresAt,
+    ...(previous.expiresAt !== undefined ? { expiresAt: previous.expiresAt } : {}),
     modelRoute: null,
     skillRoute: previous.skillRoute,
     mcpRoute: previous.mcpRoute,

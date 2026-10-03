@@ -212,7 +212,7 @@ export const routeSkills = (input: SkillRouterInput): SkillRouterDecision => {
     ? catalog.length === 0
       ? "No skills are configured. Continuing without a skill."
       : "No eligible skill. Continuing without a skill."
-    : `Selected ${selected.skillId} by ${SKILL_ROUTER_POLICY_VERSION} tie-break.`;
+    : `Selected ${selected?.skillId ?? "none"} by ${SKILL_ROUTER_POLICY_VERSION} tie-break.`;
 
   return {
     policyVersion: SKILL_ROUTER_POLICY_VERSION,

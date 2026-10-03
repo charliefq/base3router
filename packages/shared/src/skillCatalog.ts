@@ -79,7 +79,7 @@ export const skillCatalogFromProviders = (
     provider.skills.map((skill) =>
       skillManifestFromProviderSkill({
         skill,
-        driver: provider.driverKind,
+        driver: provider.driver,
         source: "provider-catalog",
       }),
     ),

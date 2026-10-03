@@ -6,6 +6,7 @@ import {
   EnvironmentId,
   MCP_DEFAULT_RETRY_POLICY,
   ProjectId,
+  ProviderDriverKind,
   SkillId,
   ThreadId,
   TurnId,
@@ -223,7 +224,7 @@ describe("skillRouter", () => {
     };
     const manifest = skillManifestFromProviderSkill({
       skill,
-      driver: "claudeAgent",
+      driver: ProviderDriverKind.make("claudeAgent"),
     });
     expect(manifest.instructionsTrust).toBe("not-executable");
     expect(manifest.trustState).toBe("unknown");
@@ -232,7 +233,7 @@ describe("skillRouter", () => {
     const catalog = skillCatalogFromProviders([
       {
         id: "claude",
-        driverKind: "claudeAgent" as never,
+        driver: ProviderDriverKind.make("claudeAgent"),
         name: "Claude",
         enabled: true,
         installed: true,
@@ -486,7 +487,7 @@ describe("execution plan and ActionGate", () => {
       plan: snapshot,
       action,
       nowMs: NOW_MS,
-      granted: store.get(approval.approvalId),
+      granted: store.get(approval.approvalId) ?? null,
     });
     expect(replay.decision).toBe("DENY");
     expect(replay.reasonCodes).toContain("REPLAY_REJECTED");
