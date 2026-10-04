@@ -126,6 +126,26 @@ describe("RPC authorization scopes", () => {
     }
   });
 
+  it("requires read for Dream Memory and concurrency inspection and operate for mutations", () => {
+    for (const method of [
+      WS_METHODS.memoryGetGovernance,
+      WS_METHODS.memoryList,
+      WS_METHODS.memoryExport,
+      WS_METHODS.concurrencyGetGovernance,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
+    for (const method of [
+      WS_METHODS.memorySave,
+      WS_METHODS.memoryDecide,
+      WS_METHODS.memoryCorrect,
+      WS_METHODS.memoryDelete,
+      WS_METHODS.memoryClearScope,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+    }
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(

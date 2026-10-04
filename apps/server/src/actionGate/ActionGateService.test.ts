@@ -536,3 +536,28 @@ it.effect("ASK blocks MCP tool execution until grant and redacts secrets", () =>
     assert.equal(executions, 1);
   }).pipe(Effect.provide(Layer.merge(layer, invocation))),
 );
+
+it.effect("consume uses current time so granted approvals cannot outlive expiry", () =>
+  Effect.gen(function* () {
+    const service = yield* ActionGateService;
+    const { plan, action } = plannedAction("stale-now");
+    const pending = createPendingApproval({
+      approvalId: ActionApprovalId.make("apr-stale-now"),
+      plan,
+      action,
+      nowIso: NOW,
+      expiresAt: "2026-10-03T00:00:01.000Z",
+      idempotencyKey: ActionIdempotencyKey.make("idem-stale-now"),
+    });
+    yield* service.putApproval(pending);
+    const granted = yield* service.respond(
+      { approvalId: pending.approvalId, decision: "grant" },
+      NOW,
+    );
+    assert.equal(granted.status, "granted");
+    const consumed = yield* service
+      .waitForAuthorized(pending.approvalId, action.fingerprint, NOW)
+      .pipe(Effect.flip);
+    assert.equal(isActionGateError(consumed) && consumed.reason === "expired", true);
+  }).pipe(Effect.provide(layer)),
+);

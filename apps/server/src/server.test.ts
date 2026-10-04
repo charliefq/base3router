@@ -6,6 +6,7 @@ import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hos
 
 import {
   type DeviceServiceState,
+  ActionApprovalId,
   AuthAccessTokenType,
   AuthStandardClientScopes,
   AuthEnvironmentBootstrapTokenType,
@@ -1083,8 +1084,8 @@ const buildAppUnderTest = (options?: {
         Layer.mergeAll(
           UsageService.layerTest,
           RouterEvaluationService.layerTest,
-          ActionGateService.layerTest,
-          DreamMemoryService.layerTest,
+          ActionGateService.layer,
+          DreamMemoryService.layer,
           ConcurrencyBudgetService.layer,
         ),
       ),
@@ -4227,6 +4228,198 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       if (rpcError._tag === "EnvironmentAuthorizationError") {
         assert.equal(rpcError.requiredScope, "orchestration:read");
       }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("Dream Memory RPCs persist, retrieve, correct, and delete through auth", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const saved = yield* withWsRpcClient(wsUrl, (client) =>
+        client[WS_METHODS.memorySave]({
+          content: "Prefer conventional commits.",
+          kind: "workflow-convention",
+          scopeKind: "project",
+          projectId: defaultProjectId,
+        }),
+      );
+      assert.equal(saved.memory.status, "active");
+      const listed = yield* withWsRpcClient(wsUrl, (client) =>
+        client[WS_METHODS.memoryList]({ projectId: defaultProjectId }),
+      );
+      assert.equal(
+        listed.memories.some((memory) => memory.memoryId === saved.memory.memoryId),
+        true,
+      );
+      const corrected = yield* withWsRpcClient(wsUrl, (client) =>
+        client[WS_METHODS.memoryCorrect]({
+          memoryId: saved.memory.memoryId,
+          content: "Prefer terse conventional commits.",
+        }),
+      );
+      assert.equal(corrected.memory.contentPresent, true);
+      const governance = yield* withWsRpcClient(wsUrl, (client) =>
+        client[WS_METHODS.memoryGetGovernance]({}),
+      );
+      assert.equal(governance.activeCount >= 1, true);
+      const concurrency = yield* withWsRpcClient(wsUrl, (client) =>
+        client[WS_METHODS.concurrencyGetGovernance]({}),
+      );
+      assert.equal(concurrency.topology, "process-local");
+      const deleted = yield* withWsRpcClient(wsUrl, (client) =>
+        client[WS_METHODS.memoryDelete]({ memoryId: corrected.memory.memoryId }),
+      );
+      assert.equal(deleted.memory.contentPresent, false);
+      const afterDelete = yield* withWsRpcClient(wsUrl, (client) =>
+        client[WS_METHODS.memoryList]({ projectId: defaultProjectId }),
+      );
+      assert.equal(
+        afterDelete.memories.some((memory) => memory.memoryId === saved.memory.memoryId),
+        false,
+      );
+      const secret = yield* withWsRpcClient(wsUrl, (client) =>
+        client[WS_METHODS.memorySave]({
+          content: "Bearer sk-secret-token-value",
+          kind: "workflow-convention",
+          scopeKind: "project",
+          projectId: defaultProjectId,
+        }).pipe(Effect.flip),
+      );
+      assert.equal(secret._tag, "DreamMemoryError");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("Dream Memory mutations require orchestration operate scope", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const { response: exchangeResponse, body: tokenBody } = yield* exchangeAccessToken(
+        defaultDesktopBootstrapToken,
+        { scope: "orchestration:read" },
+      );
+      assert.equal(exchangeResponse.status, 200);
+      const wsTicketResponse = yield* HttpClient.post("/api/auth/websocket-ticket", {
+        headers: {
+          authorization: `Bearer ${tokenBody.access_token ?? ""}`,
+        },
+      });
+      const wsTicketBody = (yield* wsTicketResponse.json) as { readonly ticket: string };
+      const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(wsTicketBody.ticket)}`;
+      const listed = yield* withWsRpcClient(wsUrl, (client) => client[WS_METHODS.memoryList]({}));
+      assert.equal(listed.memories.length, 0);
+      const rpcError = yield* Effect.flip(
+        Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.memorySave]({
+              content: "Should not persist.",
+              kind: "workflow-convention",
+              scopeKind: "personal",
+            }),
+          ),
+        ),
+      );
+      assert.equal(rpcError._tag, "EnvironmentAuthorizationError");
+      if (rpcError._tag === "EnvironmentAuthorizationError") {
+        assert.equal(rpcError.requiredScope, "orchestration:operate");
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("ActionGate RPCs read SQLite governance and require operate to respond", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const governance = yield* withWsRpcClient(wsUrl, (client) =>
+        client[WS_METHODS.actionGateGetGovernance]({}),
+      );
+      assert.equal(governance.policyVersion, "action-gate.v0");
+      assert.equal(governance.pendingApprovalCount, 0);
+      const missing = yield* withWsRpcClient(wsUrl, (client) =>
+        client[WS_METHODS.actionGateRespondApproval]({
+          approvalId: ActionApprovalId.make("apr-missing-stabilization"),
+          decision: "grant",
+        }).pipe(Effect.flip),
+      );
+      assert.equal(missing._tag, "ActionGateError");
+      const { response: exchangeResponse, body: tokenBody } = yield* exchangeAccessToken(
+        defaultDesktopBootstrapToken,
+        { scope: "orchestration:read" },
+      );
+      assert.equal(exchangeResponse.status, 200);
+      const wsTicketResponse = yield* HttpClient.post("/api/auth/websocket-ticket", {
+        headers: {
+          authorization: `Bearer ${tokenBody.access_token ?? ""}`,
+        },
+      });
+      const wsTicketBody = (yield* wsTicketResponse.json) as { readonly ticket: string };
+      const readOnlyUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(wsTicketBody.ticket)}`;
+      const readable = yield* withWsRpcClient(readOnlyUrl, (client) =>
+        client[WS_METHODS.actionGateGetGovernance]({}),
+      );
+      assert.equal(readable.pendingApprovalCount, 0);
+      const denied = yield* Effect.flip(
+        Effect.scoped(
+          withWsRpcClient(readOnlyUrl, (client) =>
+            client[WS_METHODS.actionGateRespondApproval]({
+              approvalId: ActionApprovalId.make("apr-missing-stabilization"),
+              decision: "deny",
+            }),
+          ),
+        ),
+      );
+      assert.equal(denied._tag, "EnvironmentAuthorizationError");
+      if (denied._tag === "EnvironmentAuthorizationError") {
+        assert.equal(denied.requiredScope, "orchestration:operate");
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("Dream Memory off is projected through settings and governance RPC", () =>
+    Effect.gen(function* () {
+      const settings = yield* Ref.make({
+        ...DEFAULT_SERVER_SETTINGS,
+        dreamMemory: {
+          ...DEFAULT_SERVER_SETTINGS.dreamMemory,
+          enabled: false,
+          captureMode: "off" as const,
+        },
+      });
+      yield* buildAppUnderTest({
+        layers: {
+          serverSettings: {
+            getSettings: Ref.get(settings),
+            updateSettings: (patch) =>
+              Ref.update(settings, (current) => ({
+                ...current,
+                ...patch,
+                dreamMemory: {
+                  ...current.dreamMemory,
+                  ...(patch.dreamMemory ?? {}),
+                },
+              })).pipe(Effect.andThen(Ref.get(settings))),
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const governance = yield* withWsRpcClient(wsUrl, (client) =>
+        client[WS_METHODS.memoryGetGovernance]({}),
+      );
+      assert.equal(governance.enabled, false);
+      assert.equal(governance.captureMode, "off");
+      const saved = yield* withWsRpcClient(wsUrl, (client) =>
+        client[WS_METHODS.memorySave]({
+          content: "Explicit save remains available while capture is off.",
+          kind: "workflow-convention",
+          scopeKind: "project",
+          projectId: defaultProjectId,
+        }),
+      );
+      assert.equal(saved.memory.status, "active");
+      const concurrency = yield* withWsRpcClient(wsUrl, (client) =>
+        client[WS_METHODS.concurrencyGetGovernance]({}),
+      );
+      assert.equal(concurrency.topology, "process-local");
+      assert.equal(concurrency.queued, 0);
+      assert.equal(concurrency.saturation, "idle");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

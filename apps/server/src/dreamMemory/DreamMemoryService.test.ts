@@ -363,3 +363,85 @@ it.effect("serializes concurrent correct and delete without resurrecting content
     assert.equal(/sk-|Bearer /.test(serialized), false);
   }).pipe(Effect.provide(layer)),
 );
+
+it.effect("decides, corrects, and deletes project memory without a viewer projectId", () =>
+  Effect.gen(function* () {
+    const service = yield* DreamMemoryService;
+    const envOnly = viewerFromSubject(environmentId, "alice@example.com");
+    const saved = yield* service.save(
+      {
+        content: "Prefer conventional commits.",
+        kind: "workflow-convention",
+        scopeKind: "project",
+        projectId,
+        threadId,
+      },
+      alice,
+      NOW,
+      settings,
+    );
+    const corrected = yield* service.correct(
+      { memoryId: saved.memory.memoryId, content: "Prefer terse conventional commits." },
+      envOnly,
+      NOW,
+    );
+    assert.equal(corrected.memory.status, "active");
+    const threadListed = yield* service.list({ threadId }, alice);
+    assert.equal(
+      threadListed.memories.some((memory) => memory.memoryId === saved.memory.memoryId),
+      false,
+    );
+    assert.equal(
+      threadListed.memories.some((memory) => memory.memoryId === corrected.memory.memoryId),
+      true,
+    );
+    const otherThread = yield* service.list({ threadId: ThreadId.make("thread-other") }, alice);
+    assert.equal(
+      otherThread.memories.some((memory) => memory.memoryId === saved.memory.memoryId),
+      false,
+    );
+    const envListed = yield* service.list({}, envOnly);
+    assert.equal(
+      envListed.memories.some((memory) => memory.memoryId === corrected.memory.memoryId),
+      true,
+    );
+    const blocked = yield* service
+      .remove({ memoryId: saved.memory.memoryId }, otherProjectViewer, NOW)
+      .pipe(Effect.flip);
+    assert.equal(isDreamMemoryError(blocked) && blocked.reason === "unauthorized", true);
+    const deleted = yield* service.remove({ memoryId: saved.memory.memoryId }, envOnly, NOW);
+    assert.equal(deleted.memory.contentPresent, false);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("source-thread invalidation writes deleted-source fingerprints", () =>
+  Effect.gen(function* () {
+    const service = yield* DreamMemoryService;
+    yield* service.enqueueEligibleTurn({
+      viewer: alice,
+      settings,
+      turnSucceeded: true,
+      turnText: "Derived convention from a finished turn.",
+      nowIso: NOW,
+      threadId,
+    });
+    const before = yield* service.list({ threadId }, alice);
+    assert.equal(before.memories.length >= 1, true);
+    yield* service.invalidateSourceThread(environmentId, threadId, NOW);
+    yield* service.enqueueEligibleTurn({
+      viewer: alice,
+      settings,
+      turnSucceeded: true,
+      turnText: "Derived convention from a finished turn.",
+      nowIso: "2026-10-03T00:00:04.000Z",
+      threadId,
+    });
+    const after = yield* service.list({ threadId }, alice);
+    assert.equal(
+      after.memories.some(
+        (memory) => memory.content === "Derived convention from a finished turn.",
+      ),
+      false,
+    );
+  }).pipe(Effect.provide(automaticLayer)),
+);
