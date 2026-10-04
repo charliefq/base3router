@@ -443,8 +443,7 @@ it.effect("does not auto-replay after a side effect when the handler crashes bef
       });
       externalWrites += 1;
       yield* Deferred.succeed(wrote, undefined);
-      yield* Effect.never;
-      persisted = true;
+      return yield* Effect.never;
     });
     const fiber = yield* handler.pipe(Effect.forkChild);
     yield* service.respond({ approvalId, decision: "grant" }, nowIso);
