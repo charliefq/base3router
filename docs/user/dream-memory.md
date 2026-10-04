@@ -26,7 +26,11 @@ delete. Deletion and disable are always available.
   separate. Saving a memory does not copy the thread, and deleting a
   thread does not silently hide memory in the UI — derived proposals
   from that thread are removed from retrieval.
-- Retrieved memory is labeled as untrusted reference data. Text such as
-  “ignore previous instructions” cannot grant tools, skip approvals, or
-  change routing.
+- Retrieved memory is labeled as untrusted reference data.
+  Authorization, tool execution, and routing stay on their own server
+  paths. Injected memory text is not treated as permission or policy.
+  Keyword filtering is not a security boundary.
 - Credential-shaped text is rejected and is not stored.
+- Deletion is a logical tombstone in this environment’s database. It
+  does not forensically erase SQLite WAL/backups, and it cannot recall
+  content already sent to a provider.
