@@ -1160,5 +1160,43 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:action-gate-respond-approval",
       tag: WS_METHODS.actionGateRespondApproval,
     }),
+    memoryGovernance: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:memory-governance",
+      tag: WS_METHODS.memoryGetGovernance,
+      staleTimeMs: 5_000,
+    }),
+    memoryList: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory-list",
+      tag: WS_METHODS.memoryList,
+    }),
+    memorySave: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory-save",
+      tag: WS_METHODS.memorySave,
+    }),
+    memoryDecide: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory-decide",
+      tag: WS_METHODS.memoryDecide,
+    }),
+    memoryCorrect: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory-correct",
+      tag: WS_METHODS.memoryCorrect,
+    }),
+    memoryDelete: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory-delete",
+      tag: WS_METHODS.memoryDelete,
+    }),
+    memoryClearScope: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory-clear-scope",
+      tag: WS_METHODS.memoryClearScope,
+    }),
+    memoryExport: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory-export",
+      tag: WS_METHODS.memoryExport,
+    }),
+    concurrencyGovernance: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:concurrency-governance",
+      tag: WS_METHODS.concurrencyGetGovernance,
+      staleTimeMs: 2_000,
+    }),
   };
 }

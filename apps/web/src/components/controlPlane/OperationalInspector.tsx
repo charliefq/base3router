@@ -234,6 +234,34 @@ function InspectorBody(props: {
           detail={model.outcome.evidence}
         />
       ) : null}
+      {model.dreamMemory ? (
+        <OperationalStatusCard
+          title="Dream Memory"
+          value={model.dreamMemory.enabled ? model.dreamMemory.captureMode : "off"}
+          detail={model.dreamMemory.provenance}
+        >
+          <div className="mt-1 space-y-1 text-2xs text-muted-foreground" data-dream-memory="">
+            <p data-memory-count="">Retrieved {model.dreamMemory.retrievedCount}</p>
+            <p data-memory-ids="">IDs {model.dreamMemory.retrievedIds}</p>
+            {model.dreamMemory.contradictionVisible ? <p>Contradiction visible</p> : null}
+          </div>
+        </OperationalStatusCard>
+      ) : null}
+      {model.concurrency ? (
+        <OperationalStatusCard
+          title="Concurrency"
+          value={model.concurrency.outcome}
+          detail={`${model.concurrency.workloadClass} · queue ${model.concurrency.queuedMs}ms`}
+        >
+          <div className="mt-1 space-y-1 text-2xs text-muted-foreground" data-concurrency="">
+            <p>
+              Depth {model.concurrency.depth} · attempt {model.concurrency.attempt}
+            </p>
+            <p data-concurrency-reason="">Reason {model.concurrency.reason}</p>
+            <p data-concurrency-cost="">Cost {model.concurrency.cost}</p>
+          </div>
+        </OperationalStatusCard>
+      ) : null}
       <OperationalStatusCard
         title="Route Gate"
         tone={statusTone(model.route.gateDecision)}

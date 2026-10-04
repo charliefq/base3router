@@ -172,6 +172,39 @@ export function ControlCenter(props: {
               ))}
             </OperationalStatusCard>
           ) : null}
+          {props.model.dreamMemory ? (
+            <OperationalStatusCard
+              title="Dream Memory"
+              value={props.model.dreamMemory.enabled}
+              detail={props.model.dreamMemory.captureMode}
+            >
+              <div
+                className="mt-1 space-y-1 text-2xs text-muted-foreground"
+                data-dream-memory-gov=""
+              >
+                <p>{props.model.dreamMemory.counts}</p>
+                <p>{props.model.dreamMemory.maintenance}</p>
+                <p>{props.model.dreamMemory.cost}</p>
+              </div>
+            </OperationalStatusCard>
+          ) : null}
+          {props.model.concurrency ? (
+            <OperationalStatusCard
+              title="Concurrency"
+              value={props.model.concurrency.saturation}
+              detail={props.model.concurrency.topology}
+            >
+              <div
+                className="mt-1 space-y-1 text-2xs text-muted-foreground"
+                data-concurrency-gov=""
+              >
+                <p>{props.model.concurrency.foreground}</p>
+                <p>{props.model.concurrency.background}</p>
+                <p>{props.model.concurrency.queued}</p>
+                <p>{props.model.concurrency.rejected}</p>
+              </div>
+            </OperationalStatusCard>
+          ) : null}
           {props.model.empty ? (
             <OperationalStatusCard
               title="Empty"

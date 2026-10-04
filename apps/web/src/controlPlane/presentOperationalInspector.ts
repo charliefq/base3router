@@ -150,6 +150,8 @@ export type OperationalInspectorModel = {
   readonly approval: InspectorApprovalModel | null;
   readonly toolExecution: InspectorToolExecutionModel | null;
   readonly outcome: InspectorOutcomeModel | null;
+  readonly dreamMemory: InspectorDreamMemoryModel | null;
+  readonly concurrency: InspectorConcurrencyModel | null;
   readonly error: string | null;
   readonly emptyReason: InspectorEmptyReason;
 };
@@ -203,6 +205,25 @@ export type InspectorOutcomeModel = {
   readonly evidence: string;
 };
 
+export type InspectorDreamMemoryModel = {
+  readonly captureMode: string;
+  readonly enabled: boolean;
+  readonly retrievedCount: number;
+  readonly retrievedIds: string;
+  readonly provenance: string;
+  readonly contradictionVisible: boolean;
+};
+
+export type InspectorConcurrencyModel = {
+  readonly workloadClass: string;
+  readonly outcome: string;
+  readonly queuedMs: number;
+  readonly depth: number;
+  readonly attempt: number;
+  readonly reason: string;
+  readonly cost: string;
+};
+
 export type OperationalInspectorInput = {
   readonly selected: boolean;
   readonly projectTitle: string | null;
@@ -229,6 +250,8 @@ export type OperationalInspectorInput = {
   readonly approval?: InspectorApprovalModel | null;
   readonly toolExecution?: InspectorToolExecutionModel | null;
   readonly outcome?: InspectorOutcomeModel | null;
+  readonly dreamMemory?: InspectorDreamMemoryModel | null;
+  readonly concurrency?: InspectorConcurrencyModel | null;
 };
 
 const EMPTY_ROUTE: InspectorRouteModel = {
@@ -614,6 +637,40 @@ function presentActionGate(
   };
 }
 
+function presentDreamMemory(
+  trace: import("@t3tools/contracts").MemoryRetrievalTraceV0 | undefined,
+  override: InspectorDreamMemoryModel | null | undefined,
+): InspectorDreamMemoryModel | null {
+  if (override !== undefined) return override;
+  if (trace === undefined) return null;
+  return {
+    captureMode: trace.captureMode,
+    enabled: trace.enabled,
+    retrievedCount: trace.retrievedCount,
+    retrievedIds: trace.retrievedIds.join(", ") || "none",
+    provenance: trace.used ? "retrieved as untrusted reference data" : "not injected",
+    contradictionVisible: trace.contradictionVisible,
+  };
+}
+
+function presentConcurrency(
+  trace: import("@t3tools/contracts").ConcurrencyAdmissionTraceV0 | undefined,
+  override: InspectorConcurrencyModel | null | undefined,
+): InspectorConcurrencyModel | null {
+  if (override !== undefined) return override;
+  if (trace === undefined) return null;
+  const cost = trace.cost.status === "known" ? `$${trace.cost.value}` : "unknown";
+  return {
+    workloadClass: trace.workloadClass,
+    outcome: trace.outcome,
+    queuedMs: trace.queuedMs,
+    depth: trace.depth,
+    attempt: trace.attempt,
+    reason: trace.reasonCodes.join(", ") || "none",
+    cost,
+  };
+}
+
 export function presentOperationalInspector(
   input: OperationalInspectorInput,
 ): OperationalInspectorModel {
@@ -639,6 +696,8 @@ export function presentOperationalInspector(
     approval: input.approval ?? null,
     toolExecution: input.toolExecution ?? null,
     outcome: input.outcome ?? null,
+    dreamMemory: presentDreamMemory(input.boundRoute?.memoryRetrieval, input.dreamMemory),
+    concurrency: presentConcurrency(input.boundRoute?.concurrency, input.concurrency),
     error: sanitizeDisplayText(input.sessionError),
     emptyReason: resolveEmptyReason(input),
   };
