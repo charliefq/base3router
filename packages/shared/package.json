@@ -119,6 +119,14 @@
       "types": "./src/actionAudit.ts",
       "import": "./src/actionAudit.ts"
     },
+    "./dreamMemory": {
+      "types": "./src/dreamMemory.ts",
+      "import": "./src/dreamMemory.ts"
+    },
+    "./concurrencyBudget": {
+      "types": "./src/concurrencyBudget.ts",
+      "import": "./src/concurrencyBudget.ts"
+    },
     "./routerEvaluation": {
       "types": "./src/routerEvaluation.ts",
       "import": "./src/routerEvaluation.ts"
