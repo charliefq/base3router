@@ -9,6 +9,7 @@ import * as Ref from "effect/Ref";
 import {
   ConcurrencyBudgetError,
   EnvironmentId,
+  ThreadId,
   defaultConcurrencyBudgetPolicy,
   type ConcurrencyAdmissionRequestV0,
   type ConcurrencyAdmissionResultV0,
@@ -31,6 +32,10 @@ export class ConcurrencyBudgetService extends Context.Service<
     readonly snapshot: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<ConcurrencyGovernanceSnapshotV0>;
+    readonly cancelQueuedForThread: (
+      environmentId: EnvironmentId,
+      threadId: ThreadId,
+    ) => Effect.Effect<number>;
     readonly shutdown: Effect.Effect<void>;
   }
 >()("t3/concurrencyBudget/ConcurrencyBudgetService") {}
@@ -159,6 +164,14 @@ const make = Effect.gen(function* () {
       Effect.asVoid,
     );
 
+  const cancelQueuedForThread = (
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+  ): Effect.Effect<number> =>
+    schedulerFor(environmentId).pipe(
+      Effect.map((scheduler) => scheduler.cancelQueuedForThread(threadId)),
+    );
+
   const shutdown: Effect.Effect<void> = Ref.get(schedulers).pipe(
     Effect.map((current) => {
       for (const scheduler of current.values()) scheduler.shutdownNow();
@@ -172,6 +185,7 @@ const make = Effect.gen(function* () {
     withAdmission,
     release,
     snapshot,
+    cancelQueuedForThread,
     shutdown,
   } satisfies ConcurrencyBudgetService["Service"];
 });

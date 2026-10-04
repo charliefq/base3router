@@ -580,7 +580,7 @@ const make = Effect.gen(function* () {
             detail: "One-time approval already consumed.",
           });
         }
-        return yield* consume(approvalId, fingerprint, nowIso);
+        return yield* consume(approvalId, fingerprint, DateTime.formatIso(yield* DateTime.now));
       }
       return yield* failureFromStatus(settled);
     }).pipe(Effect.mapError(toError("ActionGateService.waitForAuthorized")));

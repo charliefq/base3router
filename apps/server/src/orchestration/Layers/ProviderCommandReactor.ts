@@ -18,6 +18,10 @@ import {
   emptyOpenRouterObservation,
   type OpenRouterCostTier,
   DEFAULT_DREAM_MEMORY_SETTINGS,
+  CONCURRENCY_BUDGET_POLICY_VERSION,
+  ConcurrencyBudgetError,
+  type ConcurrencyAdmissionResultV0,
+  type ConcurrencyAdmissionTraceV0,
   type ConcurrencyWorkloadClass,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
@@ -95,6 +99,41 @@ const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
 const isProviderWorkspaceMissingError = Schema.is(ProviderWorkspaceMissingError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
+const isConcurrencyBudgetError = Schema.is(ConcurrencyBudgetError);
+
+const concurrencyTraceFromAdmission = (
+  result: ConcurrencyAdmissionResultV0,
+  attempt: number,
+): ConcurrencyAdmissionTraceV0 => ({
+  policyVersion: CONCURRENCY_BUDGET_POLICY_VERSION,
+  workloadClass: result.workloadClass,
+  outcome: result.outcome,
+  queuedMs: result.queuedMs,
+  depth: result.tree?.depth ?? 0,
+  attempt: result.tree?.attempt ?? attempt,
+  reasonCodes: [...result.reasonCodes],
+  cost: { status: "unknown" },
+});
+
+const concurrencyTraceFromError = (
+  error: unknown,
+  attempt: number,
+): ConcurrencyAdmissionTraceV0 => ({
+  policyVersion: CONCURRENCY_BUDGET_POLICY_VERSION,
+  workloadClass: "foreground-turn",
+  outcome: isConcurrencyBudgetError(error)
+    ? error.reason === "timed-out"
+      ? "timed-out"
+      : error.reason === "cancelled"
+        ? "cancelled"
+        : "rejected"
+    : "rejected",
+  queuedMs: 0,
+  depth: 0,
+  attempt,
+  reasonCodes: isConcurrencyBudgetError(error) ? [...error.reasonCodes] : ["CAPACITY_EXHAUSTED"],
+  cost: { status: "unknown" },
+});
 
 type ProviderIntentEvent = Extract<
   OrchestrationEvent,
@@ -2088,44 +2127,54 @@ const make = Effect.gen(function* () {
         ),
       ),
     );
-    const admittedSend =
-      Option.isSome(concurrencyBudget) && environmentId !== undefined
-        ? concurrencyBudget.value
-            .withAdmission(
-              {
-                workloadClass: "foreground-turn",
-                environmentId,
-                projectId: thread.projectId,
-                threadId: thread.id,
-                requestedAt: event.payload.createdAt,
-              },
-              send,
-            )
-            .pipe(
-              Effect.catch((error) =>
-                appendTurnStartFailure(
-                  "Concurrency budget rejected the turn",
-                  error instanceof Error ? error.message : "CAPACITY_EXHAUSTED",
-                ),
-              ),
-            )
-        : send;
-    if (routeBinding !== null && (memoryTrace !== undefined || Option.isSome(concurrencyBudget))) {
-      yield* persistAttemptedRoute({
+    // Inspector records the settled admission, not an optimistic "admitted".
+    // Live Control Center snapshots still include in-flight queued counts.
+    const persistBoundFacts = (concurrency?: ConcurrencyAdmissionTraceV0) => {
+      if (routeBinding === null) return Effect.void;
+      if (memoryTrace === undefined && concurrency === undefined) return Effect.void;
+      return persistAttemptedRoute({
         ...routeBinding,
         ...(memoryTrace !== undefined ? { memoryRetrieval: memoryTrace } : {}),
-        concurrency: {
-          policyVersion: "concurrency-budget.v0",
-          workloadClass: "foreground-turn",
-          outcome: "admitted",
-          queuedMs: 0,
-          depth: 0,
-          attempt: attemptCount,
-          reasonCodes: [],
-          cost: { status: "unknown" },
-        },
+        ...(concurrency !== undefined ? { concurrency } : {}),
       });
-    }
+    };
+    const admittedSend =
+      Option.isSome(concurrencyBudget) && environmentId !== undefined
+        ? Effect.gen(function* () {
+            const budget = concurrencyBudget.value;
+            const result = yield* budget.admit({
+              workloadClass: "foreground-turn",
+              environmentId,
+              projectId: thread.projectId,
+              threadId: thread.id,
+              requestedAt: event.payload.createdAt,
+            });
+            yield* persistBoundFacts(concurrencyTraceFromAdmission(result, attemptCount));
+            const leaseId = result.lease?.leaseId;
+            if (leaseId === undefined) {
+              return yield* new ConcurrencyBudgetError({
+                reason: "invalid",
+                detail: "Admission succeeded without a lease.",
+                reasonCodes: ["CAPACITY_EXHAUSTED"],
+              });
+            }
+            // Lease covers this sendTurn Effect. Adapters that return when the
+            // stream starts release before the turn is terminal; that span is
+            // documented, not a hidden turn-terminal hold.
+            return yield* send.pipe(Effect.ensuring(budget.release(environmentId, leaseId)));
+          }).pipe(
+            Effect.catch((error) =>
+              persistBoundFacts(concurrencyTraceFromError(error, attemptCount)).pipe(
+                Effect.andThen(
+                  appendTurnStartFailure(
+                    "Concurrency budget rejected the turn",
+                    error instanceof Error ? error.message : "CAPACITY_EXHAUSTED",
+                  ),
+                ),
+              ),
+            ),
+          )
+        : persistBoundFacts().pipe(Effect.andThen(send));
     // The forked send settles `sent` from here on, so drop the entry the post-processing hook uses.
     if (resumed && event.commandId !== null) resumedTurnStarts.delete(event.commandId);
     yield* admittedSend.pipe(
@@ -2160,6 +2209,10 @@ const make = Effect.gen(function* () {
     event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>,
   ) {
     yield* abortOpenRouterShadow(event.payload.threadId);
+    if (Option.isSome(concurrencyBudget) && Option.isSome(serverEnvironment)) {
+      const environmentId = yield* serverEnvironment.value.getEnvironmentId;
+      yield* concurrencyBudget.value.cancelQueuedForThread(environmentId, event.payload.threadId);
+    }
     yield* cancelTurnsAfterCompaction(
       event.payload.threadId,
       "Context compaction was interrupted. Send this message again to continue.",

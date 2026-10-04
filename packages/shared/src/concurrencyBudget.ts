@@ -25,6 +25,7 @@ import {
   type ExecutionTreeContextV0,
   type ExecutionTreeId,
   type LeaseId,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { MODEL_ROUTER_UNKNOWN_METRIC } from "@t3tools/contracts";
 
@@ -135,6 +136,7 @@ export class ConcurrencyScheduler {
 
   private treeFor(
     request: ConcurrencyAdmissionRequestV0,
+    commit: boolean,
   ): ExecutionTreeContextV0 | { reason: ConcurrencyRejectionReason } {
     if (request.tree === undefined) {
       const treeId = makeId("tree", {
@@ -143,12 +145,12 @@ export class ConcurrencyScheduler {
         class: request.workloadClass,
       }) as ExecutionTreeId;
       const tree = emptyTree(treeId);
-      this.trees.set(treeId, tree);
+      if (commit) this.trees.set(treeId, tree);
       return tree;
     }
     const stored = this.trees.get(request.tree.treeId);
     const current = stored ?? emptyTree(request.tree.treeId);
-    if (stored === undefined) this.trees.set(request.tree.treeId, current);
+    if (stored === undefined && commit) this.trees.set(request.tree.treeId, current);
     const nextDepth =
       request.workloadClass === "failover-retry" ? current.depth : current.depth + 1;
     const nextAttempt =
@@ -176,8 +178,8 @@ export class ConcurrencyScheduler {
         current.concurrentChildCount + (request.workloadClass === "failover-retry" ? 0 : 1),
       attempt: nextAttempt,
     };
-    this.trees.set(current.treeId, next);
-    return next;
+    if (commit) this.trees.set(current.treeId, next);
+    return commit ? next : current;
   }
 
   private hasCapacity(request: ConcurrencyAdmissionRequestV0): boolean {
@@ -279,10 +281,12 @@ export class ConcurrencyScheduler {
 
   admit(request: ConcurrencyAdmissionRequestV0): ConcurrencyAdmissionResultV0 {
     if (this.shutdown) return this.reject(request, "SHUTDOWN");
-    const treeOrReason = this.treeFor(request);
-    if ("reason" in treeOrReason) return this.reject(request, treeOrReason.reason);
+    const treePreview = this.treeFor(request, false);
+    if ("reason" in treePreview) return this.reject(request, treePreview.reason);
     if (this.hasCapacity(request) && !this.wouldStarveForeground(request.workloadClass)) {
-      return this.acquireLease(request, treeOrReason, 0);
+      const tree = this.treeFor(request, true);
+      if ("reason" in tree) return this.reject(request, tree.reason);
+      return this.acquireLease(request, tree, 0);
     }
     const limits = this.policy.classes[request.workloadClass];
     const sheddable = SHEDDABLE_CLASSES.includes(request.workloadClass);
@@ -329,7 +333,7 @@ export class ConcurrencyScheduler {
       workloadClass: request.workloadClass,
       queuedMs: 0,
       reasonCodes: [],
-      tree: treeOrReason,
+      tree: treePreview,
       explanation: "Queued under process-local concurrency budget.",
     };
   }
@@ -367,6 +371,13 @@ export class ConcurrencyScheduler {
       ["CANCELLED"],
     );
     return true;
+  }
+
+  cancelQueuedForThread(threadId: ThreadId): number {
+    const ids = this.queue
+      .filter((entry) => entry.request.threadId === threadId && !entry.cancelled)
+      .map((entry) => entry.admissionId);
+    return ids.reduce((count, admissionId) => count + (this.cancel(admissionId) ? 1 : 0), 0);
   }
 
   release(leaseId: LeaseId): ConcurrencyReleaseOutcomeV0 {
@@ -434,6 +445,9 @@ export class ConcurrencyScheduler {
 
   drain(): void {
     const now = this.clock.nowMs();
+    // Aging is a bounded rank boost inside a class, not starvation-freedom.
+    // Non-sheddable work waiting behind persistent higher-priority load is
+    // bounded by class maxQueueTimeMs (timeout), not by promotion across class.
     this.queue.sort((left, right) => {
       const leftRank = left.priority + Math.min(25, Math.floor((now - left.enqueuedAtMs) / 2_000));
       const rightRank =
@@ -448,7 +462,7 @@ export class ConcurrencyScheduler {
         this.hasCapacity(entry.request) &&
         !this.wouldStarveForeground(entry.request.workloadClass)
       ) {
-        const treeOrReason = this.treeFor(entry.request);
+        const treeOrReason = this.treeFor(entry.request, true);
         if ("reason" in treeOrReason) {
           const rejected = this.reject(entry.request, treeOrReason.reason);
           entry.waiter?.resolve(rejected);
