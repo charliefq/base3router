@@ -298,19 +298,19 @@ test.describe("Base3Router UI Lab", () => {
     page,
   }) => {
     await openScenario(page, "memory-prompt-injection");
-    await expect(page.locator("[data-dream-memory]")).toContainText("never authorization");
+    await expect(page.locator("[data-memory-provenance]")).toContainText("never authorization");
     await expect(page.locator("body")).not.toContainText("ignore previous instructions");
     await assertNoSecrets(page);
     await capture(page, "memory-prompt-injection");
 
     await openScenario(page, "memory-secret-rejected");
-    await expect(page.locator("[data-dream-memory]")).toContainText("was not stored");
+    await expect(page.locator("[data-memory-provenance]")).toContainText("was not stored");
     await assertNoSecrets(page);
   });
 
   test("contradiction, deletion confirmation, and cleared scope are visible", async ({ page }) => {
     await openScenario(page, "memory-contradiction");
-    await expect(page.getByText("Contradiction visible")).toBeVisible();
+    await expect(page.locator("[data-dream-memory]")).toContainText("Contradiction visible");
 
     await openScenario(page, "memory-deletion-confirm");
     await expect(page.getByText("Confirm clear personal memory")).toBeVisible();

@@ -2037,7 +2037,7 @@ export function createLabScenario(id: UiLabScenarioId): LabScenarioState {
         dreamMemory: labDreamMemory({
           retrievedCount: 0,
           retrievedIds: "none",
-          provenance: "contradiction visible",
+          provenance: "conflict inspectable; neither treated as a trusted fact",
           contradictionVisible: true,
         }),
       };

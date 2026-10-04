@@ -238,9 +238,9 @@ function InspectorBody(props: {
         <OperationalStatusCard
           title="Dream Memory"
           value={model.dreamMemory.enabled ? model.dreamMemory.captureMode : "off"}
-          detail={model.dreamMemory.provenance}
         >
           <div className="mt-1 space-y-1 text-2xs text-muted-foreground" data-dream-memory="">
+            <p data-memory-provenance="">{model.dreamMemory.provenance}</p>
             <p data-memory-count="">Retrieved {model.dreamMemory.retrievedCount}</p>
             <p data-memory-ids="">IDs {model.dreamMemory.retrievedIds}</p>
             {model.dreamMemory.contradictionVisible ? <p>Contradiction visible</p> : null}
