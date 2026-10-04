@@ -1,3 +1,4 @@
+import * as NodeCrypto from "node:crypto";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -16,6 +17,7 @@ import {
   ActionGateError,
   ActionGovernanceSnapshotV0,
   ActionId,
+  ActionIdempotencyKey,
   MODEL_ROUTER_UNKNOWN_METRIC,
   ACTION_GATE_POLICY_VERSION,
   ProjectId,
@@ -75,6 +77,17 @@ const toError =
 const uniqueConstraintConflict = (cause: unknown): boolean => {
   const text = cause instanceof Error ? `${cause.message} ${cause.name}` : String(cause);
   return /UNIQUE|unique constraint|SQLITE_CONSTRAINT/i.test(text);
+};
+
+const successorPending = (record: ActionApprovalRecord): ActionApprovalRecord => {
+  const retryId = NodeCrypto.randomUUID();
+  return {
+    ...record,
+    approvalId: ActionApprovalId.make(`apr-${retryId}`),
+    ...(record.idempotencyKey !== undefined
+      ? { idempotencyKey: ActionIdempotencyKey.make(`ask-retry:${retryId}`) }
+      : {}),
+  };
 };
 
 export class ActionGateService extends Context.Service<
@@ -277,6 +290,34 @@ const make = Effect.gen(function* () {
             });
           }
           if (TERMINAL_APPROVAL_STATUSES.has(existing.status)) {
+            if (existing.status === "consumed") {
+              return yield* new ActionGateError({
+                reason: "conflict",
+                detail: `Approval cannot be resurrected from ${existing.status}.`,
+              });
+            }
+            const successor = successorPending(record);
+            const successorJson = yield* encodeApproval(successor);
+            const retried = yield* sql<{ approvalId: string }>`
+              INSERT INTO action_gate_approvals (
+                approval_id, environment_id, fingerprint, status, idempotency_key,
+                created_at, expires_at, consumed_at, payload_json
+              ) VALUES (
+                ${successor.approvalId}, ${successor.environmentId}, ${successor.fingerprint},
+                ${successor.status}, ${successor.idempotencyKey ?? null}, ${successor.createdAt},
+                ${successor.expiresAt}, ${successor.consumedAt ?? null}, ${successorJson}
+              )
+              ON CONFLICT DO NOTHING
+              RETURNING approval_id AS "approvalId"
+            `;
+            if (retried[0] !== undefined) return successor;
+            const live = yield* loadLiveByFingerprint(
+              successor.environmentId,
+              successor.fingerprint,
+            );
+            if (Option.isSome(live) && live.value.fingerprint === successor.fingerprint) {
+              return live.value;
+            }
             return yield* new ActionGateError({
               reason: "conflict",
               detail: `Approval cannot be resurrected from ${existing.status}.`,
@@ -583,7 +624,17 @@ const make = Effect.gen(function* () {
         return yield* consume(approvalId, fingerprint, DateTime.formatIso(yield* DateTime.now));
       }
       return yield* failureFromStatus(settled);
-    }).pipe(Effect.mapError(toError("ActionGateService.waitForAuthorized")));
+    }).pipe(
+      Effect.mapError(toError("ActionGateService.waitForAuthorized")),
+      Effect.onInterrupt(() =>
+        Effect.gen(function* () {
+          if (remainingWaiters(approvalId) > 0) return;
+          const current = yield* getApproval(approvalId);
+          if (Option.isNone(current) || current.value.status !== "pending") return;
+          yield* respond({ approvalId, decision: "cancel" }, nowIso);
+        }).pipe(Effect.ignore),
+      ),
+    );
 
   const countStatus = (environmentId: EnvironmentId, status: string) =>
     sql<typeof CountRow.Type>`
