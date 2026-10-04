@@ -4,6 +4,7 @@
 
 - [Install Base3Router](./user/install.md)
 - [Messages and context](./user/composer.md)
+- [Dream Memory](./user/dream-memory.md)
 - [Working with threads](./user/thread-sidebar.md)
 - [Permission modes](./user/permission-modes.md)
 - [Terminal history](./user/terminal.md)
@@ -39,6 +40,7 @@ source alone does not explain. Most code changes do not need an internal documen
 - [Base3Router Phase 10 OpenRouter Teacher/Shadow](./architecture/base3router-phase-10.md)
 - [Base3Router Phase 11 evaluation and Hybrid Router V1](./architecture/base3router-phase-11.md)
 - [Base3Router Phase 12 Skill Router, MCP Router, and Independent ActionGate](./architecture/base3router-phase-12.md)
+- [Base3Router Phase 13 Dream Memory and concurrency budgets](./architecture/base3router-phase-13.md)
 - [Glossary](./internals/glossary.md)
 - [Connection runtime](./internals/connection-runtime.md)
 - [Providers](./internals/providers.md)
