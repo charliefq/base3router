@@ -30,7 +30,7 @@ import {
 import { resolveAttachmentRelativePath } from "../../../attachmentPaths.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { requireAllowedMcpTool } from "../../McpActionAuthorization.ts";
+import { withAllowedMcpTool } from "../../McpActionAuthorization.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
 
@@ -83,40 +83,45 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   | ActionGateService
 > {
   const scope = yield* McpInvocationContext.requireMcpCapability("preview");
-  yield* requireAllowedMcpTool(PREVIEW_TOOL_BY_OPERATION[operation], input);
-  const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
-  let targetTabId = tabId;
-  const result = yield* broker.invoke<A>({
-    onTargetTab: (resolvedTabId) => {
-      targetTabId = resolvedTabId;
-    },
-    scope,
-    operation,
+  return yield* withAllowedMcpTool(
+    PREVIEW_TOOL_BY_OPERATION[operation],
     input,
-    ...(timeoutMs === undefined ? {} : { timeoutMs }),
-    ...(tabId === undefined ? {} : { tabId }),
-  });
-  if (["status", "open", "navigate", "snapshot"].includes(operation)) return { result };
-  const statusTabId =
-    (operation !== "evaluate" && typeof result === "object" && result !== null
-      ? (result as { tabId?: PreviewTabId }).tabId
-      : undefined) ?? targetTabId;
-  const page = yield* broker
-    .invoke<PreviewAutomationStatus>({
-      scope,
-      operation: "status",
-      input: {},
-      timeoutMs: 500,
-      updateCurrentTab: false,
-      ...(statusTabId === undefined ? {} : { tabId: statusTabId }),
-    })
-    .pipe(Effect.catch(() => Effect.succeed(null)));
-  return {
-    result,
-    ...(page?.url && /^https?:\/\//i.test(page.url) && page.url.length <= 4096
-      ? { toolIcon: { _tag: "website" as const, pageUrl: page.url } }
-      : {}),
-  };
+    Effect.gen(function* () {
+      const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+      let targetTabId = tabId;
+      const result = yield* broker.invoke<A>({
+        onTargetTab: (resolvedTabId) => {
+          targetTabId = resolvedTabId;
+        },
+        scope,
+        operation,
+        input,
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        ...(tabId === undefined ? {} : { tabId }),
+      });
+      if (["status", "open", "navigate", "snapshot"].includes(operation)) return { result };
+      const statusTabId =
+        (operation !== "evaluate" && typeof result === "object" && result !== null
+          ? (result as { tabId?: PreviewTabId }).tabId
+          : undefined) ?? targetTabId;
+      const page = yield* broker
+        .invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "status",
+          input: {},
+          timeoutMs: 500,
+          updateCurrentTab: false,
+          ...(statusTabId === undefined ? {} : { tabId: statusTabId }),
+        })
+        .pipe(Effect.catch(() => Effect.succeed(null)));
+      return {
+        result,
+        ...(page?.url && /^https?:\/\//i.test(page.url) && page.url.length <= 4096
+          ? { toolIcon: { _tag: "website" as const, pageUrl: page.url } }
+          : {}),
+      };
+    }),
+  );
 });
 
 const invokeTargeted = <A extends object>(

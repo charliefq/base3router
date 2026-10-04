@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  MemoryId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -534,7 +535,7 @@ it("projects Dream Memory retrieval without private bodies or secret probes", ()
         captureMode: "review",
         enabled: true,
         retrievedCount: 1,
-        retrievedIds: ["mem-1"],
+        retrievedIds: [MemoryId.make("mem-1")],
         omittedCount: 0,
         used: true,
         contradictionVisible: true,

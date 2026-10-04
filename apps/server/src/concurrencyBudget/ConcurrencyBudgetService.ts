@@ -1,4 +1,7 @@
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -49,93 +52,116 @@ const outcomeError = (result: ConcurrencyAdmissionResultV0): ConcurrencyBudgetEr
   });
 
 const make = Effect.gen(function* () {
+  const clock = yield* Clock.Clock;
   const schedulers = yield* Ref.make(new Map<string, ConcurrencyScheduler>());
 
-  const schedulerFor = (environmentId: EnvironmentId) =>
+  const schedulerClock = {
+    nowMs: () => clock.currentTimeMillisUnsafe(),
+    nowIso: () => DateTime.formatIso(DateTime.makeUnsafe(clock.currentTimeMillisUnsafe())),
+  };
+
+  const schedulerFor = (environmentId: EnvironmentId): Effect.Effect<ConcurrencyScheduler> =>
     Ref.modify(schedulers, (current) => {
       const existing = current.get(environmentId);
       if (existing !== undefined) return [existing, current] as const;
       const created = new ConcurrencyScheduler({
         environmentId,
         policy: defaultConcurrencyBudgetPolicy(),
-        clock: {
-          nowMs: () => Date.now(),
-          nowIso: () => new Date().toISOString(),
-        },
+        clock: schedulerClock,
       });
       const next = new Map(current);
       next.set(environmentId, created);
       return [created, next] as const;
     });
 
-  const admit: ConcurrencyBudgetService["Service"]["admit"] = (request) =>
+  const awaitQueued = (
+    scheduler: ConcurrencyScheduler,
+    queued: ConcurrencyAdmissionResultV0,
+  ): Effect.Effect<ConcurrencyAdmissionResultV0> => {
+    const timeoutMs = scheduler.policy.classes[queued.workloadClass].maxQueueTimeMs;
+    const timeoutResult: ConcurrencyAdmissionResultV0 = {
+      outcome: "timed-out",
+      admissionId: queued.admissionId,
+      workloadClass: queued.workloadClass,
+      queuedMs: timeoutMs,
+      reasonCodes: ["QUEUE_TIMEOUT"],
+      explanation: "Queued work exceeded the wait budget.",
+    };
+    return Effect.gen(function* () {
+      const deferred = yield* Deferred.make<ConcurrencyAdmissionResultV0>();
+      const attached = scheduler.attachWaiter(queued.admissionId, {
+        resolve: (result) => {
+          Deferred.doneUnsafe(deferred, Effect.succeed(result));
+        },
+      });
+      if (!attached) return timeoutResult;
+      const wait = Deferred.await(deferred);
+      if (timeoutMs <= 0) return yield* wait;
+      return yield* wait.pipe(
+        Effect.timeoutOrElse({
+          duration: `${timeoutMs} millis`,
+          orElse: () =>
+            Effect.sync(() => {
+              scheduler.tick();
+              Deferred.doneUnsafe(deferred, Effect.succeed(timeoutResult));
+            }).pipe(Effect.andThen(Deferred.await(deferred))),
+        }),
+      );
+    }).pipe(
+      Effect.onInterrupt(() =>
+        Effect.sync(() => {
+          scheduler.cancel(queued.admissionId);
+        }),
+      ),
+    );
+  };
+
+  const admit = (
+    request: ConcurrencyAdmissionRequestV0,
+  ): Effect.Effect<ConcurrencyAdmissionResultV0, ConcurrencyBudgetError> =>
     Effect.gen(function* () {
       const scheduler = yield* schedulerFor(request.environmentId);
       const immediate = scheduler.admit(request);
-      if (immediate.outcome !== "queued") {
-        return immediate.outcome === "admitted" ? immediate : yield* outcomeError(immediate);
-      }
-      const timeoutMs = scheduler.policy.classes[request.workloadClass].maxQueueTimeMs;
-      const waited = yield* Effect.async<ConcurrencyAdmissionResultV0>((resume) => {
-        const handle =
-          timeoutMs > 0
-            ? setTimeout(() => {
-                scheduler.tick();
-              }, timeoutMs)
-            : undefined;
-        const attached = scheduler.attachWaiter(immediate.admissionId, {
-          resolve: (result) => {
-            if (handle !== undefined) clearTimeout(handle);
-            resume(Effect.succeed(result));
-          },
-        });
-        if (!attached) {
-          if (handle !== undefined) clearTimeout(handle);
-          resume(Effect.succeed(immediate));
-          return;
-        }
-        return Effect.sync(() => {
-          if (handle !== undefined) clearTimeout(handle);
-          scheduler.cancel(immediate.admissionId);
-        });
-      });
-      return waited.outcome === "admitted" ? waited : yield* outcomeError(waited);
+      if (immediate.outcome === "admitted") return immediate;
+      if (immediate.outcome !== "queued") return yield* outcomeError(immediate);
+      const waited = yield* awaitQueued(scheduler, immediate);
+      if (waited.outcome === "admitted") return waited;
+      return yield* outcomeError(waited);
     });
 
-  const withAdmission: ConcurrencyBudgetService["Service"]["withAdmission"] = (request, effect) =>
-    admit(request).pipe(
-      Effect.flatMap((result) => {
-        const leaseId = result.lease?.leaseId;
-        if (leaseId === undefined) {
-          return Effect.fail(
-            new ConcurrencyBudgetError({
-              reason: "invalid",
-              detail: "Admission succeeded without a lease.",
-              reasonCodes: ["CAPACITY_EXHAUSTED"],
-            }),
-          );
-        }
-        return effect.pipe(
-          Effect.ensuring(
-            schedulerFor(request.environmentId).pipe(
-              Effect.map((scheduler) => scheduler.release(leaseId)),
-              Effect.asVoid,
-            ),
+  const withAdmission = <A, E, R>(
+    request: ConcurrencyAdmissionRequestV0,
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E | ConcurrencyBudgetError, R> =>
+    Effect.flatMap(admit(request), (result): Effect.Effect<A, E | ConcurrencyBudgetError, R> => {
+      const leaseId = result.lease?.leaseId;
+      if (leaseId === undefined) {
+        return new ConcurrencyBudgetError({
+          reason: "invalid",
+          detail: "Admission succeeded without a lease.",
+          reasonCodes: ["CAPACITY_EXHAUSTED"],
+        });
+      }
+      return effect.pipe(
+        Effect.ensuring(
+          schedulerFor(request.environmentId).pipe(
+            Effect.map((scheduler) => scheduler.release(leaseId)),
+            Effect.asVoid,
           ),
-        );
-      }),
-    );
+        ),
+      );
+    });
 
-  const snapshot: ConcurrencyBudgetService["Service"]["snapshot"] = (environmentId) =>
+  const snapshot = (environmentId: EnvironmentId): Effect.Effect<ConcurrencyGovernanceSnapshotV0> =>
     schedulerFor(environmentId).pipe(Effect.map((scheduler) => scheduler.snapshot()));
 
-  const release: ConcurrencyBudgetService["Service"]["release"] = (environmentId, leaseId) =>
+  const release = (environmentId: EnvironmentId, leaseId: LeaseId): Effect.Effect<void> =>
     schedulerFor(environmentId).pipe(
       Effect.map((scheduler) => scheduler.release(leaseId)),
       Effect.asVoid,
     );
 
-  const shutdown: ConcurrencyBudgetService["Service"]["shutdown"] = Ref.get(schedulers).pipe(
+  const shutdown: Effect.Effect<void> = Ref.get(schedulers).pipe(
     Effect.map((current) => {
       for (const scheduler of current.values()) scheduler.shutdownNow();
     }),
@@ -152,9 +178,9 @@ const make = Effect.gen(function* () {
   } satisfies ConcurrencyBudgetService["Service"];
 });
 
-export const layer = Layer.scoped(ConcurrencyBudgetService, make);
+export const layer = Layer.effect(ConcurrencyBudgetService, make);
 
-export const layerTest = Layer.scoped(ConcurrencyBudgetService, make);
+export const layerTest = layer;
 
 export const shedIfRejected = (
   result: ConcurrencyAdmissionResultV0,

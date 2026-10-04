@@ -1,6 +1,7 @@
 import type { OrchestrationEvent } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -70,7 +71,7 @@ const make = Effect.gen(function* () {
     const environment = yield* Effect.serviceOption(ServerEnvironment);
     if (Option.isSome(dream) && Option.isSome(environment)) {
       const environmentId = yield* environment.value.getEnvironmentId;
-      const now = new Date().toISOString();
+      const now = DateTime.formatIso(yield* DateTime.now);
       yield* dream.value.invalidateSourceThread(environmentId, threadId, now).pipe(Effect.ignore);
     }
   });

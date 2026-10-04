@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
+import * as DateTime from "effect/DateTime";
 import {
   EnvironmentId,
   type ConcurrencyAdmissionRequestV0,
@@ -8,14 +9,15 @@ import {
 import { ConcurrencyScheduler, type SchedulerClock } from "./concurrencyBudget.ts";
 
 const env = EnvironmentId.make("env-1");
+const TEST_EPOCH_MS = DateTime.makeUnsafe("2026-10-03T00:00:00.000Z").epochMilliseconds;
 
 class FakeClock implements SchedulerClock {
   ms: number;
-  constructor(ms = Date.parse("2026-10-03T00:00:00.000Z")) {
+  constructor(ms = TEST_EPOCH_MS) {
     this.ms = ms;
   }
   nowMs = () => this.ms;
-  nowIso = () => new Date(this.ms).toISOString();
+  nowIso = () => DateTime.formatIso(DateTime.makeUnsafe(this.ms));
   advance(delta: number) {
     this.ms += delta;
   }

@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -56,6 +57,7 @@ import { PersistenceDecodeError, PersistenceSqlError } from "../persistence/Erro
 const MemoryJson = Schema.fromJsonString(MemoryRecordV0);
 const encodeMemory = Schema.encodeEffect(MemoryJson);
 const decodeMemory = Schema.decodeUnknownEffect(MemoryJson);
+const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const isDreamMemoryError = Schema.is(DreamMemoryError);
 
 const toPersistenceError =
@@ -77,7 +79,7 @@ export type DreamViewer = {
 };
 
 export class DreamExtractorTag extends Context.Service<DreamExtractorTag, DreamExtractor>()(
-  "t3/dreamMemory/DreamExtractor",
+  "t3/dreamMemory/DreamMemoryService/DreamExtractorTag",
 ) {}
 
 export class DreamMemoryService extends Context.Service<
@@ -242,7 +244,7 @@ const make = Effect.gen(function* () {
     if (!memoryPayloadOmitsSecretsAndDeletedContent(event)) return Effect.void;
     return sql`
       INSERT INTO dream_memory_audit (event_id, environment_id, recorded_at, payload_json)
-      VALUES (${event.eventId}, ${environmentId}, ${nowIso}, ${JSON.stringify({
+      VALUES (${event.eventId}, ${environmentId}, ${nowIso}, ${encodeUnknownJson({
         kind: event.kind,
         status: event.status ?? null,
         memoryId: event.memoryId ?? null,
@@ -273,7 +275,9 @@ const make = Effect.gen(function* () {
   };
 
   const retentionExpiry = (nowIso: string, retentionDays: number) =>
-    new Date(Date.parse(nowIso) + Math.max(1, retentionDays) * 86_400_000).toISOString();
+    DateTime.formatIso(
+      DateTime.add(DateTime.makeUnsafe(nowIso), { days: Math.max(1, retentionDays) }),
+    );
 
   const save: DreamMemoryService["Service"]["save"] = (input, viewer, nowIso, settings) =>
     Effect.gen(function* () {
@@ -518,7 +522,7 @@ const make = Effect.gen(function* () {
     nowIso,
   ) =>
     Effect.gen(function* () {
-      const now = nowIso ?? new Date().toISOString();
+      const now = nowIso ?? DateTime.formatIso(yield* DateTime.now);
       const records = yield* loadAll(viewer.environmentId);
       const current = records.map((record) => expireIfDue(record, now));
       for (const record of current) {
@@ -641,10 +645,10 @@ const make = Effect.gen(function* () {
       yield* sql`
         INSERT INTO dream_jobs (job_id, environment_id, status, payload_json, created_at)
         VALUES (
-          ${DreamJobId.make(`job-${Date.parse(input.nowIso)}`)},
+          ${DreamJobId.make(`job-${DateTime.makeUnsafe(input.nowIso).epochMilliseconds}`)},
           ${input.viewer.environmentId},
           ${"succeeded"},
-          ${JSON.stringify({ proposalCount: proposals.length })},
+          ${encodeUnknownJson({ proposalCount: proposals.length })},
           ${input.nowIso}
         )
       `.pipe(Effect.asVoid);

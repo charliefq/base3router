@@ -266,7 +266,7 @@ const make = Effect.gen(function* () {
           {
             workloadClass,
             environmentId,
-            requestedAt: new Date().toISOString(),
+            requestedAt: DateTime.formatIso(yield* DateTime.now),
             ...(extras.projectId !== undefined ? { projectId: extras.projectId } : {}),
             ...(extras.threadId !== undefined ? { threadId: extras.threadId } : {}),
           },

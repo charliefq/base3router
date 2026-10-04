@@ -93,6 +93,7 @@ export function DreamMemorySettings() {
           <Select
             value={memory.captureMode}
             onValueChange={(value) => {
+              if (value == null) return;
               const captureMode = value as MemoryCaptureMode;
               if (
                 captureMode === "off" ||
@@ -147,6 +148,7 @@ export function DreamMemorySettings() {
             <Select
               value={saveKind}
               onValueChange={(value) => {
+                if (value == null) return;
                 if ((MEMORY_KINDS as readonly string[]).includes(value)) {
                   setSaveKind(value as MemoryKind);
                 }

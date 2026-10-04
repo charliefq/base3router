@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ConcurrencyBudgetError } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -26,7 +26,13 @@ it.effect("releases leases after success, failure, and interruption", () =>
           environmentId,
           requestedAt: "2026-10-03T00:00:01.000Z",
         },
-        Effect.fail(new Error("boom")),
+        Effect.fail(
+          new ConcurrencyBudgetError({
+            reason: "invalid",
+            detail: "boom",
+            reasonCodes: ["CAPACITY_EXHAUSTED"],
+          }),
+        ),
       )
       .pipe(Effect.exit);
     assert.equal(failed._tag, "Failure");

@@ -358,7 +358,9 @@ it.effect("serializes concurrent correct and delete without resurrecting content
         assert.equal(memory.content, undefined);
       }
     }
-    const serialized = JSON.stringify(listed);
+    const serialized = yield* Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
+      listed,
+    );
     assert.equal(/sk-|Bearer /.test(serialized), false);
   }).pipe(Effect.provide(layer)),
 );

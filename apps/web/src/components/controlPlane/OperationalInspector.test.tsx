@@ -72,6 +72,8 @@ function model(overrides: Partial<OperationalInspectorModel> = {}): OperationalI
     approval: null,
     toolExecution: null,
     outcome: null,
+    dreamMemory: null,
+    concurrency: null,
     error: null,
     emptyReason: null,
     ...overrides,
