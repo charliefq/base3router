@@ -232,7 +232,9 @@ it.effect("does not resurrect consumed approvals and issues a successor ASK afte
     });
     yield* service.putApproval(pending);
     yield* service.respond({ approvalId: pending.approvalId, decision: "deny" }, NOW);
-    const successor = yield* service.putApproval(pending);
+    const silentReplay = yield* service.putApproval(pending).pipe(Effect.flip);
+    assert.equal(isActionGateError(silentReplay) && silentReplay.reason === "conflict", true);
+    const successor = yield* service.putApproval(pending, { retry: true });
     assert.equal(successor.status, "pending");
     assert.equal(successor.approvalId === pending.approvalId, false);
     const denied = yield* service.getApproval(pending.approvalId);
@@ -405,11 +407,21 @@ it.effect("cancel requires a successor ASK and never auto-replays the previous a
     assert.equal(cancelled.status, "cancelled");
     assert.equal(Exit.isFailure(waited), true);
     assert.equal(executions, 0);
+    const transportReplay = yield* service
+      .authorizeTool({
+        toolName: "preview_open",
+        args: { url: "https://example.test/crash-cancel-successor" },
+        environmentId,
+        threadId: ThreadId.make("thread-crash-cancel"),
+      })
+      .pipe(Effect.flip);
+    assert.equal(isActionGateError(transportReplay) && transportReplay.reason === "conflict", true);
     const retried = yield* service.authorizeTool({
       toolName: "preview_open",
       args: { url: "https://example.test/crash-cancel-successor" },
       environmentId,
       threadId: ThreadId.make("thread-crash-cancel"),
+      retry: true,
     });
     assert.equal(retried.decision, "ASK");
     assert.equal(retried.approvalId === approvalId, false);
@@ -740,5 +752,97 @@ it.effect("consume uses current time so granted approvals cannot outlive expiry"
       .waitForAuthorized(pending.approvalId, action.fingerprint, NOW)
       .pipe(Effect.flip);
     assert.equal(isActionGateError(consumed) && consumed.reason === "expired", true);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("explicit retries create one successor and concurrent retries dedupe", () =>
+  Effect.gen(function* () {
+    const service = yield* ActionGateService;
+    const asked = yield* service.authorizeTool({
+      toolName: "preview_open",
+      args: { url: "https://example.test/retry-dedupe" },
+      environmentId,
+      threadId: ThreadId.make("thread-retry-dedupe"),
+    });
+    const approvalId = asked.approvalId;
+    if (approvalId === undefined) {
+      assert.equal(asked.requiresApproval, true, "expected approval");
+      return;
+    }
+    yield* service.respond({ approvalId, decision: "deny" }, NOW);
+    const [first, second] = yield* Effect.all(
+      [
+        service.authorizeTool({
+          toolName: "preview_open",
+          args: { url: "https://example.test/retry-dedupe" },
+          environmentId,
+          threadId: ThreadId.make("thread-retry-dedupe"),
+          retry: true,
+        }),
+        service.authorizeTool({
+          toolName: "preview_open",
+          args: { url: "https://example.test/retry-dedupe" },
+          environmentId,
+          threadId: ThreadId.make("thread-retry-dedupe"),
+          retry: true,
+        }),
+      ],
+      { concurrency: 2 },
+    );
+    assert.equal(first.decision, "ASK");
+    assert.equal(second.decision, "ASK");
+    assert.equal(first.approvalId, second.approvalId);
+    assert.equal(first.approvalId === approvalId, false);
+    const successorId = first.approvalId;
+    if (successorId === undefined) {
+      assert.equal(first.requiresApproval, true, "expected successor approval");
+      return;
+    }
+    yield* service.respond({ approvalId: successorId, decision: "grant" }, NOW);
+    yield* service.consume(successorId, first.fingerprint, NOW);
+    const resurrect = yield* service
+      .authorizeTool({
+        toolName: "preview_open",
+        args: { url: "https://example.test/retry-dedupe" },
+        environmentId,
+        threadId: ThreadId.make("thread-retry-dedupe"),
+        retry: true,
+      })
+      .pipe(Effect.flip);
+    assert.equal(isActionGateError(resurrect) && resurrect.reason === "conflict", true);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("unknown consumed outcomes stay dead across a bounded retry loop", () =>
+  Effect.gen(function* () {
+    const service = yield* ActionGateService;
+    const asked = yield* service.authorizeTool({
+      toolName: "preview_open",
+      args: { url: "https://example.test/retry-loop" },
+      environmentId,
+      threadId: ThreadId.make("thread-retry-loop"),
+    });
+    const approvalId = asked.approvalId;
+    if (approvalId === undefined) {
+      assert.equal(asked.requiresApproval, true, "expected approval");
+      return;
+    }
+    yield* service.respond({ approvalId, decision: "grant" }, NOW);
+    yield* service.consume(approvalId, asked.fingerprint, NOW);
+    let conflicts = 0;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const replay = yield* service
+        .authorizeTool({
+          toolName: "preview_open",
+          args: { url: "https://example.test/retry-loop" },
+          environmentId,
+          threadId: ThreadId.make("thread-retry-loop"),
+          retry: attempt % 2 === 0,
+        })
+        .pipe(Effect.flip);
+      assert.equal(isActionGateError(replay) && replay.reason === "conflict", true);
+      conflicts += 1;
+    }
+    assert.equal(conflicts, 8);
   }).pipe(Effect.provide(layer)),
 );

@@ -28,6 +28,7 @@
         "mobile-native-client.ts",
         "base3router-ui-lab.ts",
         "router-evaluate.ts",
+        "internal-beta-acceptance.ts",
       ],
     },
     "apps/server": {

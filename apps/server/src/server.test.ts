@@ -17,6 +17,7 @@ import {
   EnvironmentId,
   EventId,
   GitCommandError,
+  HYBRID_ROUTER_POLICY_VERSION,
   KeybindingRule,
   MessageId,
   ObservationId,
@@ -197,6 +198,8 @@ import * as RouterEvaluationService from "./routerEvaluation/RouterEvaluationSer
 import * as ActionGateService from "./actionGate/ActionGateService.ts";
 import * as DreamMemoryService from "./dreamMemory/DreamMemoryService.ts";
 import * as ConcurrencyBudgetService from "./concurrencyBudget/ConcurrencyBudgetService.ts";
+import { sendTurnUntilTerminal } from "./concurrencyBudget/awaitTurnTerminal.ts";
+import { issueActiveMcpCredential } from "./mcp/McpSessionRegistry.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as Data from "effect/Data";
 
@@ -1083,7 +1086,7 @@ const buildAppUnderTest = (options?: {
       Layer.provide(
         Layer.mergeAll(
           UsageService.layerTest,
-          RouterEvaluationService.layerTest,
+          RouterEvaluationService.layer,
           ActionGateService.layer,
           DreamMemoryService.layer,
           ConcurrencyBudgetService.layer,
@@ -4417,6 +4420,269 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(concurrency.queued, 0);
       assert.equal(concurrency.saturation, "idle");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "Internal Beta: production RouterEvaluationService lists candidate Auto/Manual policies",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest();
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const insights = yield* withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.routerGetInsights]({}),
+        );
+        assert.equal(insights.candidatePolicyVersion, HYBRID_ROUTER_POLICY_VERSION);
+        assert.equal(insights.candidatePolicyState, "candidate");
+        const policies = yield* withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.routerListPolicies]({}),
+        );
+        assert.equal(
+          policies.policies.some((policy) => policy.policyVersion === HYBRID_ROUTER_POLICY_VERSION),
+          true,
+        );
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "Internal Beta: Inspector RPCs receive live ActionGate, memory, and concurrency state",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest();
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const saved = yield* withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.memorySave]({
+            content: "Prefer focused tests.",
+            kind: "workflow-convention",
+            scopeKind: "project",
+            projectId: defaultProjectId,
+          }),
+        );
+        const listed = yield* withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.memoryList]({ projectId: defaultProjectId }),
+        );
+        assert.equal(
+          listed.memories.some((memory) => memory.memoryId === saved.memory.memoryId),
+          true,
+        );
+        const action = yield* withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.actionGateGetGovernance]({}),
+        );
+        assert.equal(action.policyVersion, "action-gate.v0");
+        const concurrency = yield* withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.concurrencyGetGovernance]({}),
+        );
+        assert.equal(concurrency.topology, "process-local");
+        const insights = yield* withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.routerGetInsights]({}),
+        );
+        assert.equal(insights.insufficientData, true);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("Internal Beta: WS sendTurn holds capacity until terminal and cancels the queue", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const pubsub = yield* PubSub.unbounded<import("@t3tools/contracts").ProviderRuntimeEvent>();
+        const started = yield* Deferred.make<TurnId>();
+        const turnId = TurnId.make("turn-ws-lease");
+        yield* buildAppUnderTest({
+          layers: {
+            orchestrationEngine: {
+              dispatch: (command) =>
+                Effect.gen(function* () {
+                  const budget = yield* Effect.serviceOption(
+                    ConcurrencyBudgetService.ConcurrencyBudgetService,
+                  );
+                  if (Option.isNone(budget)) return { sequence: 0 };
+                  if (command.type === "thread.turn.interrupt") {
+                    yield* budget.value.cancelQueuedForThread(
+                      testEnvironmentDescriptor.environmentId,
+                      command.threadId,
+                    );
+                    return { sequence: 1 };
+                  }
+                  if (command.type !== "thread.turn.start") {
+                    return { sequence: 0 };
+                  }
+                  yield* budget.value.withAdmission(
+                    {
+                      workloadClass: "foreground-turn",
+                      environmentId: testEnvironmentDescriptor.environmentId,
+                      threadId: command.threadId,
+                      requestedAt: command.createdAt,
+                    },
+                    sendTurnUntilTerminal(
+                      Effect.gen(function* () {
+                        yield* Deferred.succeed(started, turnId);
+                        return { threadId: command.threadId, turnId };
+                      }),
+                      Stream.fromPubSub(pubsub),
+                    ),
+                  );
+                  return { sequence: 1 };
+                }),
+            },
+          },
+        });
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const first = yield* withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-internal-beta-turn-1"),
+            threadId: defaultThreadId,
+            message: {
+              messageId: MessageId.make("message-internal-beta-1"),
+              role: "user",
+              text: "hold capacity",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: "2026-10-04T00:00:00.000Z",
+          }).pipe(Effect.forkChild),
+        );
+        yield* Deferred.await(started);
+        const during = yield* withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.concurrencyGetGovernance]({}),
+        );
+        assert.equal(during.foregroundActive >= 1, true);
+        const queued = yield* withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-internal-beta-turn-2"),
+            threadId: defaultThreadId,
+            message: {
+              messageId: MessageId.make("message-internal-beta-2"),
+              role: "user",
+              text: "should queue",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: "2026-10-04T00:00:01.000Z",
+          }).pipe(Effect.forkChild),
+        );
+        yield* Effect.yieldNow;
+        const saturated = yield* withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.concurrencyGetGovernance]({}),
+        );
+        assert.equal(saturated.queued >= 1 || saturated.foregroundActive >= 1, true);
+        yield* withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.make("cmd-internal-beta-interrupt"),
+            threadId: defaultThreadId,
+            createdAt: "2026-10-04T00:00:02.000Z",
+          }),
+        );
+        yield* PubSub.publish(pubsub, {
+          type: "turn.completed",
+          eventId: EventId.make("evt-ws-complete"),
+          provider: "codex",
+          createdAt: "2026-10-04T00:00:03.000Z",
+          threadId: defaultThreadId,
+          turnId,
+          payload: { state: "completed" },
+        } as import("@t3tools/contracts").ProviderRuntimeEvent);
+        yield* Fiber.join(first).pipe(Effect.exit);
+        yield* Fiber.interrupt(queued);
+        const after = yield* withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.concurrencyGetGovernance]({}),
+        );
+        assert.equal(after.foregroundActive, 0);
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("Internal Beta: MCP HTTP ASK grant through WS approval executes once", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* buildAppUnderTest();
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const executions = yield* Ref.make(0);
+        const host = {
+          clientId: "internal-beta-preview-host",
+          environmentId: testEnvironmentDescriptor.environmentId,
+        } as const;
+        yield* withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.previewAutomationConnect](host).pipe(
+            Stream.tap((event) => {
+              if (event.type !== "request") return Effect.void;
+              return Ref.update(executions, (value) => value + 1).pipe(
+                Effect.andThen(
+                  client[WS_METHODS.previewAutomationRespond]({
+                    clientId: host.clientId,
+                    connectionId: event.connectionId,
+                    requestId: event.request.requestId,
+                    ok: true,
+                    result: { available: true, url: "https://example.test/ws-ask" },
+                  }),
+                ),
+              );
+            }),
+            Stream.runDrain,
+          ),
+        ).pipe(Effect.forkScoped);
+        const credential = yield* issueActiveMcpCredential({
+          threadId: defaultThreadId,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          capabilities: new Set(["preview"]),
+        });
+        if (credential === undefined) {
+          assert.equal(false, true, "expected an active MCP credential");
+          return;
+        }
+        const httpClient = yield* HttpClient.HttpClient;
+        const initialize = yield* httpClient.post("/mcp", {
+          headers: {
+            accept: "application/json, text/event-stream",
+            authorization: credential.config.authorizationHeader,
+          },
+          body: HttpBody.text(
+            `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"internal-beta","version":"1.0.0"}}}`,
+            "application/json",
+          ),
+        });
+        const sessionId = initialize.headers["mcp-session-id"];
+        const call = httpClient
+          .post("/mcp", {
+            headers: {
+              accept: "application/json, text/event-stream",
+              authorization: credential.config.authorizationHeader,
+              ...(sessionId !== undefined ? { "mcp-session-id": sessionId } : {}),
+            },
+            body: HttpBody.text(
+              `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"preview_open","arguments":{"url":"https://example.test/ws-ask"}}}`,
+              "application/json",
+            ),
+          })
+          .pipe(Effect.forkChild);
+        const pending = yield* Effect.gen(function* () {
+          for (let attempt = 0; attempt < 50; attempt += 1) {
+            const governance = yield* withWsRpcClient(wsUrl, (client) =>
+              client[WS_METHODS.actionGateGetGovernance]({}),
+            );
+            if (governance.pending[0] !== undefined) return governance.pending[0];
+            yield* Effect.yieldNow;
+          }
+          return undefined;
+        });
+        if (pending === undefined) {
+          assert.equal(false, true, "expected a pending MCP ASK");
+          return;
+        }
+        yield* withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.actionGateRespondApproval]({
+            approvalId: pending.approvalId,
+            decision: "grant",
+          }),
+        );
+        yield* call;
+        assert.equal(yield* Ref.get(executions), 1);
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("includes CORS headers on remote auth success responses", () =>

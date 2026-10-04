@@ -347,3 +347,39 @@ jobs:
 
       - name: Exercise release-only workflow steps
         run: node scripts/release-smoke.ts
+
+  internal_beta_acceptance:
+    name: Internal Beta Acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Record SHA-bound acceptance evidence
+        env:
+          INTERNAL_BETA_SKIP_UI_LAB: "1"
+        run: |
+          mkdir -p "${{ runner.temp }}/internal-beta"
+          node scripts/internal-beta-acceptance.ts run --out "${{ runner.temp }}/internal-beta/evidence.json"
+
+      - name: Upload acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: internal-beta-acceptance-${{ github.sha }}
+          path: ${{ runner.temp }}/internal-beta/
+          if-no-files-found: error
+          retention-days: 30

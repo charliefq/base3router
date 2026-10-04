@@ -23,6 +23,7 @@ import {
   type ConcurrencyAdmissionResultV0,
   type ConcurrencyAdmissionTraceV0,
   type ConcurrencyWorkloadClass,
+  type ExecutionTreeContextV0,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
@@ -87,6 +88,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { renderMemoryCapsule } from "@t3tools/shared/dreamMemory";
 import { DreamMemoryService, viewerFromSubject } from "../../dreamMemory/DreamMemoryService.ts";
 import { ConcurrencyBudgetService } from "../../concurrencyBudget/ConcurrencyBudgetService.ts";
+import { sendTurnUntilTerminal } from "../../concurrencyBudget/awaitTurnTerminal.ts";
 import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
@@ -293,7 +295,11 @@ const make = Effect.gen(function* () {
   const runWithBudget = (
     workloadClass: ConcurrencyWorkloadClass,
     effect: Effect.Effect<void>,
-    extras: { readonly projectId?: ProjectId; readonly threadId?: ThreadId } = {},
+    extras: {
+      readonly projectId?: ProjectId;
+      readonly threadId?: ThreadId;
+      readonly tree?: ExecutionTreeContextV0;
+    } = {},
   ) =>
     Effect.gen(function* () {
       if (Option.isNone(concurrencyBudget) || Option.isNone(serverEnvironment)) {
@@ -308,6 +314,7 @@ const make = Effect.gen(function* () {
             requestedAt: DateTime.formatIso(yield* DateTime.now),
             ...(extras.projectId !== undefined ? { projectId: extras.projectId } : {}),
             ...(extras.threadId !== undefined ? { threadId: extras.threadId } : {}),
+            ...(extras.tree !== undefined ? { tree: extras.tree } : {}),
           },
           effect,
         )
@@ -1779,6 +1786,7 @@ const make = Effect.gen(function* () {
     const routingMode = modelRoute?.mode;
     let currentSelection = taskModelSelection;
     let attemptCount = 0;
+    let admissionTree: ExecutionTreeContextV0 | undefined;
     const attemptedInstanceIds = new Set<string>();
     const attemptedTargetKeys = new Set<string>();
 
@@ -2071,6 +2079,7 @@ const make = Effect.gen(function* () {
                 ? runWithBudget("failover-retry", continueRoutedAttempts(), {
                     projectId: thread.projectId,
                     threadId: thread.id,
+                    ...(admissionTree !== undefined ? { tree: admissionTree } : {}),
                   }).pipe(Effect.forkDetach, Effect.as(true))
                 : Effect.succeed(false),
             ),
@@ -2097,7 +2106,12 @@ const make = Effect.gen(function* () {
 
     const sendRoutedTurn = (routeFailover: boolean) =>
       buildRoutedTurnRequest(routeFailover).pipe(
-        Effect.flatMap((request) => providerService.sendTurn(request).pipe(Effect.asVoid)),
+        Effect.flatMap((request) =>
+          sendTurnUntilTerminal(
+            providerService.sendTurn(request),
+            providerService.streamEvents,
+          ).pipe(Effect.asVoid),
+        ),
       );
 
     attemptCount += 1;
@@ -2118,9 +2132,12 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const send = providerService.sendTurn(sendTurnRequest.value).pipe(
+    const send = sendTurnUntilTerminal(
+      providerService.sendTurn(sendTurnRequest.value),
+      providerService.streamEvents,
+      { afterStart: () => registerCurrentPending() },
+    ).pipe(
       Effect.asVoid,
-      Effect.tap(() => registerCurrentPending()),
       Effect.catchCause((cause) =>
         planAndPersistFailure(cause).pipe(
           Effect.flatMap((retry) => (retry ? continueRoutedAttempts() : Effect.void)),
@@ -2158,9 +2175,10 @@ const make = Effect.gen(function* () {
                 reasonCodes: ["CAPACITY_EXHAUSTED"],
               });
             }
-            // Lease covers this sendTurn Effect. Adapters that return when the
-            // stream starts release before the turn is terminal; that span is
-            // documented, not a hidden turn-terminal hold.
+            admissionTree = result.lease?.tree;
+            // Lease covers active execution, not the start-call return.
+            // Start-return adapters keep this fiber (and the lease) until
+            // turn.completed/aborted or the bounded terminal timeout.
             return yield* send.pipe(Effect.ensuring(budget.release(environmentId, leaseId)));
           }).pipe(
             Effect.catch((error) =>

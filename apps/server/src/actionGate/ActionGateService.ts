@@ -95,6 +95,7 @@ export class ActionGateService extends Context.Service<
   {
     readonly putApproval: (
       record: ActionApprovalRecord,
+      options?: { readonly retry?: boolean },
     ) => Effect.Effect<
       ActionApprovalRecord,
       PersistenceSqlError | PersistenceDecodeError | ActionGateError
@@ -146,6 +147,7 @@ export class ActionGateService extends Context.Service<
       readonly args: unknown;
       readonly environmentId: EnvironmentId;
       readonly threadId: ThreadId;
+      readonly retry?: boolean;
     }) => Effect.Effect<
       ActionGateDecision,
       PersistenceSqlError | PersistenceDecodeError | ActionGateError
@@ -264,7 +266,7 @@ const make = Effect.gen(function* () {
       });
     });
 
-  const putApproval: ActionGateService["Service"]["putApproval"] = (record) =>
+  const putApproval: ActionGateService["Service"]["putApproval"] = (record, options) =>
     sql
       .withTransaction(
         Effect.gen(function* () {
@@ -290,10 +292,13 @@ const make = Effect.gen(function* () {
             });
           }
           if (TERMINAL_APPROVAL_STATUSES.has(existing.status)) {
-            if (existing.status === "consumed") {
+            if (existing.status === "consumed" || options?.retry !== true) {
               return yield* new ActionGateError({
                 reason: "conflict",
-                detail: `Approval cannot be resurrected from ${existing.status}.`,
+                detail:
+                  existing.status === "consumed"
+                    ? `Approval cannot be resurrected from ${existing.status}.`
+                    : `Approval cannot be resurrected from ${existing.status} without an explicit retry.`,
               });
             }
             const successor = successorPending(record);
@@ -819,6 +824,7 @@ const make = Effect.gen(function* () {
           argumentSummary: argumentSummary(input.args),
           askExplanation: "ActionGate requires a one-time exact-action approval before execution.",
         }),
+        { retry: input.retry === true },
       );
       yield* appendAudit(
         makeActionAuditEvent({

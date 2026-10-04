@@ -1,12 +1,15 @@
 # Internal Beta acceptance manifest v1
 
-Versioned mapping from requirement IDs to reviewed tests. This file is
-documentation. It is not a shell runner. Do not extract or execute
-commands from untrusted Markdown.
+Versioned mapping from requirement IDs to reviewed tests. This file is documentation. The executable mapping is
+`scripts/internal-beta-acceptance-lib.ts`. Run
+`node scripts/internal-beta-acceptance.ts run` after checkout to produce
+SHA-bound evidence. Do not extract or execute commands from this Markdown.
 
 Local verification is separate from live-provider and native release
 gates. Skipped checks, older-tree executions, and fixture-only UI Lab
-scenarios cannot establish readiness for a later SHA.
+scenarios cannot establish readiness for a later SHA. The runner refuses
+`LOCAL_STABILIZATION_VERIFIED` unless every required local gate is `PASS`
+for the current SHA.
 
 Statuses: `PASS`, `FAIL`, `NOT_RUN`, `BLOCKED`.
 
@@ -19,36 +22,36 @@ Statuses: `PASS`, `FAIL`, `NOT_RUN`, `BLOCKED`.
 
 ## Requirements
 
-| ID  | Requirement                                                | Reviewed tests / assertions                                                                       | Local result                                                          |
-| --- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| R1  | Auto/Manual bind + failover provenance                     | `Dispatcher.test.ts`, `ProviderCommandReactor.test.ts`, `ProviderRuntimeIngestion.test.ts`        | PASS (unit/reactor). WS router layer still `layerTest`. Live: NOT_RUN |
-| R2  | ASK grant once; deny/cancel/expiry zero exec               | `ActionGateService.test.ts` grant/deny/expire/cancel; WS `ActionGate RPCs read SQLite governance` | PASS                                                                  |
-| R3  | Replay and changed args cannot reuse authorization         | `ActionGateService.test.ts` replay + changed arguments                                            | PASS                                                                  |
-| R4  | Memory save/list/correct/delete through auth               | `server.test.ts` Dream Memory RPCs persist…                                                       | PASS                                                                  |
-| R5  | Memory off projected; explicit save remains                | `DreamMemoryService.test.ts` disabled; `server.test.ts` Dream Memory off…                         | PASS                                                                  |
-| R6  | Concurrency queue, cancel, timeout, lease span             | `concurrencyBudget.test.ts`, `ConcurrencyBudgetService.test.ts`                                   | PASS                                                                  |
-| R7  | Inspector persists settled admission                       | `ProviderCommandReactor.ts` persist after `admit`; UI Lab Inspector scenarios                     | PASS (server persist). Browser production: NOT_RUN                    |
-| R8  | RPC operate-scope negatives                                | `RpcAuthorization.test.ts`; WS memory save + ActionGate respond                                   | PASS                                                                  |
-| R9  | Migrations 063 conflict fails; 064/065 upgrade; fresh init | `063_ActionGateApprovalUniqueness.test.ts`, `064_DreamMemory.test.ts`                             | PASS                                                                  |
-| R10 | Crash before dispatch leaves pending approval              | `ActionGateService.test.ts` durable pending without waiter                                        | PASS                                                                  |
-| R11 | Crash after consume does not auto-replay                   | `does not auto-replay after a side effect when the handler crashes before persist`                | PASS                                                                  |
-| R12 | Unknown external outcome is not retried                    | consume is one-time; fake write + interrupt; no second write                                      | PASS (policy). Distributed exactly-once: NOT implemented              |
-| R13 | UI Lab visual fixtures                                     | `node scripts/base3router-ui-lab.ts` 149 passed                                                   | PASS (fixtures, not live RPC)                                         |
-| R14 | Live providers                                             | prepared checklist in readiness doc                                                               | BLOCKED                                                               |
-| R15 | Native install/signing                                     | readiness doc                                                                                     | BLOCKED                                                               |
-| R16 | Cancel/deny/expire successor ASK; consumed stays dead      | `cancel requires a successor ASK`; resurrection test                                              | PASS                                                                  |
-| R17 | Follow-up experiments documented, not implemented          | `docs/architecture/base3router-follow-up-experiments.md`                                          | PASS (docs only)                                                      |
+The executable ID → command map is `scripts/internal-beta-acceptance-lib.ts`.
+This table is the readable index.
+
+| ID  | Requirement                                        | Reviewed tests                                                                            | Local gate                                          |
+| --- | -------------------------------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| R1  | Auto/Manual bind + failover provenance             | `Dispatcher.test.ts`, `RouterEvaluationService.test.ts`, WS Internal Beta router policies | `L-auto-manual`, `L-ws-production`                  |
+| R2  | ASK grant once; deny/cancel/expiry zero exec       | `ActionGateService.test.ts`, `McpHttpServer.productionAsk.test.ts`                        | `L-successor-ask`, `L-mcp-ask`                      |
+| R3  | Replay and changed args cannot reuse authorization | `ActionGateService.test.ts`; MCP post-queue revalidation                                  | `L-successor-ask`, `L-mcp-ask`                      |
+| R4  | Memory save/list/correct/delete through auth       | `server.test.ts` Dream Memory RPCs; Internal Beta Inspector RPCs                          | `L-ws-production`                                   |
+| R5  | Memory off projected; explicit save remains        | `DreamMemoryService.test.ts`; WS off projection                                           | `L-ws-production`                                   |
+| R6  | Concurrency queue, cancel, timeout, lease span     | `awaitTurnTerminal.test.ts`, workload measurement, WS sendTurn                            | `L-lease-terminal`, `L-workload`, `L-ws-production` |
+| R7  | Inspector / Control Center receive real state      | WS governance RPCs from production services                                               | `L-ws-production`                                   |
+| R8  | RPC operate-scope negatives                        | `RpcAuthorization.test.ts`; WS operate-scope tests                                        | existing CI server tests                            |
+| R9  | Migrations 063 fail-closed; upgrade; restore       | `063_ActionGateApprovalUniqueness.test.ts`, `SqliteRecovery.test.ts`                      | `L-recovery`                                        |
+| R10 | Pending approval across process restart            | `SqliteRecovery.test.ts`                                                                  | `L-recovery`                                        |
+| R11 | Crash after fake write does not auto-replay        | `SqliteRecovery.test.ts`; in-memory crash-after-write                                     | `L-recovery`                                        |
+| R12 | Unknown external outcome is not retried            | consume is one-time; consumed+retry stays dead                                            | `L-successor-ask`                                   |
+| R13 | UI Lab visual fixtures                             | `scripts/base3router-ui-lab.ts`                                                           | `L-ui-lab` (fixtures, not production RPC)           |
+| R14 | Live providers                                     | readiness checklist                                                                       | `E-live-provider` BLOCKED                           |
+| R15 | Native install/signing                             | readiness doc                                                                             | `E-native-signing` BLOCKED                          |
+| R16 | Successor ASK is explicit; consumed stays dead     | `retry: true`; transport replay conflicts                                                 | `L-successor-ask`                                   |
+| R17 | Follow-up experiments documented, not implemented  | `docs/architecture/base3router-follow-up-experiments.md`                                  | docs only                                           |
 
 ## Execution record
 
-Fill at verification time for the SHA under test. Older-tree results
-do not carry forward.
+SHA-bound evidence is a CI artifact from
+`node scripts/internal-beta-acceptance.ts run` after checkout. Do not
+commit a report that names a future SHA. Older-tree results do not
+carry forward.
 
-- Last CI-verified SHA: `f72a9f9642adc8c0bb0f9e4b76d67989b734fb7b`
-- Crash/replay implementation SHA: `34e5a146b`
-- Superseded: `f544dd0ea` Check failure (unused `layerTest`) does not certify a later head
+- Evidence artifact: `internal-beta-acceptance-<sha>/evidence.json`
 - Environment: disposable SQLite; fake transports; Node 24 via nvm
-- Local commands: `vp test run` on the files named above; `node scripts/base3router-ui-lab.ts`
-- CI on `f72a9f964`: Check pass, Test / Test Server 1–3 pass, UI Lab pass
-- Evidence: this table plus `docs/architecture/base3router-internal-beta-readiness.md`
 - This file is documentation. Do not execute commands copied from it.

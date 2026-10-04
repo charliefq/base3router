@@ -2,18 +2,145 @@ import {
   ActionGateError,
   McpActionGateBlockedError,
   MODEL_ROUTER_UNKNOWN_METRIC,
+  ProjectId,
+  TurnId,
   type ActionGateDecision,
 } from "@t3tools/contracts";
+import { defaultDecisionForRisk } from "@t3tools/shared/actionGate";
+import { buildExecutionPlan } from "@t3tools/shared/executionPlan";
+import {
+  FIRST_PARTY_DEVICE_TOOLS,
+  FIRST_PARTY_PREVIEW_TOOLS,
+  FIRST_PARTY_PULL_REQUEST_TOOLS,
+  firstPartyMcpCatalog,
+} from "@t3tools/shared/mcpCatalog";
+import { routeMcp } from "@t3tools/shared/mcpRouter";
+import { routeSkills } from "@t3tools/shared/skillRouter";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { ActionGateService } from "../actionGate/ActionGateService.ts";
 import { ConcurrencyBudgetService } from "../concurrencyBudget/ConcurrencyBudgetService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
-import * as Option from "effect/Option";
 
 const isActionGateError = Schema.is(ActionGateError);
+
+const FIRST_PARTY_TOOLS = [
+  ...FIRST_PARTY_PREVIEW_TOOLS,
+  ...FIRST_PARTY_DEVICE_TOOLS,
+  ...FIRST_PARTY_PULL_REQUEST_TOOLS,
+];
+
+const blocked = (
+  toolName: string,
+  detail: string,
+  reasonCodes: ReadonlyArray<"ACTION_DENIED" | "REPLAY_REJECTED" | "APPROVAL_CONSUMED"> = [
+    "ACTION_DENIED",
+  ],
+) =>
+  new McpActionGateBlockedError({
+    toolName,
+    decision: "DENY",
+    reasonCodes: [...reasonCodes],
+    detail,
+  });
+
+const plannedFingerprint = (
+  toolName: string,
+  args: unknown,
+  invocation: McpInvocationContext.McpInvocationScope,
+) => {
+  const nowIso = "1970-01-01T00:00:00.000Z";
+  const spec = FIRST_PARTY_TOOLS.find((tool) => tool.name === toolName);
+  const serverId =
+    spec?.capability === "device"
+      ? "t3-device"
+      : spec?.capability === "pull-requests"
+        ? "t3-pull-requests"
+        : "t3-preview";
+  const toolId = `${serverId}/${toolName}`;
+  const plan = buildExecutionPlan({
+    turnId: TurnId.make(invocation.threadId),
+    threadId: invocation.threadId,
+    projectId: ProjectId.make("unbound"),
+    environmentId: invocation.environmentId,
+    nowIso,
+    expiresAt: nowIso,
+    modelRoute: null,
+    skillRoute: routeSkills({ mode: "auto", nowIso, catalog: [] }),
+    mcpRoute: routeMcp({
+      mode: "auto",
+      nowIso,
+      catalog: firstPartyMcpCatalog(nowIso),
+    }),
+    actions: [
+      {
+        serverId,
+        toolId,
+        arguments: args,
+        schemaDigest: spec?.name ?? "unknown",
+        riskClass: spec?.riskClass ?? "unclassified",
+        sideEffectClass: spec?.sideEffectClass ?? "unknown",
+      },
+    ],
+  });
+  return { spec, action: plan.actions[0] };
+};
+
+const revalidateAfterQueue = (
+  toolName: string,
+  args: unknown,
+  prior: ActionGateDecision,
+): Effect.Effect<
+  void,
+  McpActionGateBlockedError,
+  McpInvocationContext.McpInvocationContext | ActionGateService
+> =>
+  Effect.gen(function* () {
+    const invocation = yield* McpInvocationContext.McpInvocationContext;
+    const { spec, action } = plannedFingerprint(toolName, args, invocation);
+    if (action === undefined || action.fingerprint !== prior.fingerprint) {
+      return yield* blocked(
+        toolName,
+        "Queued MCP arguments no longer match the authorized fingerprint.",
+        ["REPLAY_REJECTED"],
+      );
+    }
+    const defaults = defaultDecisionForRisk({
+      riskClass: action.riskClass,
+      sideEffectClass: action.sideEffectClass,
+      mayExposeSecrets: spec?.name === "preview_snapshot" || spec?.name === "device_screenshot",
+    });
+    if (defaults.decision === "DENY") {
+      return yield* blocked(toolName, "ActionGate denied this action after queue delay.");
+    }
+    if (prior.approvalId === undefined) return;
+    const actionGate = yield* ActionGateService;
+    const stored = yield* actionGate
+      .getApproval(prior.approvalId)
+      .pipe(
+        Effect.mapError(() => blocked(toolName, "ActionGate could not revalidate the approval.")),
+      );
+    if (Option.isNone(stored)) {
+      return yield* blocked(toolName, "Queued approval is no longer present.");
+    }
+    if (stored.value.fingerprint !== prior.fingerprint) {
+      return yield* blocked(
+        toolName,
+        "Queued approval is bound to a different action fingerprint.",
+        ["REPLAY_REJECTED"],
+      );
+    }
+    if (stored.value.status !== "consumed" && stored.value.status !== "granted") {
+      return yield* blocked(
+        toolName,
+        `Queued approval is ${stored.value.status} and cannot run.`,
+        stored.value.status === "consumed" ? ["APPROVAL_CONSUMED"] : ["ACTION_DENIED"],
+      );
+    }
+  });
 
 const withMcpAdmission = <A, E, R>(
   invocation: McpInvocationContext.McpInvocationScope,
@@ -167,6 +294,10 @@ export const withAllowedMcpTool = <A, E, R>(
 > =>
   Effect.gen(function* () {
     const invocation = yield* McpInvocationContext.McpInvocationContext;
-    yield* requireAllowedMcpTool(toolName, args);
-    return yield* withMcpAdmission(invocation, toolName, run);
+    const decision = yield* requireAllowedMcpTool(toolName, args);
+    return yield* withMcpAdmission(
+      invocation,
+      toolName,
+      revalidateAfterQueue(toolName, args, decision).pipe(Effect.andThen(run)),
+    );
   });

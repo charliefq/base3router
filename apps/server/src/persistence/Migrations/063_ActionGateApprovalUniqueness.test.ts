@@ -57,6 +57,21 @@ conflictLayer("063_ActionGateApprovalUniqueness conflict", (it) => {
       `;
       const upgraded = yield* runMigrations({ toMigrationInclusive: 63 }).pipe(Effect.exit);
       assert.equal(upgraded._tag, "Failure");
+      const liveIndex = yield* sql<{ readonly name: string }>`
+        SELECT name FROM sqlite_master
+        WHERE type = 'index' AND name = 'action_gate_approvals_live_fingerprint'
+      `;
+      assert.equal(liveIndex.length, 0);
+      const rows = yield* sql<{ readonly approvalId: string }>`
+        SELECT approval_id AS "approvalId" FROM action_gate_approvals ORDER BY approval_id
+      `;
+      assert.deepEqual(
+        rows.map((row) => row.approvalId),
+        ["apr-dup-1", "apr-dup-2"],
+      );
+      // Fail-closed: do not merge live fingerprints. Inspect both rows, move the
+      // unintended one to a terminal status, then retry the migration — or restore
+      // a compatible backup taken before the upgrade.
     }),
   );
 });
