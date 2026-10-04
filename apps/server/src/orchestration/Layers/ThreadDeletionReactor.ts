@@ -3,11 +3,14 @@ import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import * as TerminalManager from "../../terminal/Manager.ts";
+import { DreamMemoryService } from "../../dreamMemory/DreamMemoryService.ts";
+import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ThreadDeletionReactor,
@@ -63,6 +66,13 @@ const make = Effect.gen(function* () {
     const { threadId } = event.payload;
     yield* stopProviderSession(threadId);
     yield* closeThreadTerminals(threadId);
+    const dream = yield* Effect.serviceOption(DreamMemoryService);
+    const environment = yield* Effect.serviceOption(ServerEnvironment);
+    if (Option.isSome(dream) && Option.isSome(environment)) {
+      const environmentId = yield* environment.value.getEnvironmentId;
+      const now = new Date().toISOString();
+      yield* dream.value.invalidateSourceThread(environmentId, threadId, now).pipe(Effect.ignore);
+    }
   });
 
   const processThreadDeletedSafely = (event: ThreadDeletedEvent) =>

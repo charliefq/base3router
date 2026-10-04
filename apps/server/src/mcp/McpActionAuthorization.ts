@@ -9,9 +9,46 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { ActionGateService } from "../actionGate/ActionGateService.ts";
+import { ConcurrencyBudgetService } from "../concurrencyBudget/ConcurrencyBudgetService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as Option from "effect/Option";
 
 const isActionGateError = Schema.is(ActionGateError);
+
+const admitMcpAction = (invocation: McpInvocationContext.McpInvocationScope, toolName: string) =>
+  Effect.gen(function* () {
+    const budget = yield* Effect.serviceOption(ConcurrencyBudgetService);
+    if (Option.isNone(budget)) return;
+    const result = yield* budget.value
+      .admit({
+        workloadClass: "mcp-action",
+        environmentId: invocation.environmentId,
+        threadId: invocation.threadId,
+        requestedAt: new Date().toISOString(),
+      })
+      .pipe(
+        Effect.mapError(
+          (error) =>
+            new McpActionGateBlockedError({
+              toolName,
+              decision: "DENY",
+              reasonCodes: ["ACTION_DENIED"],
+              detail: error.detail,
+            }),
+        ),
+      );
+    if (result.lease === undefined) {
+      return yield* new McpActionGateBlockedError({
+        toolName,
+        decision: "DENY",
+        reasonCodes: ["ACTION_DENIED"],
+        detail: result.explanation,
+      });
+    }
+    yield* Effect.acquireRelease(Effect.succeed(result.lease.leaseId), (leaseId) =>
+      budget.value.release(invocation.environmentId, leaseId),
+    );
+  });
 
 export const requireAllowedMcpTool = (
   toolName: string,
@@ -42,7 +79,10 @@ export const requireAllowedMcpTool = (
             }),
         ),
       );
-    if (decision.decision === "ALLOW") return decision;
+    if (decision.decision === "ALLOW") {
+      yield* admitMcpAction(invocation, toolName);
+      return decision;
+    }
     if (decision.decision === "DENY") {
       return yield* new McpActionGateBlockedError({
         toolName,
@@ -102,6 +142,7 @@ export const requireAllowedMcpTool = (
         cost: MODEL_ROUTER_UNKNOWN_METRIC,
       })
       .pipe(Effect.ignore);
+    yield* admitMcpAction(invocation);
     return {
       ...decision,
       decision: "ALLOW" as const,

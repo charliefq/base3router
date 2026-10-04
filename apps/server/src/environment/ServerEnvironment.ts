@@ -37,6 +37,7 @@ import { RouterEvaluationService } from "../routerEvaluation/RouterEvaluationSer
 import {
   DEFAULT_OBSERVATION_RETENTION_DAYS,
   DEFAULT_ROUTER_EVALUATION_SETTINGS,
+  DEFAULT_DREAM_MEMORY_SETTINGS,
   MODEL_ROUTER_POLICY_VERSION,
 } from "@t3tools/contracts";
 
@@ -330,6 +331,15 @@ export const make = Effect.gen(function* () {
             challengerShadowEnabled: evaluationSettings.challengerShadowEnabled,
             activePolicyVersion,
             observationCount,
+          },
+          dreamMemory: {
+            available: true,
+            enabled: (settings?.dreamMemory ?? DEFAULT_DREAM_MEMORY_SETTINGS).enabled,
+            captureMode: (settings?.dreamMemory ?? DEFAULT_DREAM_MEMORY_SETTINGS).captureMode,
+          },
+          concurrencyBudget: {
+            available: true,
+            topology: "process-local",
           },
         },
       };

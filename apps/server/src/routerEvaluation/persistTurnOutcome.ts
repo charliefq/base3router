@@ -11,6 +11,7 @@ import {
   type TurnOutcomeObservationV0,
   type ThreadId,
   REWORK_ABANDONMENT_WINDOW_MS,
+  DEFAULT_DREAM_MEMORY_SETTINGS,
 } from "@t3tools/contracts";
 import {
   classifyTurnTerminal,
@@ -30,6 +31,9 @@ import * as Option from "effect/Option";
 import * as Dispatcher from "../dispatcher/Dispatcher.ts";
 import { RouterEvaluationService } from "./RouterEvaluationService.ts";
 import { TurnTiming, type TurnTimingSnapshot } from "./TurnTiming.ts";
+import { DreamMemoryService, viewerFromSubject } from "../dreamMemory/DreamMemoryService.ts";
+import { ConcurrencyBudgetService } from "../concurrencyBudget/ConcurrencyBudgetService.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 
 const observationIdForTurn = (
   environmentId: EnvironmentId,
@@ -259,6 +263,39 @@ export const persistTurnOutcomeFromRuntimeEvent = Effect.fn("persistTurnOutcomeF
       threadId: input.threadId,
       messageId: input.messageId,
     });
+    const dream = yield* Effect.serviceOption(DreamMemoryService);
+    const settingsService = yield* Effect.serviceOption(ServerSettingsService);
+    if (Option.isSome(dream) && observation.terminalCategory === "success") {
+      const settings = Option.isSome(settingsService)
+        ? yield* settingsService.value.getSettings.pipe(
+            Effect.catch(() => Effect.succeed({ dreamMemory: DEFAULT_DREAM_MEMORY_SETTINGS })),
+          )
+        : { dreamMemory: DEFAULT_DREAM_MEMORY_SETTINGS };
+      const budget = yield* Effect.serviceOption(ConcurrencyBudgetService);
+      const enqueue = dream.value.enqueueEligibleTurn({
+        viewer: viewerFromSubject(input.environmentId, undefined),
+        settings: settings.dreamMemory,
+        turnSucceeded: true,
+        turnText: `completed turn ${input.messageId}`,
+        nowIso: now,
+        threadId: input.threadId,
+      });
+      yield* (
+        Option.isSome(budget)
+          ? budget.value
+              .withAdmission(
+                {
+                  workloadClass: "dream-job",
+                  environmentId: input.environmentId,
+                  threadId: input.threadId,
+                  requestedAt: now,
+                },
+                enqueue,
+              )
+              .pipe(Effect.catch(() => Effect.void))
+          : enqueue
+      ).pipe(Effect.ignore);
+    }
     const previous = yield* evaluation.value.latestObservationForThread(
       input.environmentId,
       input.threadId,

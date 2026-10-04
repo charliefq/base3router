@@ -75,6 +75,8 @@ import Migration0060 from "./Migrations/060_RouterEvaluationObservations.ts";
 import Migration0061 from "./Migrations/061_RouterObservationEvents.ts";
 import Migration0062 from "./Migrations/062_ActionGateApprovals.ts";
 import Migration0063 from "./Migrations/063_ActionGateApprovalUniqueness.ts";
+import Migration0064 from "./Migrations/064_DreamMemory.ts";
+import Migration0065 from "./Migrations/065_ConcurrencyBudgetAudit.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -150,6 +152,8 @@ const migrationEntries = [
   [61, "RouterObservationEvents", Migration0061],
   [62, "ActionGateApprovals", Migration0062],
   [63, "ActionGateApprovalUniqueness", Migration0063],
+  [64, "DreamMemory", Migration0064],
+  [65, "ConcurrencyBudgetAudit", Migration0065],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
