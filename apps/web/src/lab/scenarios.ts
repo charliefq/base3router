@@ -2,6 +2,8 @@ import type { ModelRouterMode } from "@t3tools/contracts";
 import type { ControlCenterModel } from "~/controlPlane/presentControlCenter";
 import type {
   InspectorApprovalModel,
+  InspectorConcurrencyModel,
+  InspectorDreamMemoryModel,
   InspectorHybridModel,
   InspectorMcpRouteModel,
   InspectorOpenRouterModel,
@@ -121,6 +123,38 @@ export const UI_LAB_SCENARIO_IDS = [
   "phase12-dark",
   "phase12-inspector",
   "control-center-action-governance",
+  "memory-off",
+  "memory-review",
+  "memory-automatic",
+  "memory-none",
+  "memory-proposal-pending",
+  "memory-proposal-approved",
+  "memory-proposal-rejected",
+  "memory-active",
+  "memory-corrected",
+  "memory-contradiction",
+  "memory-expired",
+  "memory-deletion-confirm",
+  "memory-cleared-scope",
+  "memory-prompt-injection",
+  "memory-secret-rejected",
+  "memory-bounded-retrieval",
+  "concurrency-idle",
+  "concurrency-foreground-active",
+  "concurrency-queued",
+  "concurrency-saturated-project",
+  "concurrency-foreground-protected",
+  "concurrency-queue-timeout",
+  "concurrency-cancelled-queued",
+  "concurrency-depth-rejected",
+  "concurrency-known-cost",
+  "concurrency-unknown-cost",
+  "phase13-inspector",
+  "control-center-memory-concurrency",
+  "phase13-narrow-width",
+  "phase13-compact-height",
+  "phase13-light",
+  "phase13-dark",
 ] as const;
 
 export type UiLabScenarioId = (typeof UI_LAB_SCENARIO_IDS)[number];
@@ -167,6 +201,10 @@ export type LabScenarioState = {
   readonly toolExecution?: InspectorToolExecutionModel | null;
   readonly outcome?: InspectorOutcomeModel | null;
   readonly actionGovernance?: ControlCenterModel["actionGovernance"];
+  readonly dreamMemory?: InspectorDreamMemoryModel | null;
+  readonly concurrency?: InspectorConcurrencyModel | null;
+  readonly dreamMemoryGovernance?: ControlCenterModel["dreamMemory"];
+  readonly concurrencyGovernance?: ControlCenterModel["concurrency"];
   readonly openRouterControl?: {
     readonly mode: "off" | "shadow" | "teacher";
     readonly connectionStatus: "not_configured" | "connected" | "unavailable";
@@ -354,6 +392,58 @@ function labGovernance(
     costExposure: "Known unknown · estimated unknown",
     compliance: "compliant",
     pendingCards: [],
+    ...input,
+  };
+}
+
+function labDreamMemory(input: Partial<InspectorDreamMemoryModel> = {}): InspectorDreamMemoryModel {
+  return {
+    captureMode: "review",
+    enabled: true,
+    retrievedCount: 0,
+    retrievedIds: "none",
+    provenance: "not injected",
+    contradictionVisible: false,
+    ...input,
+  };
+}
+
+function labConcurrency(input: Partial<InspectorConcurrencyModel> = {}): InspectorConcurrencyModel {
+  return {
+    workloadClass: "foreground-turn",
+    outcome: "admitted",
+    queuedMs: 0,
+    depth: 0,
+    attempt: 1,
+    reason: "none",
+    cost: "unknown",
+    ...input,
+  };
+}
+
+function labDreamGov(
+  input: Partial<NonNullable<ControlCenterModel["dreamMemory"]>> = {},
+): NonNullable<ControlCenterModel["dreamMemory"]> {
+  return {
+    enabled: "enabled",
+    captureMode: "review",
+    counts: "0 proposed · 0 active · 0 contradicted · 0 expired",
+    maintenance: "idle",
+    cost: "Dream cost unknown",
+    ...input,
+  };
+}
+
+function labConcurrencyGov(
+  input: Partial<NonNullable<ControlCenterModel["concurrency"]>> = {},
+): NonNullable<ControlCenterModel["concurrency"]> {
+  return {
+    saturation: "idle",
+    foreground: "0 foreground active",
+    background: "0 background active",
+    queued: "0 queued",
+    rejected: "0 rejected · 0 cancelled",
+    topology: "process-local",
     ...input,
   };
 }
@@ -1833,6 +1923,381 @@ export function createLabScenario(id: UiLabScenarioId): LabScenarioState {
           compliance: "attention",
           pendingCards: [labApproval(), labApproval({ approvalId: "apr-lab-2" })],
         }),
+      };
+    case "memory-off":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "memory-off",
+        label: "Memory off",
+        description: "Dream Memory is disabled. No capture, Dream jobs, or retrieval.",
+        dreamMemory: labDreamMemory({
+          captureMode: "off",
+          enabled: false,
+          provenance: "Dream disabled. Explicit save remains available.",
+        }),
+        concurrency: labConcurrency({ outcome: "admitted" }),
+      };
+    case "memory-review":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "memory-review",
+        label: "Memory review mode",
+        description: "Review mode keeps proposals out of retrieval until approved.",
+        dreamMemory: labDreamMemory({
+          captureMode: "review",
+          retrievedCount: 0,
+          provenance: "retrieved as untrusted reference data",
+        }),
+      };
+    case "memory-automatic":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "memory-automatic",
+        label: "Memory automatic mode",
+        description: "Automatic mode may activate only low-risk preferences and conventions.",
+        dreamMemory: labDreamMemory({
+          captureMode: "automatic",
+          retrievedCount: 1,
+          retrievedIds: "mem-auto-1",
+          provenance: "retrieved as untrusted reference data",
+        }),
+      };
+    case "memory-none":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "memory-none",
+        label: "No memories",
+        description: "Authorized scope has no retrievable memories.",
+        dreamMemory: labDreamMemory({ retrievedCount: 0, retrievedIds: "none" }),
+      };
+    case "memory-proposal-pending":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "memory-proposal-pending",
+        label: "Proposal pending",
+        description: "A Dream proposal waits for approval and is not retrieved.",
+        dreamMemory: labDreamMemory({
+          retrievedCount: 0,
+          provenance: "proposal pending approval",
+        }),
+      };
+    case "memory-proposal-approved":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "memory-proposal-approved",
+        label: "Proposal approved",
+        description: "Approved proposal becomes active memory with provenance.",
+        dreamMemory: labDreamMemory({
+          retrievedCount: 1,
+          retrievedIds: "mem-approved-1",
+          provenance: "confirmed / fresh",
+        }),
+      };
+    case "memory-proposal-rejected":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "memory-proposal-rejected",
+        label: "Proposal rejected",
+        description: "Rejected proposals stay out of retrieval.",
+        dreamMemory: labDreamMemory({
+          retrievedCount: 0,
+          provenance: "proposal rejected",
+        }),
+      };
+    case "memory-active":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "memory-active",
+        label: "Active memory",
+        description: "Active project memory is retrieved as untrusted reference data.",
+        dreamMemory: labDreamMemory({
+          retrievedCount: 1,
+          retrievedIds: "mem-active-1",
+          provenance: "retrieved as untrusted reference data",
+        }),
+      };
+    case "memory-corrected":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "memory-corrected",
+        label: "Corrected superseded memory",
+        description: "Correction creates a new active memory and supersedes the old one.",
+        dreamMemory: labDreamMemory({
+          retrievedCount: 1,
+          retrievedIds: "mem-correction-1",
+          provenance: "correction superseded mem-old-1",
+        }),
+      };
+    case "memory-contradiction":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "memory-contradiction",
+        label: "Contradicted memory",
+        description: "Contradicted memories stay inspectable and are not both trusted facts.",
+        dreamMemory: labDreamMemory({
+          retrievedCount: 0,
+          retrievedIds: "none",
+          provenance: "contradiction visible",
+          contradictionVisible: true,
+        }),
+      };
+    case "memory-expired":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "memory-expired",
+        label: "Expired memory",
+        description: "Expired memories are excluded from retrieval.",
+        dreamMemory: labDreamMemory({
+          retrievedCount: 0,
+          provenance: "expired / not injected",
+        }),
+      };
+    case "memory-deletion-confirm":
+      return {
+        ...createLabScenario("eval-active-v0"),
+        id: "memory-deletion-confirm",
+        label: "Deletion confirmation",
+        description:
+          "Clearing a scope requires an explicit confirmation. Deletion is not paywalled.",
+        view: "control-center",
+        dreamMemoryGovernance: labDreamGov({
+          counts: "0 proposed · 2 active · 0 contradicted · 0 expired",
+          maintenance: "Confirm clear personal memory",
+        }),
+      };
+    case "memory-cleared-scope":
+      return {
+        ...createLabScenario("eval-active-v0"),
+        id: "memory-cleared-scope",
+        label: "Cleared scope",
+        description: "A cleared scope has no retrievable content.",
+        view: "control-center",
+        dreamMemoryGovernance: labDreamGov({
+          counts: "0 proposed · 0 active · 0 contradicted · 0 expired",
+          maintenance: "scope cleared",
+        }),
+      };
+    case "memory-prompt-injection":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "memory-prompt-injection",
+        label: "Prompt-injection memory",
+        description:
+          "Injection-shaped memory stays untrusted reference data and cannot grant authorization.",
+        dreamMemory: labDreamMemory({
+          retrievedCount: 1,
+          retrievedIds: "mem-untrusted-1",
+          provenance: "untrusted reference data, never authorization",
+        }),
+      };
+    case "memory-secret-rejected":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "memory-secret-rejected",
+        label: "Secret-shaped memory rejected",
+        description: "Credential-shaped content is rejected and is not stored.",
+        dreamMemory: labDreamMemory({
+          retrievedCount: 0,
+          provenance: "secret-shaped content was not stored",
+        }),
+      };
+    case "memory-bounded-retrieval":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "memory-bounded-retrieval",
+        label: "Bounded retrieval trace",
+        description: "Retrieval is bounded and lists IDs without dumping private bodies.",
+        dreamMemory: labDreamMemory({
+          retrievedCount: 2,
+          retrievedIds: "mem-a, mem-b",
+          provenance: "retrieved as untrusted reference data",
+        }),
+        concurrency: labConcurrency({ cost: "unknown" }),
+      };
+    case "concurrency-idle":
+      return {
+        ...createLabScenario("eval-active-v0"),
+        id: "concurrency-idle",
+        label: "Concurrency idle",
+        description: "No active or queued work under the process-local budget.",
+        view: "control-center",
+        concurrencyGovernance: labConcurrencyGov(),
+      };
+    case "concurrency-foreground-active":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "concurrency-foreground-active",
+        label: "Foreground active",
+        description: "A foreground turn holds a process-local lease.",
+        concurrency: labConcurrency({
+          workloadClass: "foreground-turn",
+          outcome: "admitted",
+        }),
+      };
+    case "concurrency-queued":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "concurrency-queued",
+        label: "Queued work",
+        description: "Work waits in a bounded FIFO queue.",
+        concurrency: labConcurrency({
+          workloadClass: "mcp-action",
+          outcome: "queued",
+          queuedMs: 1200,
+          reason: "CAPACITY_EXHAUSTED",
+        }),
+      };
+    case "concurrency-saturated-project":
+      return {
+        ...createLabScenario("eval-active-v0"),
+        id: "concurrency-saturated-project",
+        label: "Saturated project",
+        description: "Project foreground capacity is saturated.",
+        view: "control-center",
+        concurrencyGovernance: labConcurrencyGov({
+          saturation: "saturated",
+          foreground: "2 foreground active",
+          queued: "3 queued",
+          rejected: "1 rejected · 0 cancelled",
+        }),
+      };
+    case "concurrency-foreground-protected":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "concurrency-foreground-protected",
+        label: "Foreground protected from Dream/Shadow",
+        description: "Dream and Shadow cannot occupy reserved foreground capacity.",
+        concurrency: labConcurrency({
+          workloadClass: "dream-job",
+          outcome: "rejected",
+          reason: "DREAM_SHED",
+        }),
+      };
+    case "concurrency-queue-timeout":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "concurrency-queue-timeout",
+        label: "Queue timeout",
+        description: "Queued work that exceeds the wait timeout is cancelled, not executed.",
+        concurrency: labConcurrency({
+          outcome: "timed-out",
+          queuedMs: 15000,
+          reason: "QUEUE_TIMEOUT",
+        }),
+      };
+    case "concurrency-cancelled-queued":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "concurrency-cancelled-queued",
+        label: "Cancelled queued work",
+        description: "Cancelling a queued waiter removes it before execution.",
+        concurrency: labConcurrency({
+          outcome: "cancelled",
+          reason: "CANCELLED",
+        }),
+      };
+    case "concurrency-depth-rejected":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "concurrency-depth-rejected",
+        label: "Depth and fan-out rejected",
+        description: "Child depth, descendants, and attempts cannot reset parent budgets.",
+        concurrency: labConcurrency({
+          workloadClass: "child-agent",
+          outcome: "rejected",
+          depth: 4,
+          attempt: 4,
+          reason: "MAX_DEPTH",
+        }),
+      };
+    case "concurrency-known-cost":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "concurrency-known-cost",
+        label: "Known cost",
+        description: "Known provider cost is shown when measured. Unknown stays unknown.",
+        concurrency: labConcurrency({ cost: "$0.12" }),
+        dreamMemory: labDreamMemory({ provenance: "Dream cost $0.12" }),
+      };
+    case "concurrency-unknown-cost":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "concurrency-unknown-cost",
+        label: "Unknown cost",
+        description: "Missing cost remains unknown.",
+        concurrency: labConcurrency({ cost: "unknown" }),
+      };
+    case "phase13-inspector":
+      return {
+        ...createLabScenario("auto-success"),
+        id: "phase13-inspector",
+        label: "Phase 13 Inspector trace",
+        description:
+          "Inspector shows memory retrieval IDs and concurrency admission without bodies.",
+        dreamMemory: labDreamMemory({
+          retrievedCount: 1,
+          retrievedIds: "mem-inspect-1",
+          provenance: "retrieved as untrusted reference data",
+        }),
+        concurrency: labConcurrency({
+          workloadClass: "foreground-turn",
+          outcome: "admitted",
+          queuedMs: 40,
+          depth: 0,
+          attempt: 1,
+        }),
+      };
+    case "control-center-memory-concurrency":
+      return {
+        ...createLabScenario("eval-active-v0"),
+        id: "control-center-memory-concurrency",
+        label: "Control Center memory and concurrency",
+        description: "Control Center projects Dream Memory counts and concurrency saturation.",
+        view: "control-center",
+        dreamMemoryGovernance: labDreamGov({
+          counts: "1 proposed · 3 active · 1 contradicted · 0 expired",
+          maintenance: "idle",
+          cost: "Dream cost unknown",
+        }),
+        concurrencyGovernance: labConcurrencyGov({
+          saturation: "busy",
+          foreground: "1 foreground active",
+          background: "1 background active",
+          queued: "2 queued",
+        }),
+      };
+    case "phase13-narrow-width":
+      return {
+        ...createLabScenario("phase13-inspector"),
+        id: "phase13-narrow-width",
+        label: "Phase 13 narrow width",
+        description: "Memory and concurrency cards remain readable at narrow width.",
+        viewport: "narrow",
+      };
+    case "phase13-compact-height":
+      return {
+        ...createLabScenario("phase13-inspector"),
+        id: "phase13-compact-height",
+        label: "Phase 13 compact height",
+        description:
+          "Inspector memory and concurrency cards remain independently scrollable at 360px.",
+        viewport: "compact-height",
+      };
+    case "phase13-light":
+      return {
+        ...createLabScenario("phase13-inspector"),
+        id: "phase13-light",
+        label: "Phase 13 light appearance",
+        description: "Dream Memory and concurrency cards in light appearance.",
+        appearance: "light",
+      };
+    case "phase13-dark":
+      return {
+        ...createLabScenario("phase13-inspector"),
+        id: "phase13-dark",
+        label: "Phase 13 dark appearance",
+        description: "Dream Memory and concurrency cards in dark appearance.",
+        appearance: "dark",
       };
   }
 }

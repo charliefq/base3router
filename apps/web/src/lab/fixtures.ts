@@ -16,6 +16,8 @@ import {
 import type { ControlCenterModel } from "~/controlPlane/presentControlCenter";
 import type {
   InspectorApprovalModel,
+  InspectorConcurrencyModel,
+  InspectorDreamMemoryModel,
   InspectorHybridModel,
   InspectorMcpRouteModel,
   InspectorOpenRouterModel,
@@ -128,6 +130,8 @@ export function inspectorModelFromLab(input: {
   readonly approval?: InspectorApprovalModel | null;
   readonly toolExecution?: InspectorToolExecutionModel | null;
   readonly outcome?: InspectorOutcomeModel | null;
+  readonly dreamMemory?: InspectorDreamMemoryModel | null;
+  readonly concurrency?: InspectorConcurrencyModel | null;
 }): OperationalInspectorModel {
   if (input.empty === true) {
     return {
@@ -177,6 +181,8 @@ export function inspectorModelFromLab(input: {
       approval: null,
       toolExecution: null,
       outcome: null,
+      dreamMemory: null,
+      concurrency: null,
       error: null,
       emptyReason: "no-selection",
     };
@@ -251,6 +257,8 @@ export function inspectorModelFromLab(input: {
     approval: input.approval ?? null,
     toolExecution: input.toolExecution ?? null,
     outcome: input.outcome ?? null,
+    dreamMemory: input.dreamMemory ?? null,
+    concurrency: input.concurrency ?? null,
     error: input.error,
     emptyReason: null,
   };
@@ -263,6 +271,8 @@ export function labControlCenterModel(input?: {
   readonly longNames?: boolean;
   readonly routerInsights?: ControlCenterModel["routerInsights"];
   readonly actionGovernance?: ControlCenterModel["actionGovernance"];
+  readonly dreamMemory?: ControlCenterModel["dreamMemory"];
+  readonly concurrency?: ControlCenterModel["concurrency"];
 }): ControlCenterModel {
   const environmentId = EnvironmentId.make("lab-environment");
   const projectId = ProjectId.make("lab-project");
@@ -328,6 +338,8 @@ export function labControlCenterModel(input?: {
     environmentLabel: input?.environmentLabel ?? (empty ? null : "UI Lab environment"),
     ...(input?.routerInsights !== undefined ? { routerInsights: input.routerInsights } : {}),
     ...(input?.actionGovernance !== undefined ? { actionGovernance: input.actionGovernance } : {}),
+    ...(input?.dreamMemory !== undefined ? { dreamMemory: input.dreamMemory } : {}),
+    ...(input?.concurrency !== undefined ? { concurrency: input.concurrency } : {}),
   };
 }
 

@@ -127,6 +127,9 @@ describe("Base3Router UI Lab fake providers", () => {
     expect(UI_LAB_SCENARIO_IDS).toContain("skill-none");
     expect(UI_LAB_SCENARIO_IDS).toContain("action-requires-approval");
     expect(UI_LAB_SCENARIO_IDS).toContain("control-center-action-governance");
+    expect(UI_LAB_SCENARIO_IDS).toContain("memory-off");
+    expect(UI_LAB_SCENARIO_IDS).toContain("phase13-inspector");
+    expect(UI_LAB_SCENARIO_IDS).toContain("control-center-memory-concurrency");
     for (const id of UI_LAB_SCENARIO_IDS) {
       const scenario = createLabScenario(id);
       expect(scenario.id).toBe(id);
@@ -143,6 +146,12 @@ describe("Base3Router UI Lab fake providers", () => {
     expect(createLabScenario("mcp-prompt-injection").mcpRoute?.filteredReasonCodes).toContain(
       "PROMPT_INJECTION_SHAPED",
     );
+    expect(createLabScenario("memory-off").dreamMemory?.enabled).toBe(false);
+    expect(createLabScenario("memory-contradiction").dreamMemory?.contradictionVisible).toBe(true);
+    expect(createLabScenario("concurrency-foreground-protected").concurrency?.reason).toBe(
+      "DREAM_SHED",
+    );
+    expect(JSON.stringify(createLabScenario("memory-secret-rejected"))).not.toMatch(/sk-|Bearer /);
     expect(JSON.stringify(createLabScenario("approval-granted").approval)).not.toMatch(
       /sk-|Bearer /,
     );
