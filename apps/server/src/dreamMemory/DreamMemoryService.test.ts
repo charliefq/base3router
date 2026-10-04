@@ -388,8 +388,10 @@ it.effect("decides, corrects, and deletes project memory without a viewer projec
     assert.equal(corrected.memory.status, "active");
     const threadListed = yield* service.list({ threadId }, alice);
     assert.equal(
-      threadListed.memories.some((memory) => memory.memoryId === saved.memory.memoryId),
-      false,
+      threadListed.memories.some(
+        (memory) => memory.memoryId === saved.memory.memoryId && memory.status === "superseded",
+      ),
+      true,
     );
     assert.equal(
       threadListed.memories.some((memory) => memory.memoryId === corrected.memory.memoryId),

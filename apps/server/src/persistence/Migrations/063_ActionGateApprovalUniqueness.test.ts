@@ -5,9 +5,9 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runMigrations } from "../Migrations.ts";
 
-const layer = it.layer(NodeSqliteClient.layer({ filename: ":memory:" }));
+const upgradeLayer = it.layer(NodeSqliteClient.layer({ filename: ":memory:" }));
 
-layer("063_ActionGateApprovalUniqueness", (it) => {
+upgradeLayer("063_ActionGateApprovalUniqueness upgrade", (it) => {
   it.effect("upgrades unique approval rows from the Phase 12 schema", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -32,7 +32,11 @@ layer("063_ActionGateApprovalUniqueness", (it) => {
       assert.equal(indexes.length, 2);
     }),
   );
+});
 
+const conflictLayer = it.layer(NodeSqliteClient.layer({ filename: ":memory:" }));
+
+conflictLayer("063_ActionGateApprovalUniqueness conflict", (it) => {
   it.effect("refuses duplicate live fingerprint rows instead of inventing a merge", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

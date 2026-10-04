@@ -20,6 +20,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 
 import { requireAllowedMcpTool } from "../mcp/McpActionAuthorization.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
@@ -555,6 +556,7 @@ it.effect("consume uses current time so granted approvals cannot outlive expiry"
       NOW,
     );
     assert.equal(granted.status, "granted");
+    yield* TestClock.setTime(Date.parse("2026-10-03T00:00:02.000Z"));
     const consumed = yield* service
       .waitForAuthorized(pending.approvalId, action.fingerprint, NOW)
       .pipe(Effect.flip);

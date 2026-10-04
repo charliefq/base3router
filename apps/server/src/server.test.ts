@@ -4274,7 +4274,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         client[WS_METHODS.memoryList]({ projectId: defaultProjectId }),
       );
       assert.equal(
-        afterDelete.memories.some((memory) => memory.memoryId === saved.memory.memoryId),
+        afterDelete.memories.some((memory) => memory.memoryId === corrected.memory.memoryId),
+        false,
+      );
+      assert.equal(
+        afterDelete.memories.some((memory) => memory.status === "active"),
         false,
       );
       const secret = yield* withWsRpcClient(wsUrl, (client) =>
