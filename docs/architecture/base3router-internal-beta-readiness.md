@@ -43,6 +43,7 @@ request cannot be recalled after `sendTurn` returns.
 | S10 | Info     | Topology            | No distributed concurrency. Provider-native subagents are not individually enforced.                                                | Documented; not advertised as implemented.                                                    |
 | S11 | Info     | Deletion            | Logical tombstone only.                                                                                                             | Documented.                                                                                   |
 | S12 | Info     | Pairing             | One trusted local principal.                                                                                                        | Documented.                                                                                   |
+| S13 | Medium   | ActionGate retry    | Cancelled/denied/expired ASK reused the same approval id and idempotency key, so a later exact-action retry conflicted.             | Fixed: successor pending row with new ids; consumed still conflicts.                          |
 | O1  | Open     | WS Auto/Manual      | `RouterEvaluationService.layerTest` still stubbed in `buildAppUnderTest`.                                                           | Open; covered at reactor/unit.                                                                |
 | O2  | Open     | MCP HTTP ASK        | `McpHttpServer.test.ts` still uses ActionGate `layerTest`.                                                                          | Open; ActionGate service + WS respond covered.                                                |
 | O3  | Open     | Live providers      | Paid network calls unauthorized.                                                                                                    | NOT RUN / BLOCKED ON USER AUTHORIZATION                                                       |
@@ -97,3 +98,24 @@ Installer, code signing, notarization, OS upgrade, and mobile store checks remai
 ## Copy review
 
 Unsupported claims removed or hedged: prompt-injection immunity, forensic deletion, starvation-freedom, multi-user isolation, native subagent limits, advertised savings. Model-selection remains policy/heuristic, not claimed intelligence.
+
+## Crash / replay
+
+Durable ActionGate state is SQLite. In-memory waiters are not. Unknown outcomes default to no automatic replay.
+
+| Window                                          | Behavior                                                                                                                        | Test                                                                               |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Before dispatch                                 | Pending row remains without a waiter; later grant consumes once                                                                 | `durable pending approvals grant once after waiters disappear`                     |
+| Interrupted wait                                | Fiber interrupt does not consume. Last-waiter cancel is best-effort `onInterrupt`; pending can remain if the wait never started | `interrupting a waiter never consumes or auto-executes`                            |
+| Cancelled ASK                                   | Cancelled/denied/expired fingerprints can open a **new** pending ASK. Consumed fingerprints cannot be resurrected               | `cancel requires a successor ASK`; `does not resurrect consumed approvals`         |
+| After consume, handler crash after a fake write | External write count stays 1; persist flag stays false; replay is blocked                                                       | `does not auto-replay after a side effect when the handler crashes before persist` |
+
+Consume is one-time authorization, not an exactly-once log of the external tool. Recheck at resume: fingerprint, expiry via `DateTime.now`, and current approval status.
+
+## Follow-up experiments (not implemented)
+
+See `docs/architecture/base3router-follow-up-experiments.md`. RoutingAdvisor, ActionRiskAdvisor, and Context workspace are design notes only.
+
+## Acceptance manifest
+
+Versioned requirement IDs: `docs/architecture/base3router-internal-beta-acceptance.v1.md`. That file is not a shell runner.
