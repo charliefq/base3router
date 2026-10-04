@@ -16,6 +16,7 @@ import {
   DreamMemoryService,
   layer as dreamMemoryLayer,
   layerFromExtractor,
+  layerTest as dreamMemoryLayerTest,
   viewerFromSubject,
 } from "./DreamMemoryService.ts";
 
@@ -98,6 +99,27 @@ it.effect("isolates personal and project memory and rejects secret-shaped saves"
       assert.equal(isDreamMemoryError(error) && error.reason === "secret_rejected", true);
     }
   }).pipe(Effect.provide(layer)),
+);
+
+it.effect("test layer rejects mutations so harness stubs stay explicit", () =>
+  Effect.gen(function* () {
+    const service = yield* DreamMemoryService;
+    const failed = yield* service
+      .save(
+        {
+          content: "Should not persist in the stub.",
+          kind: "workflow-convention",
+          scopeKind: "personal",
+        },
+        alice,
+        NOW,
+        settings,
+      )
+      .pipe(Effect.flip);
+    assert.equal(isDreamMemoryError(failed) && failed.reason === "invalid", true);
+    const listed = yield* service.list({}, alice);
+    assert.equal(listed.memories.length, 0);
+  }).pipe(Effect.provide(dreamMemoryLayerTest)),
 );
 
 it.effect("does not call Dream when disabled or when the turn failed", () =>
