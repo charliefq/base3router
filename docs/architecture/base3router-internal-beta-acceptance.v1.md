@@ -44,7 +44,11 @@ Statuses: `PASS`, `FAIL`, `NOT_RUN`, `BLOCKED`.
 Fill at verification time for the SHA under test. Older-tree results
 do not carry forward.
 
-- SHA: `34e5a146b` (crash/replay implementation); PR head after this docs commit
+- Last CI-verified SHA: `f72a9f9642adc8c0bb0f9e4b76d67989b734fb7b`
+- Crash/replay implementation SHA: `34e5a146b`
+- Superseded: `f544dd0ea` Check failure (unused `layerTest`) does not certify a later head
 - Environment: disposable SQLite; fake transports; Node 24 via nvm
-- Command set: `vp test run` on the files named above; UI Lab script
+- Local commands: `vp test run` on the files named above; `node scripts/base3router-ui-lab.ts`
+- CI on `f72a9f964`: Check pass, Test / Test Server 1–3 pass, UI Lab pass
 - Evidence: this table plus `docs/architecture/base3router-internal-beta-readiness.md`
+- This file is documentation. Do not execute commands copied from it.
