@@ -306,6 +306,21 @@ import {
   ActionGateRespondApprovalResult,
   ActionGovernanceSnapshotV0,
 } from "./actionGate.ts";
+import { ConcurrencyBudgetError, ConcurrencyGovernanceSnapshotV0 } from "./concurrencyBudget.ts";
+import {
+  DreamMemoryError,
+  DreamMemoryGovernanceSnapshotV0,
+  MemoryClearScopeRequest,
+  MemoryCorrectRequest,
+  MemoryDecisionRequest,
+  MemoryDeleteRequest,
+  MemoryExportRequest,
+  MemoryExportResult,
+  MemoryListFilter,
+  MemoryListResult,
+  MemoryMutationResult,
+  MemorySaveRequest,
+} from "./dreamMemory.ts";
 import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
@@ -463,6 +478,16 @@ export const WS_METHODS = {
 
   actionGateGetGovernance: "actionGate.getGovernance",
   actionGateRespondApproval: "actionGate.respondApproval",
+
+  memoryGetGovernance: "memory.getGovernance",
+  memoryList: "memory.list",
+  memorySave: "memory.save",
+  memoryDecide: "memory.decide",
+  memoryCorrect: "memory.correct",
+  memoryDelete: "memory.delete",
+  memoryClearScope: "memory.clearScope",
+  memoryExport: "memory.export",
+  concurrencyGetGovernance: "concurrency.getGovernance",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -857,6 +882,63 @@ const WsActionGateRespondApprovalRpc = Rpc.make(WS_METHODS.actionGateRespondAppr
   payload: ActionGateRespondApprovalRequest,
   success: ActionGateRespondApprovalResult,
   error: ActionGateRpcError,
+});
+
+const MemoryRpcError = Schema.Union([EnvironmentAuthorizationError, DreamMemoryError]);
+const ConcurrencyRpcError = Schema.Union([EnvironmentAuthorizationError, ConcurrencyBudgetError]);
+
+const WsMemoryGetGovernanceRpc = Rpc.make(WS_METHODS.memoryGetGovernance, {
+  payload: Schema.Struct({}),
+  success: DreamMemoryGovernanceSnapshotV0,
+  error: MemoryRpcError,
+});
+
+const WsMemoryListRpc = Rpc.make(WS_METHODS.memoryList, {
+  payload: MemoryListFilter,
+  success: MemoryListResult,
+  error: MemoryRpcError,
+});
+
+const WsMemorySaveRpc = Rpc.make(WS_METHODS.memorySave, {
+  payload: MemorySaveRequest,
+  success: MemoryMutationResult,
+  error: MemoryRpcError,
+});
+
+const WsMemoryDecideRpc = Rpc.make(WS_METHODS.memoryDecide, {
+  payload: MemoryDecisionRequest,
+  success: MemoryMutationResult,
+  error: MemoryRpcError,
+});
+
+const WsMemoryCorrectRpc = Rpc.make(WS_METHODS.memoryCorrect, {
+  payload: MemoryCorrectRequest,
+  success: MemoryMutationResult,
+  error: MemoryRpcError,
+});
+
+const WsMemoryDeleteRpc = Rpc.make(WS_METHODS.memoryDelete, {
+  payload: MemoryDeleteRequest,
+  success: MemoryMutationResult,
+  error: MemoryRpcError,
+});
+
+const WsMemoryClearScopeRpc = Rpc.make(WS_METHODS.memoryClearScope, {
+  payload: MemoryClearScopeRequest,
+  success: Schema.Struct({ clearedCount: NonNegativeInt }),
+  error: MemoryRpcError,
+});
+
+const WsMemoryExportRpc = Rpc.make(WS_METHODS.memoryExport, {
+  payload: MemoryExportRequest,
+  success: MemoryExportResult,
+  error: MemoryRpcError,
+});
+
+const WsConcurrencyGetGovernanceRpc = Rpc.make(WS_METHODS.concurrencyGetGovernance, {
+  payload: Schema.Struct({}),
+  success: ConcurrencyGovernanceSnapshotV0,
+  error: ConcurrencyRpcError,
 });
 
 const WsRouterRollbackPolicyRpc = Rpc.make(WS_METHODS.routerRollbackPolicy, {
@@ -1655,6 +1737,15 @@ export const WsRpcGroup = RpcGroup.make(
   WsRouterRollbackPolicyRpc,
   WsActionGateGetGovernanceRpc,
   WsActionGateRespondApprovalRpc,
+  WsMemoryGetGovernanceRpc,
+  WsMemoryListRpc,
+  WsMemorySaveRpc,
+  WsMemoryDecideRpc,
+  WsMemoryCorrectRpc,
+  WsMemoryDeleteRpc,
+  WsMemoryClearScopeRpc,
+  WsMemoryExportRpc,
+  WsConcurrencyGetGovernanceRpc,
   WsServerSignalProcessRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,

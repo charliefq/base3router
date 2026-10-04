@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  MemoryId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -514,4 +515,50 @@ it("projects Skill Route, MCP Route, ActionGate, and approval independently of R
   expect(model.actionGate?.decision).toBe("ALLOW");
   expect(model.route.gateDecision).toBe("ALLOW");
   expect(model.outcome?.classification).toBe("success");
+});
+
+it("projects Dream Memory retrieval without private bodies or secret probes", () => {
+  const model = presentOperationalInspector({
+    selected: true,
+    projectTitle: "Portfolio",
+    taskObjective: "Draft the dispatcher note",
+    gitBranch: "cursor/phase-13",
+    sessionStatus: "ready",
+    sessionError: null,
+    capabilities: { dispatcher: true, workflow: true, cursorCloud: false },
+    providers: [],
+    preview: { status: "idle" },
+    boundRoute: {
+      ...boundRoute,
+      memoryRetrieval: {
+        policyVersion: "dream-memory-policy.v0",
+        captureMode: "review",
+        enabled: true,
+        retrievedCount: 1,
+        retrievedIds: [MemoryId.make("mem-1")],
+        omittedCount: 0,
+        used: true,
+        contradictionVisible: true,
+      },
+      concurrency: {
+        policyVersion: "concurrency-budget.v0",
+        workloadClass: "foreground-turn",
+        outcome: "admitted",
+        queuedMs: 12,
+        depth: 0,
+        attempt: 1,
+        reasonCodes: [],
+        cost: { status: "unknown" },
+      },
+    },
+    workflowRun: null,
+    workflowTemplate: null,
+    cursorCloudBinding: null,
+  });
+
+  expect(model.dreamMemory?.retrievedIds).toBe("mem-1");
+  expect(model.dreamMemory?.contradictionVisible).toBe(true);
+  expect(model.concurrency?.outcome).toBe("admitted");
+  expect(model.concurrency?.cost).toBe("unknown");
+  expect(JSON.stringify(model)).not.toMatch(/sk-|Bearer /);
 });

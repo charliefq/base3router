@@ -13,7 +13,9 @@ import { expect, it } from "vite-plus/test";
 
 import {
   presentActionGovernance,
+  presentConcurrencyGovernance,
   presentControlCenter,
+  presentDreamMemoryGovernance,
   presentRouterInsights,
 } from "./presentControlCenter";
 
@@ -224,4 +226,39 @@ it("projects Action governance without fabricating known cost", () => {
   expect(governance.costExposure).toContain("unknown");
   expect(governance.costExposure).not.toMatch(/sk-|Bearer /);
   expect(governance.compliance).toBe("attention");
+});
+
+it("projects Dream Memory and concurrency without fabricating known cost", () => {
+  const memory = presentDreamMemoryGovernance({
+    environmentId,
+    policyVersion: "dream-memory-policy.v0",
+    enabled: true,
+    captureMode: "review",
+    proposedCount: 1,
+    activeCount: 2,
+    contradictedCount: 1,
+    expiredCount: 0,
+    deletedCount: 3,
+    knownCostUsd: MODEL_ROUTER_UNKNOWN_METRIC,
+    maintenance: "idle",
+  });
+  const concurrency = presentConcurrencyGovernance({
+    environmentId,
+    policyVersion: "concurrency-budget.v0",
+    topology: "process-local",
+    saturation: "busy",
+    foregroundActive: 1,
+    backgroundActive: 2,
+    queued: 3,
+    reservedForegroundFree: 0,
+    classes: [],
+    knownCostUsd: MODEL_ROUTER_UNKNOWN_METRIC,
+    cancelledCount: 1,
+    rejectedCount: 2,
+  });
+  expect(memory.counts).toContain("1 proposed");
+  expect(memory.cost).toBe("Dream cost unknown");
+  expect(concurrency.topology).toBe("process-local");
+  expect(concurrency.saturation).toBe("busy");
+  expect(JSON.stringify({ memory, concurrency })).not.toMatch(/sk-|Bearer /);
 });

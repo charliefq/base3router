@@ -19,6 +19,11 @@ const CONTROL_CENTER_SCENARIOS = new Set<UiLabScenarioId>([
   "eval-mixed-provenance",
   "eval-compact-height",
   "control-center-action-governance",
+  "memory-deletion-confirm",
+  "memory-cleared-scope",
+  "concurrency-idle",
+  "concurrency-saturated-project",
+  "control-center-memory-concurrency",
 ]);
 
 async function applyScenarioViewport(page: Page, id: UiLabScenarioId) {
@@ -26,7 +31,8 @@ async function applyScenarioViewport(page: Page, id: UiLabScenarioId) {
     id === "compact-height" ||
     id === "openrouter-compact-height" ||
     id === "eval-compact-height" ||
-    id === "phase12-compact-height"
+    id === "phase12-compact-height" ||
+    id === "phase13-compact-height"
   ) {
     await page.setViewportSize({ width: 1280, height: 360 });
     return;
@@ -35,7 +41,7 @@ async function applyScenarioViewport(page: Page, id: UiLabScenarioId) {
     await page.setViewportSize({ width: 1280, height: 520 });
     return;
   }
-  if (id === "narrow-width" || id === "phase12-narrow-width") {
+  if (id === "narrow-width" || id === "phase12-narrow-width" || id === "phase13-narrow-width") {
     await page.setViewportSize({ width: 1024, height: 640 });
     return;
   }
@@ -274,5 +280,65 @@ test.describe("Base3Router UI Lab", () => {
     await expect(page.getByText(/Known unknown/)).toBeVisible();
     await assertNoSecrets(page);
     await capture(page, "control-center-action-governance");
+  });
+
+  test("Inspector shows Dream Memory retrieval IDs without private bodies", async ({ page }) => {
+    await openScenario(page, "phase13-inspector");
+    await expect(page.locator("[data-dream-memory]")).toBeVisible();
+    await expect(page.locator("[data-memory-count]")).toContainText("Retrieved 1");
+    await expect(page.locator("[data-memory-ids]")).toContainText("mem-inspect-1");
+    await expect(page.locator("[data-concurrency]")).toBeVisible();
+    await expect(page.locator("[data-concurrency-cost]")).toContainText("unknown");
+    await expect(page.locator("body")).not.toContainText("ignore previous instructions");
+    await assertNoSecrets(page);
+    await capture(page, "phase13-inspector");
+  });
+
+  test("prompt-injection-shaped memory stays untrusted and secret-shaped content is absent", async ({
+    page,
+  }) => {
+    await openScenario(page, "memory-prompt-injection");
+    await expect(page.locator("[data-memory-provenance]")).toContainText("never authorization");
+    await expect(page.locator("body")).not.toContainText("ignore previous instructions");
+    await assertNoSecrets(page);
+    await capture(page, "memory-prompt-injection");
+
+    await openScenario(page, "memory-secret-rejected");
+    await expect(page.locator("[data-memory-provenance]")).toContainText("was not stored");
+    await assertNoSecrets(page);
+  });
+
+  test("contradiction, deletion confirmation, and cleared scope are visible", async ({ page }) => {
+    await openScenario(page, "memory-contradiction");
+    await expect(page.locator("[data-dream-memory]")).toContainText("Contradiction visible");
+
+    await openScenario(page, "memory-deletion-confirm");
+    await expect(page.getByText("Confirm clear personal memory")).toBeVisible();
+    await assertNoSecrets(page);
+    await capture(page, "memory-deletion-confirm");
+
+    await openScenario(page, "memory-cleared-scope");
+    await expect(page.getByText("scope cleared")).toBeVisible();
+  });
+
+  test("Control Center projects Dream Memory and concurrency without invented cost", async ({
+    page,
+  }) => {
+    await openScenario(page, "control-center-memory-concurrency");
+    await expect(page.locator("[data-dream-memory-gov]")).toBeVisible();
+    await expect(page.locator("[data-dream-memory-gov]")).toContainText("1 proposed");
+    await expect(page.locator("[data-concurrency-gov]")).toBeVisible();
+    await expect(page.getByText("process-local")).toBeVisible();
+    await expect(page.getByText("Dream cost unknown")).toBeVisible();
+    await assertNoSecrets(page);
+    await capture(page, "control-center-memory-concurrency");
+  });
+
+  test("foreground protection and depth rejection stay visible in Inspector", async ({ page }) => {
+    await openScenario(page, "concurrency-foreground-protected");
+    await expect(page.locator("[data-concurrency-reason]")).toContainText("DREAM_SHED");
+    await openScenario(page, "concurrency-depth-rejected");
+    await expect(page.locator("[data-concurrency-reason]")).toContainText("MAX_DEPTH");
+    await capture(page, "concurrency-depth-rejected");
   });
 });

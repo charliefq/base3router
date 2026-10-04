@@ -189,6 +189,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "dream-memory",
+    title: "Dream Memory",
+    to: "/settings/general",
+    scope: "environment",
+    searchTerms: [
+      "dream memory remember capture review automatic disable delete export provenance",
+    ],
+  },
+  {
     id: "color-scheme",
     title: "Color scheme",
     to: "/settings/appearance",

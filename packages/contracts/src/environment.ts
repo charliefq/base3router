@@ -213,6 +213,23 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       observationCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
     }),
   ),
+  /**
+   * Server can persist Dream Memory and enforce concurrency budgets.
+   * Absent on pre-Phase-13 servers, so clients hide memory controls.
+   */
+  dreamMemory: Schema.optionalKey(
+    Schema.Struct({
+      available: Schema.Boolean,
+      enabled: Schema.Boolean,
+      captureMode: TrimmedNonEmptyString.check(Schema.isMaxLength(32)),
+    }),
+  ),
+  concurrencyBudget: Schema.optionalKey(
+    Schema.Struct({
+      available: Schema.Boolean,
+      topology: TrimmedNonEmptyString.check(Schema.isMaxLength(32)),
+    }),
+  ),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

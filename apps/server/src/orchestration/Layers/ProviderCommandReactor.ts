@@ -17,6 +17,8 @@ import {
   type TurnId,
   emptyOpenRouterObservation,
   type OpenRouterCostTier,
+  DEFAULT_DREAM_MEMORY_SETTINGS,
+  type ConcurrencyWorkloadClass,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
@@ -78,6 +80,10 @@ import {
   ServerSettingsService,
 } from "../../serverSettings.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { renderMemoryCapsule } from "@t3tools/shared/dreamMemory";
+import { DreamMemoryService, viewerFromSubject } from "../../dreamMemory/DreamMemoryService.ts";
+import { ConcurrencyBudgetService } from "../../concurrencyBudget/ConcurrencyBudgetService.ts";
+import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import * as Dispatcher from "../../dispatcher/Dispatcher.ts";
@@ -242,6 +248,32 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const dreamMemory = yield* Effect.serviceOption(DreamMemoryService);
+  const concurrencyBudget = yield* Effect.serviceOption(ConcurrencyBudgetService);
+  const serverEnvironment = yield* Effect.serviceOption(ServerEnvironment);
+  const runWithBudget = (
+    workloadClass: ConcurrencyWorkloadClass,
+    effect: Effect.Effect<void>,
+    extras: { readonly projectId?: ProjectId; readonly threadId?: ThreadId } = {},
+  ) =>
+    Effect.gen(function* () {
+      if (Option.isNone(concurrencyBudget) || Option.isNone(serverEnvironment)) {
+        return yield* effect;
+      }
+      const environmentId = yield* serverEnvironment.value.getEnvironmentId;
+      return yield* concurrencyBudget.value
+        .withAdmission(
+          {
+            workloadClass,
+            environmentId,
+            requestedAt: DateTime.formatIso(yield* DateTime.now),
+            ...(extras.projectId !== undefined ? { projectId: extras.projectId } : {}),
+            ...(extras.threadId !== undefined ? { threadId: extras.threadId } : {}),
+          },
+          effect,
+        )
+        .pipe(Effect.catch(() => Effect.void));
+    });
   const modelRouterAvailability = yield* ModelRouterAvailability;
   /** Environment settings with the thread's project overrides applied. */
   const projectSettingsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -768,9 +800,13 @@ const make = Effect.gen(function* () {
       projects: project ? [project] : [],
     });
     const refreshWorkspaceSnapshot = effectiveCwd
-      ? providerRegistry
-          .refreshWorkspaceSnapshot({ instanceId: desiredInstanceId, cwd: effectiveCwd })
-          .pipe(Effect.forkDetach)
+      ? runWithBudget(
+          "detached-background",
+          providerRegistry.refreshWorkspaceSnapshot({
+            instanceId: desiredInstanceId,
+            cwd: effectiveCwd,
+          }),
+        ).pipe(Effect.forkDetach)
       : Effect.void;
 
     const startProviderSession = (input?: {
@@ -1536,24 +1572,32 @@ const make = Effect.gen(function* () {
         ...(event.payload.titleSeed !== undefined ? { titleSeed: event.payload.titleSeed } : {}),
       };
 
-      yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
-        threadId: event.payload.threadId,
-        branch: thread.branch,
-        worktreePath: thread.worktreePath,
-        ...generationInput,
-      }).pipe(Effect.forkScoped);
+      yield* runWithBudget(
+        "detached-background",
+        maybeGenerateAndRenameWorktreeBranchForFirstTurn({
+          threadId: event.payload.threadId,
+          branch: thread.branch,
+          worktreePath: thread.worktreePath,
+          ...generationInput,
+        }),
+        { projectId: thread.projectId, threadId: thread.id },
+      ).pipe(Effect.forkScoped);
 
       if (
         thread.titleState?.source !== "manual" &&
         canReplaceThreadTitle(thread.title, event.payload.titleSeed)
       ) {
-        yield* maybeGenerateThreadTitleForFirstTurn({
-          threadId: event.payload.threadId,
-          cwd: generationCwd,
-          expectedTitle: thread.title,
-          expectedVersion: thread.titleState?.version ?? null,
-          ...generationInput,
-        }).pipe(Effect.forkScoped);
+        yield* runWithBudget(
+          "detached-background",
+          maybeGenerateThreadTitleForFirstTurn({
+            threadId: event.payload.threadId,
+            cwd: generationCwd,
+            expectedTitle: thread.title,
+            expectedVersion: thread.titleState?.version ?? null,
+            ...generationInput,
+          }),
+          { projectId: thread.projectId, threadId: thread.id },
+        ).pipe(Effect.forkScoped);
       }
     }
 
@@ -1672,6 +1716,25 @@ const make = Effect.gen(function* () {
       text: message.text,
       records: message.context?.records ?? [],
     });
+    const settings = yield* serverSettingsService.getSettings.pipe(
+      Effect.catch(() => Effect.succeed({ dreamMemory: DEFAULT_DREAM_MEMORY_SETTINGS })),
+    );
+    const environmentId = Option.isSome(serverEnvironment)
+      ? yield* serverEnvironment.value.getEnvironmentId
+      : undefined;
+    let providerMessageText = messageText;
+    let memoryTrace = routeBinding?.memoryRetrieval;
+    if (Option.isSome(dreamMemory) && environmentId !== undefined) {
+      const retrieved = yield* dreamMemory.value.retrieveForTurn(
+        viewerFromSubject(environmentId, undefined, thread.projectId),
+        settings.dreamMemory,
+        messageText,
+      );
+      memoryTrace = retrieved.trace;
+      if (retrieved.capsule.entries.length > 0) {
+        providerMessageText = `${renderMemoryCapsule(retrieved.capsule)}\n\n${messageText}`;
+      }
+    }
     const modelRoute = routeBinding?.modelRoute;
     let currentRoute = modelRoute;
     const routingMode = modelRoute?.mode;
@@ -1829,7 +1892,7 @@ const make = Effect.gen(function* () {
     const buildRoutedTurnRequest = (routeFailover: boolean) =>
       buildSendTurnRequestForThread({
         threadId: event.payload.threadId,
-        messageText,
+        messageText: providerMessageText,
         ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
         ...(currentSelection !== undefined ? { modelSelection: currentSelection } : {}),
         ...(event.payload.handoff !== undefined ? { handoff: event.payload.handoff } : {}),
@@ -1966,7 +2029,10 @@ const make = Effect.gen(function* () {
           ).pipe(
             Effect.flatMap((retry) =>
               retry
-                ? continueRoutedAttempts().pipe(Effect.forkDetach, Effect.as(true))
+                ? runWithBudget("failover-retry", continueRoutedAttempts(), {
+                    projectId: thread.projectId,
+                    threadId: thread.id,
+                  }).pipe(Effect.forkDetach, Effect.as(true))
                 : Effect.succeed(false),
             ),
           ),
@@ -2022,18 +2088,72 @@ const make = Effect.gen(function* () {
         ),
       ),
     );
+    const admittedSend =
+      Option.isSome(concurrencyBudget) && environmentId !== undefined
+        ? concurrencyBudget.value
+            .withAdmission(
+              {
+                workloadClass: "foreground-turn",
+                environmentId,
+                projectId: thread.projectId,
+                threadId: thread.id,
+                requestedAt: event.payload.createdAt,
+              },
+              send,
+            )
+            .pipe(
+              Effect.catch((error) =>
+                appendTurnStartFailure(
+                  "Concurrency budget rejected the turn",
+                  error instanceof Error ? error.message : "CAPACITY_EXHAUSTED",
+                ),
+              ),
+            )
+        : send;
+    if (routeBinding !== null && (memoryTrace !== undefined || Option.isSome(concurrencyBudget))) {
+      yield* persistAttemptedRoute({
+        ...routeBinding,
+        ...(memoryTrace !== undefined ? { memoryRetrieval: memoryTrace } : {}),
+        concurrency: {
+          policyVersion: "concurrency-budget.v0",
+          workloadClass: "foreground-turn",
+          outcome: "admitted",
+          queuedMs: 0,
+          depth: 0,
+          attempt: attemptCount,
+          reasonCodes: [],
+          cost: { status: "unknown" },
+        },
+      });
+    }
     // The forked send settles `sent` from here on, so drop the entry the post-processing hook uses.
     if (resumed && event.commandId !== null) resumedTurnStarts.delete(event.commandId);
-    yield* send.pipe(
+    yield* admittedSend.pipe(
       Effect.ensuring(resumed ? Deferred.succeed(resumed.sent, undefined) : Effect.void),
       Effect.forkScoped,
     );
-    yield* maybeRunOpenRouterShadow({
+    const shadowWork = maybeRunOpenRouterShadow({
       threadId: event.payload.threadId,
       routeBinding,
       prompt: messageText,
       persist: persistAttemptedRoute,
-    }).pipe(Effect.forkDetach);
+    });
+    yield* (
+      Option.isSome(concurrencyBudget) && environmentId !== undefined
+        ? concurrencyBudget.value
+            .withAdmission(
+              {
+                workloadClass: "openrouter-shadow",
+                environmentId,
+                projectId: thread.projectId,
+                threadId: thread.id,
+                requestedAt: event.payload.createdAt,
+              },
+              shadowWork,
+            )
+            .pipe(Effect.catch(() => Effect.void))
+        : shadowWork
+    ).pipe(Effect.forkDetach);
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (

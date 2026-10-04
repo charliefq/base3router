@@ -4,6 +4,8 @@ import type {
 } from "@t3tools/client-runtime/state/models";
 import type {
   ActionGovernanceSnapshotV0,
+  ConcurrencyGovernanceSnapshotV0,
+  DreamMemoryGovernanceSnapshotV0,
   EnvironmentId,
   EvaluationMetricV0,
   ExplicitFeedbackKind,
@@ -64,6 +66,8 @@ export type ControlCenterModel = {
   readonly environmentLabel: string | null;
   readonly routerInsights?: ControlCenterRouterInsights | null;
   readonly actionGovernance?: ControlCenterActionGovernance | null;
+  readonly dreamMemory?: ControlCenterDreamMemory | null;
+  readonly concurrency?: ControlCenterConcurrency | null;
 };
 
 export type ControlCenterActionGovernance = {
@@ -75,6 +79,23 @@ export type ControlCenterActionGovernance = {
   readonly costExposure: string;
   readonly compliance: string;
   readonly pendingCards: ReadonlyArray<InspectorApprovalModel>;
+};
+
+export type ControlCenterDreamMemory = {
+  readonly enabled: string;
+  readonly captureMode: string;
+  readonly counts: string;
+  readonly maintenance: string;
+  readonly cost: string;
+};
+
+export type ControlCenterConcurrency = {
+  readonly saturation: string;
+  readonly foreground: string;
+  readonly background: string;
+  readonly queued: string;
+  readonly rejected: string;
+  readonly topology: string;
 };
 
 export type ControlCenterRouterInsights = {
@@ -132,6 +153,8 @@ export type ControlCenterInput = {
   readonly environmentLabel?: string | null;
   readonly routerInsights?: ControlCenterModel["routerInsights"];
   readonly actionGovernance?: ControlCenterModel["actionGovernance"];
+  readonly dreamMemory?: ControlCenterModel["dreamMemory"];
+  readonly concurrency?: ControlCenterModel["concurrency"];
 };
 
 export type ControlCenterInspectorTarget = {
@@ -239,6 +262,8 @@ export function presentControlCenter(input: ControlCenterInput): ControlCenterMo
     environmentLabel: sanitizeDisplayText(input.environmentLabel ?? null),
     ...(input.routerInsights !== undefined ? { routerInsights: input.routerInsights } : {}),
     ...(input.actionGovernance !== undefined ? { actionGovernance: input.actionGovernance } : {}),
+    ...(input.dreamMemory !== undefined ? { dreamMemory: input.dreamMemory } : {}),
+    ...(input.concurrency !== undefined ? { concurrency: input.concurrency } : {}),
   };
 }
 
@@ -279,6 +304,33 @@ export function presentActionGovernance(
     costExposure: `Known ${known} · ${estimated}`,
     compliance: snapshot.compliance,
     pendingCards: snapshot.pending.map(presentActionApproval),
+  };
+}
+
+export function presentDreamMemoryGovernance(
+  snapshot: DreamMemoryGovernanceSnapshotV0,
+): ControlCenterDreamMemory {
+  const cost =
+    snapshot.knownCostUsd.status === "known" ? `$${snapshot.knownCostUsd.value}` : "unknown";
+  return {
+    enabled: snapshot.enabled ? "enabled" : "disabled",
+    captureMode: snapshot.captureMode,
+    counts: `${snapshot.proposedCount} proposed · ${snapshot.activeCount} active · ${snapshot.contradictedCount} contradicted · ${snapshot.expiredCount} expired`,
+    maintenance: snapshot.maintenance,
+    cost: `Dream cost ${cost}`,
+  };
+}
+
+export function presentConcurrencyGovernance(
+  snapshot: ConcurrencyGovernanceSnapshotV0,
+): ControlCenterConcurrency {
+  return {
+    saturation: snapshot.saturation,
+    foreground: `${snapshot.foregroundActive} foreground active`,
+    background: `${snapshot.backgroundActive} background active`,
+    queued: `${snapshot.queued} queued`,
+    rejected: `${snapshot.rejectedCount} rejected · ${snapshot.cancelledCount} cancelled`,
+    topology: snapshot.topology,
   };
 }
 

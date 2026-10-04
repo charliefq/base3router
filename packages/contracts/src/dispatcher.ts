@@ -17,6 +17,8 @@ import { ModelRouterDecision } from "./modelRouter.ts";
 import { OpenRouterTeacherObservationV0 } from "./openRouter.ts";
 import { HybridRouteDecisionV1 } from "./routerEvaluation.ts";
 import { SkillRouterDecision } from "./skillRouter.ts";
+import { MemoryRetrievalTraceV0 } from "./dreamMemory.ts";
+import { ConcurrencyAdmissionTraceV0 } from "./concurrencyBudget.ts";
 
 export const DISPATCHER_POLICY_VERSION = "dispatcher.phase-1a.v1" as const;
 export const DISPATCHER_MAX_CANDIDATES = 32;
@@ -150,6 +152,10 @@ export const DispatcherTaskRouteBinding = Schema.Struct({
   mcpRoute: Schema.optional(McpRouterDecision),
   /** Phase 12 immutable execution plan. Absent on pre-Phase-12 bindings. */
   executionPlan: Schema.optional(ExecutionPlanV0),
+  /** Phase 13 Dream Memory retrieval trace. Absent on pre-Phase-13 bindings. */
+  memoryRetrieval: Schema.optional(MemoryRetrievalTraceV0),
+  /** Phase 13 concurrency admission trace. Absent on pre-Phase-13 bindings. */
+  concurrency: Schema.optional(ConcurrencyAdmissionTraceV0),
 });
 export type DispatcherTaskRouteBinding = typeof DispatcherTaskRouteBinding.Type;
 

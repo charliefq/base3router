@@ -46,6 +46,8 @@ export * from "./actionGate.ts";
 export * from "./skillRouter.ts";
 export * from "./mcpRouter.ts";
 export * from "./executionPlan.ts";
+export * from "./dreamMemory.ts";
+export * from "./concurrencyBudget.ts";
 export * from "./cloudRunner.ts";
 export * from "./workflow.ts";
 export * from "./preview.ts";

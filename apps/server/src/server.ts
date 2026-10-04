@@ -149,6 +149,8 @@ import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as RouterEvaluationService from "./routerEvaluation/RouterEvaluationService.ts";
 import * as ActionGateService from "./actionGate/ActionGateService.ts";
+import * as DreamMemoryService from "./dreamMemory/DreamMemoryService.ts";
+import * as ConcurrencyBudgetService from "./concurrencyBudget/ConcurrencyBudgetService.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -220,6 +222,12 @@ const RouterEvaluationLayerLive = RouterEvaluationService.layer.pipe(
 const ActionGateLayerLive = ActionGateService.layer.pipe(
   Layer.provideMerge(SqlitePersistenceLayerLive),
 );
+
+const DreamMemoryLayerLive = DreamMemoryService.layer.pipe(
+  Layer.provideMerge(SqlitePersistenceLayerLive),
+);
+
+const ConcurrencyBudgetLayerLive = ConcurrencyBudgetService.layer;
 
 const ResourceDiagnosticsLayerLive = Layer.mergeAll(
   HostResources.layer,
@@ -569,6 +577,8 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   Layer.provideMerge(UsageLayerLive),
   Layer.provideMerge(RouterEvaluationLayerLive),
   Layer.provideMerge(ActionGateLayerLive),
+  Layer.provideMerge(DreamMemoryLayerLive),
+  Layer.provideMerge(ConcurrencyBudgetLayerLive),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(AnalyticsService.layer),
   Layer.provideMerge(ExternalLauncher.layer),

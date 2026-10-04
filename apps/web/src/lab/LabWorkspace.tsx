@@ -82,6 +82,12 @@ export function LabWorkspace(props: {
       ? { toolExecution: props.scenario.toolExecution }
       : {}),
     ...(props.scenario.outcome !== undefined ? { outcome: props.scenario.outcome } : {}),
+    ...(props.scenario.dreamMemory !== undefined
+      ? { dreamMemory: props.scenario.dreamMemory }
+      : {}),
+    ...(props.scenario.concurrency !== undefined
+      ? { concurrency: props.scenario.concurrency }
+      : {}),
   });
 
   return (
@@ -141,6 +147,12 @@ export function LabWorkspace(props: {
                         props.liveApproval != null ? [props.liveApproval] : governance.pendingCards,
                     },
                   }
+                : {}),
+              ...(props.scenario.dreamMemoryGovernance !== undefined
+                ? { dreamMemory: props.scenario.dreamMemoryGovernance }
+                : {}),
+              ...(props.scenario.concurrencyGovernance !== undefined
+                ? { concurrency: props.scenario.concurrencyGovernance }
                 : {}),
             })}
             {...(props.onApprovalRespond !== undefined

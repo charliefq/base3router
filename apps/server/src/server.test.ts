@@ -194,6 +194,8 @@ import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as RouterEvaluationService from "./routerEvaluation/RouterEvaluationService.ts";
 import * as ActionGateService from "./actionGate/ActionGateService.ts";
+import * as DreamMemoryService from "./dreamMemory/DreamMemoryService.ts";
+import * as ConcurrencyBudgetService from "./concurrencyBudget/ConcurrencyBudgetService.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as Data from "effect/Data";
 
@@ -1082,6 +1084,8 @@ const buildAppUnderTest = (options?: {
           UsageService.layerTest,
           RouterEvaluationService.layerTest,
           ActionGateService.layerTest,
+          DreamMemoryService.layerTest,
+          ConcurrencyBudgetService.layer,
         ),
       ),
       Layer.provide(

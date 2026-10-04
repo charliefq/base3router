@@ -82,6 +82,7 @@ import { useSettingsScope } from "./SettingsScopeContext";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { OpenRouterGuidanceSettings } from "./OpenRouterGuidanceSettings";
 import { RouterEvaluationSettings } from "./RouterEvaluationSettings";
+import { DreamMemorySettings } from "./DreamMemorySettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import {
@@ -2194,6 +2195,7 @@ export function GeneralSettingsPanel() {
       <ProjectDefaultsSettings category="general" />
       <OpenRouterGuidanceSettings />
       <RouterEvaluationSettings />
+      <DreamMemorySettings />
       <SettingsSection id="organization" title="Organization">
         <SettingsRow
           {...searchableSetting("project-grouping")}

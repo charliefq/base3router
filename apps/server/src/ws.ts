@@ -84,6 +84,8 @@ import {
   DEFAULT_ROUTER_EVALUATION_SETTINGS,
   AuthOrchestrationOperateScope,
   ActionGateError,
+  DreamMemoryError,
+  DEFAULT_DREAM_MEMORY_SETTINGS,
   WS_METHODS,
   WsRpcGroup,
   WORKTREE_SETUP_ACTIVITY_KIND,
@@ -189,6 +191,8 @@ import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import { RouterEvaluationService } from "./routerEvaluation/RouterEvaluationService.ts";
 import { ActionGateService } from "./actionGate/ActionGateService.ts";
+import { DreamMemoryService, viewerFromSubject } from "./dreamMemory/DreamMemoryService.ts";
+import { ConcurrencyBudgetService } from "./concurrencyBudget/ConcurrencyBudgetService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
@@ -212,6 +216,7 @@ import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isActionGateError = Schema.is(ActionGateError);
+const isDreamMemoryError = Schema.is(DreamMemoryError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -712,6 +717,8 @@ const makeWsRpcLayer = (
       const usage = yield* UsageService.UsageService;
       const routerEvaluation = yield* RouterEvaluationService;
       const actionGate = yield* ActionGateService;
+      const dreamMemory = yield* DreamMemoryService;
+      const concurrencyBudget = yield* ConcurrencyBudgetService;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -3602,6 +3609,199 @@ const makeWsRpcLayer = (
                 ),
               );
               return { approval };
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.memoryGetGovernance]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.memoryGetGovernance,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const settings = yield* serverSettings.getSettings.pipe(
+                Effect.catch(() => Effect.succeed({ dreamMemory: DEFAULT_DREAM_MEMORY_SETTINGS })),
+              );
+              return yield* dreamMemory.governance(environmentId, settings.dreamMemory).pipe(
+                Effect.mapError((error) =>
+                  isDreamMemoryError(error)
+                    ? error
+                    : new DreamMemoryError({
+                        reason: "invalid",
+                        detail: "Dream Memory could not load governance.",
+                      }),
+                ),
+              );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.memoryList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.memoryList,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              return yield* dreamMemory
+                .list(
+                  input,
+                  viewerFromSubject(environmentId, currentSession.subject, input.projectId),
+                )
+                .pipe(
+                  Effect.mapError((error) =>
+                    isDreamMemoryError(error)
+                      ? error
+                      : new DreamMemoryError({
+                          reason: "invalid",
+                          detail: "Dream Memory could not list records.",
+                        }),
+                  ),
+                );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.memorySave]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.memorySave,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const now = yield* nowIso;
+              const settings = yield* serverSettings.getSettings.pipe(
+                Effect.catch(() => Effect.succeed({ dreamMemory: DEFAULT_DREAM_MEMORY_SETTINGS })),
+              );
+              return yield* dreamMemory
+                .save(
+                  input,
+                  viewerFromSubject(environmentId, currentSession.subject, input.projectId),
+                  now,
+                  settings.dreamMemory,
+                )
+                .pipe(
+                  Effect.mapError((error) =>
+                    isDreamMemoryError(error)
+                      ? error
+                      : new DreamMemoryError({
+                          reason: "invalid",
+                          detail: "Dream Memory could not save the record.",
+                        }),
+                  ),
+                );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.memoryDecide]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.memoryDecide,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const now = yield* nowIso;
+              return yield* dreamMemory
+                .decide(input, viewerFromSubject(environmentId, currentSession.subject), now)
+                .pipe(
+                  Effect.mapError((error) =>
+                    isDreamMemoryError(error)
+                      ? error
+                      : new DreamMemoryError({
+                          reason: "invalid",
+                          detail: "Dream Memory could not record the decision.",
+                        }),
+                  ),
+                );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.memoryCorrect]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.memoryCorrect,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const now = yield* nowIso;
+              return yield* dreamMemory
+                .correct(input, viewerFromSubject(environmentId, currentSession.subject), now)
+                .pipe(
+                  Effect.mapError((error) =>
+                    isDreamMemoryError(error)
+                      ? error
+                      : new DreamMemoryError({
+                          reason: "invalid",
+                          detail: "Dream Memory could not correct the record.",
+                        }),
+                  ),
+                );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.memoryDelete]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.memoryDelete,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const now = yield* nowIso;
+              return yield* dreamMemory
+                .remove(input, viewerFromSubject(environmentId, currentSession.subject), now)
+                .pipe(
+                  Effect.mapError((error) =>
+                    isDreamMemoryError(error)
+                      ? error
+                      : new DreamMemoryError({
+                          reason: "invalid",
+                          detail: "Dream Memory could not delete the record.",
+                        }),
+                  ),
+                );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.memoryClearScope]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.memoryClearScope,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const now = yield* nowIso;
+              return yield* dreamMemory
+                .clearScope(
+                  input,
+                  viewerFromSubject(environmentId, currentSession.subject, input.projectId),
+                  now,
+                )
+                .pipe(
+                  Effect.mapError((error) =>
+                    isDreamMemoryError(error)
+                      ? error
+                      : new DreamMemoryError({
+                          reason: "invalid",
+                          detail: "Dream Memory could not clear the scope.",
+                        }),
+                  ),
+                );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.memoryExport]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.memoryExport,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              return yield* dreamMemory
+                .exportScoped(
+                  input,
+                  viewerFromSubject(environmentId, currentSession.subject, input.projectId),
+                )
+                .pipe(
+                  Effect.mapError((error) =>
+                    isDreamMemoryError(error)
+                      ? error
+                      : new DreamMemoryError({
+                          reason: "invalid",
+                          detail: "Dream Memory could not export records.",
+                        }),
+                  ),
+                );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.concurrencyGetGovernance]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.concurrencyGetGovernance,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              return yield* concurrencyBudget.snapshot(environmentId);
             }),
             { "rpc.aggregate": "server" },
           ),

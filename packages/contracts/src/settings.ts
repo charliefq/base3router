@@ -48,6 +48,8 @@ import {
   OpenRouterGuidanceSettings,
 } from "./openRouter.ts";
 import { RouterEvaluationSettings } from "./routerEvaluation.ts";
+import { DreamMemorySettings, MemoryCaptureMode } from "./dreamMemory.ts";
+import { ConcurrencyBudgetSettings } from "./concurrencyBudget.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -1317,6 +1319,8 @@ export const ServerSettings = Schema.Struct({
    * never uploaded. Default on, 90-day retention, challenger off.
    */
   routerEvaluation: RouterEvaluationSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  dreamMemory: DreamMemorySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  concurrencyBudget: ConcurrencyBudgetSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Keyed by a user-chosen id so a source keeps its rows across edits. Entries
   // this build cannot decode round-trip untouched, as provider instances do.
@@ -1502,6 +1506,17 @@ const RouterEvaluationSettingsPatch = Schema.Struct({
   challengerShadowEnabled: Schema.optionalKey(Schema.Boolean),
 });
 
+const DreamMemorySettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  captureMode: Schema.optionalKey(MemoryCaptureMode),
+  retentionDays: Schema.optionalKey(Schema.Int),
+  retrievalLimit: Schema.optionalKey(Schema.Int),
+});
+
+const ConcurrencyBudgetSettingsPatch = Schema.Struct({
+  foregroundReserved: Schema.optionalKey(Schema.Int),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   worktreeCleanup: Schema.optionalKey(
     Schema.NullOr(
@@ -1614,6 +1629,8 @@ export const ServerSettingsPatch = Schema.Struct({
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
   openRouter: Schema.optionalKey(OpenRouterGuidanceSettingsPatch),
   routerEvaluation: Schema.optionalKey(RouterEvaluationSettingsPatch),
+  dreamMemory: Schema.optionalKey(DreamMemorySettingsPatch),
+  concurrencyBudget: Schema.optionalKey(ConcurrencyBudgetSettingsPatch),
   // Per-entry, unlike `providerInstances`: a client only ever adds or removes
   // one source, and sending the whole map races another edit that has not
   // echoed back yet. `null` removes; the server merges into its current map.

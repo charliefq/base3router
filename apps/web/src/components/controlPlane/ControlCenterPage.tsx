@@ -16,7 +16,9 @@ import {
 } from "~/controlPlane/controlCenterProjection";
 import {
   presentActionGovernance,
+  presentConcurrencyGovernance,
   presentControlCenter,
+  presentDreamMemoryGovernance,
   presentRouterInsights,
   selectControlCenterInspectorTarget,
   type ControlCenterRouterInsights,
@@ -72,6 +74,19 @@ export function ControlCenterPage(props: {
     selectedEnvironmentId === null
       ? null
       : serverEnvironment.actionGovernance({ environmentId: selectedEnvironmentId, input: {} }),
+  );
+  const memoryQuery = useEnvironmentQuery(
+    selectedEnvironmentId === null
+      ? null
+      : serverEnvironment.memoryGovernance({ environmentId: selectedEnvironmentId, input: {} }),
+  );
+  const concurrencyQuery = useEnvironmentQuery(
+    selectedEnvironmentId === null
+      ? null
+      : serverEnvironment.concurrencyGovernance({
+          environmentId: selectedEnvironmentId,
+          input: {},
+        }),
   );
   const session = useAtomValue(
     selectedEnvironmentId === null
@@ -147,6 +162,12 @@ export function ControlCenterPage(props: {
     ...(routerInsights !== undefined ? { routerInsights } : {}),
     ...(governanceQuery.data !== null
       ? { actionGovernance: presentActionGovernance(governanceQuery.data) }
+      : {}),
+    ...(memoryQuery.data !== null
+      ? { dreamMemory: presentDreamMemoryGovernance(memoryQuery.data) }
+      : {}),
+    ...(concurrencyQuery.data !== null
+      ? { concurrency: presentConcurrencyGovernance(concurrencyQuery.data) }
       : {}),
   });
   const inspector = selectControlCenterInspectorTarget(model);

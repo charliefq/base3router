@@ -9,9 +9,52 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { ActionGateService } from "../actionGate/ActionGateService.ts";
+import { ConcurrencyBudgetService } from "../concurrencyBudget/ConcurrencyBudgetService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as Option from "effect/Option";
 
 const isActionGateError = Schema.is(ActionGateError);
+
+const withMcpAdmission = <A, E, R>(
+  invocation: McpInvocationContext.McpInvocationScope,
+  toolName: string,
+  run: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | McpActionGateBlockedError, R> =>
+  Effect.gen(function* () {
+    const budget = yield* Effect.serviceOption(ConcurrencyBudgetService);
+    if (Option.isNone(budget)) return yield* run;
+    const requestedAt = DateTime.formatIso(yield* DateTime.now);
+    const admitted = yield* budget.value
+      .admit({
+        workloadClass: "mcp-action",
+        environmentId: invocation.environmentId,
+        threadId: invocation.threadId,
+        requestedAt,
+      })
+      .pipe(
+        Effect.mapError(
+          (error) =>
+            new McpActionGateBlockedError({
+              toolName,
+              decision: "DENY",
+              reasonCodes: ["ACTION_DENIED"],
+              detail: error.detail,
+            }),
+        ),
+      );
+    const leaseId = admitted.lease?.leaseId;
+    if (leaseId === undefined) {
+      return yield* new McpActionGateBlockedError({
+        toolName,
+        decision: "DENY",
+        reasonCodes: ["ACTION_DENIED"],
+        detail: admitted.explanation,
+      });
+    }
+    return yield* run.pipe(
+      Effect.ensuring(budget.value.release(invocation.environmentId, leaseId)),
+    );
+  });
 
 export const requireAllowedMcpTool = (
   toolName: string,
@@ -42,7 +85,9 @@ export const requireAllowedMcpTool = (
             }),
         ),
       );
-    if (decision.decision === "ALLOW") return decision;
+    if (decision.decision === "ALLOW") {
+      return decision;
+    }
     if (decision.decision === "DENY") {
       return yield* new McpActionGateBlockedError({
         toolName,
@@ -109,4 +154,19 @@ export const requireAllowedMcpTool = (
       reasonCodes: ["ACTION_ALLOWED"],
       explanation: "ActionGate allowed this action after a one-time approval.",
     } satisfies ActionGateDecision;
+  });
+
+export const withAllowedMcpTool = <A, E, R>(
+  toolName: string,
+  args: unknown,
+  run: Effect.Effect<A, E, R>,
+): Effect.Effect<
+  A,
+  E | McpActionGateBlockedError,
+  R | McpInvocationContext.McpInvocationContext | ActionGateService
+> =>
+  Effect.gen(function* () {
+    const invocation = yield* McpInvocationContext.McpInvocationContext;
+    yield* requireAllowedMcpTool(toolName, args);
+    return yield* withMcpAdmission(invocation, toolName, run);
   });
