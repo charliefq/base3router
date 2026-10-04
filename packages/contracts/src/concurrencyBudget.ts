@@ -26,7 +26,6 @@ export const ConcurrencyBudgetPolicyVersion = Schema.Literal(CONCURRENCY_BUDGET_
 export type ConcurrencyBudgetPolicyVersion = typeof ConcurrencyBudgetPolicyVersion.Type;
 
 const BoundedId = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
-const BoundedSlug = TrimmedNonEmptyString.check(Schema.isMaxLength(256));
 const BoundedIso = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
 const BoundedExplanation = TrimmedNonEmptyString.check(Schema.isMaxLength(512));
 
@@ -39,7 +38,7 @@ export type LeaseId = typeof LeaseId.Type;
 export const ExecutionTreeId = BoundedId.pipe(Schema.brand("ExecutionTreeId"));
 export type ExecutionTreeId = typeof ExecutionTreeId.Type;
 
-export const CONCURRENCY_WORKLOAD_CLASSES = [
+const CONCURRENCY_WORKLOAD_CLASSES = [
   "foreground-turn",
   "child-agent",
   "mcp-action",
@@ -51,7 +50,7 @@ export const CONCURRENCY_WORKLOAD_CLASSES = [
 export const ConcurrencyWorkloadClass = Schema.Literals(CONCURRENCY_WORKLOAD_CLASSES);
 export type ConcurrencyWorkloadClass = typeof ConcurrencyWorkloadClass.Type;
 
-export const CONCURRENCY_ADMISSION_OUTCOMES = [
+const CONCURRENCY_ADMISSION_OUTCOMES = [
   "admitted",
   "queued",
   "rejected",
@@ -61,7 +60,7 @@ export const CONCURRENCY_ADMISSION_OUTCOMES = [
 export const ConcurrencyAdmissionOutcome = Schema.Literals(CONCURRENCY_ADMISSION_OUTCOMES);
 export type ConcurrencyAdmissionOutcome = typeof ConcurrencyAdmissionOutcome.Type;
 
-export const CONCURRENCY_REJECTION_REASONS = [
+const CONCURRENCY_REJECTION_REASONS = [
   "CAPACITY_EXHAUSTED",
   "QUEUE_FULL",
   "QUEUE_TIMEOUT",
@@ -80,7 +79,7 @@ export const CONCURRENCY_REJECTION_REASONS = [
 export const ConcurrencyRejectionReason = Schema.Literals(CONCURRENCY_REJECTION_REASONS);
 export type ConcurrencyRejectionReason = typeof ConcurrencyRejectionReason.Type;
 
-export const CONCURRENCY_AUDIT_EVENT_KINDS = [
+const CONCURRENCY_AUDIT_EVENT_KINDS = [
   "concurrency.admitted",
   "concurrency.queued",
   "concurrency.acquired",
@@ -125,9 +124,7 @@ export const ExecutionTreeLimits = Schema.Struct({
 });
 export type ExecutionTreeLimits = typeof ExecutionTreeLimits.Type;
 
-export const defaultClassLimits = (
-  workloadClass: ConcurrencyWorkloadClass,
-): ConcurrencyClassLimits => {
+const defaultClassLimits = (workloadClass: ConcurrencyWorkloadClass): ConcurrencyClassLimits => {
   switch (workloadClass) {
     case "foreground-turn":
       return { maxConcurrent: 4, maxQueue: 8, maxQueueTimeMs: 30_000 };
@@ -146,7 +143,7 @@ export const defaultClassLimits = (
   }
 };
 
-export const DEFAULT_EXECUTION_TREE_LIMITS: ExecutionTreeLimits = {
+const DEFAULT_EXECUTION_TREE_LIMITS: ExecutionTreeLimits = {
   maxDepth: 3,
   maxDirectChildren: 4,
   maxTotalDescendants: 8,
@@ -154,9 +151,9 @@ export const DEFAULT_EXECUTION_TREE_LIMITS: ExecutionTreeLimits = {
   maxAttempts: 3,
 };
 
-export const DEFAULT_FOREGROUND_RESERVED = 1;
-export const DEFAULT_PROJECT_FOREGROUND_CONCURRENT = 2;
-export const DEFAULT_THREAD_FOREGROUND_CONCURRENT = 1;
+const DEFAULT_FOREGROUND_RESERVED = 1;
+const DEFAULT_PROJECT_FOREGROUND_CONCURRENT = 2;
+const DEFAULT_THREAD_FOREGROUND_CONCURRENT = 1;
 
 export const ConcurrencyBudgetPolicyV0 = Schema.Struct({
   policyVersion: ConcurrencyBudgetPolicyVersion,
@@ -204,11 +201,6 @@ export const ConcurrencyBudgetSettings = Schema.Struct({
   ),
 });
 export type ConcurrencyBudgetSettings = typeof ConcurrencyBudgetSettings.Type;
-
-export const DEFAULT_CONCURRENCY_BUDGET_SETTINGS: ConcurrencyBudgetSettings = {
-  policyVersion: CONCURRENCY_BUDGET_POLICY_VERSION,
-  foregroundReserved: DEFAULT_FOREGROUND_RESERVED,
-};
 
 export const ExecutionTreeContextV0 = Schema.Struct({
   treeId: ExecutionTreeId,

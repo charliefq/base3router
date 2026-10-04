@@ -9,12 +9,10 @@ import * as Ref from "effect/Ref";
 import {
   ConcurrencyBudgetError,
   EnvironmentId,
-  MODEL_ROUTER_UNKNOWN_METRIC,
   defaultConcurrencyBudgetPolicy,
   type ConcurrencyAdmissionRequestV0,
   type ConcurrencyAdmissionResultV0,
   type ConcurrencyGovernanceSnapshotV0,
-  type ConcurrencyWorkloadClass,
   type LeaseId,
 } from "@t3tools/contracts";
 import { ConcurrencyScheduler } from "@t3tools/shared/concurrencyBudget";
@@ -179,31 +177,3 @@ const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ConcurrencyBudgetService, make);
-
-export const layerTest = layer;
-
-export const shedIfRejected = (
-  result: ConcurrencyAdmissionResultV0,
-  workloadClass: ConcurrencyWorkloadClass,
-): boolean =>
-  result.outcome === "rejected" &&
-  (workloadClass === "dream-job" ||
-    workloadClass === "openrouter-shadow" ||
-    workloadClass === "detached-background");
-
-export const emptyConcurrencySnapshot = (
-  environmentId: EnvironmentId,
-): ConcurrencyGovernanceSnapshotV0 => ({
-  environmentId,
-  policyVersion: "concurrency-budget.v0",
-  topology: "process-local",
-  saturation: "idle",
-  foregroundActive: 0,
-  backgroundActive: 0,
-  queued: 0,
-  reservedForegroundFree: 1,
-  classes: [],
-  knownCostUsd: MODEL_ROUTER_UNKNOWN_METRIC,
-  cancelledCount: 0,
-  rejectedCount: 0,
-});

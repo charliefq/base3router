@@ -101,6 +101,8 @@ describe("concurrency scheduler", () => {
     if (leaseId === undefined) throw new Error("expected lease");
     expect(scheduler.release(leaseId)).toEqual({ leaseId, released: true, duplicate: false });
     expect(scheduler.release(leaseId)).toEqual({ leaseId, released: false, duplicate: true });
+    expect(scheduler.activeCount()).toBe(8);
+    scheduler.shutdownNow();
     expect(scheduler.activeCount()).toBe(0);
   });
 
@@ -116,20 +118,32 @@ describe("concurrency scheduler", () => {
     expect(retry.outcome).toBe("admitted");
     expect(retry.tree?.attempt).toBe(2);
     expect(retry.tree?.depth).toBe(child.tree?.depth);
-    const tooDeep = scheduler.admit(
+    const childLease = child.lease?.leaseId;
+    if (childLease !== undefined) scheduler.release(childLease);
+    const nested = scheduler.admit(request("child-agent", { tree: child.tree }));
+    expect(nested.outcome).toBe("admitted");
+    expect(nested.tree?.depth).toBe(2);
+    const nestedLease = nested.lease?.leaseId;
+    if (nestedLease !== undefined) scheduler.release(nestedLease);
+    const deeper = scheduler.admit(request("child-agent", { tree: nested.tree }));
+    expect(deeper.outcome).toBe("admitted");
+    expect(deeper.tree?.depth).toBe(3);
+    const tooDeep = scheduler.admit(request("child-agent", { tree: deeper.tree }));
+    expect(tooDeep.outcome).toBe("rejected");
+    expect(tooDeep.reasonCodes).toContain("MAX_DEPTH");
+    const spoofed = scheduler.admit(
       request("child-agent", {
         tree: {
           ...tree,
-          depth: 3,
-          descendantCount: 8,
-          directChildCount: 4,
-          concurrentChildCount: 2,
+          depth: 0,
+          descendantCount: 0,
+          directChildCount: 0,
+          concurrentChildCount: 0,
           attempt: 1,
         },
       }),
     );
-    expect(tooDeep.outcome).toBe("rejected");
-    expect(tooDeep.reasonCodes.length).toBeGreaterThan(0);
+    expect(spoofed.outcome).toBe("rejected");
   });
 
   it("shuts down without leaking permits", () => {

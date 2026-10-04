@@ -20,6 +20,7 @@ import {
 } from "./DreamMemoryService.ts";
 
 const isDreamMemoryError = Schema.is(DreamMemoryError);
+const encodeListedJson = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const environmentId = EnvironmentId.make("env-1");
 const projectId = ProjectId.make("project-1");
 const otherProject = ProjectId.make("project-2");
@@ -358,9 +359,7 @@ it.effect("serializes concurrent correct and delete without resurrecting content
         assert.equal(memory.content, undefined);
       }
     }
-    const serialized = yield* Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
-      listed,
-    );
+    const serialized = yield* encodeListedJson(listed);
     assert.equal(/sk-|Bearer /.test(serialized), false);
   }).pipe(Effect.provide(layer)),
 );

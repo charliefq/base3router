@@ -146,7 +146,9 @@ export class ConcurrencyScheduler {
       this.trees.set(treeId, tree);
       return tree;
     }
-    const current = this.trees.get(request.tree.treeId) ?? request.tree;
+    const stored = this.trees.get(request.tree.treeId);
+    const current = stored ?? emptyTree(request.tree.treeId);
+    if (stored === undefined) this.trees.set(request.tree.treeId, current);
     const nextDepth =
       request.workloadClass === "failover-retry" ? current.depth : current.depth + 1;
     const nextAttempt =
@@ -191,9 +193,13 @@ export class ConcurrencyScheduler {
         if (used >= this.policy.threadForegroundConcurrent) return false;
       }
     } else if (
-      this.reservedForegroundFree() === 0 &&
-      BACKGROUND_CLASSES.has(request.workloadClass)
+      BACKGROUND_CLASSES.has(request.workloadClass) &&
+      this.queue.some(
+        (entry) => entry.request.workloadClass === "foreground-turn" && !entry.cancelled,
+      )
     ) {
+      // Background classes have their own pools. They still cannot start when a
+      // foreground waiter is already queued for the reserved interactive slot.
       return false;
     }
     return true;

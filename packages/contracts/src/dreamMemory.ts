@@ -23,7 +23,7 @@ import { ModelRouterMetricValue } from "./modelRouter.ts";
 
 export const DREAM_MEMORY_SCHEMA_VERSION = "dream-memory.v0" as const;
 export const DREAM_MEMORY_POLICY_VERSION = "dream-memory-policy.v0" as const;
-export const MEMORY_CAPSULE_VERSION = "memory-capsule.v0" as const;
+const MEMORY_CAPSULE_VERSION = "memory-capsule.v0" as const;
 
 export const DreamMemorySchemaVersion = Schema.Literal(DREAM_MEMORY_SCHEMA_VERSION);
 export type DreamMemorySchemaVersion = typeof DreamMemorySchemaVersion.Type;
@@ -68,27 +68,23 @@ export const MEMORY_KINDS = [
 export const MemoryKind = Schema.Literals(MEMORY_KINDS);
 export type MemoryKind = typeof MemoryKind.Type;
 
-export const MEMORY_SOURCE_TYPES = [
-  "user-explicit",
-  "system-observation",
-  "model-proposal",
-] as const;
+const MEMORY_SOURCE_TYPES = ["user-explicit", "system-observation", "model-proposal"] as const;
 export const MemorySourceType = Schema.Literals(MEMORY_SOURCE_TYPES);
 export type MemorySourceType = typeof MemorySourceType.Type;
 
-export const MEMORY_CREATORS = ["user", "system-observation", "model-proposal"] as const;
+const MEMORY_CREATORS = ["user", "system-observation", "model-proposal"] as const;
 export const MemoryCreator = Schema.Literals(MEMORY_CREATORS);
 export type MemoryCreator = typeof MemoryCreator.Type;
 
-export const MEMORY_CONFIDENCE_CLASSES = ["confirmed", "reported", "inferred", "unknown"] as const;
+const MEMORY_CONFIDENCE_CLASSES = ["confirmed", "reported", "inferred", "unknown"] as const;
 export const MemoryConfidenceClass = Schema.Literals(MEMORY_CONFIDENCE_CLASSES);
 export type MemoryConfidenceClass = typeof MemoryConfidenceClass.Type;
 
-export const MEMORY_FRESHNESS_STATES = ["fresh", "stale", "expired", "unknown"] as const;
+const MEMORY_FRESHNESS_STATES = ["fresh", "stale", "expired", "unknown"] as const;
 export const MemoryFreshnessState = Schema.Literals(MEMORY_FRESHNESS_STATES);
 export type MemoryFreshnessState = typeof MemoryFreshnessState.Type;
 
-export const MEMORY_SENSITIVITY_CLASSES = [
+const MEMORY_SENSITIVITY_CLASSES = [
   "public-project",
   "internal",
   "personal",
@@ -98,11 +94,11 @@ export const MEMORY_SENSITIVITY_CLASSES = [
 export const MemorySensitivityClass = Schema.Literals(MEMORY_SENSITIVITY_CLASSES);
 export type MemorySensitivityClass = typeof MemorySensitivityClass.Type;
 
-export const MEMORY_CAPTURE_MODES = ["off", "review", "automatic"] as const;
+const MEMORY_CAPTURE_MODES = ["off", "review", "automatic"] as const;
 export const MemoryCaptureMode = Schema.Literals(MEMORY_CAPTURE_MODES);
 export type MemoryCaptureMode = typeof MemoryCaptureMode.Type;
 
-export const MEMORY_STATUSES = [
+const MEMORY_STATUSES = [
   "proposed",
   "active",
   "superseded",
@@ -114,11 +110,11 @@ export const MEMORY_STATUSES = [
 export const MemoryStatus = Schema.Literals(MEMORY_STATUSES);
 export type MemoryStatus = typeof MemoryStatus.Type;
 
-export const MEMORY_SCOPE_KINDS = ["personal", "project", "environment", "thread"] as const;
+const MEMORY_SCOPE_KINDS = ["personal", "project", "environment", "thread"] as const;
 export const MemoryScopeKind = Schema.Literals(MEMORY_SCOPE_KINDS);
 export type MemoryScopeKind = typeof MemoryScopeKind.Type;
 
-export const MEMORY_RETENTION_POLICIES = ["standard", "short", "until-deleted"] as const;
+const MEMORY_RETENTION_POLICIES = ["standard", "short", "until-deleted"] as const;
 export const MemoryRetentionPolicy = Schema.Literals(MEMORY_RETENTION_POLICIES);
 export type MemoryRetentionPolicy = typeof MemoryRetentionPolicy.Type;
 
@@ -128,8 +124,8 @@ export const AUTOMATIC_ACTIVATION_KINDS: ReadonlyArray<MemoryKind> = [
 ];
 
 export const DEFAULT_MEMORY_CAPTURE_MODE: MemoryCaptureMode = "review";
-export const DEFAULT_MEMORY_RETENTION_DAYS = 180;
-export const DEFAULT_MEMORY_RETRIEVAL_LIMIT = 8;
+const DEFAULT_MEMORY_RETENTION_DAYS = 180;
+const DEFAULT_MEMORY_RETRIEVAL_LIMIT = 8;
 export const DEFAULT_MEMORY_TOKEN_BUDGET = 1_200;
 
 export const MemoryProvenanceRef = Schema.Struct({
@@ -219,7 +215,7 @@ export const MemoryRetrievalTraceV0 = Schema.Struct({
 });
 export type MemoryRetrievalTraceV0 = typeof MemoryRetrievalTraceV0.Type;
 
-export const DREAM_JOB_STATUSES = [
+const DREAM_JOB_STATUSES = [
   "queued",
   "running",
   "succeeded",
@@ -247,7 +243,7 @@ export const DreamJobRecordV0 = Schema.Struct({
 });
 export type DreamJobRecordV0 = typeof DreamJobRecordV0.Type;
 
-export const MEMORY_AUDIT_EVENT_KINDS = [
+const MEMORY_AUDIT_EVENT_KINDS = [
   "memory.proposed",
   "memory.activated",
   "memory.retrieved",

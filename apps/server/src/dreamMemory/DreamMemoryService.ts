@@ -41,6 +41,7 @@ import {
   dreamShouldCallExtractor,
   expireIfDue,
   exportMemories,
+  explicitSaveAllowed,
   fakeDreamExtractor,
   makeMemoryAuditEvent,
   markContradiction,
@@ -281,6 +282,12 @@ const make = Effect.gen(function* () {
 
   const save: DreamMemoryService["Service"]["save"] = (input, viewer, nowIso, settings) =>
     Effect.gen(function* () {
+      if (!explicitSaveAllowed(settings)) {
+        return yield* new DreamMemoryError({
+          reason: "disabled",
+          detail: "Explicit save is unavailable.",
+        });
+      }
       if (
         input.projectId !== undefined &&
         viewer.projectId !== undefined &&
@@ -664,9 +671,10 @@ const make = Effect.gen(function* () {
         Effect.forEach(
           records.filter(
             (record) =>
-              record.scope.threadId === threadId &&
               record.creator !== "user" &&
-              record.status !== "deleted",
+              record.status !== "deleted" &&
+              (record.scope.threadId === threadId ||
+                record.provenance.some((ref) => ref.threadId === threadId)),
           ),
           (record) => put(tombstoneMemory(record, nowIso)),
           { concurrency: 1, discard: true },

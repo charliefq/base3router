@@ -1085,7 +1085,7 @@ const buildAppUnderTest = (options?: {
           RouterEvaluationService.layerTest,
           ActionGateService.layerTest,
           DreamMemoryService.layerTest,
-          ConcurrencyBudgetService.layerTest,
+          ConcurrencyBudgetService.layer,
         ),
       ),
       Layer.provide(

@@ -3,7 +3,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 
-import { ConcurrencyBudgetService, layerTest } from "./ConcurrencyBudgetService.ts";
+import { ConcurrencyBudgetService, layer as layerTest } from "./ConcurrencyBudgetService.ts";
 
 const environmentId = EnvironmentId.make("env-1");
 

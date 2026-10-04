@@ -41,9 +41,9 @@ const SENSITIVE_CLAIM =
 const PROMPT_INJECTION =
   /ignore (all |any |previous |prior )?instructions|you are now|system:\s|tool call:|grant (me |full )?access|override (the )?policy/i;
 
-export const MEMORY_UNTRUSTED_DELIMITER = "untrusted-memory-reference";
+const MEMORY_UNTRUSTED_DELIMITER = "untrusted-memory-reference";
 
-export const GENERIC_AUTH_SUBJECTS = new Set([
+const GENERIC_AUTH_SUBJECTS = new Set([
   "one-time-token",
   "reusable-dev-token",
   "reusable-dev-token-child",
@@ -114,13 +114,13 @@ export const deriveMemoryActorId = (subject: string | undefined): MemoryActorId 
 
 export const memoryContainsSecret = (value: string): boolean => SECRET_SHAPED.test(value);
 
-export const memoryLooksSensitive = (value: string): boolean =>
+const memoryLooksSensitive = (value: string): boolean =>
   SECRET_SHAPED.test(value) || SENSITIVE_CLAIM.test(value);
 
 export const memoryLooksLikePromptInjection = (value: string): boolean =>
   PROMPT_INJECTION.test(value);
 
-export const canTransitionMemory = (from: MemoryStatus, to: MemoryStatus): boolean =>
+const canTransitionMemory = (from: MemoryStatus, to: MemoryStatus): boolean =>
   from === to || (LEGAL_TRANSITIONS[from]?.includes(to) ?? false);
 
 export const authoritativeScope = (input: {
@@ -158,6 +158,7 @@ export const authoritativeScope = (input: {
     environmentId: input.environmentId,
     actorId: input.actorId,
     ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+    ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
   };
 };
 
@@ -181,10 +182,10 @@ export const scopeAllowsRead = (
   return true;
 };
 
-export const retrievalEnabled = (settings: DreamMemorySettings): boolean =>
+const retrievalEnabled = (settings: DreamMemorySettings): boolean =>
   settings.enabled && settings.captureMode !== "off";
 
-export const dreamProcessingEnabled = (settings: DreamMemorySettings): boolean =>
+const dreamProcessingEnabled = (settings: DreamMemorySettings): boolean =>
   settings.enabled && settings.captureMode !== "off";
 
 export const explicitSaveAllowed = (_settings: DreamMemorySettings): boolean => true;
@@ -217,7 +218,7 @@ export const sourceFingerprint = (input: {
     content: input.content,
   }).slice(0, 32);
 
-export const makeMemoryId = (input: {
+const makeMemoryId = (input: {
   readonly scope: MemoryScopeV0;
   readonly content: string;
   readonly createdAt: string;
@@ -298,6 +299,7 @@ export const tombstoneMemory = (record: MemoryRecordV0, nowIso: string): MemoryR
   content: undefined,
   structuredValue: undefined,
   contentPresent: false,
+  sourceInvalidated: true,
   updatedAt: nowIso,
   freshness: "expired",
 });
@@ -367,7 +369,7 @@ export const markContradiction = (
   };
 };
 
-export const lexicalRelevance = (content: string, taskText: string): number => {
+const lexicalRelevance = (content: string, taskText: string): number => {
   const terms = taskText
     .toLowerCase()
     .split(/[^a-z0-9]+/i)
