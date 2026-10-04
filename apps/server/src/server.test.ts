@@ -4379,27 +4379,19 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
   it.effect("Dream Memory off is projected through settings and governance RPC", () =>
     Effect.gen(function* () {
-      const settings = yield* Ref.make({
+      const offSettings = {
         ...DEFAULT_SERVER_SETTINGS,
         dreamMemory: {
           ...DEFAULT_SERVER_SETTINGS.dreamMemory,
           enabled: false,
-          captureMode: "off" as const,
+          captureMode: "off" as const satisfies "off",
         },
-      });
+      };
       yield* buildAppUnderTest({
         layers: {
           serverSettings: {
-            getSettings: Ref.get(settings),
-            updateSettings: (patch) =>
-              Ref.update(settings, (current) => ({
-                ...current,
-                ...patch,
-                dreamMemory: {
-                  ...current.dreamMemory,
-                  ...(patch.dreamMemory ?? {}),
-                },
-              })).pipe(Effect.andThen(Ref.get(settings))),
+            getSettings: Effect.succeed(offSettings),
+            updateSettings: () => Effect.succeed(offSettings),
           },
         },
       });
