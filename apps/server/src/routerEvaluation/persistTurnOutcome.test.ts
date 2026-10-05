@@ -4,11 +4,15 @@ import {
   MessageId,
   MODEL_ROUTER_DEFAULT_POLICY,
   MODEL_ROUTER_POLICY_VERSION,
+  NodeId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
+  ProviderTurnId,
   ThreadId,
   type DispatcherTaskRouteBinding,
   type ModelRouterDecision,
+  type OrchestrationV2ProviderTurn,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -398,11 +402,11 @@ describe("detectReworkProxy", () => {
 
 describe("runtimeEventFromV2ProviderTurn", () => {
   const providerTurn = (
-    status: "pending" | "running" | "completed" | "failed" | "interrupted" | "cancelled",
-  ) => ({
-    id: "turn-v2-1",
-    providerThreadId: "provider-thread-1",
-    nodeId: "node-1",
+    status: OrchestrationV2ProviderTurn["status"],
+  ): OrchestrationV2ProviderTurn => ({
+    id: ProviderTurnId.make("turn-v2-1"),
+    providerThreadId: ProviderThreadId.make("provider-thread-1"),
+    nodeId: NodeId.make("node-1"),
     runAttemptId: null,
     nativeTurnRef: null,
     ordinal: 1,

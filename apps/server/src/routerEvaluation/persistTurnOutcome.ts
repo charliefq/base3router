@@ -38,6 +38,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as Dispatcher from "../dispatcher/Dispatcher.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
+import type { ProjectionStoreV2Error } from "../orchestration-v2/ProjectionStore.ts";
 import { RouterEvaluationService } from "./RouterEvaluationService.ts";
 import { TurnTiming, type TurnTimingSnapshot } from "./TurnTiming.ts";
 import { DreamMemoryService, viewerFromSubject } from "../dreamMemory/DreamMemoryService.ts";
@@ -374,7 +375,7 @@ export const persistTurnOutcomeFromV2ProviderTurn = Effect.fn(
   readonly getRunMessage: (
     threadId: ThreadId,
     runId: RunId,
-  ) => Effect.Effect<{ readonly id: MessageId } | undefined, unknown>;
+  ) => Effect.Effect<{ readonly id: MessageId } | undefined, ProjectionStoreV2Error>;
 }) {
   const event = runtimeEventFromV2ProviderTurn(input);
   if (event === undefined) return;
