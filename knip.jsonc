@@ -29,6 +29,7 @@
         "base3router-ui-lab.ts",
         "router-evaluate.ts",
         "internal-beta-acceptance.ts",
+        "internal-beta-production-browser.ts",
       ],
     },
     "apps/server": {
@@ -70,7 +71,9 @@
         "scripts/warm-dep-cache.ts",
         "src/lab/main.tsx",
         "playwright.config.ts",
+        "playwright.production.config.ts",
         "e2e/**/*.ts",
+        "e2e-production/**/*.ts",
       ],
       // UI component modules are copied and adapted as cohesive sets. Keep their
       // named subcomponents even before they have callers; the file audit still
