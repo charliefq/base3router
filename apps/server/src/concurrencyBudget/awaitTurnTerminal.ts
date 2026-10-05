@@ -4,9 +4,9 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
@@ -15,8 +15,6 @@ import * as Stream from "effect/Stream";
  * release after this bound so shutdown cannot wait forever.
  */
 const FOREGROUND_TURN_TERMINAL_TIMEOUT: Duration.Input = "10 minutes";
-
-export type TurnTerminalOutcome = "completed" | "aborted" | "timeout" | "stream-ended";
 
 const isTurnTerminalEvent = (
   event: ProviderRuntimeEvent,
@@ -46,10 +44,10 @@ export const sendTurnUntilTerminal = <A extends ProviderTurnStartResult, E, R, R
 ): Effect.Effect<A, E, R | R2> =>
   Effect.scoped(
     Effect.gen(function* () {
-      const terminals =
-        yield* Queue.unbounded<
-          Extract<ProviderRuntimeEvent, { type: "turn.completed" | "turn.aborted" }>
-        >();
+      const terminals = yield* Queue.unbounded<
+        Extract<ProviderRuntimeEvent, { type: "turn.completed" | "turn.aborted" }>,
+        Cause.Done
+      >();
       yield* Stream.runForEach(stream, (event) =>
         isTurnTerminalEvent(event) ? Queue.offer(terminals, event) : Effect.void,
       ).pipe(
@@ -66,7 +64,7 @@ export const sendTurnUntilTerminal = <A extends ProviderTurnStartResult, E, R, R
         Stream.runHead,
         Effect.timeoutOrElse({
           duration: options?.timeout ?? FOREGROUND_TURN_TERMINAL_TIMEOUT,
-          orElse: () => Effect.succeed(Option.none()),
+          orElse: () => Effect.succeedNone,
         }),
       );
       return started;
