@@ -104,7 +104,7 @@ function runPlaywright(input: {
   readonly pairingUrl: string;
   readonly home: string;
 }): number {
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...NodeProcess.env,
     T3CODE_PRODUCTION_BROWSER_URL: input.origin,
     T3CODE_PRODUCTION_PAIRING_URL: input.pairingUrl,
