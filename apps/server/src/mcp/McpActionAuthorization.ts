@@ -2,36 +2,20 @@ import {
   ActionGateError,
   McpActionGateBlockedError,
   MODEL_ROUTER_UNKNOWN_METRIC,
-  ProjectId,
-  TurnId,
   type ActionGateDecision,
 } from "@t3tools/contracts";
 import { defaultDecisionForRisk } from "@t3tools/shared/actionGate";
-import { buildExecutionPlan } from "@t3tools/shared/executionPlan";
-import {
-  FIRST_PARTY_DEVICE_TOOLS,
-  FIRST_PARTY_PREVIEW_TOOLS,
-  FIRST_PARTY_PULL_REQUEST_TOOLS,
-  firstPartyMcpCatalog,
-} from "@t3tools/shared/mcpCatalog";
-import { routeMcp } from "@t3tools/shared/mcpRouter";
-import { routeSkills } from "@t3tools/shared/skillRouter";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { ActionGateService } from "../actionGate/ActionGateService.ts";
+import { planMcpToolAction } from "../actionGate/mcpToolPlan.ts";
 import { ConcurrencyBudgetService } from "../concurrencyBudget/ConcurrencyBudgetService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
 const isActionGateError = Schema.is(ActionGateError);
-
-const FIRST_PARTY_TOOLS = [
-  ...FIRST_PARTY_PREVIEW_TOOLS,
-  ...FIRST_PARTY_DEVICE_TOOLS,
-  ...FIRST_PARTY_PULL_REQUEST_TOOLS,
-];
 
 const blocked = (
   toolName: string,
@@ -47,48 +31,6 @@ const blocked = (
     detail,
   });
 
-const plannedFingerprint = (
-  toolName: string,
-  args: unknown,
-  invocation: McpInvocationContext.McpInvocationScope,
-) => {
-  const nowIso = "1970-01-01T00:00:00.000Z";
-  const spec = FIRST_PARTY_TOOLS.find((tool) => tool.name === toolName);
-  const serverId =
-    spec?.capability === "device"
-      ? "t3-device"
-      : spec?.capability === "pull-requests"
-        ? "t3-pull-requests"
-        : "t3-preview";
-  const toolId = `${serverId}/${toolName}`;
-  const plan = buildExecutionPlan({
-    turnId: TurnId.make(invocation.threadId),
-    threadId: invocation.threadId,
-    projectId: ProjectId.make("unbound"),
-    environmentId: invocation.environmentId,
-    nowIso,
-    expiresAt: nowIso,
-    modelRoute: null,
-    skillRoute: routeSkills({ mode: "auto", nowIso, catalog: [] }),
-    mcpRoute: routeMcp({
-      mode: "auto",
-      nowIso,
-      catalog: firstPartyMcpCatalog(nowIso),
-    }),
-    actions: [
-      {
-        serverId,
-        toolId,
-        arguments: args,
-        schemaDigest: spec?.name ?? "unknown",
-        riskClass: spec?.riskClass ?? "unclassified",
-        sideEffectClass: spec?.sideEffectClass ?? "unknown",
-      },
-    ],
-  });
-  return { spec, action: plan.actions[0] };
-};
-
 const revalidateAfterQueue = (
   toolName: string,
   args: unknown,
@@ -100,7 +42,12 @@ const revalidateAfterQueue = (
 > =>
   Effect.gen(function* () {
     const invocation = yield* McpInvocationContext.McpInvocationContext;
-    const { spec, action } = plannedFingerprint(toolName, args, invocation);
+    const { spec, action } = planMcpToolAction({
+      toolName,
+      args,
+      environmentId: invocation.environmentId,
+      threadId: invocation.threadId,
+    });
     if (action === undefined || action.fingerprint !== prior.fingerprint) {
       return yield* blocked(
         toolName,

@@ -16,13 +16,11 @@ import {
   ActionGateDecision,
   ActionGateError,
   ActionGovernanceSnapshotV0,
-  ActionId,
   ActionIdempotencyKey,
   MODEL_ROUTER_UNKNOWN_METRIC,
   ACTION_GATE_POLICY_VERSION,
   ProjectId,
   ThreadId,
-  TurnId,
   type ActionApprovalStatus,
   type ActionAuditEventV0,
   type ActionGateRespondApprovalRequest,
@@ -36,16 +34,8 @@ import {
   defaultDecisionForRisk,
   TERMINAL_APPROVAL_STATUSES,
 } from "@t3tools/shared/actionGate";
-import { buildExecutionPlan } from "@t3tools/shared/executionPlan";
-import {
-  FIRST_PARTY_DEVICE_TOOLS,
-  FIRST_PARTY_PREVIEW_TOOLS,
-  FIRST_PARTY_PULL_REQUEST_TOOLS,
-  firstPartyMcpCatalog,
-} from "@t3tools/shared/mcpCatalog";
-import { routeMcp } from "@t3tools/shared/mcpRouter";
-import { routeSkills } from "@t3tools/shared/skillRouter";
 import { PersistenceDecodeError, PersistenceSqlError } from "../persistence/Errors.ts";
+import { planMcpToolAction } from "./mcpToolPlan.ts";
 
 const ApprovalRow = Schema.Struct({
   approvalId: Schema.String,
@@ -739,53 +729,19 @@ const make = Effect.gen(function* () {
       } satisfies ActionGovernanceSnapshotV0;
     }).pipe(Effect.mapError(toPersistenceError("ActionGateService.governance")));
 
-  const FIRST_PARTY_TOOLS = [
-    ...FIRST_PARTY_PREVIEW_TOOLS,
-    ...FIRST_PARTY_DEVICE_TOOLS,
-    ...FIRST_PARTY_PULL_REQUEST_TOOLS,
-  ];
-
   const authorizeTool: ActionGateService["Service"]["authorizeTool"] = (input) =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;
       const nowIso = DateTime.formatIso(now);
       const expiresAt = DateTime.formatIso(DateTime.add(now, { minutes: 5 }));
-      const spec = FIRST_PARTY_TOOLS.find((tool) => tool.name === input.toolName);
-      const serverId =
-        spec?.capability === "device"
-          ? "t3-device"
-          : spec?.capability === "pull-requests"
-            ? "t3-pull-requests"
-            : "t3-preview";
-      const toolId = `${serverId}/${input.toolName}`;
-      const skillRoute = routeSkills({ mode: "auto", nowIso, catalog: [] });
-      const mcpRoute = routeMcp({
-        mode: "auto",
-        nowIso,
-        catalog: firstPartyMcpCatalog(nowIso),
-      });
-      const plan = buildExecutionPlan({
-        turnId: TurnId.make(input.threadId),
-        threadId: input.threadId,
-        projectId: ProjectId.make("unbound"),
+      const { spec, action, plan } = planMcpToolAction({
+        toolName: input.toolName,
+        args: input.args,
         environmentId: input.environmentId,
+        threadId: input.threadId,
         nowIso,
         expiresAt,
-        modelRoute: null,
-        skillRoute,
-        mcpRoute,
-        actions: [
-          {
-            serverId,
-            toolId,
-            arguments: input.args,
-            schemaDigest: spec?.name ?? "unknown",
-            riskClass: spec?.riskClass ?? "unclassified",
-            sideEffectClass: spec?.sideEffectClass ?? "unknown",
-          },
-        ],
       });
-      const action = plan.actions[0];
       if (action === undefined) {
         return yield* new ActionGateError({
           reason: "invalid",
@@ -936,17 +892,33 @@ export const layerTest = Layer.succeed(
       ),
     appendAudit: () => Effect.void,
     governance: (environmentId) => Effect.succeed(emptyGovernance(environmentId)),
-    authorizeTool: () =>
-      Effect.succeed({
+    authorizeTool: (input) => {
+      const planned = planMcpToolAction({
+        toolName: input.toolName,
+        args: input.args,
+        environmentId: input.environmentId,
+        threadId: input.threadId,
+      });
+      const action = planned.action;
+      if (action === undefined) {
+        return Effect.fail(
+          new ActionGateError({
+            reason: "invalid",
+            detail: "Test ActionGate could not fingerprint this tool call.",
+          }),
+        );
+      }
+      return Effect.succeed({
         policyVersion: ACTION_GATE_POLICY_VERSION,
-        actionId: ActionId.make("action-test"),
-        decision: "ALLOW",
-        riskClass: "read-only-local",
-        sideEffectClass: "read",
-        fingerprint: ActionFingerprint.make("0".repeat(64)),
-        reasonCodes: ["ACTION_ALLOWED"],
+        actionId: action.actionId,
+        decision: "ALLOW" as const,
+        riskClass: action.riskClass,
+        sideEffectClass: action.sideEffectClass,
+        fingerprint: action.fingerprint,
+        reasonCodes: ["ACTION_ALLOWED"] as const,
         explanation: "Test ActionGate allows tools.",
         requiresApproval: false,
-      }),
+      });
+    },
   }),
 );
