@@ -1,7 +1,10 @@
 import { CommandId, MessageId, type OrchestrationV2Command } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import { argumentHash, issueContinuationGrant } from "../policy/Base3PolicyGate.ts";
+import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -92,7 +95,30 @@ const makeSweep = Effect.gen(function* () {
         preferences.snoozeLimitedThreads,
       );
       if (command === null) continue;
+      if (command.type === "message.dispatch") {
+        const granted = yield* issueContinuationGrant({
+          grantId: `grant:usage-limit:${command.usageLimitContinuationOfRunId ?? thread.latestRunId}`,
+          threadId: thread.id,
+          messageId: command.messageId,
+          runId: command.usageLimitContinuationOfRunId ?? thread.latestRunId,
+          operation: "usage-limit",
+          hash: argumentHash({
+            text: command.text,
+            model: command.modelSelection?.model ?? null,
+            instanceId: command.modelSelection?.instanceId ?? null,
+            attachmentIds: [],
+          }),
+        }).pipe(Effect.exit);
+        if (Exit.isFailure(granted)) {
+          yield* Effect.logWarning("orchestration-v2.limit-recovery.unauthorized", {
+            threadId: thread.id,
+            cause: granted.cause,
+          });
+          continue;
+        }
+      }
       yield* threads.dispatch(command).pipe(
+        Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
         Effect.catchCause((cause) =>
           Effect.logWarning("orchestration-v2.limit-recovery.dispatch-failed", {
             threadId: thread.id,

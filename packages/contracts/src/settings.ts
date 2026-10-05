@@ -38,6 +38,13 @@ import {
   type ProviderDriverKind,
 } from "./providerInstance.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
+import { ConcurrencyBudgetSettings } from "./concurrencyBudget.ts";
+import { DreamMemorySettings, MemoryCaptureMode } from "./dreamMemory.ts";
+import {
+  OpenRouterCostTier,
+  OpenRouterGuidanceMode,
+  OpenRouterGuidanceSettings,
+} from "./openRouter.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -1404,6 +1411,9 @@ export const ServerSettings = Schema.Struct({
   usagePriceOverrides: Schema.Record(TrimmedNonEmptyString, UsageModelPriceOverride).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  dreamMemory: DreamMemorySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  openRouter: OpenRouterGuidanceSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  concurrencyBudget: ConcurrencyBudgetSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -1566,6 +1576,26 @@ const OpenCodeSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
 });
 
+const OpenRouterGuidanceSettingsPatch = Schema.Struct({
+  guidanceMode: Schema.optionalKey(OpenRouterGuidanceMode),
+  shadowConsent: Schema.optionalKey(Schema.Boolean),
+  teacherEnabled: Schema.optionalKey(Schema.Boolean),
+  teacherFallbackToBase3: Schema.optionalKey(Schema.Boolean),
+  costTier: Schema.optionalKey(OpenRouterCostTier),
+  catalogTtlMs: Schema.optionalKey(Schema.Int),
+});
+
+const ConcurrencyBudgetSettingsPatch = Schema.Struct({
+  foregroundReserved: Schema.optionalKey(Schema.Int),
+});
+
+const DreamMemorySettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  captureMode: Schema.optionalKey(MemoryCaptureMode),
+  retentionDays: Schema.optionalKey(Schema.Int),
+  retrievalLimit: Schema.optionalKey(Schema.Int),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   worktreeCleanup: Schema.optionalKey(
     Schema.NullOr(
@@ -1700,6 +1730,9 @@ export const ServerSettingsPatch = Schema.Struct({
   usagePriceOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(UsageModelPriceOverride)),
   ),
+  dreamMemory: Schema.optionalKey(DreamMemorySettingsPatch),
+  openRouter: Schema.optionalKey(OpenRouterGuidanceSettingsPatch),
+  concurrencyBudget: Schema.optionalKey(ConcurrencyBudgetSettingsPatch),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

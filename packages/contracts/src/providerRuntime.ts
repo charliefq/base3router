@@ -13,6 +13,8 @@ import {
   TrimmedNonEmptyString,
   TurnId,
 } from "./baseSchemas.ts";
+import { ModelRouterFailureCategory } from "./modelRouter.ts";
+import { OpenRouterTeacherObservationV0 } from "./openRouter.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
 import { ProviderUsageLimitsUpdate } from "./providerUsageLimits.ts";
 import { ProviderApprovalOption } from "./providerPolicy.ts";
@@ -359,6 +361,10 @@ const TurnCompletedPayload = Schema.Struct({
   totalCostUsd: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(TrimmedNonEmptyStringSchema),
   tokenUsage: Schema.optional(TurnTokenUsage),
+  /** Present when a provider classifies the failure. Absent on ordinary V2 events. */
+  failureCategory: Schema.optional(ModelRouterFailureCategory),
+  /** Present when OpenRouter guidance observed the turn. Absent otherwise. */
+  openRouter: Schema.optional(OpenRouterTeacherObservationV0),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 

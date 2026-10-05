@@ -1,6 +1,9 @@
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
+import { layer as actionGateLayer } from "./actionGate/ActionGateService.ts";
+import { readGovernanceSnapshot } from "./policy/GovernanceProjection.ts";
+import { PolicyExecutionContext } from "./policy/executionContext.ts";
 import * as NodeCrypto from "node:crypto";
 
 import * as DateTime from "effect/DateTime";
@@ -84,6 +87,7 @@ import {
   ChatAttachmentId,
   PersistChatAttachmentsError,
   RpcClientId,
+  AuthOrchestrationReadScope,
   EnvironmentAuthorizationError,
   type ProjectId,
   type ProviderDriverKind,
@@ -2021,6 +2025,12 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverProbe, Effect.succeed({}), {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.governanceSnapshot]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.governanceSnapshot,
+            authorizeEffect(AuthOrchestrationReadScope, readGovernanceSnapshot(input)),
+            { "rpc.aggregate": "governance" },
+          ),
         [WS_METHODS.serverGetConfig]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverGetConfig,
@@ -3775,6 +3785,18 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               previewAutomationBroker,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
+              Layer.provide(
+                Layer.succeed(PolicyExecutionContext, {
+                  kind: "session",
+                  actorId: session.subject,
+                  sessionId: session.sessionId,
+                  scopes: session.scopes,
+                  ...(session.expiresAt === undefined
+                    ? {}
+                    : { expiresAt: DateTime.formatIso(session.expiresAt) }),
+                }),
+              ),
+              Layer.provide(actionGateLayer),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
               Layer.provide(AgentSessionScanner.layer),
               Layer.provide(ProviderMaintenanceRunner.layer),

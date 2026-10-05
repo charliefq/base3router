@@ -2641,6 +2641,11 @@ export const OrchestrationV2Command = Schema.Union([
     /** Seed the temporary title and generate a durable replacement for the first message. */
     titleSeed: Schema.optional(TrimmedNonEmptyString),
     modelSelection: Schema.optional(ModelSelection),
+    /**
+     * Omitted mode is Manual: the server binds the explicit model and does not
+     * Auto-switch. Protocol 2 only; this is not a protocol 1 field.
+     */
+    routingMode: Schema.optional(Schema.Literals(["auto", "manual"])),
     sourcePlanRef: Schema.optional(Schema.Struct({ threadId: ThreadId, planId: PlanId })),
     restartContinuationOfRunId: Schema.optional(RunId),
     usageLimitContinuationOfRunId: Schema.optional(RunId),

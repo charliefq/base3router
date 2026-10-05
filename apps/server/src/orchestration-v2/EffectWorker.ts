@@ -28,6 +28,7 @@ import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationServic
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
+import { revalidateOutboxEffect } from "../policy/Base3PolicyGate.ts";
 
 export class OrchestrationEffectExecutionError extends Schema.TaggedError<OrchestrationEffectExecutionError>()(
   "OrchestrationEffectExecutionError",
@@ -109,21 +110,30 @@ export const executorLayer: Layer.Layer<
         const willRetry = options?.willRetry ?? false;
         switch (effect.request.type) {
           case "provider-runtime.continue":
-            return continueRestartedRun({
+            return revalidateOutboxEffect({
               threadId: effect.threadId,
-              sourceRunId: effect.request.sourceRunId,
-            }).pipe(
-              Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
-              Effect.provideService(ServerSettings.ServerSettingsService, settings),
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationEffectExecutionError({
-                    effectId: effect.id,
-                    effectType: effect.request.type,
-                    cause,
+              request: { type: effect.request.type, runId: effect.request.sourceRunId },
+            })
+              .pipe(
+                Effect.andThen(
+                  continueRestartedRun({
+                    threadId: effect.threadId,
+                    sourceRunId: effect.request.sourceRunId,
                   }),
-              ),
-            );
+                ),
+              )
+              .pipe(
+                Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+                Effect.provideService(ServerSettings.ServerSettingsService, settings),
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationEffectExecutionError({
+                      effectId: effect.id,
+                      effectType: effect.request.type,
+                      cause,
+                    }),
+                ),
+              );
           case "provider-session.detach":
             return providerSessions
               .detach({
@@ -145,8 +155,19 @@ export const executorLayer: Layer.Layer<
                 ),
               );
           case "provider-turn.start":
-            return providerTurnStart
-              .start({ threadId: effect.threadId, runId: effect.request.runId, willRetry })
+            return revalidateOutboxEffect({
+              threadId: effect.threadId,
+              request: { type: effect.request.type, runId: effect.request.runId },
+            })
+              .pipe(
+                Effect.andThen(
+                  providerTurnStart.start({
+                    threadId: effect.threadId,
+                    runId: effect.request.runId,
+                    willRetry,
+                  }),
+                ),
+              )
               .pipe(
                 Effect.mapError(
                   (cause) =>
@@ -158,177 +179,222 @@ export const executorLayer: Layer.Layer<
                 ),
               );
           case "provider-turn.interrupt":
-            return providerTurnControl
-              .interrupt({
-                threadId: effect.threadId,
-                providerSessionId: effect.request.providerSessionId,
-                providerThreadId: effect.request.providerThreadId,
-                providerTurnId: effect.request.providerTurnId,
-              })
-              .pipe(
-                // The provider has stopped what it still ran and reported it.
-                // Whatever the thread still shows on that provider thread is
-                // work no process will report on, so the Stop ends it too.
-                Effect.andThen(
-                  threads.dispatch({
-                    type: "thread.background-work.settle",
-                    commandId: CommandId.make(`${effect.commandId}:background-work-settled`),
+            return revalidateOutboxEffect({
+              threadId: effect.threadId,
+              request: { type: effect.request.type },
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+              Effect.andThen(
+                providerTurnControl
+                  .interrupt({
                     threadId: effect.threadId,
+                    providerSessionId: effect.request.providerSessionId,
                     providerThreadId: effect.request.providerThreadId,
                     providerTurnId: effect.request.providerTurnId,
-                  }),
-                ),
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationEffectExecutionError({
-                      effectId: effect.id,
-                      effectType: effect.request.type,
-                      cause,
-                    }),
-                ),
-              );
-          case "provider-turn.steer":
-            return providerTurnControl
-              .steer({
-                threadId: effect.threadId,
-                providerSessionId: effect.request.providerSessionId,
-                providerThreadId: effect.request.providerThreadId,
-                providerTurnId: effect.request.providerTurnId,
-                messageId: effect.request.messageId,
-              })
-              .pipe(
-                Effect.tap(() =>
-                  Effect.gen(function* () {
-                    if (effect.request.type !== "provider-turn.steer") return;
-                    const messageId = effect.request.messageId;
-                    const projection = yield* threads.getThreadRecords(
-                      effect.threadId,
-                      ["messages", "runs"],
-                      { messageIds: [effect.request.messageId] },
-                    );
-                    const message = projection.messages.find((row) => row.id === messageId);
-                    if (message?.delegatedCompletion === undefined) return;
-                    yield* threads.dispatch({
-                      type: "notification.delivery.accept",
-                      commandId: CommandId.make(`command:mailbox-accepted:${effect.id}`),
-                      threadId: effect.threadId,
-                      messageId: message.id,
-                    });
-                  }),
-                ),
-                Effect.catch((error) =>
-                  Effect.gen(function* () {
-                    if (
-                      !("turnCompleted" in error) ||
-                      !error.turnCompleted ||
-                      effect.request.type !== "provider-turn.steer"
-                    ) {
-                      return yield* error;
-                    }
-                    const projection = yield* threads.getThreadRecords(
-                      effect.threadId,
-                      ["messages", "runs"],
-                      { messageIds: [effect.request.messageId] },
-                    );
-                    const messageId = effect.request.messageId;
-                    const message = projection.messages.find((item) => item.id === messageId);
-                    const run = projection.runs.find((item) => item.id === message?.runId);
-                    if (message === undefined || run === undefined) return yield* error;
-                    // Reuse the message identity and a stable command receipt so an outbox
-                    // retry cannot append a duplicate message or start a second follow-up.
-                    yield* threads.dispatch({
-                      type: "message.dispatch",
-                      commandId: CommandId.make(`command:steer-follow-up:${effect.id}`),
-                      threadId: effect.threadId,
-                      messageId: message.id,
-                      text: message.text,
-                      ...(message.context ? { context: message.context } : {}),
-                      attachments: message.attachments,
-                      // A user's follow-up starts on the thread's saved selection,
-                      // which already holds the steer's choice. A delegated
-                      // completion stays pinned to the run it reports to.
-                      ...(message.delegatedCompletion === undefined
-                        ? {}
-                        : { modelSelection: run.modelSelection }),
-                      dispatchMode: {
-                        type:
-                          message.delegatedCompletion === undefined
-                            ? "start_immediately"
-                            : "queue_after_active",
-                      },
-                      createdBy: message.createdBy,
-                      creationSource: message.creationSource,
-                      ...(message.delegatedCompletion === undefined
-                        ? {}
-                        : { delegatedCompletion: message.delegatedCompletion }),
-                      ...(message.notification === undefined
-                        ? {}
-                        : { notification: message.notification }),
-                      ...(message.scheduledTaskId === undefined
-                        ? {}
-                        : { scheduledTaskId: message.scheduledTaskId }),
-                      ...(message.senderThreadId === undefined
-                        ? {}
-                        : { senderThreadId: message.senderThreadId }),
-                    });
-                  }),
-                ),
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationEffectExecutionError({
-                      effectId: effect.id,
-                      effectType: effect.request.type,
-                      cause,
-                    }),
-                ),
-              );
-          case "provider-turn.restart":
-            return providerTurnControl
-              .interruptAndAwaitTerminal({
-                threadId: effect.threadId,
-                providerSessionId: effect.request.providerSessionId,
-                providerThreadId: effect.request.providerThreadId,
-                providerTurnId: effect.request.providerTurnId,
-                interruptedAttemptId: effect.request.interruptedAttemptId,
-                ...(effect.request.sessionTransition?.type === "replace"
-                  ? {
-                      replacementProviderSessionId:
-                        effect.request.sessionTransition.replacementProviderSessionId,
-                    }
-                  : {}),
-              })
-              .pipe(
-                Effect.andThen(
-                  effect.request.sessionTransition?.type === "replace"
-                    ? providerSessions.detach({
-                        providerSessionId: effect.request.providerSessionId,
+                  })
+                  .pipe(
+                    // The provider has stopped what it still ran and reported it.
+                    // Whatever the thread still shows on that provider thread is
+                    // work no process will report on, so the Stop ends it too.
+                    Effect.andThen(
+                      threads.dispatch({
+                        type: "thread.background-work.settle",
+                        commandId: CommandId.make(`${effect.commandId}:background-work-settled`),
                         threadId: effect.threadId,
-                        detail: "Selection change requires a provider session restart.",
-                      })
-                    : effect.request.sessionTransition?.type === "detach"
-                      ? providerSessions.detach({
-                          providerSessionId: effect.request.providerSessionId,
-                          threadId: effect.threadId,
-                          detail: "Provider thread handoff replaced this session binding.",
-                        })
-                      : Effect.void,
-                ),
-                Effect.andThen(
-                  providerTurnStart.start({
-                    threadId: effect.threadId,
-                    runId: effect.request.runId,
-                    willRetry,
+                        providerThreadId: effect.request.providerThreadId,
+                        providerTurnId: effect.request.providerTurnId,
+                      }),
+                    ),
+                    Effect.mapError(
+                      (cause) =>
+                        new OrchestrationEffectExecutionError({
+                          effectId: effect.id,
+                          effectType: effect.request.type,
+                          cause,
+                        }),
+                    ),
+                  ),
+              ),
+            );
+          case "provider-turn.steer":
+            return revalidateOutboxEffect({
+              threadId: effect.threadId,
+              request: { type: effect.request.type, messageId: effect.request.messageId },
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
                   }),
-                ),
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationEffectExecutionError({
-                      effectId: effect.id,
-                      effectType: effect.request.type,
-                      cause,
-                    }),
-                ),
-              );
+              ),
+              Effect.andThen(
+                providerTurnControl
+                  .steer({
+                    threadId: effect.threadId,
+                    providerSessionId: effect.request.providerSessionId,
+                    providerThreadId: effect.request.providerThreadId,
+                    providerTurnId: effect.request.providerTurnId,
+                    messageId: effect.request.messageId,
+                  })
+                  .pipe(
+                    Effect.tap(() =>
+                      Effect.gen(function* () {
+                        if (effect.request.type !== "provider-turn.steer") return;
+                        const messageId = effect.request.messageId;
+                        const projection = yield* threads.getThreadRecords(
+                          effect.threadId,
+                          ["messages", "runs"],
+                          { messageIds: [effect.request.messageId] },
+                        );
+                        const message = projection.messages.find((row) => row.id === messageId);
+                        if (message?.delegatedCompletion === undefined) return;
+                        yield* threads.dispatch({
+                          type: "notification.delivery.accept",
+                          commandId: CommandId.make(`command:mailbox-accepted:${effect.id}`),
+                          threadId: effect.threadId,
+                          messageId: message.id,
+                        });
+                      }),
+                    ),
+                    Effect.catch((error) =>
+                      Effect.gen(function* () {
+                        if (
+                          !("turnCompleted" in error) ||
+                          !error.turnCompleted ||
+                          effect.request.type !== "provider-turn.steer"
+                        ) {
+                          return yield* error;
+                        }
+                        const projection = yield* threads.getThreadRecords(
+                          effect.threadId,
+                          ["messages", "runs"],
+                          { messageIds: [effect.request.messageId] },
+                        );
+                        const messageId = effect.request.messageId;
+                        const message = projection.messages.find((item) => item.id === messageId);
+                        const run = projection.runs.find((item) => item.id === message?.runId);
+                        if (message === undefined || run === undefined) return yield* error;
+                        // Reuse the message identity and a stable command receipt so an outbox
+                        // retry cannot append a duplicate message or start a second follow-up.
+                        yield* threads.dispatch({
+                          type: "message.dispatch",
+                          commandId: CommandId.make(`command:steer-follow-up:${effect.id}`),
+                          threadId: effect.threadId,
+                          messageId: message.id,
+                          text: message.text,
+                          ...(message.context ? { context: message.context } : {}),
+                          attachments: message.attachments,
+                          // A user's follow-up starts on the thread's saved selection,
+                          // which already holds the steer's choice. A delegated
+                          // completion stays pinned to the run it reports to.
+                          ...(message.delegatedCompletion === undefined
+                            ? {}
+                            : { modelSelection: run.modelSelection }),
+                          dispatchMode: {
+                            type:
+                              message.delegatedCompletion === undefined
+                                ? "start_immediately"
+                                : "queue_after_active",
+                          },
+                          createdBy: message.createdBy,
+                          creationSource: message.creationSource,
+                          ...(message.delegatedCompletion === undefined
+                            ? {}
+                            : { delegatedCompletion: message.delegatedCompletion }),
+                          ...(message.notification === undefined
+                            ? {}
+                            : { notification: message.notification }),
+                          ...(message.scheduledTaskId === undefined
+                            ? {}
+                            : { scheduledTaskId: message.scheduledTaskId }),
+                          ...(message.senderThreadId === undefined
+                            ? {}
+                            : { senderThreadId: message.senderThreadId }),
+                        });
+                      }),
+                    ),
+                    Effect.mapError(
+                      (cause) =>
+                        new OrchestrationEffectExecutionError({
+                          effectId: effect.id,
+                          effectType: effect.request.type,
+                          cause,
+                        }),
+                    ),
+                  ),
+              ),
+            );
+          case "provider-turn.restart":
+            return revalidateOutboxEffect({
+              threadId: effect.threadId,
+              request: { type: effect.request.type, runId: effect.request.runId },
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+              Effect.andThen(
+                providerTurnControl
+                  .interruptAndAwaitTerminal({
+                    threadId: effect.threadId,
+                    providerSessionId: effect.request.providerSessionId,
+                    providerThreadId: effect.request.providerThreadId,
+                    providerTurnId: effect.request.providerTurnId,
+                    interruptedAttemptId: effect.request.interruptedAttemptId,
+                    ...(effect.request.sessionTransition?.type === "replace"
+                      ? {
+                          replacementProviderSessionId:
+                            effect.request.sessionTransition.replacementProviderSessionId,
+                        }
+                      : {}),
+                  })
+                  .pipe(
+                    Effect.andThen(
+                      effect.request.sessionTransition?.type === "replace"
+                        ? providerSessions.detach({
+                            providerSessionId: effect.request.providerSessionId,
+                            threadId: effect.threadId,
+                            detail: "Selection change requires a provider session restart.",
+                          })
+                        : effect.request.sessionTransition?.type === "detach"
+                          ? providerSessions.detach({
+                              providerSessionId: effect.request.providerSessionId,
+                              threadId: effect.threadId,
+                              detail: "Provider thread handoff replaced this session binding.",
+                            })
+                          : Effect.void,
+                    ),
+                    Effect.andThen(
+                      providerTurnStart.start({
+                        threadId: effect.threadId,
+                        runId: effect.request.runId,
+                        willRetry,
+                      }),
+                    ),
+                    Effect.mapError(
+                      (cause) =>
+                        new OrchestrationEffectExecutionError({
+                          effectId: effect.id,
+                          effectType: effect.request.type,
+                          cause,
+                        }),
+                    ),
+                  ),
+              ),
+            );
           case "runtime-request.respond":
             return runtimeRequests
               .respond({

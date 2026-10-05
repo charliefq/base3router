@@ -50,6 +50,7 @@ import {
   AcpRegistrySetProviderResult,
 } from "./acpRegistry.ts";
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
+import { GovernanceReadError, GovernanceSnapshot, GovernanceSnapshotInput } from "./governance.ts";
 import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
@@ -532,6 +533,8 @@ export const WS_METHODS = {
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
+
+  governanceSnapshot: "governance.snapshot",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -550,6 +553,12 @@ const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
   payload: Schema.Struct({}),
   success: Schema.Struct({}),
   error: EnvironmentAuthorizationError,
+});
+
+const WsGovernanceSnapshotRpc = Rpc.make(WS_METHODS.governanceSnapshot, {
+  payload: GovernanceSnapshotInput,
+  success: GovernanceSnapshot,
+  error: Schema.Union([EnvironmentAuthorizationError, GovernanceReadError]),
 });
 
 const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
@@ -1684,6 +1693,7 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
 
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
+  WsGovernanceSnapshotRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,

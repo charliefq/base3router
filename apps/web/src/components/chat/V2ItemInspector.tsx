@@ -7,6 +7,7 @@ import type {
 import { ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "lucide-react";
 import { memo } from "react";
 
+import { GovernanceInspector } from "../governance/GovernanceSurfaces";
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import { Button } from "../ui/button";
@@ -212,6 +213,11 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
           Open subagent thread
         </Button>
       ) : null}
+
+      <GovernanceInspector
+        environmentId={props.environmentId}
+        threadId={props.projectedItem.sourceThreadId}
+      />
 
       {item.type === "handoff" ? (
         <div className="space-y-1 rounded-md border border-border/45 p-2 text-muted-foreground">

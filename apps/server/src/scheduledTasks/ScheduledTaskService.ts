@@ -28,6 +28,8 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { authorizeScheduleUpsert } from "../policy/Base3PolicyGate.ts";
+import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -517,38 +519,46 @@ export const layer = Layer.effect(
         const result =
           active.threadId === null
             ? yield* Effect.exit(
-                threadLaunch.launch({
-                  commandId,
-                  projectId: active.projectId,
-                  title: active.title,
-                  modelSelection: active.modelSelection,
-                  runtimeMode: active.runtimeMode,
-                  interactionMode: active.interactionMode,
-                  workspaceStrategy: active.workspaceStrategy,
-                  initialMessage: {
+                threadLaunch
+                  .launch({
+                    commandId,
+                    projectId: active.projectId,
+                    title: active.title,
+                    modelSelection: active.modelSelection,
+                    runtimeMode: active.runtimeMode,
+                    interactionMode: active.interactionMode,
+                    workspaceStrategy: active.workspaceStrategy,
+                    initialMessage: {
+                      messageId,
+                      scheduledTaskId: active.id,
+                      text: prompt,
+                      attachments: [],
+                    },
+                    createdBy: active.createdBy,
+                    creationSource: active.creationSource,
+                  })
+                  .pipe(
+                    Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
+                  ),
+              )
+            : yield* Effect.exit(
+                threadManagement
+                  .sendToThread({
+                    projectId: active.projectId,
+                    commandId,
+                    threadId: ThreadId.make(active.threadId),
                     messageId,
                     scheduledTaskId: active.id,
                     text: prompt,
                     attachments: [],
-                  },
-                  createdBy: active.createdBy,
-                  creationSource: active.creationSource,
-                }),
-              )
-            : yield* Effect.exit(
-                threadManagement.sendToThread({
-                  projectId: active.projectId,
-                  commandId,
-                  threadId: ThreadId.make(active.threadId),
-                  messageId,
-                  scheduledTaskId: active.id,
-                  text: prompt,
-                  attachments: [],
-                  modelSelection: active.modelSelection,
-                  mode: "auto",
-                  createdBy: active.createdBy,
-                  creationSource: active.creationSource,
-                }),
+                    modelSelection: active.modelSelection,
+                    mode: "auto",
+                    createdBy: active.createdBy,
+                    creationSource: active.creationSource,
+                  })
+                  .pipe(
+                    Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
+                  ),
               );
 
         const completedAt = yield* localNow;
@@ -769,6 +779,19 @@ export const layer = Layer.effect(
           lastRunError: existingTask?.lastRunError ?? null,
           runCount: existingTask?.runCount ?? 0,
         };
+        yield* authorizeScheduleUpsert({
+          taskId: id,
+          threadId: task.threadId,
+          prompt: task.prompt,
+          model: task.modelSelection?.model ?? null,
+          instanceId: task.modelSelection?.instanceId ?? null,
+          createdBy: task.createdBy,
+          creationSource: task.creationSource,
+        }).pipe(
+          Effect.mapError((cause) =>
+            taskError("Schedule task was not authorized.", { taskId: id, cause }),
+          ),
+        );
         yield* saveTask(task, input.requireExisting === true);
         yield* notifyChanged;
         return { task };

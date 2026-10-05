@@ -19,6 +19,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import { kernelTestPolicyContext, PolicyExecutionContext } from "../policy/executionContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import { PreviewControlsHandlersLive } from "./toolkits/previewControls/handlers.ts";
@@ -118,8 +119,21 @@ const makeMcpAuthMiddleware = McpSessionRegistry.McpSessionRegistry.pipe(
         });
         return unauthorized;
       }
+      const actor = invocation.actor;
+      const policyContext =
+        actor === undefined
+          ? { kind: "absent" as const }
+          : actor.actorId === "kernel-test"
+            ? kernelTestPolicyContext
+            : {
+                kind: "session" as const,
+                actorId: actor.actorId,
+                sessionId: actor.sessionId,
+                scopes: actor.scopes,
+              };
       return yield* httpEffect.pipe(
         Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+        Effect.provideService(PolicyExecutionContext, policyContext),
         Effect.map(normalizeMcpHttpResponse),
       );
     }),

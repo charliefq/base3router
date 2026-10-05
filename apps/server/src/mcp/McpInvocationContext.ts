@@ -24,6 +24,11 @@ export interface McpInvocationScope {
   readonly providerInstanceId: ProviderInstanceId;
   readonly capabilities: ReadonlySet<McpCapability>;
   readonly issuedAt: number;
+  readonly actor?: {
+    readonly actorId: string;
+    readonly sessionId: string;
+    readonly scopes: ReadonlyArray<import("@t3tools/contracts").AuthEnvironmentScope>;
+  };
 }
 
 export class McpInvocationContext extends Context.Service<

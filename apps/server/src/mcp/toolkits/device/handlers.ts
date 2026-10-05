@@ -15,6 +15,7 @@ import { ensureAgentDeviceShim } from "../../../device/AgentDeviceShim.ts";
 import { nodeRuntimeUnavailableMessage } from "@t3tools/shared/nodeRuntime";
 
 import * as DeviceService from "../../../device/DeviceService.ts";
+import { withAllowedMcpTool } from "../../McpActionAuthorization.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { DeviceScreenshotToolkit, DeviceStandardToolkit, DeviceToolkit } from "./tools.ts";
 
@@ -120,127 +121,143 @@ const toolError = (error: DeviceError | DeviceToolUnavailableError) => error;
 
 const handlers = {
   device_list: (input) =>
-    Effect.gen(function* () {
-      const scope = yield* requireDeviceAccess;
-      const devices = yield* DeviceService.DeviceService;
-      const state = yield* devices.list;
-      if (state.hostStatus === "disabled") {
-        return yield* new DeviceToolUnavailableError({
-          reason:
-            "Device support is off. Ask the user to enable it in the Device panel before installing or starting device tools.",
-        });
-      }
-      const hostId = input?.hostId;
-      const open = state.sessions
-        .filter((session) => session.threadId === scope.threadId)
-        .map((session) => ({ hostId: session.hostId, deviceId: session.deviceId }));
-      return {
-        hostStatuses: Object.fromEntries(
-          Object.entries(state.hostStatuses).filter(([id]) => !hostId || id === hostId),
-        ),
-        hosts: hostId ? state.hosts.filter((host) => host.id === hostId) : state.hosts,
-        devices: hostId
-          ? state.devices.filter((device) => device.hostId === hostId)
-          : state.devices,
-        open,
-      };
-    }).pipe(Effect.mapError(toolError)),
+    withAllowedMcpTool(
+      "device_list",
+      input,
+      Effect.gen(function* () {
+        const scope = yield* requireDeviceAccess;
+        const devices = yield* DeviceService.DeviceService;
+        const state = yield* devices.list;
+        if (state.hostStatus === "disabled") {
+          return yield* new DeviceToolUnavailableError({
+            reason:
+              "Device support is off. Ask the user to enable it in the Device panel before installing or starting device tools.",
+          });
+        }
+        const hostId = input?.hostId;
+        const open = state.sessions
+          .filter((session) => session.threadId === scope.threadId)
+          .map((session) => ({ hostId: session.hostId, deviceId: session.deviceId }));
+        return {
+          hostStatuses: Object.fromEntries(
+            Object.entries(state.hostStatuses).filter(([id]) => !hostId || id === hostId),
+          ),
+          hosts: hostId ? state.hosts.filter((host) => host.id === hostId) : state.hosts,
+          devices: hostId
+            ? state.devices.filter((device) => device.hostId === hostId)
+            : state.devices,
+          open,
+        };
+      }).pipe(Effect.mapError(toolError)),
+    ),
   device_open: (input) =>
-    Effect.gen(function* () {
-      const scope = yield* requireDeviceAccess;
-      const devices = yield* DeviceService.DeviceService;
-      const state = yield* devices.list;
-      if (state.hostStatus === "disabled") {
-        return yield* new DeviceToolUnavailableError({
-          reason:
-            "Device support is off. Ask the user to enable it in the Device panel before installing or starting device tools.",
+    withAllowedMcpTool(
+      "device_open",
+      input,
+      Effect.gen(function* () {
+        const scope = yield* requireDeviceAccess;
+        const devices = yield* DeviceService.DeviceService;
+        const state = yield* devices.list;
+        if (state.hostStatus === "disabled") {
+          return yield* new DeviceToolUnavailableError({
+            reason:
+              "Device support is off. Ask the user to enable it in the Device panel before installing or starting device tools.",
+          });
+        }
+        const target = yield* pickDevice(state.devices, input);
+        // Resolve consent and agent connectivity before booting or registering a session.
+        const agentArgs = yield* devices.agentTarget({
+          threadId: scope.threadId,
+          hostId: target.hostId,
+          deviceId: target.id,
         });
-      }
-      const target = yield* pickDevice(state.devices, input);
-      // Resolve consent and agent connectivity before booting or registering a session.
-      const agentArgs = yield* devices.agentTarget({
-        threadId: scope.threadId,
-        hostId: target.hostId,
-        deviceId: target.id,
-      });
-      const session = yield* devices.open({
-        threadId: scope.threadId,
-        hostId: target.hostId,
-        deviceId: target.id,
-        platform: target.platform,
-      });
-      const after = yield* devices.state;
-      const device =
-        after.devices.find(
-          (candidate) => candidate.hostId === session.hostId && candidate.id === session.deviceId,
-        ) ?? target;
-      const targetArgs = [...agentDeviceTargetArgs(device), ...agentArgs];
-      const config = yield* ServerConfig.ServerConfig;
-      const path = yield* Path.Path;
-      const platform = yield* HostProcessPlatform;
-      const shimDir = yield* ensureAgentDeviceShim({
-        entryPath: yield* devices.agentCli,
-        stateDir: config.stateDir,
-      }).pipe(
-        Effect.mapError(
-          (error) =>
-            new DeviceToolUnavailableError({
-              reason:
-                error._tag === "NodeRuntimeUnavailableError"
-                  ? nodeRuntimeUnavailableMessage("Device automation")
-                  : "Could not prepare the agent-device launcher.",
-              cause: error,
-            }),
-        ),
-      );
-      const command = path.join(
-        shimDir,
-        platform === "win32" ? "agent-device.cmd" : "agent-device",
-      );
-      return {
-        device,
-        agentDevice: { command, targetArgs },
-        quickStart: agentDeviceQuickStart(device, targetArgs, command),
-      };
-    }).pipe(Effect.mapError(toolError)),
+        const session = yield* devices.open({
+          threadId: scope.threadId,
+          hostId: target.hostId,
+          deviceId: target.id,
+          platform: target.platform,
+        });
+        const after = yield* devices.state;
+        const device =
+          after.devices.find(
+            (candidate) => candidate.hostId === session.hostId && candidate.id === session.deviceId,
+          ) ?? target;
+        const targetArgs = [...agentDeviceTargetArgs(device), ...agentArgs];
+        const config = yield* ServerConfig.ServerConfig;
+        const path = yield* Path.Path;
+        const platform = yield* HostProcessPlatform;
+        const shimDir = yield* ensureAgentDeviceShim({
+          entryPath: yield* devices.agentCli,
+          stateDir: config.stateDir,
+        }).pipe(
+          Effect.mapError(
+            (error) =>
+              new DeviceToolUnavailableError({
+                reason:
+                  error._tag === "NodeRuntimeUnavailableError"
+                    ? nodeRuntimeUnavailableMessage("Device automation")
+                    : "Could not prepare the agent-device launcher.",
+                cause: error,
+              }),
+          ),
+        );
+        const command = path.join(
+          shimDir,
+          platform === "win32" ? "agent-device.cmd" : "agent-device",
+        );
+        return {
+          device,
+          agentDevice: { command, targetArgs },
+          quickStart: agentDeviceQuickStart(device, targetArgs, command),
+        };
+      }).pipe(Effect.mapError(toolError)),
+    ),
   device_screenshot: (input) =>
-    Effect.gen(function* () {
-      const scope = yield* requireDeviceAccess;
-      const devices = yield* DeviceService.DeviceService;
-      const sessions = yield* devices.sessionsForThread(scope.threadId);
-      const target =
-        input.deviceId !== undefined
-          ? { hostId: input.hostId ?? LOCAL_DEVICE_HOST_ID, deviceId: input.deviceId }
-          : sessions
-              .filter((session) => input.hostId === undefined || session.hostId === input.hostId)
-              .at(-1);
-      if (!target) {
-        return yield* new DeviceToolUnavailableError({
-          reason: "No device is open in this thread. Call device_open first.",
-        });
-      }
-      const shot = yield* devices.screenshot(target);
-      return {
-        device: shot.device,
-        screenshot: {
-          mimeType: "image/png" as const,
-          data: Buffer.from(shot.png).toString("base64"),
-          ...pngDimensions(shot.png),
-        },
-      };
-    }).pipe(Effect.mapError(toolError)),
+    withAllowedMcpTool(
+      "device_screenshot",
+      input,
+      Effect.gen(function* () {
+        const scope = yield* requireDeviceAccess;
+        const devices = yield* DeviceService.DeviceService;
+        const sessions = yield* devices.sessionsForThread(scope.threadId);
+        const target =
+          input.deviceId !== undefined
+            ? { hostId: input.hostId ?? LOCAL_DEVICE_HOST_ID, deviceId: input.deviceId }
+            : sessions
+                .filter((session) => input.hostId === undefined || session.hostId === input.hostId)
+                .at(-1);
+        if (!target) {
+          return yield* new DeviceToolUnavailableError({
+            reason: "No device is open in this thread. Call device_open first.",
+          });
+        }
+        const shot = yield* devices.screenshot(target);
+        return {
+          device: shot.device,
+          screenshot: {
+            mimeType: "image/png" as const,
+            data: Buffer.from(shot.png).toString("base64"),
+            ...pngDimensions(shot.png),
+          },
+        };
+      }).pipe(Effect.mapError(toolError)),
+    ),
   device_close: (input) =>
-    Effect.gen(function* () {
-      const scope = yield* requireDeviceAccess;
-      const devices = yield* DeviceService.DeviceService;
-      yield* devices.close({
-        threadId: scope.threadId,
-        ...(input.hostId === undefined ? {} : { hostId: input.hostId }),
-        ...(input.deviceId === undefined ? {} : { deviceId: input.deviceId }),
-        ...(input.shutdown === undefined ? {} : { shutdown: input.shutdown }),
-      });
-      return {};
-    }).pipe(Effect.mapError(toolError)),
+    withAllowedMcpTool(
+      "device_close",
+      input,
+      Effect.gen(function* () {
+        const scope = yield* requireDeviceAccess;
+        const devices = yield* DeviceService.DeviceService;
+        yield* devices.close({
+          threadId: scope.threadId,
+          ...(input.hostId === undefined ? {} : { hostId: input.hostId }),
+          ...(input.deviceId === undefined ? {} : { deviceId: input.deviceId }),
+          ...(input.shutdown === undefined ? {} : { shutdown: input.shutdown }),
+        });
+        return {};
+      }).pipe(Effect.mapError(toolError)),
+    ),
 } satisfies Parameters<typeof DeviceToolkit.toLayer>[0];
 
 /** Width and height from the IHDR chunk; a PNG that lacks one reports 0×0. */

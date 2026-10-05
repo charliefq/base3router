@@ -1,4 +1,5 @@
 import {
+  McpActionGateBlockedError,
   McpCapabilityUnavailableError,
   PositiveInt,
   PullRequestState,
@@ -118,6 +119,7 @@ export class PullRequestListFailedError extends Schema.TaggedError<PullRequestLi
 }
 
 export const PullRequestToolError = Schema.Union([
+  McpActionGateBlockedError,
   McpCapabilityUnavailableError,
   PullRequestUrlInvalidError,
   PullRequestTargetIncompleteError,

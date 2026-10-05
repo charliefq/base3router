@@ -35,6 +35,118 @@
       "types": "./src/model.ts",
       "import": "./src/model.ts"
     },
+    "./modelRouter": {
+      "types": "./src/modelRouter.ts",
+      "import": "./src/modelRouter.ts"
+    },
+    "./modelRouterFailover": {
+      "types": "./src/modelRouterFailover.ts",
+      "import": "./src/modelRouterFailover.ts"
+    },
+    "./hybridRouter": {
+      "types": "./src/hybridRouter.ts",
+      "import": "./src/hybridRouter.ts"
+    },
+    "./actionCanonical": {
+      "types": "./src/actionCanonical.ts",
+      "import": "./src/actionCanonical.ts"
+    },
+    "./actionAudit": {
+      "types": "./src/actionAudit.ts",
+      "import": "./src/actionAudit.ts"
+    },
+    "./actionGate": {
+      "types": "./src/actionGate.ts",
+      "import": "./src/actionGate.ts"
+    },
+    "./executionPlan": {
+      "types": "./src/executionPlan.ts",
+      "import": "./src/executionPlan.ts"
+    },
+    "./skillCatalog": {
+      "types": "./src/skillCatalog.ts",
+      "import": "./src/skillCatalog.ts"
+    },
+    "./skillRouter": {
+      "types": "./src/skillRouter.ts",
+      "import": "./src/skillRouter.ts"
+    },
+    "./mcpCatalog": {
+      "types": "./src/mcpCatalog.ts",
+      "import": "./src/mcpCatalog.ts"
+    },
+    "./mcpRouter": {
+      "types": "./src/mcpRouter.ts",
+      "import": "./src/mcpRouter.ts"
+    },
+    "./mcpLifecycle": {
+      "types": "./src/mcpLifecycle.ts",
+      "import": "./src/mcpLifecycle.ts"
+    },
+    "./phase12Bind": {
+      "types": "./src/phase12Bind.ts",
+      "import": "./src/phase12Bind.ts"
+    },
+    "./dreamMemory": {
+      "types": "./src/dreamMemory.ts",
+      "import": "./src/dreamMemory.ts"
+    },
+    "./concurrencyBudget": {
+      "types": "./src/concurrencyBudget.ts",
+      "import": "./src/concurrencyBudget.ts"
+    },
+    "./routerEvaluation": {
+      "types": "./src/routerEvaluation.ts",
+      "import": "./src/routerEvaluation.ts"
+    },
+    "./routerEvaluation.fixture": {
+      "types": "./src/routerEvaluation.fixture.ts",
+      "import": "./src/routerEvaluation.fixture.ts"
+    },
+    "./routerPolicy": {
+      "types": "./src/routerPolicy.ts",
+      "import": "./src/routerPolicy.ts"
+    },
+    "./turnOutcome": {
+      "types": "./src/turnOutcome.ts",
+      "import": "./src/turnOutcome.ts"
+    },
+    "./openRouterRedaction": {
+      "types": "./src/openRouterRedaction.ts",
+      "import": "./src/openRouterRedaction.ts"
+    },
+    "./openRouterPrivacy": {
+      "types": "./src/openRouterPrivacy.ts",
+      "import": "./src/openRouterPrivacy.ts"
+    },
+    "./openRouterErrors": {
+      "types": "./src/openRouterErrors.ts",
+      "import": "./src/openRouterErrors.ts"
+    },
+    "./openRouterTaskProfile": {
+      "types": "./src/openRouterTaskProfile.ts",
+      "import": "./src/openRouterTaskProfile.ts"
+    },
+    "./openRouterIdentity": {
+      "types": "./src/openRouterIdentity.ts",
+      "import": "./src/openRouterIdentity.ts"
+    },
+    "./openRouterMarketPriors": {
+      "types": "./src/openRouterMarketPriors.ts",
+      "import": "./src/openRouterMarketPriors.ts"
+    },
+    "./openRouterGuidance": {
+      "types": "./src/openRouterGuidance.ts",
+      "import": "./src/openRouterGuidance.ts"
+    },
+    "./openRouterMetadata": {
+      "types": "./src/openRouterMetadata.ts",
+      "import": "./src/openRouterMetadata.ts"
+    },
+    "./openRouterTeacherGate": {
+      "types": "./src/openRouterTeacherGate.ts",
+      "import": "./src/openRouterTeacherGate.ts"
+    },
     "./advertisedEndpoint": {
       "types": "./src/advertisedEndpoint.ts",
       "import": "./src/advertisedEndpoint.ts"

@@ -1,3 +1,4 @@
+import { GovernanceControlCenter } from "../governance/GovernanceSurfaces";
 import { SettingsGroup } from "./SettingsGroup";
 import { Spinner } from "~/components/ui/spinner";
 import { NotificationSettings } from "./NotificationSettings";
@@ -3269,6 +3270,9 @@ export function GeneralSettingsPanel() {
         />
       </SettingsSection>
 
+      <SettingsSection id="control-center" title="Control Center">
+        <GovernanceControlCenter environmentId={environmentId} />
+      </SettingsSection>
       <SettingsSection id="about" title="About">
         {isElectron || HOSTED_APP_CHANNEL ? (
           <AboutVersionSection />
