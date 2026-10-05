@@ -135,6 +135,7 @@ async function main(): Promise<number> {
     T3CODE_DEV_AUTH_TOKEN: DEV_TOKEN,
     T3CODE_NO_BROWSER: "1",
     T3CODE_SINGLE_ORIGIN_DEV: "1",
+    T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD: "0",
     T3CODE_HOST: "127.0.0.1",
     HOST: "127.0.0.1",
   };
@@ -233,11 +234,16 @@ async function main(): Promise<number> {
     const evidenceDir = NodeProcess.env.INTERNAL_BETA_EVIDENCE_DIR;
     if (evidenceDir !== undefined && evidenceDir.length > 0) {
       NodeFS.mkdirSync(evidenceDir, { recursive: true });
-      const screenshotDir = NodePath.join(WEB_ROOT, "playwright-production-results", "screenshots");
-      if (NodeFS.existsSync(screenshotDir)) {
-        NodeFS.cpSync(screenshotDir, NodePath.join(evidenceDir, "production-browser-screenshots"), {
-          recursive: true,
-        });
+      const screenshotDir = NodePath.join("/opt/cursor/artifacts");
+      const shots = NodeFS.existsSync(screenshotDir)
+        ? NodeFS.readdirSync(screenshotDir).filter((name) => name.startsWith("production-"))
+        : [];
+      if (shots.length > 0) {
+        const dest = NodePath.join(evidenceDir, "production-browser-screenshots");
+        NodeFS.mkdirSync(dest, { recursive: true });
+        for (const name of shots) {
+          NodeFS.copyFileSync(NodePath.join(screenshotDir, name), NodePath.join(dest, name));
+        }
       }
     }
     return status;

@@ -5,17 +5,23 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, test, type Page } from "@playwright/test";
 
 const ARTIFACT_DIR = "/opt/cursor/artifacts";
-const SCREENSHOT_DIR = NodePath.join(
-  import.meta.dirname,
-  "../playwright-production-results/screenshots",
-);
-
 async function capture(page: Page, name: string) {
-  await NodeFS.promises.mkdir(SCREENSHOT_DIR, { recursive: true });
   await NodeFS.promises.mkdir(ARTIFACT_DIR, { recursive: true });
-  const webPath = NodePath.join(SCREENSHOT_DIR, `${name}.png`);
-  await page.screenshot({ path: webPath, animations: "disabled" });
-  await NodeFS.promises.copyFile(webPath, NodePath.join(ARTIFACT_DIR, `${name}.png`));
+  await page.screenshot({
+    path: NodePath.join(ARTIFACT_DIR, `${name}.png`),
+    animations: "disabled",
+  });
+}
+
+async function finishFirstRunIfPresent(page: Page) {
+  const setup = page.getByRole("dialog", { name: "Set up Base3Router" });
+  const appeared = await setup.isVisible({ timeout: 20_000 }).catch(() => false);
+  if (!appeared) return;
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Your agents" })).toBeVisible();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("button", { name: "Do not import projects" }).click();
+  await expect(setup).toBeHidden();
 }
 
 async function ensureInspectorOpen(page: Page) {
@@ -100,8 +106,10 @@ test("Internal Beta: production web UI talks to real RPC for memory, approvals, 
 
   await page.goto(pairingUrl);
   await expect(page).not.toHaveURL(/\/pair/, { timeout: 60_000 });
+  await finishFirstRunIfPresent(page);
 
   await page.goto("/control-center");
+  await expect(page).toHaveURL(/\/control-center/);
   await expect(page.locator('[data-control-plane="control-center"]')).toBeVisible();
   await expect(page.locator('[data-control-center-surface="ready"]')).toBeVisible({
     timeout: 60_000,
