@@ -56,7 +56,7 @@ export const GATES: ReadonlyArray<GateDefinition> = [
   {
     id: "L-lease-terminal",
     requirementIds: ["R6", "O6"],
-    title: "Foreground lease spans terminal execution and cleanup safety",
+    title: "Foreground lease spans terminal execution; unconfirmed stream-end keeps the slot",
     requiredLocal: true,
     command: {
       kind: "vp-test",
@@ -99,7 +99,7 @@ export const GATES: ReadonlyArray<GateDefinition> = [
   {
     id: "L-workload",
     requirementIds: ["R6"],
-    title: "Scheduler occupancy plus bounded sustained fake-provider workload",
+    title: "Scheduler occupancy plus bounded 60-second fake-provider workload",
     requiredLocal: true,
     command: {
       kind: "vp-test",

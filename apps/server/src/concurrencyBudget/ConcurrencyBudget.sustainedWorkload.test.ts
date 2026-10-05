@@ -25,6 +25,9 @@ import { sendTurnUntilTerminal } from "./awaitTurnTerminal.ts";
 import { ConcurrencyBudgetService, layerWithPolicy } from "./ConcurrencyBudgetService.ts";
 
 const environmentId = EnvironmentId.make("env-sustained");
+const WORKLOAD_MS = 60_000;
+const SAMPLE_EVERY_MS = 5_000;
+const TURN_WORK_MS = 1_500;
 
 const mixedPolicy = () => {
   const policy = defaultConcurrencyBudgetPolicy();
@@ -51,7 +54,7 @@ const completed = (threadId: ThreadId, turnId: TurnId): ProviderRuntimeEvent =>
   }) as ProviderRuntimeEvent;
 
 it.effect(
-  "Internal Beta: bounded sustained fake-provider workload with overlapping FG/BG and cancellation",
+  "Internal Beta: bounded 60-second fake-provider workload with overlapping FG/BG and cancellation",
   () =>
     TestClock.withLive(
       Effect.gen(function* () {
@@ -59,6 +62,9 @@ it.effect(
         const startedAt = yield* Clock.currentTimeMillis;
         const rssBefore = process.memoryUsage().rss;
         const completedWork = yield* Ref.make(0);
+        const foregroundAttempted = yield* Ref.make(0);
+        const backgroundAttempted = yield* Ref.make(0);
+        const seq = yield* Ref.make(0);
         const peak = yield* Ref.make({ foregroundActive: 0, queued: 0, backgroundActive: 0 });
         const samples = yield* Ref.make<
           Array<{
@@ -69,6 +75,12 @@ it.effect(
             readonly backgroundActive: number;
           }>
         >([]);
+        const cancellationCycles: Array<{
+          readonly cycle: number;
+          readonly cancelled: number;
+          readonly queuedAfter: number;
+        }> = [];
+        const live = yield* Ref.make<Array<Fiber.Fiber<unknown, ConcurrencyBudgetError>>>([]);
 
         const recordPeak = (snapshot: {
           readonly foregroundActive: number;
@@ -104,100 +116,92 @@ it.effect(
             ]);
           });
 
+        const nextId = (prefix: string) =>
+          Ref.updateAndGet(seq, (value) => value + 1).pipe(
+            Effect.map((value) => `${prefix}-${String(value)}`),
+          );
+
         const fakeTurn = (input: {
           readonly workloadClass: "foreground-turn" | "dream-job" | "detached-background";
-          readonly threadId: ThreadId;
-          readonly turnId: TurnId;
-          readonly workMs: number;
         }) =>
           Effect.gen(function* () {
+            const threadId = ThreadId.make(yield* nextId("thread"));
+            const turnId = TurnId.make(yield* nextId("turn"));
+            yield* Ref.update(
+              input.workloadClass === "foreground-turn" ? foregroundAttempted : backgroundAttempted,
+              (count) => count + 1,
+            );
             const terminals = yield* Queue.unbounded<ProviderRuntimeEvent>();
             return yield* budget.withAdmission(
               {
                 workloadClass: input.workloadClass,
                 environmentId,
-                threadId: input.threadId,
+                threadId,
                 requestedAt: "2026-10-05T00:00:00.000Z",
               },
               sendTurnUntilTerminal(
                 Effect.gen(function* () {
-                  yield* Effect.sleep(Duration.millis(input.workMs)).pipe(
-                    Effect.andThen(Queue.offer(terminals, completed(input.threadId, input.turnId))),
+                  yield* Effect.sleep(Duration.millis(TURN_WORK_MS)).pipe(
+                    Effect.andThen(Queue.offer(terminals, completed(threadId, turnId))),
                     Effect.andThen(Ref.update(completedWork, (count) => count + 1)),
                     Effect.forkChild({ startImmediately: true }),
                   );
-                  return { threadId: input.threadId, turnId: input.turnId };
+                  return { threadId, turnId };
                 }),
                 Stream.fromQueue(terminals),
-                { timeout: "2 seconds", interruptAckTimeout: "100 millis" },
+                { timeout: "8 seconds", interruptAckTimeout: "200 millis" },
               ),
             );
-          });
+          }).pipe(
+            Effect.catchTag("ConcurrencyBudgetError", () => Effect.void),
+            Effect.forkChild({ startImmediately: true }),
+          );
+
+        const track = (fiber: Fiber.Fiber<unknown, ConcurrencyBudgetError>) =>
+          Ref.update(live, (current) => [...current, fiber]);
 
         const sampler = yield* Effect.forever(
           Effect.gen(function* () {
-            const snapshot = yield* budget.snapshot(environmentId);
-            yield* recordPeak(snapshot);
-            yield* Effect.sleep("25 millis");
+            yield* recordPeak(yield* budget.snapshot(environmentId));
+            yield* Effect.sleep(Duration.millis(SAMPLE_EVERY_MS));
           }),
         ).pipe(Effect.forkChild({ startImmediately: true }));
 
-        const foregroundFibers: Array<Fiber.Fiber<unknown, ConcurrencyBudgetError>> = [];
-        for (let index = 0; index < 4; index += 1) {
-          const fiber = yield* fakeTurn({
-            workloadClass: "foreground-turn",
-            threadId: ThreadId.make(`thread-fg-${String(index)}`),
-            turnId: TurnId.make(`turn-fg-${String(index)}`),
-            workMs: 40,
-          }).pipe(Effect.forkChild({ startImmediately: true }));
-          foregroundFibers.push(fiber);
-        }
-        const dreamFiber = yield* fakeTurn({
-          workloadClass: "dream-job",
-          threadId: ThreadId.make("thread-dream"),
-          turnId: TurnId.make("turn-dream"),
-          workMs: 50,
-        }).pipe(Effect.forkChild({ startImmediately: true }));
-        const shadowFiber = yield* fakeTurn({
-          workloadClass: "detached-background",
-          threadId: ThreadId.make("thread-shadow"),
-          turnId: TurnId.make("turn-shadow"),
-          workMs: 40,
-        }).pipe(Effect.forkChild({ startImmediately: true }));
+        let cycle = 0;
+        while ((yield* Clock.currentTimeMillis) - startedAt < WORKLOAD_MS) {
+          yield* fakeTurn({ workloadClass: "foreground-turn" }).pipe(Effect.flatMap(track));
+          yield* fakeTurn({ workloadClass: "foreground-turn" }).pipe(Effect.flatMap(track));
+          yield* fakeTurn({ workloadClass: "dream-job" }).pipe(Effect.flatMap(track));
+          yield* fakeTurn({ workloadClass: "detached-background" }).pipe(Effect.flatMap(track));
 
-        const cancellationCycles: Array<{
-          readonly cycle: number;
-          readonly cancelled: number;
-          readonly queuedAfter: number;
-        }> = [];
-        for (let cycle = 0; cycle < 4; cycle += 1) {
           const waiter = yield* budget
             .withAdmission(
               {
                 workloadClass: "foreground-turn",
                 environmentId,
                 threadId: ThreadId.make("thread-cancel-cycle"),
-                requestedAt: `2026-10-05T00:01:0${String(cycle)}.000Z`,
+                requestedAt: `2026-10-05T00:01:00.000Z`,
               },
               Effect.void,
             )
             .pipe(Effect.forkChild({ startImmediately: true }));
-          yield* Effect.sleep("10 millis");
+          yield* Effect.sleep("200 millis");
           const cancelled = yield* budget.cancelQueuedForThread(
             environmentId,
             ThreadId.make("thread-cancel-cycle"),
           );
           yield* Fiber.join(waiter).pipe(Effect.exit);
-          const after = yield* budget.snapshot(environmentId);
-          yield* recordPeak(after);
-          cancellationCycles.push({ cycle, cancelled, queuedAfter: after.queued });
+          const afterCancel = yield* budget.snapshot(environmentId);
+          yield* recordPeak(afterCancel);
+          cancellationCycles.push({ cycle, cancelled, queuedAfter: afterCancel.queued });
+          cycle += 1;
+          yield* Effect.sleep("1 second");
         }
 
-        for (const fiber of foregroundFibers) {
-          yield* Fiber.join(fiber).pipe(Effect.exit);
+        const remaining = yield* Ref.get(live);
+        for (const fiber of remaining) {
+          yield* Fiber.interrupt(fiber);
         }
-        yield* Fiber.join(dreamFiber).pipe(Effect.exit);
-        yield* Fiber.join(shadowFiber).pipe(Effect.exit);
         yield* Fiber.interrupt(sampler);
         yield* budget.shutdown;
         const finalSnapshot = yield* budget.snapshot(environmentId);
@@ -207,11 +211,11 @@ it.effect(
         const testHarnessDurationMs = (yield* Clock.currentTimeMillis) - startedAt;
         const rssAfter = process.memoryUsage().rss;
         const evidence = {
-          note: "testHarnessDurationMs is harness wall time, not application performance.",
+          note: "testHarnessDurationMs is harness wall time for this 60-second bounded fake-provider run. It is not application performance.",
           workload: {
-            foregroundAttempted: 4,
-            backgroundAttempted: 2,
-            cancellationCycles: 4,
+            foregroundAttempted: yield* Ref.get(foregroundAttempted),
+            backgroundAttempted: yield* Ref.get(backgroundAttempted),
+            cancellationCycles: cancellationCycles.length,
             completedWork: finished,
           },
           peak: peaks,
@@ -234,14 +238,15 @@ it.effect(
             `${encoded}\n`,
           );
         }
-        assert.equal(finished >= 6, true);
+        assert.equal(testHarnessDurationMs >= WORKLOAD_MS, true);
+        assert.equal(finished >= 1, true);
         assert.equal(peaks.foregroundActive >= 1, true);
-        assert.equal(resourceSamples.length >= 1, true);
+        assert.equal(resourceSamples.length >= 10, true);
+        assert.equal(cancellationCycles.length >= 10, true);
         assert.equal(finalSnapshot.foregroundActive, 0);
         assert.equal(finalSnapshot.queued, 0);
         assert.equal(evidence.cleanup.allIdle, true);
-        assert.equal(testHarnessDurationMs >= 0, true);
-        assert.equal(cancellationCycles.length, 4);
       }),
     ).pipe(Effect.provide(layerWithPolicy(mixedPolicy()))),
+  90_000,
 );

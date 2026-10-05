@@ -25,25 +25,25 @@ Statuses: `PASS`, `FAIL`, `NOT_RUN`, `BLOCKED`.
 The executable ID → command map is `scripts/internal-beta-acceptance-lib.ts`.
 This table is the readable index.
 
-| ID  | Requirement                                        | Reviewed tests                                                                          | Local gate                                          |
-| --- | -------------------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| R1  | Auto/Manual bind + sendTurn + failover provenance  | Dispatcher bind; PCR Auto/Manual sendTurn to fake models; WS policy list                | `L-auto-manual`, `L-ws-production`                  |
-| R2  | ASK grant once; deny/cancel/expiry zero exec       | `ActionGateService.test.ts`, `McpHttpServer.productionAsk.test.ts`                      | `L-successor-ask`, `L-mcp-ask`                      |
-| R3  | Replay and changed args cannot reuse authorization | `ActionGateService.test.ts`; MCP post-queue revalidation                                | `L-successor-ask`, `L-mcp-ask`                      |
-| R4  | Memory save/list/correct/delete through auth       | `server.test.ts` Dream Memory RPCs; production browser Settings                         | `L-ws-production`, `L-production-browser`           |
-| R5  | Memory off projected; explicit save remains        | `DreamMemoryService.test.ts`; WS off projection; production browser toggle              | `L-ws-production`, `L-production-browser`           |
-| R6  | Concurrency queue, cancel, timeout, lease span     | Terminal wait + interrupt-on-timeout; scheduler occupancy; sustained fake-provider load | `L-lease-terminal`, `L-workload`, `L-ws-production` |
-| R7  | Inspector / Control Center receive real state      | WS governance RPCs; production Playwright against real RPC                              | `L-ws-production`, `L-production-browser`           |
-| R8  | RPC operate-scope negatives                        | `RpcAuthorization.test.ts`; WS operate-scope tests                                      | existing CI server tests                            |
-| R9  | Migrations 063 fail-closed; upgrade; restore       | `063_ActionGateApprovalUniqueness.test.ts`, `SqliteRecovery.test.ts`                    | `L-recovery`                                        |
-| R10 | Pending approval across process restart            | `SqliteRecovery.test.ts`                                                                | `L-recovery`                                        |
-| R11 | Crash after fake write does not auto-replay        | `SqliteRecovery.test.ts`; in-memory crash-after-write                                   | `L-recovery`                                        |
-| R12 | Unknown external outcome is not retried            | consume is one-time; consumed+retry stays dead                                          | `L-successor-ask`                                   |
-| R13 | UI Lab visual fixtures                             | `scripts/base3router-ui-lab.ts`                                                         | `L-ui-lab` (fixtures, not production RPC)           |
-| R14 | Live providers                                     | readiness checklist                                                                     | `E-live-provider` BLOCKED                           |
-| R15 | Native install/signing                             | readiness doc                                                                           | `E-native-signing` BLOCKED                          |
-| R16 | Successor ASK is explicit; consumed stays dead     | `retry: true`; transport replay conflicts                                               | `L-successor-ask`                                   |
-| R17 | Follow-up experiments documented, not implemented  | `docs/architecture/base3router-follow-up-experiments.md`                                | docs only                                           |
+| ID  | Requirement                                        | Reviewed tests                                                                            | Local gate                                          |
+| --- | -------------------------------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| R1  | Auto/Manual bind + sendTurn + failover provenance  | Dispatcher bind; PCR Auto/Manual sendTurn to fake models; WS policy list                  | `L-auto-manual`, `L-ws-production`                  |
+| R2  | ASK grant once; deny/cancel/expiry zero exec       | `ActionGateService.test.ts`, `McpHttpServer.productionAsk.test.ts`                        | `L-successor-ask`, `L-mcp-ask`                      |
+| R3  | Replay and changed args cannot reuse authorization | `ActionGateService.test.ts`; MCP post-queue revalidation                                  | `L-successor-ask`, `L-mcp-ask`                      |
+| R4  | Memory save/list/correct/delete through auth       | `server.test.ts` Dream Memory RPCs; production browser Settings                           | `L-ws-production`, `L-production-browser`           |
+| R5  | Memory off projected; explicit save remains        | `DreamMemoryService.test.ts`; WS off projection; production browser toggle                | `L-ws-production`, `L-production-browser`           |
+| R6  | Concurrency queue, cancel, timeout, lease span     | Terminal wait + interrupt-as-request; unconfirmed stream-end pins; 60s fake-provider load | `L-lease-terminal`, `L-workload`, `L-ws-production` |
+| R7  | Inspector / Control Center receive real state      | WS governance RPCs; production Playwright against real RPC                                | `L-ws-production`, `L-production-browser`           |
+| R8  | RPC operate-scope negatives                        | `RpcAuthorization.test.ts`; WS operate-scope tests                                        | existing CI server tests                            |
+| R9  | Migrations 063 fail-closed; upgrade; restore       | `063_ActionGateApprovalUniqueness.test.ts`, `SqliteRecovery.test.ts`                      | `L-recovery`                                        |
+| R10 | Pending approval across process restart            | `SqliteRecovery.test.ts`                                                                  | `L-recovery`                                        |
+| R11 | Crash after fake write does not auto-replay        | `SqliteRecovery.test.ts`; in-memory crash-after-write                                     | `L-recovery`                                        |
+| R12 | Unknown external outcome is not retried            | consume is one-time; consumed+retry stays dead                                            | `L-successor-ask`                                   |
+| R13 | UI Lab visual fixtures                             | `scripts/base3router-ui-lab.ts`                                                           | `L-ui-lab` (fixtures, not production RPC)           |
+| R14 | Live providers                                     | readiness checklist                                                                       | `E-live-provider` BLOCKED                           |
+| R15 | Native install/signing                             | readiness doc                                                                             | `E-native-signing` BLOCKED                          |
+| R16 | Successor ASK is explicit; consumed stays dead     | `retry: true`; transport replay conflicts                                                 | `L-successor-ask`                                   |
+| R17 | Follow-up experiments documented, not implemented  | `docs/architecture/base3router-follow-up-experiments.md`                                  | docs only                                           |
 
 ## Execution record
 
