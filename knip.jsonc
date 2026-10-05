@@ -44,7 +44,6 @@
       // Ported policy entry points kept for the V2 gate. They have no separate
       // driver or RPC consumer on this branch.
       "ignoreIssues": {
-        "src/routerEvaluation/persistTurnOutcome.ts": ["exports"],
         "src/workflow/Workflow.ts": ["exports"],
       },
     },

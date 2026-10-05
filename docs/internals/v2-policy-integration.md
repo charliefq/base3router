@@ -60,6 +60,12 @@ Schema changes for Base3Router tables live in `base3_policy_migrations`, not
 in `effect_sql_migrations`. Upstream's id-only migrator is not applied to a
 database that already contains Base3Router policy tables.
 
+Terminal V2 provider turns (`provider_turn.updated` completed, failed,
+interrupted, or cancelled) write one router observation keyed by
+`environmentId:threadId:messageId`. Unknown cost stays unknown. Duplicate
+terminal events for the same turn do not add a second row. A restart that
+binds a new message writes a new observation.
+
 ## Dispatch coverage
 
 One gate, `authorizeDispatch`, sits in `Orchestrator.dispatchOnce`. Effect

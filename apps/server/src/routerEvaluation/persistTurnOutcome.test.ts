@@ -13,7 +13,11 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildTurnOutcomeObservation, detectReworkProxy } from "./persistTurnOutcome.ts";
+import {
+  buildTurnOutcomeObservation,
+  detectReworkProxy,
+  runtimeEventFromV2ProviderTurn,
+} from "./persistTurnOutcome.ts";
 
 const environmentId = EnvironmentId.make("lab-environment");
 const threadId = ThreadId.make("thread-1");
@@ -389,5 +393,62 @@ describe("detectReworkProxy", () => {
         nowMs: Date.parse("2026-10-03T00:00:10.000Z"),
       })?.kind,
     ).toBe("regenerate");
+  });
+});
+
+describe("runtimeEventFromV2ProviderTurn", () => {
+  const providerTurn = (
+    status: "pending" | "running" | "completed" | "failed" | "interrupted" | "cancelled",
+  ) => ({
+    id: "turn-v2-1",
+    providerThreadId: "provider-thread-1",
+    nodeId: "node-1",
+    runAttemptId: null,
+    nativeTurnRef: null,
+    ordinal: 1,
+    status,
+    startedAt: null,
+    completedAt: null,
+  });
+
+  it("maps terminal V2 statuses and ignores in-flight turns", () => {
+    const eventFor = (status: Parameters<typeof providerTurn>[0]) =>
+      runtimeEventFromV2ProviderTurn({
+        threadId,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        driver: ProviderDriverKind.make("codex"),
+        providerTurn: providerTurn(status),
+      });
+    expect(eventFor("running")).toBeUndefined();
+    expect(eventFor("pending")).toBeUndefined();
+    expect(eventFor("completed")?.type).toBe("turn.completed");
+    expect(
+      eventFor("completed") && "payload" in eventFor("completed")!
+        ? eventFor("completed")!.payload
+        : undefined,
+    ).toEqual({ state: "completed" });
+    expect(
+      eventFor("failed") && "payload" in eventFor("failed")!
+        ? eventFor("failed")!.payload
+        : undefined,
+    ).toEqual({
+      state: "failed",
+    });
+    expect(
+      eventFor("interrupted") && "payload" in eventFor("interrupted")!
+        ? eventFor("interrupted")!.payload
+        : undefined,
+    ).toEqual({ state: "interrupted" });
+    expect(
+      eventFor("cancelled") && "payload" in eventFor("cancelled")!
+        ? eventFor("cancelled")!.payload
+        : undefined,
+    ).toEqual({ state: "cancelled" });
+    const completedEvent = eventFor("completed");
+    expect(
+      completedEvent !== undefined &&
+        completedEvent.type === "turn.completed" &&
+        !("totalCostUsd" in completedEvent.payload),
+    ).toBe(true);
   });
 });

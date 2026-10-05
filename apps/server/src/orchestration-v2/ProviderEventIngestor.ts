@@ -26,6 +26,7 @@ import * as Schema from "effect/Schema";
 
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
+import { persistTurnOutcomeFromV2ProviderTurn } from "../routerEvaluation/persistTurnOutcome.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as IdAllocator from "./IdAllocator.ts";
@@ -570,6 +571,14 @@ export const layer: Layer.Layer<
                     : { context: input.analyticsContext }),
                 }),
               );
+              yield* persistTurnOutcomeFromV2ProviderTurn({
+                threadId: input.threadId,
+                ...(input.runId === undefined ? {} : { runId: input.runId }),
+                providerInstanceId: input.providerInstanceId,
+                driver: input.event.driver,
+                providerTurn,
+                getRunMessage: projections.getRunMessage,
+              }).pipe(Effect.catch(() => Effect.void));
             }),
           ),
         ),

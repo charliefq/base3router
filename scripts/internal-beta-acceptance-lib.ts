@@ -125,6 +125,8 @@ export const GATES: ReadonlyArray<GateDefinition> = [
       files: [
         "apps/server/src/dispatcher/Dispatcher.test.ts",
         "apps/server/src/routerEvaluation/RouterEvaluationService.test.ts",
+        "apps/server/src/routerEvaluation/persistTurnOutcome.test.ts",
+        "apps/server/src/routerEvaluation/persistTurnOutcome.v2.test.ts",
         "apps/server/src/policy/Base3Policy.dispatch.test.ts",
       ],
     },
