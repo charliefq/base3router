@@ -4660,7 +4660,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const mcpHeaders = (sessionId?: string | undefined) => ({
           accept: "application/json, text/event-stream",
           authorization: credential.config.authorizationHeader,
-          ...(sessionId !== undefined ? { "mcp-session-id": sessionId } : {}),
+          ...(sessionId !== undefined
+            ? {
+                "mcp-session-id": sessionId,
+                "mcp-protocol-version": "2025-06-18",
+              }
+            : {}),
         });
         const postMcp = (body: string, sessionId?: string) =>
           httpClient.post("/mcp", {
@@ -4675,15 +4680,21 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           200,
           `expected POST /mcp initialize 200, got ${String(initialize.status)}`,
         );
+        yield* initialize.text;
         const sessionId = initialize.headers["mcp-session-id"];
-        yield* postMcp(`{"jsonrpc":"2.0","method":"notifications/initialized"}`, sessionId);
+        assert.equal(typeof sessionId, "string", "expected mcp-session-id from initialize");
+        const initialized = yield* postMcp(
+          `{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+          sessionId,
+        );
+        yield* initialized.text.pipe(Effect.exit);
         const callTool = (id: number, url: string) =>
           postMcp(
             `{"jsonrpc":"2.0","id":${String(id)},"method":"tools/call","params":{"name":"preview_open","arguments":{"url":"${url}"}}}`,
             sessionId,
           );
         const waitPending = Effect.gen(function* () {
-          for (let attempt = 0; attempt < 100; attempt += 1) {
+          for (let attempt = 0; attempt < 150; attempt += 1) {
             const governance = yield* withWsRpcClient(wsUrl, (client) =>
               client[WS_METHODS.actionGateGetGovernance]({}),
             );
@@ -4697,7 +4708,21 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const grantCall = yield* callTool(2, "https://example.test/ws-ask-grant").pipe(
           Effect.forkChild({ startImmediately: true }),
         );
-        const grantPending = yield* waitPending;
+        const grantPending = yield* Effect.raceFirst(
+          waitPending,
+          Fiber.join(grantCall).pipe(
+            Effect.flatMap((response) =>
+              response.text.pipe(
+                Effect.orElseSucceed(() => ""),
+                Effect.flatMap((body) =>
+                  Effect.die(
+                    `tools/call finished before ASK pending: status=${String(response.status)} body=${body.slice(0, 500)}`,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
         yield* withWsRpcClient(wsUrl, (client) =>
           client[WS_METHODS.actionGateRespondApproval]({
             approvalId: grantPending.approvalId,
