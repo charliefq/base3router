@@ -24,6 +24,7 @@ import {
 } from "../concurrencyBudget/ConcurrencyBudgetService.ts";
 import * as ServerConfig from "../config.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import { withAllowedMcpTool } from "./McpActionAuthorization.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -80,6 +81,15 @@ const governanceCounts = {
   degradedMcpServerCount: 0,
 };
 
+const openStatus = {
+  available: true,
+  visible: true,
+  tabId: PreviewTabId.make("tab-mcp-ask"),
+  url: "https://example.test/ask",
+  title: "Ask",
+  loading: false,
+};
+
 const waitUntil = <A>(
   read: Effect.Effect<A>,
   predicate: (value: A) => boolean,
@@ -111,11 +121,7 @@ const serveOpen = (clientId: string, executions: Ref.Ref<number>) =>
             connectionId: event.connectionId,
             requestId: event.request.requestId,
             ok: true,
-            result: {
-              available: true,
-              tabId: PreviewTabId.make("tab-mcp-ask"),
-              url: "https://example.test/ask",
-            },
+            result: openStatus,
           }),
         ),
       );
@@ -134,6 +140,20 @@ const callOpen = (args: Record<string, unknown>) =>
       );
   });
 
+const pendingAsk = (service: ActionGateService["Service"]) =>
+  waitUntil(
+    service.governance(environmentId, governanceCounts),
+    (snapshot) => snapshot.pending.some((item) => item.status === "pending"),
+    "expected a pending ASK",
+  );
+
+const noPendingAsk = (service: ActionGateService["Service"]) =>
+  waitUntil(
+    service.governance(environmentId, governanceCounts),
+    (snapshot) => snapshot.pending.every((item) => item.status !== "pending"),
+    "expected no pending ASK",
+  );
+
 it.live("MCP ASK grant executes the fake tool once through production ActionGate", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -141,18 +161,14 @@ it.live("MCP ASK grant executes the fake tool once through production ActionGate
       yield* serveOpen("mcp-ask-grant", executions);
       const service = yield* ActionGateService;
       const fiber = yield* callOpen({ url: "https://example.test/ask-grant" }).pipe(
-        Effect.forkChild,
+        Effect.forkChild({ startImmediately: true }),
       );
-      const pending = yield* waitUntil(
-        service.governance(environmentId, governanceCounts),
-        (snapshot) => snapshot.pending.length === 1,
-        "expected a pending ASK",
-      );
-      const approvalId = pending.pending[0]?.approvalId;
-      expect(approvalId).toBeDefined();
+      const pending = yield* pendingAsk(service);
+      const approval = pending.pending.find((item) => item.status === "pending");
+      expect(approval?.approvalId).toBeDefined();
       yield* service.respond(
-        { approvalId: approvalId!, decision: "grant" },
-        pending.pending[0]!.createdAt,
+        { approvalId: approval!.approvalId, decision: "grant" },
+        approval!.createdAt,
       );
       const result = yield* Fiber.join(fiber);
       expect(result.isError).toBe(false);
@@ -169,34 +185,43 @@ it.live("MCP ASK deny, cancel, and expiry execute the fake tool zero times", () 
       const service = yield* ActionGateService;
 
       const denyFiber = yield* callOpen({ url: "https://example.test/ask-deny" }).pipe(
-        Effect.forkChild,
+        Effect.forkChild({ startImmediately: true }),
       );
-      const denyPending = yield* waitUntil(
-        service.governance(environmentId, governanceCounts),
-        (snapshot) => snapshot.pending.length === 1,
-        "expected deny ASK",
-      );
+      const denyPending = yield* pendingAsk(service);
+      const denyApproval = denyPending.pending.find((item) => item.status === "pending");
       yield* service.respond(
-        { approvalId: denyPending.pending[0]!.approvalId, decision: "deny" },
-        denyPending.pending[0]!.createdAt,
+        { approvalId: denyApproval!.approvalId, decision: "deny" },
+        denyApproval!.createdAt,
       );
       const denied = yield* Fiber.join(denyFiber).pipe(Effect.exit);
       expect(Exit.isFailure(denied) || (Exit.isSuccess(denied) && denied.value.isError)).toBe(true);
+      yield* noPendingAsk(service);
 
       const cancelFiber = yield* callOpen({ url: "https://example.test/ask-cancel" }).pipe(
-        Effect.forkChild,
+        Effect.forkChild({ startImmediately: true }),
       );
-      const cancelPending = yield* waitUntil(
-        service.governance(environmentId, governanceCounts),
-        (snapshot) => snapshot.pending.some((item) => item.status === "pending"),
-        "expected cancel ASK",
-      );
-      const cancelId = cancelPending.pending.find((item) => item.status === "pending")?.approvalId;
+      const cancelPending = yield* pendingAsk(service);
+      const cancelApproval = cancelPending.pending.find((item) => item.status === "pending");
       yield* service.respond(
-        { approvalId: cancelId!, decision: "cancel" },
-        cancelPending.pending[0]!.createdAt,
+        { approvalId: cancelApproval!.approvalId, decision: "cancel" },
+        cancelApproval!.createdAt,
       );
       yield* Fiber.join(cancelFiber).pipe(Effect.exit);
+      yield* noPendingAsk(service);
+
+      const expireFiber = yield* callOpen({ url: "https://example.test/ask-expire" }).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      const expirePending = yield* pendingAsk(service);
+      const expireApproval = expirePending.pending.find((item) => item.status === "pending");
+      const expired = yield* service
+        .respond(
+          { approvalId: expireApproval!.approvalId, decision: "grant" },
+          "2099-01-01T00:00:00.000Z",
+        )
+        .pipe(Effect.exit);
+      expect(Exit.isFailure(expired)).toBe(true);
+      yield* Fiber.join(expireFiber).pipe(Effect.exit);
 
       expect(yield* Ref.get(executions)).toBe(0);
     }),
@@ -207,7 +232,6 @@ it.live("revalidates mutated arguments after MCP admission queue delay", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const executions = yield* Ref.make(0);
-      yield* serveOpen("mcp-ask-revalidate", executions);
       const service = yield* ActionGateService;
       const budget = yield* ConcurrencyBudgetService;
       const blocker = yield* Deferred.make<void>();
@@ -221,24 +245,28 @@ it.live("revalidates mutated arguments after MCP admission queue delay", () =>
           },
           Deferred.await(blocker),
         )
-        .pipe(Effect.forkChild);
+        .pipe(Effect.forkChild({ startImmediately: true }));
 
       const args: { url: string } = { url: "https://example.test/ask-original" };
-      const fiber = yield* callOpen(args).pipe(Effect.forkChild);
-      const pending = yield* waitUntil(
-        service.governance(environmentId, governanceCounts),
-        (snapshot) => snapshot.pending.length === 1,
-        "expected queued ASK",
+      const fiber = yield* withAllowedMcpTool(
+        "preview_open",
+        args,
+        Ref.update(executions, (value) => value + 1),
+      ).pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+        Effect.forkChild({ startImmediately: true }),
       );
+      const pending = yield* pendingAsk(service);
+      const approval = pending.pending.find((item) => item.status === "pending");
       args.url = "https://example.test/ask-mutated";
       yield* service.respond(
-        { approvalId: pending.pending[0]!.approvalId, decision: "grant" },
-        pending.pending[0]!.createdAt,
+        { approvalId: approval!.approvalId, decision: "grant" },
+        approval!.createdAt,
       );
       yield* Deferred.succeed(blocker, undefined);
       yield* Fiber.join(blocking);
       const result = yield* Fiber.join(fiber).pipe(Effect.exit);
-      expect(Exit.isFailure(result) || (Exit.isSuccess(result) && result.value.isError)).toBe(true);
+      expect(Exit.isFailure(result)).toBe(true);
       expect(yield* Ref.get(executions)).toBe(0);
     }),
   ).pipe(Effect.provide(ProductionAskLayer)),

@@ -28,7 +28,10 @@ const mixedPolicy = () => {
 const layer = layerWithPolicy(mixedPolicy());
 
 const hold = (started: Deferred.Deferred<void>, release: Deferred.Deferred<void>) =>
-  Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release)));
+  Effect.gen(function* () {
+    yield* Deferred.succeed(started, undefined);
+    yield* Deferred.await(release);
+  });
 
 it.effect("measures mixed foreground/background occupancy and cancellation-cycle cleanup", () =>
   Effect.gen(function* () {
@@ -37,6 +40,28 @@ it.effect("measures mixed foreground/background occupancy and cancellation-cycle
     const rssBefore = process.memoryUsage().rss;
     const fgRelease = yield* Deferred.make<void>();
     const bgRelease = yield* Deferred.make<void>();
+    const bgStarted = yield* Deferred.make<void>();
+    const bgFiber = yield* budget
+      .withAdmission(
+        {
+          workloadClass: "dream-job",
+          environmentId,
+          requestedAt: "2026-10-04T00:00:10.000Z",
+        },
+        hold(bgStarted, bgRelease),
+      )
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(bgStarted);
+    const shadowFiber = yield* budget
+      .withAdmission(
+        {
+          workloadClass: "detached-background",
+          environmentId,
+          requestedAt: "2026-10-04T00:00:11.000Z",
+        },
+        hold(yield* Deferred.make<void>(), bgRelease),
+      )
+      .pipe(Effect.forkChild({ startImmediately: true }));
     const fgStarted: Array<Deferred.Deferred<void>> = [];
     const fgFibers: Array<Fiber.Fiber<void, unknown>> = [];
     for (let index = 0; index < 3; index += 1) {
@@ -52,33 +77,11 @@ it.effect("measures mixed foreground/background occupancy and cancellation-cycle
           },
           hold(started, fgRelease),
         )
-        .pipe(Effect.forkChild);
+        .pipe(Effect.forkChild({ startImmediately: true }));
       fgFibers.push(fiber);
     }
     yield* Deferred.await(fgStarted[0]!);
     yield* Deferred.await(fgStarted[1]!);
-    const bgStarted = yield* Deferred.make<void>();
-    const bgFiber = yield* budget
-      .withAdmission(
-        {
-          workloadClass: "dream-job",
-          environmentId,
-          requestedAt: "2026-10-04T00:00:10.000Z",
-        },
-        hold(bgStarted, bgRelease),
-      )
-      .pipe(Effect.forkChild);
-    yield* Deferred.await(bgStarted);
-    const shadowFiber = yield* budget
-      .withAdmission(
-        {
-          workloadClass: "detached-background",
-          environmentId,
-          requestedAt: "2026-10-04T00:00:11.000Z",
-        },
-        hold(yield* Deferred.make<void>(), bgRelease),
-      )
-      .pipe(Effect.forkChild);
 
     const occupied = yield* budget.snapshot(environmentId);
     const cancellationCycles: Array<{
@@ -97,24 +100,25 @@ it.effect("measures mixed foreground/background occupancy and cancellation-cycle
           },
           Effect.void,
         )
-        .pipe(Effect.forkChild);
+        .pipe(Effect.forkChild({ startImmediately: true }));
       yield* Effect.yieldNow;
       const cancelled = yield* budget.cancelQueuedForThread(
         environmentId,
         ThreadId.make("thread-cancel-cycle"),
       );
-      yield* Fiber.interrupt(waiter);
+      yield* Fiber.join(waiter).pipe(Effect.exit);
       const after = yield* budget.snapshot(environmentId);
       cancellationCycles.push({ cycle, cancelled, queuedAfter: after.queued });
     }
 
     yield* Deferred.succeed(fgRelease, undefined);
     yield* Deferred.succeed(bgRelease, undefined);
-    yield* Fiber.join(fgFibers[0]!);
-    yield* Fiber.join(fgFibers[1]!);
-    yield* Fiber.interrupt(fgFibers[2]!);
-    yield* Fiber.join(bgFiber);
-    yield* Fiber.interrupt(shadowFiber);
+    yield* Fiber.join(fgFibers[0]!).pipe(Effect.exit);
+    yield* Fiber.join(fgFibers[1]!).pipe(Effect.exit);
+    yield* Fiber.join(fgFibers[2]!).pipe(Effect.exit);
+    yield* Fiber.join(bgFiber).pipe(Effect.exit);
+    yield* Fiber.join(shadowFiber).pipe(Effect.exit);
+    yield* budget.shutdown;
     const finalSnapshot = yield* budget.snapshot(environmentId);
     const durationMs = Date.now() - startedAt;
     const rssAfter = process.memoryUsage().rss;

@@ -769,7 +769,9 @@ it.effect("explicit retries create one successor and concurrent retries dedupe",
       assert.equal(asked.requiresApproval, true, "expected approval");
       return;
     }
-    yield* service.respond({ approvalId, decision: "deny" }, NOW);
+    const deniedRecord = yield* service.getApproval(approvalId);
+    const denyNow = deniedRecord._tag === "Some" ? deniedRecord.value.createdAt : NOW;
+    yield* service.respond({ approvalId, decision: "deny" }, denyNow);
     const [first, second] = yield* Effect.all(
       [
         service.authorizeTool({
@@ -798,8 +800,11 @@ it.effect("explicit retries create one successor and concurrent retries dedupe",
       assert.equal(first.requiresApproval, true, "expected successor approval");
       return;
     }
-    yield* service.respond({ approvalId: successorId, decision: "grant" }, NOW);
-    yield* service.consume(successorId, first.fingerprint, NOW);
+    const successorRecord = yield* service.getApproval(successorId);
+    const successorNow =
+      successorRecord._tag === "Some" ? successorRecord.value.createdAt : denyNow;
+    yield* service.respond({ approvalId: successorId, decision: "grant" }, successorNow);
+    yield* service.consume(successorId, first.fingerprint, successorNow);
     const resurrect = yield* service
       .authorizeTool({
         toolName: "preview_open",
@@ -827,8 +832,10 @@ it.effect("unknown consumed outcomes stay dead across a bounded retry loop", () 
       assert.equal(asked.requiresApproval, true, "expected approval");
       return;
     }
-    yield* service.respond({ approvalId, decision: "grant" }, NOW);
-    yield* service.consume(approvalId, asked.fingerprint, NOW);
+    const grantedRecord = yield* service.getApproval(approvalId);
+    const grantNow = grantedRecord._tag === "Some" ? grantedRecord.value.createdAt : NOW;
+    yield* service.respond({ approvalId, decision: "grant" }, grantNow);
+    yield* service.consume(approvalId, asked.fingerprint, grantNow);
     let conflicts = 0;
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const replay = yield* service

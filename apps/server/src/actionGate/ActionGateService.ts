@@ -81,9 +81,12 @@ const uniqueConstraintConflict = (cause: unknown): boolean => {
 
 const successorPending = (record: ActionApprovalRecord): ActionApprovalRecord => {
   const retryId = NodeCrypto.randomUUID();
+  const { decidedAt: _decidedAt, consumedAt: _consumedAt, ...rest } = record;
   return {
-    ...record,
+    ...rest,
     approvalId: ActionApprovalId.make(`apr-${retryId}`),
+    status: "pending",
+    reasonCodes: ["APPROVAL_REQUIRED"],
     ...(record.idempotencyKey !== undefined
       ? { idempotencyKey: ActionIdempotencyKey.make(`ask-retry:${retryId}`) }
       : {}),
@@ -234,6 +237,23 @@ const make = Effect.gen(function* () {
       }),
     );
 
+  const loadConsumedByFingerprint = (environmentId: EnvironmentId, fingerprint: string) =>
+    sql<typeof ApprovalRow.Type>`
+      SELECT approval_id AS "approvalId", payload_json AS "payloadJson"
+      FROM action_gate_approvals
+      WHERE environment_id = ${environmentId}
+        AND fingerprint = ${fingerprint}
+        AND status = 'consumed'
+      ORDER BY created_at ASC, approval_id ASC
+      LIMIT 1
+    `.pipe(
+      Effect.flatMap((rows) => {
+        const row = rows[0];
+        if (row === undefined) return Effect.succeed(Option.none());
+        return decodeRow(row.payloadJson).pipe(Effect.map(Option.some));
+      }),
+    );
+
   const appendAudit: ActionGateService["Service"]["appendAudit"] = (event) =>
     sql`
       INSERT INTO action_gate_audit (event_id, environment_id, plan_id, recorded_at, payload_json)
@@ -299,6 +319,16 @@ const make = Effect.gen(function* () {
                   existing.status === "consumed"
                     ? `Approval cannot be resurrected from ${existing.status}.`
                     : `Approval cannot be resurrected from ${existing.status} without an explicit retry.`,
+              });
+            }
+            const consumed = yield* loadConsumedByFingerprint(
+              record.environmentId,
+              record.fingerprint,
+            );
+            if (Option.isSome(consumed)) {
+              return yield* new ActionGateError({
+                reason: "conflict",
+                detail: "Approval cannot be resurrected from consumed.",
               });
             }
             const successor = successorPending(record);
@@ -411,10 +441,7 @@ const make = Effect.gen(function* () {
               });
             }
             if (record.status === "expired") {
-              return yield* new ActionGateError({
-                reason: "expired",
-                detail: "Approval expired before a decision was recorded.",
-              });
+              return record;
             }
             return yield* new ActionGateError({
               reason: "conflict",
@@ -484,6 +511,12 @@ const make = Effect.gen(function* () {
         }),
       );
       yield* notifyWaiters(next.approvalId);
+      if (next.status === "expired") {
+        return yield* new ActionGateError({
+          reason: "expired",
+          detail: "Approval expired before a decision was recorded.",
+        });
+      }
       return next;
     }).pipe(Effect.mapError(toError("ActionGateService.respond")));
 

@@ -10,9 +10,8 @@ import {
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -38,7 +37,8 @@ const tightForegroundPolicy = () => {
   };
 };
 
-const layer = layerWithPolicy(tightForegroundPolicy());
+const provideTight = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(Effect.provide(layerWithPolicy(tightForegroundPolicy())));
 
 const completed = (id: TurnId): ProviderRuntimeEvent =>
   ({
@@ -68,302 +68,345 @@ const startReturnSend = (id: TurnId, returned: Deferred.Deferred<void>) =>
     return { threadId, turnId: id };
   });
 
+const forkAdmission = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(Effect.forkChild({ startImmediately: true }));
+
 it.effect("keeps capacity until a start-return adapter emits a terminal event", () =>
-  Effect.gen(function* () {
-    const budget = yield* ConcurrencyBudgetService;
-    const pubsub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
-    const returned = yield* Deferred.make<void>();
-    const afterStart = yield* Deferred.make<void>();
-    const fiber = yield* budget
-      .withAdmission(
-        {
-          workloadClass: "foreground-turn",
-          environmentId,
-          threadId,
-          requestedAt: "2026-10-04T00:00:00.000Z",
-        },
-        sendTurnUntilTerminal(startReturnSend(turnId, returned), Stream.fromPubSub(pubsub), {
-          afterStart: () => Deferred.succeed(afterStart, undefined),
-        }),
-      )
-      .pipe(Effect.forkChild);
-    yield* Deferred.await(returned);
-    yield* Deferred.await(afterStart);
-    const during = yield* budget.snapshot(environmentId);
-    assert.equal(during.foregroundActive, 1);
-    const blocked = yield* budget
-      .withAdmission(
-        {
-          workloadClass: "foreground-turn",
-          environmentId,
-          threadId: ThreadId.make("thread-async-other"),
-          requestedAt: "2026-10-04T00:00:01.000Z",
-        },
-        Effect.void,
-      )
-      .pipe(Effect.forkChild);
-    yield* Effect.yieldNow;
-    const queued = yield* budget.snapshot(environmentId);
-    assert.equal(queued.foregroundActive, 1);
-    assert.equal(queued.queued >= 1, true);
-    yield* PubSub.publish(pubsub, completed(turnId));
-    yield* Fiber.join(fiber);
-    const second = yield* Fiber.join(blocked).pipe(Effect.exit);
-    assert.equal(Exit.isSuccess(second), true);
-    const after = yield* budget.snapshot(environmentId);
-    assert.equal(after.foregroundActive, 0);
-    assert.equal(after.queued, 0);
-  }).pipe(Effect.provide(layer)),
+  provideTight(
+    Effect.gen(function* () {
+      const budget = yield* ConcurrencyBudgetService;
+      const terminals = yield* Queue.unbounded<ProviderRuntimeEvent>();
+      const returned = yield* Deferred.make<void>();
+      const afterStart = yield* Deferred.make<void>();
+      const secondBegan = yield* Ref.make(false);
+      const secondRelease = yield* Deferred.make<void>();
+      const first = yield* forkAdmission(
+        budget.withAdmission(
+          {
+            workloadClass: "foreground-turn",
+            environmentId,
+            threadId,
+            requestedAt: "2026-10-04T00:00:00.000Z",
+          },
+          sendTurnUntilTerminal(startReturnSend(turnId, returned), Stream.fromQueue(terminals), {
+            afterStart: () => Deferred.succeed(afterStart, undefined),
+          }),
+        ),
+      );
+      yield* Deferred.await(returned);
+      yield* Deferred.await(afterStart);
+      const during = yield* budget.snapshot(environmentId);
+      assert.equal(during.foregroundActive, 1);
+      const second = yield* forkAdmission(
+        budget.withAdmission(
+          {
+            workloadClass: "foreground-turn",
+            environmentId,
+            threadId: ThreadId.make("thread-async-other"),
+            requestedAt: "2026-10-04T00:00:01.000Z",
+          },
+          Effect.gen(function* () {
+            yield* Ref.set(secondBegan, true);
+            yield* Deferred.await(secondRelease);
+          }),
+        ),
+      );
+      yield* Effect.yieldNow;
+      assert.equal(yield* Ref.get(secondBegan), false);
+      const queued = yield* budget.snapshot(environmentId);
+      assert.equal(queued.foregroundActive, 1);
+      assert.equal(queued.queued >= 1, true);
+      yield* Queue.offer(terminals, completed(turnId));
+      yield* Fiber.join(first);
+      while (!(yield* Ref.get(secondBegan))) {
+        yield* Effect.yieldNow;
+      }
+      assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 1);
+      yield* Deferred.succeed(secondRelease, undefined);
+      yield* Fiber.join(second);
+      const after = yield* budget.snapshot(environmentId);
+      assert.equal(after.foregroundActive, 0);
+      assert.equal(after.queued, 0);
+    }),
+  ),
 );
 
 it.effect("releases once on success, failure, and confirmed abort", () =>
-  Effect.gen(function* () {
-    const budget = yield* ConcurrencyBudgetService;
-    const pubsub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
-    const returned = yield* Deferred.make<void>();
-    const ok = yield* budget.withAdmission(
-      {
-        workloadClass: "foreground-turn",
-        environmentId,
-        threadId,
-        requestedAt: "2026-10-04T00:00:02.000Z",
-      },
-      sendTurnUntilTerminal(startReturnSend(turnId, returned), Stream.fromPubSub(pubsub)).pipe(
-        Effect.zipLeft(PubSub.publish(pubsub, completed(turnId))),
-      ),
-    );
-    assert.equal(ok.turnId, turnId);
-    assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
-
-    const failedSend = Effect.fail(
-      new ConcurrencyBudgetError({
-        reason: "invalid",
-        detail: "adapter failed after start",
-        reasonCodes: ["CAPACITY_EXHAUSTED"],
-      }),
-    );
-    const failed = yield* budget
-      .withAdmission(
-        {
-          workloadClass: "foreground-turn",
-          environmentId,
-          threadId,
-          requestedAt: "2026-10-04T00:00:03.000Z",
-        },
-        sendTurnUntilTerminal(failedSend, Stream.fromPubSub(pubsub)),
-      )
-      .pipe(Effect.exit);
-    assert.equal(failed._tag, "Failure");
-    assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
-
-    const abortReturned = yield* Deferred.make<void>();
-    const abortFiber = yield* budget
-      .withAdmission(
-        {
-          workloadClass: "foreground-turn",
-          environmentId,
-          threadId,
-          requestedAt: "2026-10-04T00:00:04.000Z",
-        },
-        sendTurnUntilTerminal(startReturnSend(turnId, abortReturned), Stream.fromPubSub(pubsub)),
-      )
-      .pipe(Effect.forkChild);
-    yield* Deferred.await(abortReturned);
-    assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 1);
-    yield* PubSub.publish(pubsub, aborted(turnId));
-    yield* Fiber.join(abortFiber);
-    assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
-  }).pipe(Effect.provide(layer)),
-);
-
-it.effect("does not release on a cancellation request while execution continues", () =>
-  Effect.gen(function* () {
-    const budget = yield* ConcurrencyBudgetService;
-    const pubsub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
-    const returned = yield* Deferred.make<void>();
-    const cancelRequested = yield* Ref.make(false);
-    const fiber = yield* budget
-      .withAdmission(
-        {
-          workloadClass: "foreground-turn",
-          environmentId,
-          threadId,
-          requestedAt: "2026-10-04T00:00:05.000Z",
-        },
-        sendTurnUntilTerminal(startReturnSend(turnId, returned), Stream.fromPubSub(pubsub)),
-      )
-      .pipe(Effect.forkChild);
-    yield* Deferred.await(returned);
-    yield* Ref.set(cancelRequested, true);
-    const duringCancel = yield* budget.snapshot(environmentId);
-    assert.equal(yield* Ref.get(cancelRequested), true);
-    assert.equal(duringCancel.foregroundActive, 1);
-    yield* PubSub.publish(pubsub, aborted(turnId));
-    yield* Fiber.join(fiber);
-    assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
-  }).pipe(Effect.provide(layer)),
-);
-
-it.effect("ignores duplicate and late terminals for another execution's lease", () =>
-  Effect.gen(function* () {
-    const budget = yield* ConcurrencyBudgetService;
-    const pubsub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
-    const firstReturned = yield* Deferred.make<void>();
-    const first = yield* budget
-      .withAdmission(
-        {
-          workloadClass: "foreground-turn",
-          environmentId,
-          threadId,
-          requestedAt: "2026-10-04T00:00:06.000Z",
-        },
-        sendTurnUntilTerminal(startReturnSend(turnId, firstReturned), Stream.fromPubSub(pubsub)),
-      )
-      .pipe(Effect.forkChild);
-    yield* Deferred.await(firstReturned);
-    yield* PubSub.publish(pubsub, completed(turnId));
-    yield* PubSub.publish(pubsub, completed(turnId));
-    yield* Fiber.join(first);
-    assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
-
-    const secondReturned = yield* Deferred.make<void>();
-    const second = yield* budget
-      .withAdmission(
-        {
-          workloadClass: "foreground-turn",
-          environmentId,
-          threadId,
-          requestedAt: "2026-10-04T00:00:07.000Z",
-        },
-        sendTurnUntilTerminal(
-          startReturnSend(otherTurnId, secondReturned),
-          Stream.fromPubSub(pubsub),
-        ),
-      )
-      .pipe(Effect.forkChild);
-    yield* Deferred.await(secondReturned);
-    yield* PubSub.publish(pubsub, completed(turnId));
-    assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 1);
-    yield* PubSub.publish(pubsub, completed(otherTurnId));
-    yield* Fiber.join(second);
-    assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
-  }).pipe(Effect.provide(layer)),
-);
-
-it.effect("preserves execution-tree accounting across failover-retry", () =>
-  Effect.gen(function* () {
-    const budget = yield* ConcurrencyBudgetService;
-    const parentAdmit = yield* budget.admit({
-      workloadClass: "foreground-turn",
-      environmentId,
-      threadId,
-      requestedAt: "2026-10-04T00:00:10.000Z",
-    });
-    assert.equal(parentAdmit.outcome, "admitted");
-    const tree = parentAdmit.lease?.tree;
-    assert.equal(tree !== undefined, true);
-    const retry = yield* budget.admit({
-      workloadClass: "failover-retry",
-      environmentId,
-      threadId,
-      requestedAt: "2026-10-04T00:00:10.100Z",
-      ...(tree !== undefined ? { tree } : {}),
-    });
-    assert.equal(retry.outcome, "admitted");
-    assert.equal(retry.lease?.tree.treeId, tree?.treeId);
-    assert.equal((retry.lease?.tree.attempt ?? 0) >= (tree?.attempt ?? 0), true);
-    const during = yield* budget.snapshot(environmentId);
-    assert.equal(during.foregroundActive, 1);
-    assert.equal(
-      during.classes.some((item) => item.workloadClass === "failover-retry" && item.active === 1),
-      true,
-    );
-    if (parentAdmit.lease !== undefined) {
-      yield* budget.release(environmentId, parentAdmit.lease.leaseId);
-      yield* budget.release(environmentId, parentAdmit.lease.leaseId);
-    }
-    if (retry.lease !== undefined) {
-      yield* budget.release(environmentId, retry.lease.leaseId);
-    }
-    const after = yield* budget.snapshot(environmentId);
-    assert.equal(
-      after.classes.every((item) => item.active === 0),
-      true,
-    );
-  }).pipe(Effect.provide(layer)),
-);
-
-it.effect("releases on bounded timeout when the terminal event never arrives", () =>
-  Effect.gen(function* () {
-    const budget = yield* ConcurrencyBudgetService;
-    const pubsub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
-    const returned = yield* Deferred.make<void>();
-    const fiber = yield* budget
-      .withAdmission(
-        {
-          workloadClass: "foreground-turn",
-          environmentId,
-          threadId,
-          requestedAt: "2026-10-04T00:00:11.000Z",
-        },
-        sendTurnUntilTerminal(startReturnSend(turnId, returned), Stream.fromPubSub(pubsub), {
-          timeout: "20 millis",
-        }),
-      )
-      .pipe(Effect.forkChild);
-    yield* Deferred.await(returned);
-    yield* TestClock.adjust("20 millis");
-    yield* Fiber.join(fiber);
-    const after = yield* budget.snapshot(environmentId);
-    assert.equal(after.foregroundActive, 0);
-  }).pipe(Effect.provide(layer)),
-);
-
-it.effect(
-  "shutdown cancels queued work; missing terminals still release on the timeout bound",
-  () =>
+  provideTight(
     Effect.gen(function* () {
       const budget = yield* ConcurrencyBudgetService;
-      const pubsub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
+      const successTerminals = yield* Queue.unbounded<ProviderRuntimeEvent>();
       const returned = yield* Deferred.make<void>();
-      const fiber = yield* budget
+      const successFiber = yield* forkAdmission(
+        budget.withAdmission(
+          {
+            workloadClass: "foreground-turn",
+            environmentId,
+            threadId,
+            requestedAt: "2026-10-04T00:00:02.000Z",
+          },
+          sendTurnUntilTerminal(
+            startReturnSend(turnId, returned),
+            Stream.fromQueue(successTerminals),
+          ),
+        ),
+      );
+      yield* Deferred.await(returned);
+      yield* Queue.offer(successTerminals, completed(turnId));
+      const ok = yield* Fiber.join(successFiber);
+      assert.equal(ok.turnId, turnId);
+      assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
+
+      const failedSend = Effect.fail(
+        new ConcurrencyBudgetError({
+          reason: "invalid",
+          detail: "adapter failed after start",
+          reasonCodes: ["CAPACITY_EXHAUSTED"],
+        }),
+      );
+      const failed = yield* budget
         .withAdmission(
           {
             workloadClass: "foreground-turn",
             environmentId,
             threadId,
-            requestedAt: "2026-10-04T00:00:12.000Z",
+            requestedAt: "2026-10-04T00:00:03.000Z",
           },
-          sendTurnUntilTerminal(startReturnSend(turnId, returned), Stream.fromPubSub(pubsub), {
-            timeout: "50 millis",
-          }),
+          sendTurnUntilTerminal(
+            failedSend,
+            Stream.fromQueue(yield* Queue.unbounded<ProviderRuntimeEvent>()),
+          ),
         )
-        .pipe(Effect.forkChild);
-      yield* Deferred.await(returned);
-      const queued = yield* budget
-        .withAdmission(
+        .pipe(Effect.exit);
+      assert.equal(failed._tag, "Failure");
+      assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
+
+      const abortTerminals = yield* Queue.unbounded<ProviderRuntimeEvent>();
+      const abortReturned = yield* Deferred.make<void>();
+      const abortFiber = yield* forkAdmission(
+        budget.withAdmission(
           {
             workloadClass: "foreground-turn",
             environmentId,
-            threadId: ThreadId.make("thread-queued"),
-            requestedAt: "2026-10-04T00:00:12.100Z",
+            threadId,
+            requestedAt: "2026-10-04T00:00:04.000Z",
           },
-          Effect.void,
-        )
-        .pipe(Effect.forkChild);
-      yield* Effect.yieldNow;
-      const cancelled = yield* budget.cancelQueuedForThread(
-        environmentId,
-        ThreadId.make("thread-queued"),
+          sendTurnUntilTerminal(
+            startReturnSend(turnId, abortReturned),
+            Stream.fromQueue(abortTerminals),
+          ),
+        ),
       );
-      assert.equal(cancelled >= 0, true);
-      yield* budget.shutdown;
-      const shutdown = yield* budget.snapshot(environmentId);
-      assert.equal(shutdown.queued, 0);
-      yield* TestClock.adjust("50 millis");
+      yield* Deferred.await(abortReturned);
+      assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 1);
+      yield* Queue.offer(abortTerminals, aborted(turnId));
+      yield* Fiber.join(abortFiber);
+      assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
+    }),
+  ),
+);
+
+it.effect("does not release on a cancellation request while execution continues", () =>
+  provideTight(
+    Effect.gen(function* () {
+      const budget = yield* ConcurrencyBudgetService;
+      const terminals = yield* Queue.unbounded<ProviderRuntimeEvent>();
+      const returned = yield* Deferred.make<void>();
+      const cancelRequested = yield* Ref.make(false);
+      const fiber = yield* forkAdmission(
+        budget.withAdmission(
+          {
+            workloadClass: "foreground-turn",
+            environmentId,
+            threadId,
+            requestedAt: "2026-10-04T00:00:05.000Z",
+          },
+          sendTurnUntilTerminal(startReturnSend(turnId, returned), Stream.fromQueue(terminals)),
+        ),
+      );
+      yield* Deferred.await(returned);
+      yield* Ref.set(cancelRequested, true);
+      const duringCancel = yield* budget.snapshot(environmentId);
+      assert.equal(yield* Ref.get(cancelRequested), true);
+      assert.equal(duringCancel.foregroundActive, 1);
+      yield* Queue.offer(terminals, aborted(turnId));
       yield* Fiber.join(fiber);
-      yield* Fiber.interrupt(queued);
+      assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
+    }),
+  ),
+);
+
+it.effect("ignores duplicate and late terminals for another execution's lease", () =>
+  provideTight(
+    Effect.gen(function* () {
+      const budget = yield* ConcurrencyBudgetService;
+      const terminals = yield* Queue.unbounded<ProviderRuntimeEvent>();
+      const firstReturned = yield* Deferred.make<void>();
+      const first = yield* forkAdmission(
+        budget.withAdmission(
+          {
+            workloadClass: "foreground-turn",
+            environmentId,
+            threadId,
+            requestedAt: "2026-10-04T00:00:06.000Z",
+          },
+          sendTurnUntilTerminal(
+            startReturnSend(turnId, firstReturned),
+            Stream.fromQueue(terminals),
+          ),
+        ),
+      );
+      yield* Deferred.await(firstReturned);
+      yield* Queue.offer(terminals, completed(turnId));
+      yield* Queue.offer(terminals, completed(turnId));
+      yield* Fiber.join(first);
+      assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
+
+      const secondReturned = yield* Deferred.make<void>();
+      const second = yield* forkAdmission(
+        budget.withAdmission(
+          {
+            workloadClass: "foreground-turn",
+            environmentId,
+            threadId,
+            requestedAt: "2026-10-04T00:00:07.000Z",
+          },
+          sendTurnUntilTerminal(
+            startReturnSend(otherTurnId, secondReturned),
+            Stream.fromQueue(terminals),
+          ),
+        ),
+      );
+      yield* Deferred.await(secondReturned);
+      yield* Queue.offer(terminals, completed(turnId));
+      assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 1);
+      yield* Queue.offer(terminals, completed(otherTurnId));
+      yield* Fiber.join(second);
+      assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
+    }),
+  ),
+);
+
+it.effect("preserves execution-tree accounting across failover-retry", () =>
+  provideTight(
+    Effect.gen(function* () {
+      const budget = yield* ConcurrencyBudgetService;
+      const parentAdmit = yield* budget.admit({
+        workloadClass: "foreground-turn",
+        environmentId,
+        threadId,
+        requestedAt: "2026-10-04T00:00:10.000Z",
+      });
+      assert.equal(parentAdmit.outcome, "admitted");
+      const tree = parentAdmit.lease?.tree;
+      assert.equal(tree !== undefined, true);
+      const retry = yield* budget.admit({
+        workloadClass: "failover-retry",
+        environmentId,
+        threadId,
+        requestedAt: "2026-10-04T00:00:10.100Z",
+        ...(tree !== undefined ? { tree } : {}),
+      });
+      assert.equal(retry.outcome, "admitted");
+      assert.equal(retry.lease?.tree.treeId, tree?.treeId);
+      assert.equal((retry.lease?.tree.attempt ?? 0) >= (tree?.attempt ?? 0), true);
+      const during = yield* budget.snapshot(environmentId);
+      assert.equal(during.foregroundActive, 1);
+      assert.equal(
+        during.classes.some((item) => item.workloadClass === "failover-retry" && item.active === 1),
+        true,
+      );
+      if (parentAdmit.lease !== undefined) {
+        yield* budget.release(environmentId, parentAdmit.lease.leaseId);
+        yield* budget.release(environmentId, parentAdmit.lease.leaseId);
+      }
+      if (retry.lease !== undefined) {
+        yield* budget.release(environmentId, retry.lease.leaseId);
+      }
+      const after = yield* budget.snapshot(environmentId);
+      assert.equal(
+        after.classes.every((item) => item.active === 0),
+        true,
+      );
+    }),
+  ),
+);
+
+it.effect("releases on bounded timeout when the terminal event never arrives", () =>
+  provideTight(
+    Effect.gen(function* () {
+      const budget = yield* ConcurrencyBudgetService;
+      const terminals = yield* Queue.unbounded<ProviderRuntimeEvent>();
+      const returned = yield* Deferred.make<void>();
+      const fiber = yield* forkAdmission(
+        budget.withAdmission(
+          {
+            workloadClass: "foreground-turn",
+            environmentId,
+            threadId,
+            requestedAt: "2026-10-04T00:00:11.000Z",
+          },
+          sendTurnUntilTerminal(startReturnSend(turnId, returned), Stream.fromQueue(terminals), {
+            timeout: "20 millis",
+          }),
+        ),
+      );
+      yield* Deferred.await(returned);
+      yield* TestClock.adjust("20 millis");
+      yield* Fiber.join(fiber);
       const after = yield* budget.snapshot(environmentId);
       assert.equal(after.foregroundActive, 0);
-    }).pipe(Effect.provide(layer)),
+    }),
+  ),
+);
+
+it.effect(
+  "shutdown cancels queued work; missing terminals still release on the timeout bound",
+  () =>
+    provideTight(
+      Effect.gen(function* () {
+        const budget = yield* ConcurrencyBudgetService;
+        const terminals = yield* Queue.unbounded<ProviderRuntimeEvent>();
+        const returned = yield* Deferred.make<void>();
+        const fiber = yield* forkAdmission(
+          budget.withAdmission(
+            {
+              workloadClass: "foreground-turn",
+              environmentId,
+              threadId,
+              requestedAt: "2026-10-04T00:00:12.000Z",
+            },
+            sendTurnUntilTerminal(startReturnSend(turnId, returned), Stream.fromQueue(terminals), {
+              timeout: "50 millis",
+            }),
+          ),
+        );
+        yield* Deferred.await(returned);
+        const queued = yield* forkAdmission(
+          budget.withAdmission(
+            {
+              workloadClass: "foreground-turn",
+              environmentId,
+              threadId: ThreadId.make("thread-queued"),
+              requestedAt: "2026-10-04T00:00:12.100Z",
+            },
+            Effect.void,
+          ),
+        );
+        yield* Effect.yieldNow;
+        const cancelled = yield* budget.cancelQueuedForThread(
+          environmentId,
+          ThreadId.make("thread-queued"),
+        );
+        assert.equal(cancelled >= 0, true);
+        yield* budget.shutdown;
+        const shutdown = yield* budget.snapshot(environmentId);
+        assert.equal(shutdown.queued, 0);
+        yield* TestClock.adjust("50 millis");
+        yield* Fiber.join(fiber);
+        yield* Fiber.interrupt(queued);
+        const after = yield* budget.snapshot(environmentId);
+        assert.equal(after.foregroundActive, 0);
+      }),
+    ),
 );
