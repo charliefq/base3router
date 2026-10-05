@@ -69,9 +69,9 @@ it("rejects stale evidence for a different SHA", () => {
 });
 
 it("rejects failed required local gates even when the document claims verified", () => {
-  const gates = passingGates();
-  const lease = gates.find((gate) => gate.id === "L-lease-terminal");
-  if (lease !== undefined) lease.status = "FAIL";
+  const gates = passingGates().map((gate) =>
+    gate.id === "L-lease-terminal" ? { ...gate, status: "FAIL" as const } : gate,
+  );
   const checked = checkEvidence({
     evidence: validDocument({ gates, verdict: "LOCAL_STABILIZATION_VERIFIED" }),
     currentSha: "abc123",

@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -102,11 +102,12 @@ if (command !== "run" && command !== "check") usage();
 
 if (command === "run") {
   const outFlag = args.indexOf("--out");
-  const out =
-    outFlag >= 0 && args[outFlag + 1] !== undefined
-      ? args[outFlag + 1]
+  const specifiedOut = outFlag >= 0 ? args[outFlag + 1] : undefined;
+  const outPath =
+    specifiedOut !== undefined
+      ? specifiedOut
       : NodePath.join(repoRoot, ".t3", "internal-beta-evidence.json");
-  const evidenceDir = NodePath.join(NodePath.dirname(out), "internal-beta-evidence");
+  const evidenceDir = NodePath.join(NodePath.dirname(outPath), "internal-beta-evidence");
   NodeFS.mkdirSync(evidenceDir, { recursive: true });
   const tree = currentTree();
   const gates = GATES.map((gate) => runGate(gate, evidenceDir));
@@ -118,7 +119,7 @@ if (command === "run") {
     gates,
     verdict: verdictFor(gates),
   };
-  writeEvidence(out, document);
+  writeEvidence(outPath, document);
   NodeProcess.stdout.write(
     `${document.verdict} sha=${document.sha} dirty=${String(document.dirty)}\n`,
   );
