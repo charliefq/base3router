@@ -24,6 +24,11 @@ diverge at `7cfb4987`. A pull request into `main` therefore contains both the
 upstream V2 history and the policy ports. Use the ranges above to review them
 separately.
 
+GitHub cannot start `pull_request` CI while that history is unmerged, because
+the test merge is conflicting. A merge commit of `origin/main` records the
+join and keeps this branch's tree: V1 files are not added back. The resulting
+tree is the V2 engine plus the Base3Router ports.
+
 ## Sources left untouched
 
 - Policy and stabilization reference: PR #16 at
