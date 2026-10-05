@@ -21,6 +21,7 @@ import {
   argumentHash,
   authorizeDispatch,
   authorizeScheduleUpsert,
+  confirmProviderTermination,
   countOccupied,
   issueContinuationGrant,
   revalidateOutboxEffect,
@@ -285,6 +286,7 @@ it.effect("usage-limit continuation keeps the prior actor and rejects a mismatch
     yield* sql`
       UPDATE base3_capacity_leases SET run_id = 'run-limit' WHERE thread_id = 'thread-limit'
     `;
+    yield* confirmProviderTermination({ threadId: "thread-limit", runId: "run-limit" });
     const hash = argumentHash({
       text: "Continue where you left off.",
       model: "gpt-5.4",
