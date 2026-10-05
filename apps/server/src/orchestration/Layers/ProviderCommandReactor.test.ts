@@ -13,6 +13,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSetupError,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import {
@@ -77,6 +78,7 @@ import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts"
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { bindDispatcherTurnStartCommand } from "../../dispatcher/Dispatcher.ts";
 import { ServerActivation } from "../../serverActivation.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
@@ -191,6 +193,30 @@ async function waitFor(
 
   return poll();
 }
+
+const catalogProvider = (input: {
+  readonly instanceId: string;
+  readonly driver?: string;
+  readonly models: ReadonlyArray<string>;
+}): ServerProvider => ({
+  instanceId: ProviderInstanceId.make(input.instanceId),
+  driver: ProviderDriverKind.make(input.driver ?? input.instanceId),
+  enabled: true,
+  installed: true,
+  version: null,
+  status: "ready",
+  auth: { status: "authenticated" },
+  checkedAt: "2026-01-01T00:00:00.000Z",
+  models: input.models.map((model) => ({
+    slug: model,
+    name: model,
+    isCustom: false,
+    capabilities: null,
+    isDefault: model === input.models[0],
+  })),
+  slashCommands: [],
+  skills: [],
+});
 
 describe("ProviderCommandReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
@@ -1404,6 +1430,196 @@ describe("ProviderCommandReactor", () => {
       };
       expect(detail.detail).toContain("Manual selection was kept");
     }),
+  );
+
+  effectIt.effect(
+    "Internal Beta: Auto bind reaches the bound fake model and failover keeps provenance",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            dispatcherEnabled: true,
+            sendTurnEffect: (request) =>
+              request.modelSelection?.instanceId === "codex"
+                ? Effect.fail(
+                    new ProviderAdapterRequestError({
+                      provider: "codex",
+                      method: "sendTurn",
+                      detail:
+                        "Codex usage limit reached. Send the message again once the limit resets.",
+                      failureCategory: "usage_quota_exhausted",
+                      failureScope: "provider_instance",
+                    }),
+                  )
+                : Effect.succeed({
+                    threadId: ThreadId.make("thread-1"),
+                    turnId: asTurnId("turn-bound-auto"),
+                  }),
+          }),
+        );
+        const command = {
+          type: "thread.turn.start" as const,
+          commandId: CommandId.make("cmd-internal-beta-auto-bind"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("message-internal-beta-auto-bind"),
+            role: "user" as const,
+            text: "Reach the bound fake model.",
+            attachments: [],
+          },
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          routingMode: "auto" as const,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required" as const,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        };
+        const bound = yield* Effect.promise(() =>
+          harness.runEffect(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient;
+              return yield* bindDispatcherTurnStartCommand(command, {
+                enabled: true,
+                environmentId: Effect.succeed(EnvironmentId.make("environment-1")),
+                providers: Effect.succeed([
+                  catalogProvider({ instanceId: "codex", models: ["gpt-5-codex"] }),
+                  catalogProvider({
+                    instanceId: "claude",
+                    driver: "claudeAgent",
+                    models: ["claude-sonnet-4-6"],
+                  }),
+                ]),
+                environmentDefaultModelSelection: Effect.succeed(null),
+                sql,
+              });
+            }),
+          ),
+        );
+        expect(bound).toMatchObject({
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+          routeBinding: {
+            target: { instanceId: "codex", model: "gpt-5-codex" },
+            modelRoute: { mode: "auto", executionStatus: "bound" },
+          },
+        });
+
+        yield* harness.engine.dispatch(bound);
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length >= 2));
+        yield* Effect.promise(() => harness.drain());
+        expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+        });
+        expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claude"),
+            model: "claude-sonnet-4-6",
+          },
+        });
+        const routes = yield* Effect.promise(() => harness.readDispatcherTaskRoutes());
+        const binding = decodeDispatcherTaskRouteBinding(routes[0]!.binding);
+        expect(binding.modelRoute?.mode).toBe("auto");
+        expect(
+          binding.modelRoute?.attempts?.some(
+            (attempt) => attempt.failureCategory === "usage_quota_exhausted",
+          ),
+        ).toBe(true);
+      }),
+  );
+
+  effectIt.effect(
+    "Internal Beta: Manual bind reaches the user model and is preserved on failure",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            dispatcherEnabled: true,
+            sendTurnEffect: () =>
+              Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: "codex",
+                  method: "sendTurn",
+                  detail:
+                    "Codex usage limit reached. Send the message again once the limit resets.",
+                  failureCategory: "usage_quota_exhausted",
+                  failureScope: "provider_instance",
+                }),
+              ),
+          }),
+        );
+        const command = {
+          type: "thread.turn.start" as const,
+          commandId: CommandId.make("cmd-internal-beta-manual-bind"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("message-internal-beta-manual-bind"),
+            role: "user" as const,
+            text: "Keep the manual fake model.",
+            attachments: [],
+          },
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          routingMode: "manual" as const,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required" as const,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        };
+        const bound = yield* Effect.promise(() =>
+          harness.runEffect(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient;
+              return yield* bindDispatcherTurnStartCommand(command, {
+                enabled: true,
+                environmentId: Effect.succeed(EnvironmentId.make("environment-1")),
+                providers: Effect.succeed([
+                  catalogProvider({ instanceId: "codex", models: ["gpt-5-codex"] }),
+                  catalogProvider({
+                    instanceId: "claude",
+                    driver: "claudeAgent",
+                    models: ["claude-sonnet-4-6"],
+                  }),
+                ]),
+                environmentDefaultModelSelection: Effect.succeed(null),
+                sql,
+              });
+            }),
+          ),
+        );
+        expect(bound).toMatchObject({
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+          routeBinding: {
+            target: { instanceId: "codex", model: "gpt-5-codex" },
+            modelRoute: { mode: "manual", executionStatus: "bound" },
+          },
+        });
+
+        yield* harness.engine.dispatch(bound);
+        yield* Effect.promise(() =>
+          waitFor(async () => {
+            const readModel = await harness.readModel();
+            return (
+              readModel.threads
+                .find((thread) => thread.id === ThreadId.make("thread-1"))
+                ?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+              false
+            );
+          }),
+        );
+        yield* Effect.promise(() => harness.drain());
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+        expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+        });
+        const readModel = yield* Effect.promise(() => harness.readModel());
+        const detail = readModel.threads
+          .find((thread) => thread.id === ThreadId.make("thread-1"))
+          ?.activities.find((activity) => activity.kind === "provider.turn.start.failed")
+          ?.payload as { detail?: string };
+        expect(detail.detail).toContain("Manual selection was kept");
+      }),
   );
 
   effectIt.effect("does not automatically replay after a side-effect has started", () =>
