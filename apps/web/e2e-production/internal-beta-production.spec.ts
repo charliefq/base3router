@@ -1,7 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import * as NodeSqlite from "node:sqlite";
 import { expect, test, type Page } from "@playwright/test";
 
 const ARTIFACT_DIR = "/opt/cursor/artifacts";
@@ -46,7 +46,7 @@ const seedPendingApproval = (input: {
   const dbPath = NodePath.join(home, "userdata", "state.sqlite");
   const now = new Date().toISOString();
   const expires = new Date(Date.now() + 5 * 60_000).toISOString();
-  const digest = createHash("sha256")
+  const digest = NodeCrypto.createHash("sha256")
     .update(`${input.approvalId}:${input.toolId}`)
     .digest("hex")
     .slice(0, 64);
@@ -71,7 +71,7 @@ const seedPendingApproval = (input: {
     argumentSummary: "path=internal-beta.txt",
     askExplanation: "ActionGate requires a one-time exact-action approval before execution.",
   };
-  const db = new DatabaseSync(dbPath);
+  const db = new NodeSqlite.DatabaseSync(dbPath);
   try {
     db.exec("PRAGMA journal_mode=WAL");
     db.exec("PRAGMA busy_timeout=5000");
@@ -160,8 +160,8 @@ test("Internal Beta: production web UI talks to real RPC for memory, approvals, 
   await ensureInspectorOpen(page);
   await expect(page.locator("[data-control-plane='inspector']")).toBeVisible();
 
-  const grantId = `apr-${randomUUID()}`;
-  const denyId = `apr-${randomUUID()}`;
+  const grantId = `apr-${NodeCrypto.randomUUID()}`;
+  const denyId = `apr-${NodeCrypto.randomUUID()}`;
   seedPendingApproval({
     environmentId,
     approvalId: grantId,
