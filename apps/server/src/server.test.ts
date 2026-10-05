@@ -1565,6 +1565,7 @@ const waitWallClock = (ms: number) =>
   Effect.promise(
     () =>
       new Promise<void>((resolve) => {
+        // TestClock does not advance while MCP HTTP I/O is in flight.
         setTimeout(resolve, ms);
       }),
   );
