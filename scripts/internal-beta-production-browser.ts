@@ -28,6 +28,31 @@ async function waitForSqlite(homeDir: string) {
   throw new Error("Disposable SQLite file was not created.");
 }
 
+async function waitForWorkflowStage(
+  page: {
+    waitForFunction: (
+      pageFunction: (expected: string) => boolean,
+      arg: string,
+      options: { timeout: number },
+    ) => Promise<unknown>;
+  },
+  label: string,
+) {
+  await page.waitForFunction(
+    (expected) => {
+      const surface = document.querySelector("[data-governance-surface='control-center']");
+      const text = surface?.textContent ?? "";
+      if (text.includes("Loading governance") || text.includes("Loading workflow")) {
+        return false;
+      }
+      const stage = document.querySelector("[data-workflow-stage]");
+      return stage?.textContent?.includes(expected) === true;
+    },
+    label,
+    { timeout: 30_000 },
+  );
+}
+
 function seedPendingHumanGate(homeDir: string) {
   const db = new DatabaseSync(sqlitePath(homeDir));
   try {
@@ -251,20 +276,14 @@ async function main() {
       throw new Error(`Pending workflow decision was not Build Gate: ${pendingText}`);
     }
     await page.locator("[data-workflow-approve]").click();
-    await page.waitForFunction(
-      () => {
-        const stage = document.querySelector("[data-workflow-stage]");
-        return stage?.textContent?.includes("Architecture") === true;
-      },
-      null,
-      { timeout: 20_000 },
-    );
+    await waitForWorkflowStage(page, "Architecture");
     const duplicate = page.locator("[data-workflow-approve]");
     if ((await duplicate.count()) > 0) {
       await duplicate.click();
     }
     await page.reload({ waitUntil: "domcontentloaded" });
     await surface.waitFor({ timeout: 20_000 });
+    await waitForWorkflowStage(page, "Architecture");
     const text = await surface.innerText();
     if (!text.includes("Protocol 2")) {
       throw new Error(`Control Center did not report protocol 2: ${text}`);
@@ -308,6 +327,7 @@ async function main() {
       await page.goto(`${origin}/settings/general`, { waitUntil: "domcontentloaded" });
     }
     await surface.waitFor({ timeout: 90_000 });
+    await waitForWorkflowStage(page, "Architecture");
     const restartedText = await surface.innerText();
     if (!restartedText.includes("Architecture")) {
       throw new Error(`Approved workflow stage did not survive restart: ${restartedText}`);
