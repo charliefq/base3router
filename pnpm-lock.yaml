@@ -133,6 +133,9 @@ importers:
       knip:
         specifier: 6.34.0
         version: 6.34.0
+      playwright-core:
+        specifier: 1.60.0
+        version: 1.60.0
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

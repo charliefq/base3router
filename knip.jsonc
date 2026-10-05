@@ -14,8 +14,16 @@
     },
     "scripts": {
       // Knip loads its preprocessor through a CLI option; native verification and
-      // worktree setup (from t3.json) run directly.
-      "entry": ["knip-schemas.ts", "mobile-native-client.ts", "setup-worktree.ts"],
+      // worktree setup (from t3.json) run directly. The V2 acceptance scripts are
+      // invoked by the acceptance runner, not imported.
+      "entry": [
+        "knip-schemas.ts",
+        "mobile-native-client.ts",
+        "setup-worktree.ts",
+        "internal-beta-acceptance.ts",
+        "internal-beta-production-browser.ts",
+        "v2-governance-surfaces.ts",
+      ],
     },
     "apps/server": {
       // Vite+ pack entries and the launcher used by installed background services.
@@ -33,6 +41,12 @@
       // Keep the transitive Effect runtime pinned for standalone npm installs.
       // The Vite+ web build prerequisite.
       "ignoreDependencies": ["@effect/platform-node-shared", "@t3tools/web"],
+      // Ported policy entry points kept for the V2 gate. They have no separate
+      // driver or RPC consumer on this branch.
+      "ignoreIssues": {
+        "src/routerEvaluation/persistTurnOutcome.ts": ["exports"],
+        "src/workflow/Workflow.ts": ["exports"],
+      },
     },
     "apps/desktop": {
       // Electron loads these bundles by filename rather than importing them.
@@ -91,6 +105,28 @@
     "packages/*": {
       // These workspace packages are private to this monorepo.
       "includeEntryExports": true,
+    },
+    "packages/contracts": {
+      "includeEntryExports": true,
+      // OpenRouter has no V2 provider driver. These constants stay with the
+      // guidance schema until a driver exists.
+      "ignoreIssues": {
+        "src/dreamMemory.ts": ["exports"],
+        "src/openRouter.ts": ["exports"],
+        "src/routerEvaluation.ts": ["exports"],
+      },
+    },
+    "packages/shared": {
+      "includeEntryExports": true,
+      "ignoreIssues": {
+        "src/modelRouter.ts": ["exports"],
+        "src/modelRouterFailover.ts": ["exports"],
+        "src/openRouterGuidance.ts": ["exports"],
+        "src/openRouterMetadata.ts": ["exports"],
+        "src/openRouterPrivacy.ts": ["exports"],
+        "src/routerEvaluation.fixture.ts": ["exports"],
+        "src/routerEvaluation.ts": ["exports"],
+      },
     },
     "packages/effect-acp": {
       "includeEntryExports": true,
