@@ -16,8 +16,6 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { PolicyExecutionContext } from "./executionContext.ts";
 
-const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
-
 const decodeSnapshot = Schema.decodeUnknownEffect(GovernanceSnapshot);
 
 const routeFields = (
@@ -46,12 +44,10 @@ const routeFields = (
   }
 };
 
-const occupied = (row: { readonly run_id: string | null; readonly run_status: string | null }) =>
-  row.run_id === null || row.run_status === null || !TERMINAL.has(row.run_status);
-
 /**
  * Session-scoped governance read model. Thread filters narrow the view;
- * they are not an identity claim.
+ * they are not an identity claim. Occupancy follows the lease row: projection
+ * terminalization does not free a slot without provider confirmation.
  */
 const isGovernanceReadError = Schema.is(GovernanceReadError);
 
@@ -197,7 +193,7 @@ export const readGovernanceSnapshot = (input: { readonly threadId?: string | und
       interruptRequested: row.interrupt_requested === 1,
       disconnectUnconfirmed: row.disconnect_unconfirmed === 1,
       runStatus: row.run_status,
-      occupied: row.status === "active" && occupied(row),
+      occupied: row.status === "active",
     }));
     const approvals: ReadonlyArray<GovernanceApprovalProjection> = approvalRows.map((row) => ({
       approvalId: row.approval_id,

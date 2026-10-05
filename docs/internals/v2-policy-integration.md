@@ -89,9 +89,13 @@ to delegation, unattended schedule creation, and external-write MCP tools.
 | Protocol 1                    | Not accepted                                                                         | Clients must speak protocol 2                          |
 
 Interrupt requests and unconfirmed disconnects set flags on the lease. A slot
-frees only when the projection run is `completed`, `failed`, `cancelled`,
-`interrupted`, or `rolled_back`, or the lease is released after that confirmed
-state. A missing run row stays occupied.
+stays occupied until a matching V2 `provider_turn.updated` terminal is ingested
+and `confirmProviderTermination` writes `released_at`. Local projection
+`completed|failed|cancelled|interrupted|rolled_back` does not free capacity.
+A closed event stream without that confirmation leaves the slot pinned.
+`ProviderRuntimeRecoveryService` can terminalize projection runs on
+startup/shutdown; it does not confirm that the provider process stopped, so it
+does not release the lease. A missing run row stays occupied.
 
 ## Schema import
 

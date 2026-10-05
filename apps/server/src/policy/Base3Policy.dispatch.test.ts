@@ -373,7 +373,7 @@ it.effect("effect outbox revalidates grants and does not rerun a terminal run", 
         environmentId: EnvironmentId.make("local"),
         threadId: "thread-outbox",
       }),
-    ).toBe(0);
+    ).toBe(1);
   }).pipe(Effect.provide(gateLayer)),
 );
 

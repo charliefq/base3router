@@ -138,45 +138,27 @@ export const countOccupied = (input: {
     input.threadId !== undefined
       ? input.sql<{ readonly count: number }>`
           SELECT COUNT(*) AS "count"
-          FROM base3_capacity_leases l
-          LEFT JOIN orchestration_v2_projection_runs r ON r.run_id = l.run_id
-          WHERE l.environment_id = ${input.environmentId}
-            AND l.thread_id = ${input.threadId}
-            AND l.released_at IS NULL
-            AND l.status = 'active'
-            AND (
-              l.run_id IS NULL
-              OR r.run_id IS NULL
-              OR r.status NOT IN ('completed', 'failed', 'cancelled', 'interrupted', 'rolled_back')
-            )
+          FROM base3_capacity_leases
+          WHERE environment_id = ${input.environmentId}
+            AND thread_id = ${input.threadId}
+            AND released_at IS NULL
+            AND status = 'active'
         `
       : input.workloadClass !== undefined
         ? input.sql<{ readonly count: number }>`
             SELECT COUNT(*) AS "count"
-            FROM base3_capacity_leases l
-            LEFT JOIN orchestration_v2_projection_runs r ON r.run_id = l.run_id
-            WHERE l.environment_id = ${input.environmentId}
-              AND l.workload_class = ${input.workloadClass}
-              AND l.released_at IS NULL
-              AND l.status = 'active'
-              AND (
-                l.run_id IS NULL
-                OR r.run_id IS NULL
-                OR r.status NOT IN ('completed', 'failed', 'cancelled', 'interrupted', 'rolled_back')
-              )
+            FROM base3_capacity_leases
+            WHERE environment_id = ${input.environmentId}
+              AND workload_class = ${input.workloadClass}
+              AND released_at IS NULL
+              AND status = 'active'
           `
         : input.sql<{ readonly count: number }>`
             SELECT COUNT(*) AS "count"
-            FROM base3_capacity_leases l
-            LEFT JOIN orchestration_v2_projection_runs r ON r.run_id = l.run_id
-            WHERE l.environment_id = ${input.environmentId}
-              AND l.released_at IS NULL
-              AND l.status = 'active'
-              AND (
-                l.run_id IS NULL
-                OR r.run_id IS NULL
-                OR r.status NOT IN ('completed', 'failed', 'cancelled', 'interrupted', 'rolled_back')
-              )
+            FROM base3_capacity_leases
+            WHERE environment_id = ${input.environmentId}
+              AND released_at IS NULL
+              AND status = 'active'
           `;
   return query.pipe(Effect.map((rows) => rows[0]?.count ?? 0));
 };
@@ -283,6 +265,39 @@ export const noteUnconfirmedDisconnect = (input: {
       WHERE released_at IS NULL
         AND thread_id = ${input.threadId}
         AND (run_id = ${input.runId} OR run_id IS NULL)
+    `;
+  });
+
+/**
+ * Release a slot only after the matching provider turn is confirmed terminal.
+ * Interrupt requests, stream close, and local projection status do not call this.
+ */
+export const confirmProviderTermination = (input: {
+  readonly threadId: string;
+  readonly runId?: string | undefined;
+  readonly messageId?: string | undefined;
+}) =>
+  Effect.gen(function* () {
+    const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+    if (Option.isNone(sql)) return;
+    if (input.runId === undefined && input.messageId === undefined) return;
+    const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
+    if (input.runId !== undefined) {
+      yield* sql.value`
+        UPDATE base3_capacity_leases
+        SET released_at = ${now}, status = 'released'
+        WHERE released_at IS NULL
+          AND thread_id = ${input.threadId}
+          AND run_id = ${input.runId}
+      `;
+      return;
+    }
+    yield* sql.value`
+      UPDATE base3_capacity_leases
+      SET released_at = ${now}, status = 'released'
+      WHERE released_at IS NULL
+        AND thread_id = ${input.threadId}
+        AND message_id = ${input.messageId ?? null}
     `;
   });
 

@@ -32,6 +32,7 @@ import { initializeV2Database } from "../persistence/initializeV2Database.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import {
   authorizeDispatch,
+  confirmProviderTermination,
   countOccupied,
   noteInterrupt,
   noteUnconfirmedDisconnect,
@@ -162,8 +163,16 @@ it.effect("manual dispatch binds a route and admits one foreground lease", () =>
         environmentId: EnvironmentId.make("local"),
         threadId: "thread-1",
       }),
+    ).toBe(1);
+    yield* confirmProviderTermination({ threadId: "thread-1", runId: "run-1" });
+    expect(
+      yield* countOccupied({
+        sql,
+        environmentId: EnvironmentId.make("local"),
+        threadId: "thread-1",
+      }),
     ).toBe(0);
-    yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed' WHERE run_id = 'run-1'`;
+    yield* confirmProviderTermination({ threadId: "thread-1", runId: "run-1" });
     expect(
       yield* countOccupied({
         sql,

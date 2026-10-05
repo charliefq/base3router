@@ -27,6 +27,7 @@ import * as Schema from "effect/Schema";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import { persistTurnOutcomeFromV2ProviderTurn } from "../routerEvaluation/persistTurnOutcome.ts";
+import { confirmProviderTermination } from "../policy/Base3PolicyGate.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as IdAllocator from "./IdAllocator.ts";
@@ -555,6 +556,10 @@ export const layer: Layer.Layer<
                 providerTurn.status !== "cancelled"
               )
                 return;
+              yield* confirmProviderTermination({
+                threadId: input.threadId,
+                ...(input.runId === undefined ? {} : { runId: input.runId }),
+              }).pipe(Effect.catch(() => Effect.void));
               const key = `${input.providerInstanceId}:${providerTurn.id}`;
               if (completedTurnAnalytics.has(key)) return;
               completedTurnAnalytics.add(key);
