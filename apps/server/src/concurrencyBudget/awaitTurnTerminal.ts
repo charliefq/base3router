@@ -128,7 +128,7 @@ export const sendTurnUntilTerminal = <A extends ProviderTurnStartResult, E, R, R
       }
       if (ended) {
         // Event stream is gone and execution was not confirmed stopped.
-        yield* Effect.never;
+        return yield* Effect.never;
       }
       yield* waitMatching();
       return started;

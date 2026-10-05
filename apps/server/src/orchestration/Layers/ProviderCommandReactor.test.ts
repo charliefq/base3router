@@ -628,6 +628,8 @@ describe("ProviderCommandReactor", () => {
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
     const runEffect = <A, E>(effect: Effect.Effect<A, E>) => runtime!.runPromise(effect);
+    const runSql = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
+      runtime!.runPromise(effect);
     const readDispatcherTaskRoutes = () =>
       runtime!.runPromise(
         Effect.gen(function* () {
@@ -775,6 +777,7 @@ describe("ProviderCommandReactor", () => {
       drain,
       startReactor,
       runEffect,
+      runSql,
       readDispatcherTaskRoutes,
       deleteTaskHandoffs,
       get titleRegenerationCompletionDispatchAttempts() {
@@ -1477,7 +1480,7 @@ describe("ProviderCommandReactor", () => {
           createdAt: "2026-01-01T00:00:00.000Z",
         };
         const bound = yield* Effect.promise(() =>
-          harness.runEffect(
+          harness.runSql(
             Effect.gen(function* () {
               const sql = yield* SqlClient.SqlClient;
               return yield* bindDispatcherTurnStartCommand(command, {
@@ -1568,7 +1571,7 @@ describe("ProviderCommandReactor", () => {
           createdAt: "2026-01-01T00:00:00.000Z",
         };
         const bound = yield* Effect.promise(() =>
-          harness.runEffect(
+          harness.runSql(
             Effect.gen(function* () {
               const sql = yield* SqlClient.SqlClient;
               return yield* bindDispatcherTurnStartCommand(command, {

@@ -12,6 +12,8 @@ import {
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
@@ -54,8 +56,7 @@ it.effect(
     TestClock.withLive(
       Effect.gen(function* () {
         const budget = yield* ConcurrencyBudgetService;
-        // @effect-diagnostics-next-line globalDateInEffect:off
-        const startedAt = Date.now();
+        const startedAt = yield* Clock.currentTimeMillis;
         const rssBefore = process.memoryUsage().rss;
         const completedWork = yield* Ref.make(0);
         const peak = yield* Ref.make({ foregroundActive: 0, queued: 0, backgroundActive: 0 });
@@ -76,36 +77,32 @@ it.effect(
             readonly workloadClass: string;
             readonly active: number;
           }>;
-        }) => {
-          const backgroundActive = snapshot.classes
-            .filter(
-              (item) =>
-                item.workloadClass === "dream-job" || item.workloadClass === "detached-background",
-            )
-            .reduce((sum, item) => sum + item.active, 0);
-          return Ref.update(peak, (current) => ({
-            foregroundActive: Math.max(current.foregroundActive, snapshot.foregroundActive),
-            queued: Math.max(current.queued, snapshot.queued),
-            backgroundActive: Math.max(current.backgroundActive, backgroundActive),
-          })).pipe(
-            Effect.andThen(
-              Ref.update(samples, (current) => {
-                // @effect-diagnostics-next-line globalDateInEffect:off
-                const atMs = Date.now() - startedAt;
-                return [
-                  ...current,
-                  {
-                    atMs,
-                    rss: process.memoryUsage().rss,
-                    foregroundActive: snapshot.foregroundActive,
-                    queued: snapshot.queued,
-                    backgroundActive,
-                  },
-                ];
-              }),
-            ),
-          );
-        };
+        }) =>
+          Effect.gen(function* () {
+            const backgroundActive = snapshot.classes
+              .filter(
+                (item) =>
+                  item.workloadClass === "dream-job" ||
+                  item.workloadClass === "detached-background",
+              )
+              .reduce((sum, item) => sum + item.active, 0);
+            yield* Ref.update(peak, (current) => ({
+              foregroundActive: Math.max(current.foregroundActive, snapshot.foregroundActive),
+              queued: Math.max(current.queued, snapshot.queued),
+              backgroundActive: Math.max(current.backgroundActive, backgroundActive),
+            }));
+            const atMs = (yield* Clock.currentTimeMillis) - startedAt;
+            yield* Ref.update(samples, (current) => [
+              ...current,
+              {
+                atMs,
+                rss: process.memoryUsage().rss,
+                foregroundActive: snapshot.foregroundActive,
+                queued: snapshot.queued,
+                backgroundActive,
+              },
+            ]);
+          });
 
         const fakeTurn = (input: {
           readonly workloadClass: "foreground-turn" | "dream-job" | "detached-background";
@@ -124,7 +121,7 @@ it.effect(
               },
               sendTurnUntilTerminal(
                 Effect.gen(function* () {
-                  yield* Effect.sleep(`${String(input.workMs)} millis`).pipe(
+                  yield* Effect.sleep(Duration.millis(input.workMs)).pipe(
                     Effect.andThen(Queue.offer(terminals, completed(input.threadId, input.turnId))),
                     Effect.andThen(Ref.update(completedWork, (count) => count + 1)),
                     Effect.forkChild({ startImmediately: true }),
@@ -207,8 +204,7 @@ it.effect(
         const finished = yield* Ref.get(completedWork);
         const peaks = yield* Ref.get(peak);
         const resourceSamples = yield* Ref.get(samples);
-        // @effect-diagnostics-next-line globalDateInEffect:off
-        const testHarnessDurationMs = Date.now() - startedAt;
+        const testHarnessDurationMs = (yield* Clock.currentTimeMillis) - startedAt;
         const rssAfter = process.memoryUsage().rss;
         const evidence = {
           note: "testHarnessDurationMs is harness wall time, not application performance.",
