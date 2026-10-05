@@ -122,8 +122,8 @@ function ProjectWorkflowDecisions(props: {
                 void submit({
                   type: "run.start",
                   projectId: props.projectId,
-                  commandId: `start${crypto.randomUUID().replaceAll("-", "")}`,
-                  runId: `run${crypto.randomUUID().replaceAll("-", "")}`,
+                  commandId: `start${Date.now().toString(36)}`,
+                  runId: `run${Date.now().toString(36)}`,
                   templateId: "saas-production",
                   templateVersion: 1,
                   originatingThreadId: null,

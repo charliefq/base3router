@@ -13,9 +13,7 @@ import {
 import { assert, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as NodeFs from "node:fs";
 import * as NodeOs from "node:os";
-import * as NodePath from "node:path";
 
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runMigrations } from "../persistence/Migrations.ts";
@@ -86,6 +84,13 @@ const discoveryArtifact = (): WorkflowArtifact => ({
 
 const insertProject = Effect.fn("workflow.rpc.insertProject")(function* () {
   const sql = yield* SqlClient.SqlClient;
+  yield* sql`DELETE FROM projection_workflow_decisions`;
+  yield* sql`DELETE FROM projection_workflow_artifacts`;
+  yield* sql`DELETE FROM projection_workflow_stage_attempts`;
+  yield* sql`DELETE FROM projection_workflow_runs`;
+  yield* sql`DELETE FROM projection_workflow_cursors`;
+  yield* sql`DELETE FROM base3_workflow_commands`;
+  yield* sql`DELETE FROM projection_projects WHERE project_id = ${projectId}`;
   yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at) VALUES (${projectId}, 'Project', '/tmp/workflow-rpc', '[]', ${at}, ${at})`;
 });
 
@@ -387,8 +392,7 @@ memoryLayer("workflow human decisions", (it) => {
 });
 
 it.effect("workflow decisions survive a file-backed server restart", () => {
-  const directory = NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "workflow-rpc-"));
-  const filename = NodePath.join(directory, "state.sqlite");
+  const filename = `${NodeOs.tmpdir()}/workflow-rpc-human-decision.sqlite`;
   const layer = NodeSqliteClient.layer({ filename });
   const write = Effect.gen(function* () {
     yield* runMigrations({ toMigrationInclusive: 56 });
@@ -409,16 +413,12 @@ it.effect("workflow decisions survive a file-backed server restart", () => {
       noopDispatch,
     );
   }).pipe(Effect.provide(layer));
-  const read = Effect.gen(function* () {
-    return yield* workflowCatalogForProject(projectId);
-  }).pipe(Effect.provide(layer));
+  const read = workflowCatalogForProject(projectId).pipe(Effect.provide(layer));
   return Effect.gen(function* () {
     const first = yield* write;
     assert.equal(first.runs[0]?.currentStageId, "architecture");
     const second = yield* read;
     assert.equal(second.runs[0]?.currentStageId, "architecture");
     assert.equal(second.runs[0]?.decisions.at(-1)?.value, "approve");
-  }).pipe(
-    Effect.ensuring(Effect.sync(() => NodeFs.rmSync(directory, { recursive: true, force: true }))),
-  );
+  });
 });

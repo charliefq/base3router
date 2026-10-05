@@ -16,7 +16,7 @@ const artifactDir = "/opt/cursor/artifacts";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function sqlitePath(homeDir: string) {
-  return NodePath.join(homeDir, "userdata", "state.sqlite");
+  return NodePath.join(homeDir, "userdata", "statev2.sqlite");
 }
 
 async function waitForSqlite(homeDir: string) {

@@ -2090,12 +2090,18 @@ const makeWsRpcLayer = (
                 providerRegistry.getProviders,
                 serverSettings.getSettings,
               ]);
-              return yield* Workflow.previewWorkflowStage(input, {
+              const preview = yield* Workflow.previewWorkflowStage(input, {
                 environmentId,
                 providers,
                 environmentDefaultModelSelection: settings.defaultModelSelection,
-                cursorCloudConfigured: false,
               });
+              return {
+                stage: preview.stage,
+                profile: preview.profile,
+                attempt: preview.attempt,
+                packetText: preview.packetText,
+                route: preview.route,
+              };
             }).pipe(
               Effect.catchCause((cause) => {
                 const error = Cause.squash(cause);
