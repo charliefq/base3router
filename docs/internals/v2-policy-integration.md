@@ -86,6 +86,7 @@ to delegation, unattended schedule creation, and external-write MCP tools.
 | Effect outbox                 | Start, steer, restart, and continue require the message grant and a non-terminal run | Terminal runs are not replayed                         |
 | `provider.switch`             | Denied for authenticated sessions                                                    | Explicit handoff is the switch contract                |
 | Cursor Cloud REST             | Not a second engine                                                                  | Product sessions fail closed                           |
+| OpenRouter HTTP execution     | No executable provider driver on this pin                                            | Guidance / Teacher / Shadow only                       |
 | Protocol 1                    | Not accepted                                                                         | Clients must speak protocol 2                          |
 
 Interrupt requests and unconfirmed disconnects set flags on the lease. A slot
@@ -117,6 +118,14 @@ and `workflow.action` on that same authenticated session. `orchestration:read`
 can view a pending gate; `orchestration:operate` records approve, reject, or
 cancel. Approved agent stages dispatch through governed V2
 `ThreadLaunchService` / `message.dispatch`. Cursor Cloud REST stays fail-closed.
+OpenRouter has no executable driver on this pin.
+
+ActionGate ASK uses `actionGate.authorizeTool` with the governed MCP tool path
+(`preview_open` is network-access → ASK). `waitForAuthorized` consumes a grant
+once and records `action.started`. Deny, cancel, and expiry never start the
+action. Dream Memory save, capture-off, enqueue, and delete go through
+`memory.save`, settings `dreamMemory.captureMode`, `memory.enqueueEligible`,
+and `memory.delete`. Deleted rows stay deleted after reopen.
 
 ## Later upstream commits
 

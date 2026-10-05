@@ -1,7 +1,18 @@
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import {
+  ActionGateError,
+  DEFAULT_DREAM_MEMORY_SETTINGS,
+  DreamMemoryError,
+} from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
-import { layer as actionGateLayer } from "./actionGate/ActionGateService.ts";
+import { layer as actionGateLayer, ActionGateService } from "./actionGate/ActionGateService.ts";
+import {
+  DreamMemoryService,
+  viewerFromSubject,
+  layer as dreamMemoryLayer,
+} from "./dreamMemory/DreamMemoryService.ts";
+import { makeActionAuditEvent } from "@t3tools/shared/actionAudit";
 import { readGovernanceSnapshot } from "./policy/GovernanceProjection.ts";
 import * as Workflow from "./workflow/Workflow.ts";
 import { PolicyExecutionContext } from "./policy/executionContext.ts";
@@ -23,6 +34,9 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
+
+const isActionGateError = Schema.is(ActionGateError);
+const isDreamMemoryError = Schema.is(DreamMemoryError);
 import { rpcInitialItems } from "./rpcInitialItems.ts";
 import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
 import { subscribeCodexAuthCallback } from "./provider/CodexAuthCallback.ts";
@@ -1188,6 +1202,8 @@ const makeWsRpcLayer = (
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+      const actionGate = yield* ActionGateService;
+      const dreamMemory = yield* DreamMemoryService;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       yield* Effect.addFinalizer(() =>
@@ -1909,6 +1925,7 @@ const makeWsRpcLayer = (
                   runtimeMode: input.runtimeMode,
                   interactionMode: input.interactionMode,
                   workspaceStrategy: input.workspaceStrategy,
+                  ...(input.routingMode === undefined ? {} : { routingMode: input.routingMode }),
                   ...(input.initialMessage === undefined
                     ? {}
                     : {
@@ -2177,6 +2194,177 @@ const makeWsRpcLayer = (
               }),
             ),
             { "rpc.aggregate": "workflow" },
+          ),
+        [WS_METHODS.actionGateAuthorizeTool]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.actionGateAuthorizeTool,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const decision = yield* actionGate.authorizeTool({
+                toolName: input.toolName,
+                args: input.args,
+                environmentId,
+                threadId: input.threadId,
+                ...(input.retry === undefined ? {} : { retry: input.retry }),
+              });
+              if (decision.decision === "ASK" && decision.approvalId !== undefined) {
+                const approvalId = decision.approvalId;
+                const fingerprint = decision.fingerprint;
+                const nowIso = DateTime.formatIso(yield* DateTime.now);
+                yield* actionGate.waitForAuthorized(approvalId, fingerprint, nowIso).pipe(
+                  Effect.flatMap((consumed) =>
+                    Effect.gen(function* () {
+                      const at = DateTime.formatIso(yield* DateTime.now);
+                      yield* actionGate.appendAudit(
+                        makeActionAuditEvent({
+                          kind: "action.started",
+                          at,
+                          environmentId,
+                          planId: consumed.planId,
+                          actionId: consumed.actionId,
+                          decision: "ALLOW",
+                          approvalId: consumed.approvalId,
+                        }),
+                      );
+                      yield* actionGate.appendAudit(
+                        makeActionAuditEvent({
+                          kind: "action.succeeded",
+                          at,
+                          environmentId,
+                          planId: consumed.planId,
+                          actionId: consumed.actionId,
+                          decision: "ALLOW",
+                          outcome: "success",
+                          approvalId: consumed.approvalId,
+                        }),
+                      );
+                    }),
+                  ),
+                  Effect.catchCause(() => Effect.void),
+                  Effect.forkDetach,
+                );
+              }
+              return decision;
+            }).pipe(
+              Effect.catchCause((cause) => {
+                const error = Cause.squash(cause);
+                if (isActionGateError(error)) return Effect.fail(error);
+                return Effect.fail(
+                  new ActionGateError({
+                    reason: "invalid",
+                    detail: "ActionGate could not authorize this tool.",
+                  }),
+                );
+              }),
+            ),
+            { "rpc.aggregate": "actionGate" },
+          ),
+        [WS_METHODS.actionGateRespondApproval]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.actionGateRespondApproval,
+            Effect.gen(function* () {
+              const nowIso = DateTime.formatIso(yield* DateTime.now);
+              const approval = yield* actionGate.respond(input, nowIso);
+              return { approval };
+            }).pipe(
+              Effect.catchCause((cause) => {
+                const error = Cause.squash(cause);
+                if (isActionGateError(error)) return Effect.fail(error);
+                return Effect.fail(
+                  new ActionGateError({
+                    reason: "invalid",
+                    detail: "ActionGate could not record that approval decision.",
+                  }),
+                );
+              }),
+            ),
+            { "rpc.aggregate": "actionGate" },
+          ),
+        [WS_METHODS.memorySave]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.memorySave,
+            Effect.gen(function* () {
+              const [environmentId, settings] = yield* Effect.all([
+                serverEnvironment.getEnvironmentId,
+                serverSettings.getSettings,
+              ]);
+              const nowIso = DateTime.formatIso(yield* DateTime.now);
+              return yield* dreamMemory.save(
+                input,
+                viewerFromSubject(environmentId, currentSession.subject, input.projectId),
+                nowIso,
+                settings.dreamMemory ?? DEFAULT_DREAM_MEMORY_SETTINGS,
+              );
+            }).pipe(
+              Effect.catchCause((cause) => {
+                const error = Cause.squash(cause);
+                if (isDreamMemoryError(error)) return Effect.fail(error);
+                return Effect.fail(
+                  new DreamMemoryError({
+                    reason: "invalid",
+                    detail: "Dream Memory could not save that record.",
+                  }),
+                );
+              }),
+            ),
+            { "rpc.aggregate": "memory" },
+          ),
+        [WS_METHODS.memoryDelete]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.memoryDelete,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const nowIso = DateTime.formatIso(yield* DateTime.now);
+              return yield* dreamMemory.remove(
+                input,
+                viewerFromSubject(environmentId, currentSession.subject),
+                nowIso,
+              );
+            }).pipe(
+              Effect.catchCause((cause) => {
+                const error = Cause.squash(cause);
+                if (isDreamMemoryError(error)) return Effect.fail(error);
+                return Effect.fail(
+                  new DreamMemoryError({
+                    reason: "invalid",
+                    detail: "Dream Memory could not delete that record.",
+                  }),
+                );
+              }),
+            ),
+            { "rpc.aggregate": "memory" },
+          ),
+        [WS_METHODS.memoryEnqueueEligible]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.memoryEnqueueEligible,
+            Effect.gen(function* () {
+              const [environmentId, settings] = yield* Effect.all([
+                serverEnvironment.getEnvironmentId,
+                serverSettings.getSettings,
+              ]);
+              const nowIso = DateTime.formatIso(yield* DateTime.now);
+              yield* dreamMemory.enqueueEligibleTurn({
+                viewer: viewerFromSubject(environmentId, currentSession.subject, input.projectId),
+                settings: settings.dreamMemory ?? DEFAULT_DREAM_MEMORY_SETTINGS,
+                turnSucceeded: true,
+                turnText: input.turnText,
+                nowIso,
+                ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
+              });
+              return { ok: true as const };
+            }).pipe(
+              Effect.catchCause((cause) => {
+                const error = Cause.squash(cause);
+                if (isDreamMemoryError(error)) return Effect.fail(error);
+                return Effect.fail(
+                  new DreamMemoryError({
+                    reason: "invalid",
+                    detail: "Dream Memory could not enqueue that turn.",
+                  }),
+                );
+              }),
+            ),
+            { "rpc.aggregate": "memory" },
           ),
         [WS_METHODS.serverGetConfig]: (_input) =>
           observeRpcEffect(
@@ -3943,6 +4131,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                     : { expiresAt: DateTime.formatIso(session.expiresAt) }),
                 }),
               ),
+              Layer.provide(dreamMemoryLayer),
               Layer.provide(actionGateLayer),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
               Layer.provide(AgentSessionScanner.layer),

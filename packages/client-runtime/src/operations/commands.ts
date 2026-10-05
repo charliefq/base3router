@@ -178,6 +178,7 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
   readonly bootstrap?: StartThreadBootstrap;
   readonly sourceProposedPlan?: { readonly threadId: ThreadId; readonly planId: PlanId };
   readonly dispatchMode?: "auto" | "queue" | "steer" | "restart" | "start";
+  readonly routingMode?: "auto" | "manual";
 }
 
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
@@ -672,6 +673,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       runtimeMode: input.runtimeMode,
       interactionMode: input.interactionMode,
       workspaceStrategy,
+      ...(input.routingMode === undefined ? {} : { routingMode: input.routingMode }),
       initialMessage: {
         messageId: input.message.messageId,
         text: input.message.text,
@@ -700,6 +702,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       ...(input.sourceProposedPlan === undefined
         ? {}
         : { sourcePlanRef: input.sourceProposedPlan }),
+      ...(input.routingMode === undefined ? {} : { routingMode: input.routingMode }),
       dispatchMode: { type: "start_immediately" },
     });
   }
@@ -760,6 +763,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     ...(shouldSendTitleSeed ? { titleSeed: input.titleSeed } : {}),
     ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
     ...(input.sourceProposedPlan === undefined ? {} : { sourcePlanRef: input.sourceProposedPlan }),
+    ...(input.routingMode === undefined ? {} : { routingMode: input.routingMode }),
     ...(serverResolvesCommandContext && requestedMode !== "queue"
       ? { deliveryIntent: requestedMode }
       : {}),

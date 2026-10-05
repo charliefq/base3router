@@ -15,6 +15,7 @@ import { useComposerMenuState } from "./useComposerMenuState";
 
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
   interactionMode: ProviderInteractionMode;
+  routingMode: "auto" | "manual";
   runtimeMode: RuntimeMode;
   runtimeModeOptions: ReadonlyArray<{
     readonly mode: RuntimeMode;
@@ -30,6 +31,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
    */
   hidden?: boolean;
   onToggleInteractionMode: () => void;
+  onRoutingModeChange: (mode: "auto" | "manual") => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
   const composerFloatingLayerProps = useComposerMenuProps();
@@ -75,6 +77,18 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             <MenuDivider />
           </>
         ) : null}
+        <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Route</div>
+        <MenuRadioGroup
+          value={props.routingMode}
+          onValueChange={(value) => {
+            if (value !== "auto" && value !== "manual") return;
+            props.onRoutingModeChange(value);
+          }}
+        >
+          <MenuRadioItem value="manual">Manual</MenuRadioItem>
+          <MenuRadioItem value="auto">Auto</MenuRadioItem>
+        </MenuRadioGroup>
+        <MenuDivider />
         <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Access</div>
         <MenuRadioGroup
           value={props.runtimeMode}

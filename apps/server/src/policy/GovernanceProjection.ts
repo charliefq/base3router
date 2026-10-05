@@ -20,12 +20,16 @@ const decodeSnapshot = Schema.decodeUnknownEffect(GovernanceSnapshot);
 
 const routeFields = (
   json: string,
-): Pick<GovernanceRouteProjection, "mode" | "model" | "instanceId"> => {
+): Pick<
+  GovernanceRouteProjection,
+  "mode" | "model" | "instanceId" | "source" | "fallbackIndex"
+> => {
   try {
     const parsed = JSON.parse(json) as {
       readonly target?: { readonly model?: string; readonly instanceId?: string };
-      readonly modelRoute?: { readonly mode?: string };
+      readonly modelRoute?: { readonly mode?: string; readonly fallbackIndex?: number };
       readonly source?: string;
+      readonly fallbackIndex?: number;
     };
     const declared = parsed.modelRoute?.mode;
     const mode =
@@ -34,13 +38,16 @@ const routeFields = (
         : parsed.source === "explicit"
           ? "manual"
           : "unknown";
+    const fallbackIndex = parsed.fallbackIndex ?? parsed.modelRoute?.fallbackIndex;
     return {
       mode,
       model: parsed.target?.model ?? null,
       instanceId: parsed.target?.instanceId ?? null,
+      source: parsed.source ?? null,
+      fallbackIndex: typeof fallbackIndex === "number" ? fallbackIndex : null,
     };
   } catch {
-    return { mode: "unknown", model: null, instanceId: null };
+    return { mode: "unknown", model: null, instanceId: null, source: null, fallbackIndex: null };
   }
 };
 

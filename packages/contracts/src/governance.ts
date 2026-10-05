@@ -19,6 +19,8 @@ export const GovernanceRouteProjection = Schema.Struct({
   mode: Schema.Literals(GOVERNANCE_ROUTE_MODES),
   model: Schema.NullOr(Schema.String),
   instanceId: Schema.NullOr(Schema.String),
+  source: Schema.NullOr(Schema.String),
+  fallbackIndex: Schema.NullOr(Schema.Number),
   createdAt: Schema.String,
 });
 export type GovernanceRouteProjection = typeof GovernanceRouteProjection.Type;

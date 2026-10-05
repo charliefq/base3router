@@ -51,6 +51,20 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("requires operate permission for ActionGate and Dream Memory mutations", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.actionGateAuthorizeTool)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.actionGateRespondApproval)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.memorySave)).toBe(AuthOrchestrationOperateScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.memoryDelete)).toBe(AuthOrchestrationOperateScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.memoryEnqueueEligible)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
   it("allows relay status reads without granting relay installation access", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.cloudGetRelayClientStatus)).toBe(
       AuthRelayReadScope,

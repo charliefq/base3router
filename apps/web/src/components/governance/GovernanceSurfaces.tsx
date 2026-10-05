@@ -1,7 +1,10 @@
 import type {
+  ActionApprovalId,
   EnvironmentId,
   GovernanceSnapshot,
+  MemoryId,
   ProjectId,
+  ThreadId,
   WorkflowCatalog,
   WorkflowRun,
   WorkflowStage,
@@ -10,6 +13,7 @@ import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime"
 import { useEffect, useState } from "react";
 
 import { Button } from "../ui/button";
+import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { useProjects } from "../../state/entities";
 import { governanceEnvironment } from "../../state/governance";
 import { useEnvironmentQuery } from "../../state/query";
@@ -303,9 +307,17 @@ function GovernanceProjectionView(props: {
             ) : (
               <ul className="mt-2 space-y-1 text-xs">
                 {snapshot.routes.map((route) => (
-                  <li key={`${route.threadId}:${route.messageId}`}>
+                  <li
+                    key={`${route.threadId}:${route.messageId}`}
+                    data-governance-route={`${route.threadId}:${route.messageId}`}
+                    data-route-mode={route.mode}
+                    data-route-source={route.source ?? ""}
+                    data-route-fallback={route.fallbackIndex ?? ""}
+                  >
                     {route.mode} · {route.model ?? "unselected"} ·{" "}
                     {route.instanceId ?? "no instance"}
+                    {route.source !== null ? ` · ${route.source}` : ""}
+                    {route.fallbackIndex !== null ? ` · fallback ${route.fallbackIndex}` : ""}
                   </li>
                 ))}
               </ul>
@@ -335,7 +347,11 @@ function GovernanceProjectionView(props: {
             ) : (
               <ul className="mt-2 space-y-1 text-xs">
                 {snapshot.approvals.map((approval) => (
-                  <li key={approval.approvalId}>
+                  <li
+                    key={approval.approvalId}
+                    data-approval-id={approval.approvalId}
+                    data-approval-status={approval.status}
+                  >
                     {approval.status}
                     {approval.consumedAt !== null ? " · consumed" : ""}
                   </li>
@@ -351,7 +367,11 @@ function GovernanceProjectionView(props: {
             {snapshot.memories.length === 0 ? null : (
               <ul className="mt-2 space-y-1 text-xs">
                 {snapshot.memories.map((memory) => (
-                  <li key={memory.memoryId}>
+                  <li
+                    key={memory.memoryId}
+                    data-memory-id={memory.memoryId}
+                    data-memory-status={memory.status}
+                  >
                     {memory.status} · {memory.scopeKind}
                     {memory.contentPresent ? "" : " · content absent"}
                   </li>
@@ -361,8 +381,241 @@ function GovernanceProjectionView(props: {
           </article>
         </div>
       )}
+      <ActionGateAndMemoryControls
+        environmentId={props.environmentId}
+        snapshot={snapshot}
+        onRefresh={props.onRefresh}
+      />
       <WorkflowDecisions environmentId={props.environmentId} refreshTick={props.refreshTick} />
     </section>
+  );
+}
+
+function ActionGateAndMemoryControls(props: {
+  readonly environmentId: EnvironmentId | null;
+  readonly snapshot: GovernanceSnapshot | null;
+  readonly onRefresh: () => void;
+}) {
+  const environmentId = props.environmentId;
+  const authorizeTool = useAtomCommand(governanceEnvironment.authorizeTool, {
+    reportFailure: false,
+  });
+  const respondApproval = useAtomCommand(governanceEnvironment.respondApproval, {
+    reportFailure: false,
+  });
+  const saveMemory = useAtomCommand(governanceEnvironment.saveMemory, { reportFailure: false });
+  const deleteMemory = useAtomCommand(governanceEnvironment.deleteMemory, { reportFailure: false });
+  const enqueueEligible = useAtomCommand(governanceEnvironment.enqueueEligible, {
+    reportFailure: false,
+  });
+  const updateSettings = useUpdateEnvironmentSettings(
+    environmentId ?? ("unbound" as EnvironmentId),
+  );
+  const [error, setError] = useState<string | null>(null);
+  if (environmentId === null) return null;
+  const threadId = (props.snapshot?.routes[0]?.threadId ??
+    props.snapshot?.leases[0]?.threadId ??
+    "governance-ask") as ThreadId;
+  const pending = props.snapshot?.approvals.find((approval) => approval.status === "pending");
+  const decided = props.snapshot?.approvals.find((approval) => approval.status !== "pending");
+  const activeMemory = props.snapshot?.memories.find((memory) => memory.status !== "deleted");
+  const submit = async (run: () => Promise<{ _tag: string }>) => {
+    setError(null);
+    const result = await run();
+    if (result._tag === "Failure") {
+      const cause = squashAtomCommandFailure(result as never);
+      setError(cause instanceof Error ? cause.message : "Governance mutation failed.");
+    }
+    props.onRefresh();
+  };
+  return (
+    <div className="space-y-3">
+      <article className="rounded-md border border-border/60 p-3" data-action-gate-surface="">
+        <h3 className="text-xs font-medium">ActionGate</h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          ASK is a one-time exact-action approval. Grant executes once. Deny, cancel, and expiry
+          execute zero times.
+        </p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <input
+            className="h-7 min-w-48 rounded-md border border-border/60 bg-transparent px-2 text-xs"
+            data-action-gate-url=""
+            defaultValue="https://example.invalid/ask"
+            aria-label="ASK tool URL"
+          />
+          <Button
+            size="sm"
+            type="button"
+            data-action-gate-authorize=""
+            onClick={() => {
+              const urlInput = document.querySelector<HTMLInputElement>("[data-action-gate-url]");
+              const url = urlInput?.value.trim() || "https://example.invalid/ask";
+              void submit(() =>
+                authorizeTool({
+                  environmentId,
+                  input: {
+                    toolName: "preview_open",
+                    args: { url },
+                    threadId,
+                  },
+                }),
+              );
+            }}
+          >
+            Request ASK
+          </Button>
+          <Button
+            size="sm"
+            type="button"
+            data-action-gate-grant=""
+            disabled={pending === undefined}
+            onClick={() => {
+              if (pending === undefined) return;
+              void submit(() =>
+                respondApproval({
+                  environmentId,
+                  input: { approvalId: pending.approvalId as ActionApprovalId, decision: "grant" },
+                }),
+              );
+            }}
+          >
+            Grant
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            type="button"
+            data-action-gate-deny=""
+            disabled={pending === undefined}
+            onClick={() => {
+              if (pending === undefined) return;
+              void submit(() =>
+                respondApproval({
+                  environmentId,
+                  input: { approvalId: pending.approvalId as ActionApprovalId, decision: "deny" },
+                }),
+              );
+            }}
+          >
+            Deny
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            type="button"
+            data-action-gate-cancel=""
+            disabled={pending === undefined}
+            onClick={() => {
+              if (pending === undefined) return;
+              void submit(() =>
+                respondApproval({
+                  environmentId,
+                  input: { approvalId: pending.approvalId as ActionApprovalId, decision: "cancel" },
+                }),
+              );
+            }}
+          >
+            Cancel
+          </Button>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground" data-action-gate-state="">
+          {pending !== undefined
+            ? `Pending ${pending.approvalId}`
+            : decided !== undefined
+              ? `${decided.status} ${decided.approvalId}`
+              : "No ActionGate approval."}
+        </p>
+      </article>
+      <article className="rounded-md border border-border/60 p-3" data-memory-surface="">
+        <h3 className="text-xs font-medium">Dream Memory</h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Memory is data, never authority. Capture off creates no new memory from eligible activity.
+        </p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            type="button"
+            data-memory-save=""
+            onClick={() => {
+              void submit(() =>
+                saveMemory({
+                  environmentId,
+                  input: {
+                    content: "browser-memory-preference",
+                    kind: "explicit-user-preference",
+                    scopeKind: "personal",
+                  },
+                }),
+              );
+            }}
+          >
+            Save memory
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            type="button"
+            data-memory-enqueue=""
+            onClick={() => {
+              void submit(() =>
+                enqueueEligible({
+                  environmentId,
+                  input: {
+                    turnText: "Prefer using the production browser harness for governance proofs.",
+                    threadId,
+                  },
+                }),
+              );
+            }}
+          >
+            Enqueue eligible
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            type="button"
+            data-memory-capture-off=""
+            onClick={() => {
+              updateSettings({ dreamMemory: { captureMode: "off" } });
+              props.onRefresh();
+            }}
+          >
+            Disable capture
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            type="button"
+            data-memory-delete=""
+            disabled={activeMemory === undefined}
+            onClick={() => {
+              if (activeMemory === undefined) return;
+              void submit(() =>
+                deleteMemory({
+                  environmentId,
+                  input: { memoryId: activeMemory.memoryId as MemoryId },
+                }),
+              );
+            }}
+          >
+            Delete memory
+          </Button>
+        </div>
+      </article>
+      <article className="rounded-md border border-border/60 p-3" data-provider-disclosure="">
+        <h3 className="text-xs font-medium">Provider capabilities</h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          OpenRouter has no executable provider driver on this branch. It is guidance, Teacher, and
+          Shadow only. Cursor Cloud REST execution is unavailable for authenticated product sessions
+          and is not a second engine.
+        </p>
+      </article>
+      {error !== null ? (
+        <p className="text-xs text-destructive" data-governance-mutation-error="">
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }
 

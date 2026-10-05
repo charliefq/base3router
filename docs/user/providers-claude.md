@@ -74,30 +74,15 @@ tool, which refuses skills reserved for manual invocation.
 
 ## OpenRouter
 
-Create a Claude instance with its own config directory, such as
-`~/.claude_openrouter`, and keep **Binary path** set to `claude`. In that instance's
-**Environment variables**, use:
+This branch has **no executable OpenRouter provider driver**. OpenRouter is
+guidance, Teacher, and Shadow only. A Claude instance pointed at
+`https://openrouter.ai/api` is not an OpenRouter execution path in T3 Code, and
+product sessions do not restore that driver.
 
-| Variable               | Value                                     |
-| ---------------------- | ----------------------------------------- |
-| `ANTHROPIC_BASE_URL`   | `https://openrouter.ai/api`               |
-| `ANTHROPIC_AUTH_TOKEN` | Your OpenRouter API key, marked Sensitive |
-| `ANTHROPIC_API_KEY`    | An explicitly empty value                 |
-
-If that Claude config directory has a cached Anthropic login, run `/logout` in a
-Claude Code session using that directory before starting the router setup. Cached
-login credentials can conflict with the router token.
-
-Select the model you want in T3 Code. For an OpenRouter model outside the built-in
-list, open that Claude instance in **Settings > Providers** and add its full model
-ID with **Add custom model**. Then select it in the chat model picker.
-`ANTHROPIC_DEFAULT_*_MODEL` variables map Claude Code aliases such as `sonnet`; they
-do not replace the explicit model ID selected in T3 Code. Custom models may have
-fewer effort, thinking, or context controls than built-in models.
-
-Verify the model used in OpenRouter's activity dashboard. For current compatibility
-requirements, use the
-[OpenRouter Claude Code guide](https://openrouter.ai/docs/cookbook/coding-agents/claude-code-integration).
+Do not treat OpenRouter activity dashboards, `ANTHROPIC_BASE_URL`, or a custom
+Claude model ID as proof that T3 Code executed an OpenRouter request. Paid
+OpenRouter calls are out of scope here. If you need Claude, use Claude Code's
+normal login on this environment.
 
 ## Other routers
 

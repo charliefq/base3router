@@ -39,6 +39,14 @@ describe("WebSocket RPC contracts", () => {
     expect(methods.filter((method) => method.startsWith("orchestrationV1."))).toEqual([]);
   });
 
+  it("registers production ActionGate and Dream Memory operate methods", () => {
+    expect(WsRpcGroup.requests.has("actionGate.authorizeTool")).toBe(true);
+    expect(WsRpcGroup.requests.has("actionGate.respondApproval")).toBe(true);
+    expect(WsRpcGroup.requests.has("memory.save")).toBe(true);
+    expect(WsRpcGroup.requests.has("memory.delete")).toBe(true);
+    expect(WsRpcGroup.requests.has("memory.enqueueEligible")).toBe(true);
+  });
+
   it("rejects server-internal commands sent to dispatchCommand", () => {
     const dispatchCommand = WsRpcGroup.requests.get(ORCHESTRATION_V2_WS_METHODS.dispatchCommand);
     if (dispatchCommand === undefined) throw new Error("dispatchCommand is not registered");

@@ -52,6 +52,21 @@ import {
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import { GovernanceReadError, GovernanceSnapshot, GovernanceSnapshotInput } from "./governance.ts";
 import {
+  ActionGateAuthorizeToolRequest,
+  ActionGateDecision,
+  ActionGateError,
+  ActionGateRespondApprovalRequest,
+  ActionGateRespondApprovalResult,
+} from "./actionGate.ts";
+import {
+  DreamMemoryError,
+  MemoryDeleteRequest,
+  MemoryEnqueueEligibleRequest,
+  MemoryEnqueueEligibleResult,
+  MemoryMutationResult,
+  MemorySaveRequest,
+} from "./dreamMemory.ts";
+import {
   WorkflowActionInput,
   WorkflowArtifact,
   WorkflowCatalog,
@@ -555,6 +570,11 @@ export const WS_METHODS = {
   workflowStagePreview: "workflow.stagePreview",
   workflowDispatchStage: "workflow.dispatchStage",
   workflowProposeArtifact: "workflow.proposeArtifact",
+  actionGateAuthorizeTool: "actionGate.authorizeTool",
+  actionGateRespondApproval: "actionGate.respondApproval",
+  memorySave: "memory.save",
+  memoryDelete: "memory.delete",
+  memoryEnqueueEligible: "memory.enqueueEligible",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -611,6 +631,35 @@ const WsWorkflowProposeArtifactRpc = Rpc.make(WS_METHODS.workflowProposeArtifact
   payload: WorkflowProposeArtifactInput,
   success: WorkflowArtifact,
   error: WorkflowRpcError,
+});
+
+const ActionGateRpcError = Schema.Union([EnvironmentAuthorizationError, ActionGateError]);
+const WsActionGateAuthorizeToolRpc = Rpc.make(WS_METHODS.actionGateAuthorizeTool, {
+  payload: ActionGateAuthorizeToolRequest,
+  success: ActionGateDecision,
+  error: ActionGateRpcError,
+});
+const WsActionGateRespondApprovalRpc = Rpc.make(WS_METHODS.actionGateRespondApproval, {
+  payload: ActionGateRespondApprovalRequest,
+  success: ActionGateRespondApprovalResult,
+  error: ActionGateRpcError,
+});
+
+const MemoryRpcError = Schema.Union([EnvironmentAuthorizationError, DreamMemoryError]);
+const WsMemorySaveRpc = Rpc.make(WS_METHODS.memorySave, {
+  payload: MemorySaveRequest,
+  success: MemoryMutationResult,
+  error: MemoryRpcError,
+});
+const WsMemoryDeleteRpc = Rpc.make(WS_METHODS.memoryDelete, {
+  payload: MemoryDeleteRequest,
+  success: MemoryMutationResult,
+  error: MemoryRpcError,
+});
+const WsMemoryEnqueueEligibleRpc = Rpc.make(WS_METHODS.memoryEnqueueEligible, {
+  payload: MemoryEnqueueEligibleRequest,
+  success: MemoryEnqueueEligibleResult,
+  error: MemoryRpcError,
 });
 
 const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
@@ -1752,6 +1801,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsWorkflowStagePreviewRpc,
   WsWorkflowDispatchStageRpc,
   WsWorkflowProposeArtifactRpc,
+  WsActionGateAuthorizeToolRpc,
+  WsActionGateRespondApprovalRpc,
+  WsMemorySaveRpc,
+  WsMemoryDeleteRpc,
+  WsMemoryEnqueueEligibleRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,

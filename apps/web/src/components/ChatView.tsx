@@ -7947,6 +7947,7 @@ export default function ChatView(props: ChatViewProps) {
                 modelSelection: context.selectedModelSelection,
                 runtimeMode,
                 interactionMode: context.interactionMode,
+                routingMode: context.routingMode,
                 createdAt,
               },
             });
@@ -8175,6 +8176,7 @@ export default function ChatView(props: ChatViewProps) {
       selectedModelSelection: ctxSelectedModelSelection,
       interactionMode: sendInteractionMode,
       interactionModeEnabled: sendInteractionModeEnabled,
+      routingMode: sendRoutingMode,
     } = sendCtx;
     const annotationImageAlreadyAttached =
       directAnnotation?.image !== undefined &&
@@ -8821,6 +8823,7 @@ export default function ChatView(props: ChatViewProps) {
                   titleSeed: title,
                   runtimeMode,
                   interactionMode: target.interactionMode,
+                  routingMode: sendRoutingMode,
                   bootstrap: {
                     createThread: {
                       projectId: activeProject.id,
@@ -9215,6 +9218,7 @@ export default function ChatView(props: ChatViewProps) {
           titleSeed: title,
           runtimeMode,
           interactionMode: sendInteractionMode,
+          routingMode: sendRoutingMode,
           dispatchMode,
           ...(bootstrap ? { bootstrap } : {}),
           createdAt: messageCreatedAt,
@@ -9655,6 +9659,7 @@ export default function ChatView(props: ChatViewProps) {
       selectedProviderModels: ctxSelectedProviderModels,
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
+      routingMode: sendRoutingMode,
     } = sendCtx;
 
     const threadIdForSend = activeThread.id;
@@ -9733,6 +9738,7 @@ export default function ChatView(props: ChatViewProps) {
           titleSeed: activeThread.title,
           runtimeMode,
           interactionMode: nextInteractionMode,
+          routingMode: sendRoutingMode,
           ...(nextInteractionMode === "default" && activeProposedPlan
             ? {
                 sourceProposedPlan: {
@@ -9792,6 +9798,7 @@ export default function ChatView(props: ChatViewProps) {
       selectedProviderModels: ctxSelectedProviderModels,
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
+      routingMode: sendRoutingMode,
     } = sendCtx;
 
     const createdAt = new Date().toISOString();
@@ -9847,6 +9854,7 @@ export default function ChatView(props: ChatViewProps) {
           titleSeed: nextThreadTitle,
           runtimeMode: defaultRuntimeMode,
           interactionMode: "default",
+          routingMode: sendRoutingMode,
           sourceProposedPlan: {
             threadId: activeThread.id,
             planId: activeProposedPlan.id,
