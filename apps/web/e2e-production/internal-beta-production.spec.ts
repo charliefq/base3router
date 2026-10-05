@@ -15,7 +15,7 @@ async function capture(page: Page, name: string) {
 
 async function finishFirstRunIfPresent(page: Page) {
   const setup = page.getByRole("dialog", { name: "Set up Base3Router" });
-  const appeared = await setup.isVisible({ timeout: 20_000 }).catch(() => false);
+  const appeared = await setup.isVisible({ timeout: 5_000 }).catch(() => false);
   if (!appeared) return;
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Your agents" })).toBeVisible();
@@ -103,6 +103,19 @@ test("Internal Beta: production web UI talks to real RPC for memory, approvals, 
   if (pairingUrl === undefined || pairingUrl.length === 0) {
     throw new Error("T3CODE_PRODUCTION_PAIRING_URL is required.");
   }
+
+  await page.addInitScript(() => {
+    const key = "t3code:client-settings:v1";
+    const current = window.localStorage.getItem(key);
+    const parsed =
+      current === null || current.length === 0
+        ? {}
+        : (JSON.parse(current) as Record<string, unknown>);
+    window.localStorage.setItem(
+      key,
+      JSON.stringify({ ...parsed, onboardingCompletedAt: "2026-10-05T00:00:00.000Z" }),
+    );
+  });
 
   await page.goto(pairingUrl);
   await expect(page).not.toHaveURL(/\/pair/, { timeout: 60_000 });

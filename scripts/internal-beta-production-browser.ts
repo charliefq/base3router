@@ -136,25 +136,20 @@ async function main(): Promise<number> {
     T3CODE_NO_BROWSER: "1",
     T3CODE_SINGLE_ORIGIN_DEV: "1",
     T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD: "0",
-    T3CODE_HOST: "127.0.0.1",
-    HOST: "127.0.0.1",
   };
   delete env.VITE_HTTP_URL;
   delete env.VITE_WS_URL;
   delete env.T3CODE_UI_LAB;
   delete env.T3CODE_UI_LAB_URL;
+  delete env.HOST;
+  delete env.T3CODE_HOST;
 
   // `--home-dir` outranks worktree `.t3`. Ambient T3CODE_HOME alone does not.
+  // Do not pass --host 127.0.0.1: Vite proxies /ws to http://localhost:<port>,
+  // and an IPv4-only backend leaves the WebSocket upgrade hanging on ::1.
   const child = NodeChildProcess.spawn(
     runtimeProcess.execPath,
-    [
-      NodePath.join(REPO_ROOT, "scripts/dev-runner.ts"),
-      "dev",
-      "--home-dir",
-      home,
-      "--host",
-      "127.0.0.1",
-    ],
+    [NodePath.join(REPO_ROOT, "scripts/dev-runner.ts"), "dev", "--home-dir", home],
     {
       cwd: REPO_ROOT,
       env,
