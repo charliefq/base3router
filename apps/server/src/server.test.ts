@@ -1566,6 +1566,7 @@ const waitWallClock = (ms: number) =>
     () =>
       new Promise<void>((resolve) => {
         // TestClock does not advance while MCP HTTP I/O is in flight.
+        // @effect-diagnostics-next-line globalTimers:off
         setTimeout(resolve, ms);
       }),
   );
@@ -4514,15 +4515,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                     return { sequence: 0 };
                   }
                   yield* Deferred.succeed(started, turnId);
-                  yield* budget.value.withAdmission(
-                    {
-                      workloadClass: "foreground-turn",
-                      environmentId: testEnvironmentDescriptor.environmentId,
-                      threadId: command.threadId,
-                      requestedAt: command.createdAt,
-                    },
-                    Deferred.await(workRelease),
-                  );
+                  yield* budget.value
+                    .withAdmission(
+                      {
+                        workloadClass: "foreground-turn",
+                        environmentId: testEnvironmentDescriptor.environmentId,
+                        threadId: command.threadId,
+                        requestedAt: command.createdAt,
+                      },
+                      Deferred.await(workRelease),
+                    )
+                    .pipe(Effect.catchTag("ConcurrencyBudgetError", () => Effect.void));
                   return { sequence: 1 };
                 }),
             },

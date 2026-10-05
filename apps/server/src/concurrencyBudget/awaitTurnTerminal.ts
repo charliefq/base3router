@@ -14,7 +14,7 @@ import * as Stream from "effect/Stream";
  * Foreground leases must outlive start-return adapters. Missing terminals
  * release after this bound so shutdown cannot wait forever.
  */
-export const FOREGROUND_TURN_TERMINAL_TIMEOUT: Duration.DurationInput = "10 minutes";
+const FOREGROUND_TURN_TERMINAL_TIMEOUT: Duration.Input = "10 minutes";
 
 export type TurnTerminalOutcome = "completed" | "aborted" | "timeout" | "stream-ended";
 
@@ -38,7 +38,7 @@ export const sendTurnUntilTerminal = <A extends ProviderTurnStartResult, E, R, R
   send: Effect.Effect<A, E, R>,
   stream: Stream.Stream<ProviderRuntimeEvent>,
   options?: {
-    readonly timeout?: Duration.DurationInput;
+    readonly timeout?: Duration.Input;
     readonly afterStart?: (started: A) => Effect.Effect<void, never, R2>;
   },
 ): Effect.Effect<A, E, R | R2> =>

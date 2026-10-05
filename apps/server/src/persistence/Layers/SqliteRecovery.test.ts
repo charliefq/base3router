@@ -80,12 +80,16 @@ const plannedAction = () => {
 };
 
 const withTempDb = <A, E, R>(
-  use: (dbPath: string, persistence: Layer.Layer<SqlClient.SqlClient>) => Effect.Effect<A, E, R>,
+  use: (
+    dbPath: string,
+    persistence: ReturnType<typeof makeSqlitePersistenceLive>,
+  ) => Effect.Effect<A, E, R>,
 ) => {
   const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-recovery-"));
   const dbPath = NodePath.join(tempDir, "state.sqlite");
   const persistence = makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer));
   return use(dbPath, persistence).pipe(
+    Effect.provide(NodeServices.layer),
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
   );
 };
@@ -114,6 +118,7 @@ it.effect("pending approvals survive process restart on a disposable file databa
         },
       );
       assert.equal(child.status, 0);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
       const inspected = JSON.parse(child.stdout) as ReadonlyArray<{
         readonly approvalId: string;
         readonly status: string;

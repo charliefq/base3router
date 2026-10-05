@@ -2,7 +2,12 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import { EnvironmentId, ThreadId, defaultConcurrencyBudgetPolicy } from "@t3tools/contracts";
+import {
+  ConcurrencyBudgetError,
+  EnvironmentId,
+  ThreadId,
+  defaultConcurrencyBudgetPolicy,
+} from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -36,6 +41,7 @@ const hold = (started: Deferred.Deferred<void>, release: Deferred.Deferred<void>
 it.effect("measures mixed foreground/background occupancy and cancellation-cycle cleanup", () =>
   Effect.gen(function* () {
     const budget = yield* ConcurrencyBudgetService;
+    // @effect-diagnostics-next-line globalDateInEffect:off
     const startedAt = Date.now();
     const rssBefore = process.memoryUsage().rss;
     const fgRelease = yield* Deferred.make<void>();
@@ -63,7 +69,7 @@ it.effect("measures mixed foreground/background occupancy and cancellation-cycle
       )
       .pipe(Effect.forkChild({ startImmediately: true }));
     const fgStarted: Array<Deferred.Deferred<void>> = [];
-    const fgFibers: Array<Fiber.Fiber<void, unknown>> = [];
+    const fgFibers: Array<Fiber.Fiber<void, ConcurrencyBudgetError>> = [];
     for (let index = 0; index < 3; index += 1) {
       const started = yield* Deferred.make<void>();
       fgStarted.push(started);
@@ -120,6 +126,7 @@ it.effect("measures mixed foreground/background occupancy and cancellation-cycle
     yield* Fiber.join(shadowFiber).pipe(Effect.exit);
     yield* budget.shutdown;
     const finalSnapshot = yield* budget.snapshot(environmentId);
+    // @effect-diagnostics-next-line globalDateInEffect:off
     const durationMs = Date.now() - startedAt;
     const rssAfter = process.memoryUsage().rss;
     const evidence = {
@@ -150,10 +157,9 @@ it.effect("measures mixed foreground/background occupancy and cancellation-cycle
     const evidenceDir = process.env.INTERNAL_BETA_EVIDENCE_DIR;
     if (evidenceDir !== undefined && evidenceDir.length > 0) {
       NodeFS.mkdirSync(evidenceDir, { recursive: true });
-      NodeFS.writeFileSync(
-        NodePath.join(evidenceDir, "mixed-workload.json"),
-        `${JSON.stringify(evidence, null, 2)}\n`,
-      );
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const encoded = JSON.stringify(evidence, null, 2);
+      NodeFS.writeFileSync(NodePath.join(evidenceDir, "mixed-workload.json"), `${encoded}\n`);
     }
     assert.equal(occupied.foregroundActive, 2);
     assert.equal(occupied.queued >= 1, true);

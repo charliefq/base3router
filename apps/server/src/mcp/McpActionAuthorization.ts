@@ -134,11 +134,9 @@ const revalidateAfterQueue = (
       );
     }
     if (stored.value.status !== "consumed" && stored.value.status !== "granted") {
-      return yield* blocked(
-        toolName,
-        `Queued approval is ${stored.value.status} and cannot run.`,
-        stored.value.status === "consumed" ? ["APPROVAL_CONSUMED"] : ["ACTION_DENIED"],
-      );
+      return yield* blocked(toolName, `Queued approval is ${stored.value.status} and cannot run.`, [
+        "ACTION_DENIED",
+      ]);
     }
   });
 

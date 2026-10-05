@@ -90,15 +90,15 @@ const openStatus = {
   loading: false,
 };
 
-const waitUntil = <A>(
-  read: Effect.Effect<A>,
+const waitUntil = <A, E>(
+  read: Effect.Effect<A, E>,
   predicate: (value: A) => boolean,
   description: string,
 ) =>
   Effect.gen(function* () {
     const deadline = (yield* Clock.currentTimeMillis) + 5_000;
     while (true) {
-      const value = yield* read;
+      const value = yield* Effect.orDie(read);
       if (predicate(value)) return value;
       if ((yield* Clock.currentTimeMillis) >= deadline) {
         return yield* Effect.die(new Error(description));
