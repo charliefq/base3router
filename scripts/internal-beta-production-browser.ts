@@ -188,11 +188,16 @@ async function main(): Promise<number> {
           observedHome = runnerMatch[2];
         }
       }
-      const pairingMatch = combined.match(/Pairing URL: (https?:\/\/\S+)/);
+      const pairingMatch = combined.match(/(?:Pairing URL|pairingUrl): (https?:\/\/\S+)/);
       if (pairingMatch?.[1] !== undefined) {
         pairingUrl = pairingMatch[1];
       }
-      if (webPort !== undefined && pairingUrl !== undefined) break;
+      if (
+        webPort !== undefined &&
+        (pairingUrl !== undefined || combined.includes("Listening on "))
+      ) {
+        break;
+      }
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     if (webPort === undefined) {
