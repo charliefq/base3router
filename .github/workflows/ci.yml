@@ -356,6 +356,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          # Bind evidence to the PR head, not the pull_request merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           sparse-checkout: |
             /*
             !/.repos/
@@ -374,12 +376,20 @@ jobs:
         run: |
           mkdir -p "${{ runner.temp }}/internal-beta"
           node scripts/internal-beta-acceptance.ts run --out "${{ runner.temp }}/internal-beta/evidence.json"
+          head="$(git rev-parse HEAD)"
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          recorded="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])' < "${{ runner.temp }}/internal-beta/evidence.json")"
+          if test "$head" != "$expected" || test "$recorded" != "$head"; then
+            printf 'acceptance evidence SHA mismatch: HEAD=%s expected=%s recorded=%s\n' "$head" "$expected" "$recorded" >&2
+            exit 1
+          fi
+          printf 'acceptance-evidence-sha=%s\n' "$head"
 
       - name: Upload acceptance evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: internal-beta-acceptance-${{ github.sha }}
+          name: internal-beta-acceptance-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/internal-beta/
           if-no-files-found: error
           retention-days: 30
