@@ -91,6 +91,26 @@ it("rejects evidence that omits a required local gate", () => {
   expect(checked.detail).toContain("L-mcp-ask");
 });
 
+it("keeps production browser, routing execution, lease cleanup, and sustained workload required", () => {
+  const required = new Set(GATES.filter((gate) => gate.requiredLocal).map((gate) => gate.id));
+  expect(required.has("L-production-browser")).toBe(true);
+  expect(required.has("L-auto-manual")).toBe(true);
+  expect(required.has("L-lease-terminal")).toBe(true);
+  expect(required.has("L-workload")).toBe(true);
+  const autoManual = GATES.find((gate) => gate.id === "L-auto-manual");
+  expect(
+    autoManual?.command.kind === "vp-test" &&
+      autoManual.command.files.some((file) => file.includes("ProviderCommandReactor.test.ts")),
+  ).toBe(true);
+  const workload = GATES.find((gate) => gate.id === "L-workload");
+  expect(
+    workload?.command.kind === "vp-test" &&
+      workload.command.files.some((file) =>
+        file.includes("ConcurrencyBudget.sustainedWorkload.test.ts"),
+      ),
+  ).toBe(true);
+});
+
 it("accepts valid SHA-bound evidence for the current tree", () => {
   const checked = checkEvidence({
     evidence: validDocument(),

@@ -56,7 +56,7 @@ export const GATES: ReadonlyArray<GateDefinition> = [
   {
     id: "L-lease-terminal",
     requirementIds: ["R6", "O6"],
-    title: "Foreground lease spans terminal execution",
+    title: "Foreground lease spans terminal execution and cleanup safety",
     requiredLocal: true,
     command: {
       kind: "vp-test",
@@ -99,23 +99,27 @@ export const GATES: ReadonlyArray<GateDefinition> = [
   {
     id: "L-workload",
     requirementIds: ["R6"],
-    title: "Mixed foreground/background occupancy and cancellation cycles",
+    title: "Scheduler occupancy plus bounded sustained fake-provider workload",
     requiredLocal: true,
     command: {
       kind: "vp-test",
-      files: ["apps/server/src/concurrencyBudget/ConcurrencyBudget.workload.test.ts"],
+      files: [
+        "apps/server/src/concurrencyBudget/ConcurrencyBudget.workload.test.ts",
+        "apps/server/src/concurrencyBudget/ConcurrencyBudget.sustainedWorkload.test.ts",
+      ],
     },
   },
   {
     id: "L-auto-manual",
     requirementIds: ["R1", "O1"],
-    title: "Auto/Manual bind through Dispatcher and production router evaluation",
+    title: "Auto/Manual bind, sendTurn to the bound fake model, and failover provenance",
     requiredLocal: true,
     command: {
       kind: "vp-test",
       files: [
         "apps/server/src/dispatcher/Dispatcher.test.ts",
         "apps/server/src/routerEvaluation/RouterEvaluationService.test.ts",
+        "apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts",
       ],
     },
   },
@@ -138,6 +142,16 @@ export const GATES: ReadonlyArray<GateDefinition> = [
     command: {
       kind: "vp-test",
       files: ["scripts/internal-beta-acceptance.test.ts"],
+    },
+  },
+  {
+    id: "L-production-browser",
+    requirementIds: ["R7", "O5"],
+    title: "Production web UI against real RPC, disposable SQLite, and fake transports",
+    requiredLocal: true,
+    command: {
+      kind: "node-script",
+      script: "scripts/internal-beta-production-browser.ts",
     },
   },
   {
