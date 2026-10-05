@@ -2104,13 +2104,25 @@ const make = Effect.gen(function* () {
         );
       });
 
+    const interruptOnStaleTerminal = (
+      started: { readonly threadId: ThreadId },
+      reason: "timeout" | "stream-ended",
+    ) =>
+      providerService.interruptTurn({ threadId: started.threadId }).pipe(
+        // Stream-end cannot observe remaining adapter work. After interrupt is
+        // delivered, production releases so finite streams (compaction) cannot
+        // pin capacity forever. Timeout keeps the lease unless a terminal
+        // arrives — a still-running fake after timeout must not free the slot.
+        Effect.as({ executionStopped: reason === "stream-ended" }),
+        Effect.catchCause(() => Effect.succeed({ executionStopped: reason === "stream-ended" })),
+      );
+
     const sendRoutedTurn = (routeFailover: boolean) =>
       buildRoutedTurnRequest(routeFailover).pipe(
         Effect.flatMap((request) =>
-          sendTurnUntilTerminal(
-            providerService.sendTurn(request),
-            providerService.streamEvents,
-          ).pipe(Effect.asVoid),
+          sendTurnUntilTerminal(providerService.sendTurn(request), providerService.streamEvents, {
+            onCleanup: interruptOnStaleTerminal,
+          }).pipe(Effect.asVoid),
         ),
       );
 
@@ -2135,7 +2147,10 @@ const make = Effect.gen(function* () {
     const send = sendTurnUntilTerminal(
       providerService.sendTurn(sendTurnRequest.value),
       providerService.streamEvents,
-      { afterStart: () => registerCurrentPending() },
+      {
+        afterStart: () => registerCurrentPending(),
+        onCleanup: interruptOnStaleTerminal,
+      },
     ).pipe(
       Effect.asVoid,
       Effect.catchCause((cause) =>

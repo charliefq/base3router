@@ -332,12 +332,14 @@ it.effect("preserves execution-tree accounting across failover-retry", () =>
   ),
 );
 
-it.effect("releases on bounded timeout when the terminal event never arrives", () =>
+it.effect("interrupts on timeout and releases only after the fake provider stops", () =>
   provideTight(
     Effect.gen(function* () {
       const budget = yield* ConcurrencyBudgetService;
       const terminals = yield* Queue.unbounded<ProviderRuntimeEvent>();
       const returned = yield* Deferred.make<void>();
+      const workActive = yield* Ref.make(true);
+      const interrupts = yield* Ref.make(0);
       const fiber = yield* forkAdmission(
         budget.withAdmission(
           {
@@ -348,23 +350,78 @@ it.effect("releases on bounded timeout when the terminal event never arrives", (
           },
           sendTurnUntilTerminal(startReturnSend(turnId, returned), Stream.fromQueue(terminals), {
             timeout: "20 millis",
+            interruptAckTimeout: "50 millis",
+            onCleanup: (_started, reason) =>
+              Effect.gen(function* () {
+                assert.equal(reason, "timeout");
+                yield* Ref.update(interrupts, (count) => count + 1);
+                yield* Ref.set(workActive, false);
+                yield* Queue.offer(terminals, aborted(turnId));
+                return { executionStopped: true };
+              }),
           }),
         ),
       );
       yield* Deferred.await(returned);
+      assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 1);
+      assert.equal(yield* Ref.get(workActive), true);
       yield* TestClock.adjust("20 millis");
       yield* Fiber.join(fiber);
-      const after = yield* budget.snapshot(environmentId);
-      assert.equal(after.foregroundActive, 0);
+      assert.equal(yield* Ref.get(interrupts), 1);
+      assert.equal(yield* Ref.get(workActive), false);
+      assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
     }),
   ),
 );
 
-it.effect("releases when the provider event stream ends without a terminal event", () =>
+it.effect("keeps the lease on timeout when a fake provider stays active after interrupt", () =>
+  provideTight(
+    Effect.gen(function* () {
+      const budget = yield* ConcurrencyBudgetService;
+      const terminals = yield* Queue.unbounded<ProviderRuntimeEvent>();
+      const returned = yield* Deferred.make<void>();
+      const workActive = yield* Ref.make(true);
+      const interrupts = yield* Ref.make(0);
+      const fiber = yield* forkAdmission(
+        budget.withAdmission(
+          {
+            workloadClass: "foreground-turn",
+            environmentId,
+            threadId,
+            requestedAt: "2026-10-04T00:00:11.500Z",
+          },
+          sendTurnUntilTerminal(startReturnSend(turnId, returned), Stream.fromQueue(terminals), {
+            timeout: "20 millis",
+            interruptAckTimeout: "20 millis",
+            onCleanup: (_started, reason) =>
+              Effect.gen(function* () {
+                assert.equal(reason, "timeout");
+                yield* Ref.update(interrupts, (count) => count + 1);
+                return { executionStopped: false };
+              }),
+          }),
+        ),
+      );
+      yield* Deferred.await(returned);
+      yield* TestClock.adjust("40 millis");
+      yield* Effect.yieldNow;
+      assert.equal(yield* Ref.get(interrupts), 1);
+      assert.equal(yield* Ref.get(workActive), true);
+      assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 1);
+      yield* Fiber.interrupt(fiber);
+      assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
+      assert.equal(yield* Ref.get(workActive), true);
+    }),
+  ),
+);
+
+it.effect("releases when the provider event stream ends and interrupt confirms stop", () =>
   provideTight(
     Effect.gen(function* () {
       const budget = yield* ConcurrencyBudgetService;
       const returned = yield* Deferred.make<void>();
+      const workActive = yield* Ref.make(true);
+      const interrupts = yield* Ref.make(0);
       const fiber = yield* forkAdmission(
         budget.withAdmission(
           {
@@ -384,15 +441,114 @@ it.effect("releases when the provider event stream ends without a terminal event
               turnId,
               payload: { streamKind: "assistant_text", delta: "partial" },
             } as ProviderRuntimeEvent),
+            {
+              interruptAckTimeout: "20 millis",
+              onCleanup: (_started, reason) =>
+                Effect.gen(function* () {
+                  assert.equal(reason, "stream-ended");
+                  yield* Ref.update(interrupts, (count) => count + 1);
+                  yield* Ref.set(workActive, false);
+                  return { executionStopped: true };
+                }),
+            },
           ),
         ),
       );
       yield* Deferred.await(returned);
       yield* Fiber.join(fiber);
-      const after = yield* budget.snapshot(environmentId);
-      assert.equal(after.foregroundActive, 0);
+      assert.equal(yield* Ref.get(interrupts), 1);
+      assert.equal(yield* Ref.get(workActive), false);
+      assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
     }),
   ),
+);
+
+it.effect(
+  "keeps the lease after stream-end when a fake provider stays active (enforcement limitation)",
+  () =>
+    provideTight(
+      Effect.gen(function* () {
+        const budget = yield* ConcurrencyBudgetService;
+        const returned = yield* Deferred.make<void>();
+        const workActive = yield* Ref.make(true);
+        const interrupts = yield* Ref.make(0);
+        const fiber = yield* forkAdmission(
+          budget.withAdmission(
+            {
+              workloadClass: "foreground-turn",
+              environmentId,
+              threadId,
+              requestedAt: "2026-10-04T00:00:13.500Z",
+            },
+            sendTurnUntilTerminal(
+              startReturnSend(turnId, returned),
+              Stream.succeed({
+                type: "content.delta",
+                eventId: EventId.make("evt-delta-live"),
+                provider: "codex",
+                createdAt: "2026-10-04T00:00:13.500Z",
+                threadId,
+                turnId,
+                payload: { streamKind: "assistant_text", delta: "still running" },
+              } as ProviderRuntimeEvent),
+              {
+                interruptAckTimeout: "20 millis",
+                onCleanup: (_started, reason) =>
+                  Effect.gen(function* () {
+                    assert.equal(reason, "stream-ended");
+                    yield* Ref.update(interrupts, (count) => count + 1);
+                    return { executionStopped: false };
+                  }),
+              },
+            ),
+          ),
+        );
+        yield* Deferred.await(returned);
+        yield* Effect.yieldNow;
+        assert.equal(yield* Ref.get(interrupts), 1);
+        assert.equal(yield* Ref.get(workActive), true);
+        assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 1);
+        yield* Fiber.interrupt(fiber);
+        assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
+        assert.equal(yield* Ref.get(workActive), true);
+      }),
+    ),
+);
+
+it.effect(
+  "releases on stream-end without onCleanup because remaining work cannot be observed",
+  () =>
+    provideTight(
+      Effect.gen(function* () {
+        const budget = yield* ConcurrencyBudgetService;
+        const returned = yield* Deferred.make<void>();
+        const fiber = yield* forkAdmission(
+          budget.withAdmission(
+            {
+              workloadClass: "foreground-turn",
+              environmentId,
+              threadId,
+              requestedAt: "2026-10-04T00:00:14.000Z",
+            },
+            sendTurnUntilTerminal(
+              startReturnSend(turnId, returned),
+              Stream.succeed({
+                type: "content.delta",
+                eventId: EventId.make("evt-delta-limit"),
+                provider: "codex",
+                createdAt: "2026-10-04T00:00:14.000Z",
+                threadId,
+                turnId,
+                payload: { streamKind: "assistant_text", delta: "unobserved" },
+              } as ProviderRuntimeEvent),
+            ),
+          ),
+        );
+        yield* Deferred.await(returned);
+        yield* Fiber.join(fiber);
+        assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
+      }),
+    ),
 );
 
 it.effect(
@@ -413,6 +569,8 @@ it.effect(
             },
             sendTurnUntilTerminal(startReturnSend(turnId, returned), Stream.fromQueue(terminals), {
               timeout: "50 millis",
+              interruptAckTimeout: "20 millis",
+              onCleanup: () => Effect.succeed({ executionStopped: true }),
             }),
           ),
         );
