@@ -52,6 +52,20 @@ import {
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import { GovernanceReadError, GovernanceSnapshot, GovernanceSnapshotInput } from "./governance.ts";
 import {
+  WorkflowActionInput,
+  WorkflowArtifact,
+  WorkflowCatalog,
+  WorkflowDispatchStageInput,
+  WorkflowDispatchStageResult,
+  WorkflowOperationError,
+  WorkflowProposeArtifactInput,
+  WorkflowReadInput,
+  WorkflowReadRunInput,
+  WorkflowRun,
+  WorkflowStagePreview,
+  WorkflowStagePreviewInput,
+} from "./workflow.ts";
+import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
   EnvironmentAuthorizationError,
@@ -535,6 +549,12 @@ export const WS_METHODS = {
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
 
   governanceSnapshot: "governance.snapshot",
+  workflowCatalog: "workflow.catalog",
+  workflowReadRun: "workflow.readRun",
+  workflowAction: "workflow.action",
+  workflowStagePreview: "workflow.stagePreview",
+  workflowDispatchStage: "workflow.dispatchStage",
+  workflowProposeArtifact: "workflow.proposeArtifact",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -559,6 +579,38 @@ const WsGovernanceSnapshotRpc = Rpc.make(WS_METHODS.governanceSnapshot, {
   payload: GovernanceSnapshotInput,
   success: GovernanceSnapshot,
   error: Schema.Union([EnvironmentAuthorizationError, GovernanceReadError]),
+});
+
+const WorkflowRpcError = Schema.Union([WorkflowOperationError, EnvironmentAuthorizationError]);
+const WsWorkflowCatalogRpc = Rpc.make(WS_METHODS.workflowCatalog, {
+  payload: WorkflowReadInput,
+  success: WorkflowCatalog,
+  error: WorkflowRpcError,
+});
+const WsWorkflowReadRunRpc = Rpc.make(WS_METHODS.workflowReadRun, {
+  payload: WorkflowReadRunInput,
+  success: Schema.NullOr(WorkflowRun),
+  error: WorkflowRpcError,
+});
+const WsWorkflowActionRpc = Rpc.make(WS_METHODS.workflowAction, {
+  payload: WorkflowActionInput,
+  success: WorkflowCatalog,
+  error: WorkflowRpcError,
+});
+const WsWorkflowStagePreviewRpc = Rpc.make(WS_METHODS.workflowStagePreview, {
+  payload: WorkflowStagePreviewInput,
+  success: WorkflowStagePreview,
+  error: WorkflowRpcError,
+});
+const WsWorkflowDispatchStageRpc = Rpc.make(WS_METHODS.workflowDispatchStage, {
+  payload: WorkflowDispatchStageInput,
+  success: WorkflowDispatchStageResult,
+  error: WorkflowRpcError,
+});
+const WsWorkflowProposeArtifactRpc = Rpc.make(WS_METHODS.workflowProposeArtifact, {
+  payload: WorkflowProposeArtifactInput,
+  success: WorkflowArtifact,
+  error: WorkflowRpcError,
 });
 
 const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
@@ -1694,6 +1746,12 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsGovernanceSnapshotRpc,
+  WsWorkflowCatalogRpc,
+  WsWorkflowReadRunRpc,
+  WsWorkflowActionRpc,
+  WsWorkflowStagePreviewRpc,
+  WsWorkflowDispatchStageRpc,
+  WsWorkflowProposeArtifactRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,

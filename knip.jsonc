@@ -41,11 +41,6 @@
       // Keep the transitive Effect runtime pinned for standalone npm installs.
       // The Vite+ web build prerequisite.
       "ignoreDependencies": ["@effect/platform-node-shared", "@t3tools/web"],
-      // Ported policy entry points kept for the V2 gate. They have no separate
-      // driver or RPC consumer on this branch.
-      "ignoreIssues": {
-        "src/workflow/Workflow.ts": ["exports"],
-      },
     },
     "apps/desktop": {
       // Electron loads these bundles by filename rather than importing them.

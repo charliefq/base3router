@@ -108,6 +108,12 @@ authorized with `orchestration:read` on the authenticated session. It shows
 route mode, lease occupancy, approval status, and whether memory content is
 present. It does not include prompts or memory content.
 
+Workflow Phase 5 human decisions use `workflow.catalog`, `workflow.readRun`,
+and `workflow.action` on that same authenticated session. `orchestration:read`
+can view a pending gate; `orchestration:operate` records approve, reject, or
+cancel. Approved agent stages dispatch through governed V2
+`ThreadLaunchService` / `message.dispatch`. Cursor Cloud REST stays fail-closed.
+
 ## Later upstream commits
 
 None. The pin remains `8ed276c246b624631e7d39241ebfd22d8314cb68`.

@@ -155,6 +155,10 @@
       "types": "./src/state/governance.ts",
       "default": "./src/state/governance.ts"
     },
+    "./state/workflow": {
+      "types": "./src/state/workflow.ts",
+      "default": "./src/state/workflow.ts"
+    },
     "./state/item-support": {
       "types": "./src/state/itemSupport.ts",
       "default": "./src/state/itemSupport.ts"
