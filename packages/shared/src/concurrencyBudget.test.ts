@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import * as DateTime from "effect/DateTime";
 import {
   EnvironmentId,
+  ThreadId,
   type ConcurrencyAdmissionRequestV0,
   type ConcurrencyWorkloadClass,
 } from "@t3tools/contracts";
@@ -222,5 +223,101 @@ describe("concurrency scheduler", () => {
       expect(item.active).toBeGreaterThanOrEqual(0);
     }
     expect(scheduler.activeCount()).toBe(0);
+  });
+
+  it("does not commit execution-tree counts while work is only queued", () => {
+    const clock = new FakeClock();
+    const scheduler = new ConcurrencyScheduler({ environmentId: env, clock });
+    const parent = scheduler.admit(request("foreground-turn"));
+    const tree = parent.tree;
+    if (tree === undefined) throw new Error("expected tree");
+    const childLeases: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const admitted = scheduler.admit(request("child-agent"));
+      if (admitted.lease !== undefined) childLeases.push(admitted.lease.leaseId);
+    }
+    const queued = scheduler.admit(
+      request("child-agent", { tree, threadId: ThreadId.make("t-1") }),
+    );
+    expect(queued.outcome).toBe("queued");
+    expect(queued.tree?.concurrentChildCount ?? 0).toBe(0);
+    const woken: string[] = [];
+    scheduler.attachWaiter(queued.admissionId, {
+      resolve: (result) => {
+        woken.push(result.outcome);
+      },
+    });
+    const first = childLeases.shift();
+    if (first === undefined) throw new Error("expected child lease");
+    scheduler.release(first as never);
+    expect(woken[0]).toBe("admitted");
+  });
+
+  it("cancels queued work for a thread and cannot promote Dream above foreground by aging", () => {
+    const clock = new FakeClock();
+    const scheduler = new ConcurrencyScheduler({ environmentId: env, clock });
+    const threadId = ThreadId.make("thread-cancel");
+    for (let index = 0; index < 8; index += 1) {
+      expect(scheduler.admit(request("mcp-action")).outcome).toBe("admitted");
+    }
+    const queued = scheduler.admit(request("mcp-action", { threadId }));
+    expect(queued.outcome).toBe("queued");
+    expect(scheduler.cancelQueuedForThread(threadId)).toBe(1);
+    expect(scheduler.queuedCount()).toBe(0);
+
+    const foregroundLeases: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const admitted = scheduler.admit(request("foreground-turn"));
+      if (admitted.lease !== undefined) foregroundLeases.push(admitted.lease.leaseId);
+    }
+    expect(scheduler.admit(request("dream-job")).outcome).toBe("admitted");
+    const queuedDream = scheduler.admit(request("dream-job"));
+    expect(queuedDream.outcome).toBe("queued");
+    const queuedForeground = scheduler.admit(request("foreground-turn"));
+    expect(queuedForeground.outcome).toBe("queued");
+    let dreamResult = queuedDream.outcome;
+    let foregroundResult = queuedForeground.outcome;
+    scheduler.attachWaiter(queuedDream.admissionId, {
+      resolve: (result) => {
+        dreamResult = result.outcome;
+      },
+    });
+    scheduler.attachWaiter(queuedForeground.admissionId, {
+      resolve: (result) => {
+        foregroundResult = result.outcome;
+      },
+    });
+    clock.advance(60_000);
+    const leaseId = foregroundLeases.shift();
+    if (leaseId === undefined) throw new Error("expected foreground lease");
+    scheduler.release(leaseId as never);
+    expect(foregroundResult).toBe("admitted");
+    expect(dreamResult).toBe("queued");
+  });
+
+  it("times out non-sheddable queued work at maxQueueTimeMs rather than claiming starvation-freedom", () => {
+    const clock = new FakeClock();
+    const scheduler = new ConcurrencyScheduler({ environmentId: env, clock });
+    const started = performance.now();
+    const foregroundLeases: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const admitted = scheduler.admit(request("foreground-turn"));
+      if (admitted.lease !== undefined) foregroundLeases.push(admitted.lease.leaseId);
+    }
+    const queued = scheduler.admit(
+      request("foreground-turn", { threadId: ThreadId.make("t-wait") }),
+    );
+    expect(queued.outcome).toBe("queued");
+    let outcome = queued.outcome;
+    scheduler.attachWaiter(queued.admissionId, {
+      resolve: (result) => {
+        outcome = result.outcome;
+      },
+    });
+    clock.advance(scheduler.policy.classes["foreground-turn"].maxQueueTimeMs);
+    scheduler.tick();
+    expect(outcome).toBe("timed-out");
+    expect(performance.now() - started).toBeLessThan(1_000);
+    for (const leaseId of foregroundLeases) scheduler.release(leaseId as never);
   });
 });

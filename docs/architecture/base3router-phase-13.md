@@ -183,7 +183,9 @@ server from the authenticated session subject when that subject is a
 distinct identity, otherwise `environment-local` for this environment.
 
 V0 personal memory is therefore environment-local unless a distinct
-auth subject exists. Isolation tests still prove:
+auth subject exists. Generic pairing represents **one trusted local
+principal** for that environment, not separate isolated users. Isolation
+tests still prove:
 
 - project memory cannot leak to unrelated projects
 - one actor cannot read another actor’s personal memory
@@ -345,6 +347,10 @@ Rules:
 - No client-owned counters.
 - FIFO within a priority class.
 - Aging cannot promote Dream/Shadow above reserved foreground.
+- Aging is not starvation-freedom. Persistent higher-priority load can
+  keep lower non-sheddable classes waiting. The bounded wait for queued
+  work is the class `maxQueueTimeMs` (30s for foreground; then
+  `timed-out`). Sheddable Dream/Shadow may be rejected earlier.
 - Dream and Shadow cannot block foreground turns.
 - Queue length bound and wait timeout.
 - Cancellation while queued removes the waiter.
@@ -365,8 +371,11 @@ holding a `foreground-turn` lease does not consume the `child-agent`
 pool. Children acquire from the child pool. A parent never waits on a
 child that needs the parent’s own class permit.
 
-Execution-tree context is server-generated at foreground admit and
-carried to nested work. The child cannot reset or expand its budget.
+Execution-tree context is generated when a caller supplies
+`request.tree`. Live spawn paths (foreground `sendTurn`, MCP, Dream,
+Shadow) currently admit without a parent tree, so fan-out limits apply
+only when nested work is explicitly tree-linked. Do not advertise
+tree enforcement on paths that omit `request.tree`.
 
 Limits (conservative V0; larger user-configurable values are a
 documented Pro/Team boundary, not implemented billing):
@@ -388,17 +397,17 @@ ActionGate; admission is additional, not a substitute.
 
 ## Integration points (Phase 8–12 spawn paths)
 
-| Path                       | File                                        | Class                 | Behavior                                          |
-| -------------------------- | ------------------------------------------- | --------------------- | ------------------------------------------------- |
-| Foreground `sendTurn`      | `ProviderCommandReactor.ts`                 | `foreground-turn`     | Admit before send; ensuring release               |
-| Auto-route failover        | `continueRoutedAttempts`                    | `failover-retry`      | Consumes attempt budget; no reset                 |
-| OpenRouter Shadow          | `maybeRunOpenRouterShadow`                  | `openrouter-shadow`   | Shed if no capacity; abort releases               |
-| MCP tool execute           | `McpActionAuthorization.ts`                 | `mcp-action`          | After ActionGate ALLOW; ensuring release          |
-| Dream worker               | `DreamMemoryService`                        | `dream-job`           | Lowest priority; cancellable                      |
-| Observed provider subagent | `ThreadBackgroundLiveness` / runtime ingest | `child-agent`         | Admit against parent tree; reject records fan-out |
-| Title / detached helpers   | existing `forkDetach` / title worker        | `detached-background` | Bounded; shed under overload                      |
-| Interrupt / session stop   | `processTurnInterruptRequested`             | all active for thread | Cancel queued + release leases                    |
-| Application shutdown       | scheduler `shutdown` finalizer              | all                   | Cancel queued, interrupt active                   |
+| Path                       | File                                        | Class                 | Behavior                                                                          |
+| -------------------------- | ------------------------------------------- | --------------------- | --------------------------------------------------------------------------------- |
+| Foreground `sendTurn`      | `ProviderCommandReactor.ts`                 | `foreground-turn`     | Admit before send; lease is the `sendTurn` Effect span (not always turn-terminal) |
+| Auto-route failover        | `continueRoutedAttempts`                    | `failover-retry`      | Consumes attempt budget; no reset                                                 |
+| OpenRouter Shadow          | `maybeRunOpenRouterShadow`                  | `openrouter-shadow`   | Shed if no capacity; abort releases                                               |
+| MCP tool execute           | `McpActionAuthorization.ts`                 | `mcp-action`          | After ActionGate ALLOW; ensuring release                                          |
+| Dream worker               | `DreamMemoryService`                        | `dream-job`           | Lowest priority; cancellable                                                      |
+| Observed provider subagent | `ThreadBackgroundLiveness` / runtime ingest | `child-agent`         | Admit against parent tree when supplied; reject records fan-out                   |
+| Title / detached helpers   | existing `forkDetach` / title worker        | `detached-background` | Bounded; shed under overload                                                      |
+| Interrupt / session stop   | `processTurnInterruptRequested`             | queued for thread     | Cancel queued admissions; active leases release via ensuring                      |
+| Application shutdown       | scheduler `shutdown` finalizer              | all                   | Cancel queued, release active leases                                              |
 
 Provider-native subagents are not spawned by T3. V0 still attaches an
 execution-tree context to the parent turn and counts observed children

@@ -14,4 +14,7 @@ export default Effect.gen(function* () {
     ON action_gate_approvals (environment_id, fingerprint)
     WHERE status IN ('pending', 'granted')
   `;
+  // Duplicate live fingerprints fail closed. Do not merge rows. Inspect both
+  // approvals, move the unintended live row to a terminal status, retry this
+  // migration, or restore a compatible backup taken before the upgrade.
 });

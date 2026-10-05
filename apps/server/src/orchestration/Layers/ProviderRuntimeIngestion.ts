@@ -1865,6 +1865,7 @@ const make = Effect.gen(function* () {
             messageId: pendingTurnStart.value.messageId,
             event,
             measurementEnabled: settings.routerEvaluation.measurementEnabled !== false,
+            projectId: thread.projectId,
           }).pipe(
             Effect.ignore({
               log: true,

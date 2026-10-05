@@ -4,16 +4,88 @@ import {
   MODEL_ROUTER_UNKNOWN_METRIC,
   type ActionGateDecision,
 } from "@t3tools/contracts";
+import { defaultDecisionForRisk } from "@t3tools/shared/actionGate";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { ActionGateService } from "../actionGate/ActionGateService.ts";
+import { planMcpToolAction } from "../actionGate/mcpToolPlan.ts";
 import { ConcurrencyBudgetService } from "../concurrencyBudget/ConcurrencyBudgetService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
-import * as Option from "effect/Option";
 
 const isActionGateError = Schema.is(ActionGateError);
+
+const blocked = (
+  toolName: string,
+  detail: string,
+  reasonCodes: ReadonlyArray<"ACTION_DENIED" | "REPLAY_REJECTED" | "APPROVAL_CONSUMED"> = [
+    "ACTION_DENIED",
+  ],
+) =>
+  new McpActionGateBlockedError({
+    toolName,
+    decision: "DENY",
+    reasonCodes: [...reasonCodes],
+    detail,
+  });
+
+const revalidateAfterQueue = (
+  toolName: string,
+  args: unknown,
+  prior: ActionGateDecision,
+): Effect.Effect<
+  void,
+  McpActionGateBlockedError,
+  McpInvocationContext.McpInvocationContext | ActionGateService
+> =>
+  Effect.gen(function* () {
+    const invocation = yield* McpInvocationContext.McpInvocationContext;
+    const { spec, action } = planMcpToolAction({
+      toolName,
+      args,
+      environmentId: invocation.environmentId,
+      threadId: invocation.threadId,
+    });
+    if (action === undefined || action.fingerprint !== prior.fingerprint) {
+      return yield* blocked(
+        toolName,
+        "Queued MCP arguments no longer match the authorized fingerprint.",
+        ["REPLAY_REJECTED"],
+      );
+    }
+    const defaults = defaultDecisionForRisk({
+      riskClass: action.riskClass,
+      sideEffectClass: action.sideEffectClass,
+      mayExposeSecrets: spec?.name === "preview_snapshot" || spec?.name === "device_screenshot",
+    });
+    if (defaults.decision === "DENY") {
+      return yield* blocked(toolName, "ActionGate denied this action after queue delay.");
+    }
+    if (prior.approvalId === undefined) return;
+    const actionGate = yield* ActionGateService;
+    const stored = yield* actionGate
+      .getApproval(prior.approvalId)
+      .pipe(
+        Effect.mapError(() => blocked(toolName, "ActionGate could not revalidate the approval.")),
+      );
+    if (Option.isNone(stored)) {
+      return yield* blocked(toolName, "Queued approval is no longer present.");
+    }
+    if (stored.value.fingerprint !== prior.fingerprint) {
+      return yield* blocked(
+        toolName,
+        "Queued approval is bound to a different action fingerprint.",
+        ["REPLAY_REJECTED"],
+      );
+    }
+    if (stored.value.status !== "consumed" && stored.value.status !== "granted") {
+      return yield* blocked(toolName, `Queued approval is ${stored.value.status} and cannot run.`, [
+        "ACTION_DENIED",
+      ]);
+    }
+  });
 
 const withMcpAdmission = <A, E, R>(
   invocation: McpInvocationContext.McpInvocationScope,
@@ -167,6 +239,10 @@ export const withAllowedMcpTool = <A, E, R>(
 > =>
   Effect.gen(function* () {
     const invocation = yield* McpInvocationContext.McpInvocationContext;
-    yield* requireAllowedMcpTool(toolName, args);
-    return yield* withMcpAdmission(invocation, toolName, run);
+    const decision = yield* requireAllowedMcpTool(toolName, args);
+    return yield* withMcpAdmission(
+      invocation,
+      toolName,
+      revalidateAfterQueue(toolName, args, decision).pipe(Effect.andThen(run)),
+    );
   });

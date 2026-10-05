@@ -18,7 +18,12 @@ import {
   emptyOpenRouterObservation,
   type OpenRouterCostTier,
   DEFAULT_DREAM_MEMORY_SETTINGS,
+  CONCURRENCY_BUDGET_POLICY_VERSION,
+  ConcurrencyBudgetError,
+  type ConcurrencyAdmissionResultV0,
+  type ConcurrencyAdmissionTraceV0,
   type ConcurrencyWorkloadClass,
+  type ExecutionTreeContextV0,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
@@ -83,6 +88,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { renderMemoryCapsule } from "@t3tools/shared/dreamMemory";
 import { DreamMemoryService, viewerFromSubject } from "../../dreamMemory/DreamMemoryService.ts";
 import { ConcurrencyBudgetService } from "../../concurrencyBudget/ConcurrencyBudgetService.ts";
+import { sendTurnUntilTerminal } from "../../concurrencyBudget/awaitTurnTerminal.ts";
 import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
@@ -95,6 +101,41 @@ const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
 const isProviderWorkspaceMissingError = Schema.is(ProviderWorkspaceMissingError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
+const isConcurrencyBudgetError = Schema.is(ConcurrencyBudgetError);
+
+const concurrencyTraceFromAdmission = (
+  result: ConcurrencyAdmissionResultV0,
+  attempt: number,
+): ConcurrencyAdmissionTraceV0 => ({
+  policyVersion: CONCURRENCY_BUDGET_POLICY_VERSION,
+  workloadClass: result.workloadClass,
+  outcome: result.outcome,
+  queuedMs: result.queuedMs,
+  depth: result.tree?.depth ?? 0,
+  attempt: result.tree?.attempt ?? attempt,
+  reasonCodes: [...result.reasonCodes],
+  cost: { status: "unknown" },
+});
+
+const concurrencyTraceFromError = (
+  error: unknown,
+  attempt: number,
+): ConcurrencyAdmissionTraceV0 => ({
+  policyVersion: CONCURRENCY_BUDGET_POLICY_VERSION,
+  workloadClass: "foreground-turn",
+  outcome: isConcurrencyBudgetError(error)
+    ? error.reason === "timed-out"
+      ? "timed-out"
+      : error.reason === "cancelled"
+        ? "cancelled"
+        : "rejected"
+    : "rejected",
+  queuedMs: 0,
+  depth: 0,
+  attempt,
+  reasonCodes: isConcurrencyBudgetError(error) ? [...error.reasonCodes] : ["CAPACITY_EXHAUSTED"],
+  cost: { status: "unknown" },
+});
 
 type ProviderIntentEvent = Extract<
   OrchestrationEvent,
@@ -254,7 +295,11 @@ const make = Effect.gen(function* () {
   const runWithBudget = (
     workloadClass: ConcurrencyWorkloadClass,
     effect: Effect.Effect<void>,
-    extras: { readonly projectId?: ProjectId; readonly threadId?: ThreadId } = {},
+    extras: {
+      readonly projectId?: ProjectId;
+      readonly threadId?: ThreadId;
+      readonly tree?: ExecutionTreeContextV0;
+    } = {},
   ) =>
     Effect.gen(function* () {
       if (Option.isNone(concurrencyBudget) || Option.isNone(serverEnvironment)) {
@@ -269,6 +314,7 @@ const make = Effect.gen(function* () {
             requestedAt: DateTime.formatIso(yield* DateTime.now),
             ...(extras.projectId !== undefined ? { projectId: extras.projectId } : {}),
             ...(extras.threadId !== undefined ? { threadId: extras.threadId } : {}),
+            ...(extras.tree !== undefined ? { tree: extras.tree } : {}),
           },
           effect,
         )
@@ -336,6 +382,7 @@ const make = Effect.gen(function* () {
     readonly kind:
       | "provider.turn.start.failed"
       | "provider.turn.interrupt.failed"
+      | "provider.turn.interrupt.unconfirmed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
       | "provider.session.stop.failed";
@@ -1740,6 +1787,7 @@ const make = Effect.gen(function* () {
     const routingMode = modelRoute?.mode;
     let currentSelection = taskModelSelection;
     let attemptCount = 0;
+    let admissionTree: ExecutionTreeContextV0 | undefined;
     const attemptedInstanceIds = new Set<string>();
     const attemptedTargetKeys = new Set<string>();
 
@@ -2032,6 +2080,7 @@ const make = Effect.gen(function* () {
                 ? runWithBudget("failover-retry", continueRoutedAttempts(), {
                     projectId: thread.projectId,
                     threadId: thread.id,
+                    ...(admissionTree !== undefined ? { tree: admissionTree } : {}),
                   }).pipe(Effect.forkDetach, Effect.as(true))
                 : Effect.succeed(false),
             ),
@@ -2056,9 +2105,64 @@ const make = Effect.gen(function* () {
         );
       });
 
+    /**
+     * interruptTurn requests cancellation. It does not confirm the provider
+     * process stopped:
+     * - Codex: `turn/interrupt` RPC ack; child turns best-effort bounded.
+     * - Claude: stopSession (query close, SIGKILL fallback). Session closed locally.
+     * - Cursor / Grok / Antigravity: ACP or runtime cancel.
+     * - OpenCode: `session.abort` with timeout (control-plane ack).
+     * - OpenRouter: AbortController.abort (local HTTP; remote may continue).
+     * Stop is confirmed only by `turn.completed` / `turn.aborted`. Until then
+     * the foreground lease stays occupied.
+     */
+    const interruptOnStaleTerminal = (
+      started: { readonly threadId: ThreadId; readonly turnId: TurnId },
+      _reason: "timeout" | "stream-ended",
+    ) =>
+      providerService.interruptTurn({ threadId: started.threadId }).pipe(
+        Effect.as({ executionStopped: false as const }),
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            yield* appendProviderFailureActivity({
+              threadId: started.threadId,
+              kind: "provider.turn.interrupt.failed",
+              summary: "Provider turn interrupt failed",
+              detail: formatFailureDetail(cause),
+              turnId: started.turnId,
+              createdAt: DateTime.formatIso(yield* DateTime.now),
+            }).pipe(Effect.ignore);
+            return { executionStopped: false as const };
+          }),
+        ),
+      );
+
+    const surfaceUnresolvedExecution = (
+      started: { readonly threadId: ThreadId; readonly turnId: TurnId },
+      reason: "timeout" | "stream-ended",
+    ) =>
+      Effect.gen(function* () {
+        yield* appendProviderFailureActivity({
+          threadId: started.threadId,
+          kind: "provider.turn.interrupt.unconfirmed",
+          summary: "Provider execution is still unresolved",
+          detail:
+            reason === "stream-ended"
+              ? "The provider event stream closed without a terminal. interruptTurn only requested cancellation. Capacity stays occupied until turn.completed or turn.aborted."
+              : "The turn wait bound requested interrupt. interruptTurn only requested cancellation. Capacity stays occupied until a terminal event.",
+          turnId: started.turnId,
+          createdAt: DateTime.formatIso(yield* DateTime.now),
+        });
+      }).pipe(Effect.ignore);
+
     const sendRoutedTurn = (routeFailover: boolean) =>
       buildRoutedTurnRequest(routeFailover).pipe(
-        Effect.flatMap((request) => providerService.sendTurn(request).pipe(Effect.asVoid)),
+        Effect.flatMap((request) =>
+          sendTurnUntilTerminal(providerService.sendTurn(request), providerService.streamEvents, {
+            onCleanup: interruptOnStaleTerminal,
+            onUnresolved: surfaceUnresolvedExecution,
+          }).pipe(Effect.asVoid),
+        ),
       );
 
     attemptCount += 1;
@@ -2079,53 +2183,71 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const send = providerService.sendTurn(sendTurnRequest.value).pipe(
+    const send = sendTurnUntilTerminal(
+      providerService.sendTurn(sendTurnRequest.value),
+      providerService.streamEvents,
+      {
+        afterStart: () => registerCurrentPending(),
+        onCleanup: interruptOnStaleTerminal,
+        onUnresolved: surfaceUnresolvedExecution,
+      },
+    ).pipe(
       Effect.asVoid,
-      Effect.tap(() => registerCurrentPending()),
       Effect.catchCause((cause) =>
         planAndPersistFailure(cause).pipe(
           Effect.flatMap((retry) => (retry ? continueRoutedAttempts() : Effect.void)),
         ),
       ),
     );
-    const admittedSend =
-      Option.isSome(concurrencyBudget) && environmentId !== undefined
-        ? concurrencyBudget.value
-            .withAdmission(
-              {
-                workloadClass: "foreground-turn",
-                environmentId,
-                projectId: thread.projectId,
-                threadId: thread.id,
-                requestedAt: event.payload.createdAt,
-              },
-              send,
-            )
-            .pipe(
-              Effect.catch((error) =>
-                appendTurnStartFailure(
-                  "Concurrency budget rejected the turn",
-                  error instanceof Error ? error.message : "CAPACITY_EXHAUSTED",
-                ),
-              ),
-            )
-        : send;
-    if (routeBinding !== null && (memoryTrace !== undefined || Option.isSome(concurrencyBudget))) {
-      yield* persistAttemptedRoute({
+    // Inspector records the settled admission, not an optimistic "admitted".
+    // Live Control Center snapshots still include in-flight queued counts.
+    const persistBoundFacts = (concurrency?: ConcurrencyAdmissionTraceV0) => {
+      if (routeBinding === null) return Effect.void;
+      if (memoryTrace === undefined && concurrency === undefined) return Effect.void;
+      return persistAttemptedRoute({
         ...routeBinding,
         ...(memoryTrace !== undefined ? { memoryRetrieval: memoryTrace } : {}),
-        concurrency: {
-          policyVersion: "concurrency-budget.v0",
-          workloadClass: "foreground-turn",
-          outcome: "admitted",
-          queuedMs: 0,
-          depth: 0,
-          attempt: attemptCount,
-          reasonCodes: [],
-          cost: { status: "unknown" },
-        },
+        ...(concurrency !== undefined ? { concurrency } : {}),
       });
-    }
+    };
+    const admittedSend =
+      Option.isSome(concurrencyBudget) && environmentId !== undefined
+        ? Effect.gen(function* () {
+            const budget = concurrencyBudget.value;
+            const result = yield* budget.admit({
+              workloadClass: "foreground-turn",
+              environmentId,
+              projectId: thread.projectId,
+              threadId: thread.id,
+              requestedAt: event.payload.createdAt,
+            });
+            yield* persistBoundFacts(concurrencyTraceFromAdmission(result, attemptCount));
+            const leaseId = result.lease?.leaseId;
+            if (leaseId === undefined) {
+              return yield* new ConcurrencyBudgetError({
+                reason: "invalid",
+                detail: "Admission succeeded without a lease.",
+                reasonCodes: ["CAPACITY_EXHAUSTED"],
+              });
+            }
+            admissionTree = result.lease?.tree;
+            // Lease covers active execution, not the start-call return.
+            // Start-return adapters keep this fiber (and the lease) until
+            // turn.completed/aborted or the bounded terminal timeout.
+            return yield* send.pipe(Effect.ensuring(budget.release(environmentId, leaseId)));
+          }).pipe(
+            Effect.catch((error) =>
+              persistBoundFacts(concurrencyTraceFromError(error, attemptCount)).pipe(
+                Effect.andThen(
+                  appendTurnStartFailure(
+                    "Concurrency budget rejected the turn",
+                    error instanceof Error ? error.message : "CAPACITY_EXHAUSTED",
+                  ),
+                ),
+              ),
+            ),
+          )
+        : persistBoundFacts().pipe(Effect.andThen(send));
     // The forked send settles `sent` from here on, so drop the entry the post-processing hook uses.
     if (resumed && event.commandId !== null) resumedTurnStarts.delete(event.commandId);
     yield* admittedSend.pipe(
@@ -2160,6 +2282,10 @@ const make = Effect.gen(function* () {
     event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>,
   ) {
     yield* abortOpenRouterShadow(event.payload.threadId);
+    if (Option.isSome(concurrencyBudget) && Option.isSome(serverEnvironment)) {
+      const environmentId = yield* serverEnvironment.value.getEnvironmentId;
+      yield* concurrencyBudget.value.cancelQueuedForThread(environmentId, event.payload.threadId);
+    }
     yield* cancelTurnsAfterCompaction(
       event.payload.threadId,
       "Context compaction was interrupted. Send this message again to continue.",

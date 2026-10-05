@@ -2,6 +2,7 @@ import {
   EnvironmentId,
   MessageId,
   ObservationId,
+  ProjectId,
   TURN_OUTCOME_OBSERVATION_VERSION,
   UNKNOWN_TASK_PROFILE,
   emptyOutcomeEvidence,
@@ -226,6 +227,7 @@ export const persistTurnOutcomeFromRuntimeEvent = Effect.fn("persistTurnOutcomeF
     readonly messageId: MessageId;
     readonly event: ProviderRuntimeEvent;
     readonly measurementEnabled: boolean;
+    readonly projectId?: ProjectId;
     readonly timing?: TurnTimingSnapshot;
   }) {
     if (!input.measurementEnabled) return;
@@ -273,7 +275,7 @@ export const persistTurnOutcomeFromRuntimeEvent = Effect.fn("persistTurnOutcomeF
         : { dreamMemory: DEFAULT_DREAM_MEMORY_SETTINGS };
       const budget = yield* Effect.serviceOption(ConcurrencyBudgetService);
       const enqueue = dream.value.enqueueEligibleTurn({
-        viewer: viewerFromSubject(input.environmentId, undefined),
+        viewer: viewerFromSubject(input.environmentId, undefined, input.projectId),
         settings: settings.dreamMemory,
         turnSucceeded: true,
         turnText: `completed turn ${input.messageId}`,
