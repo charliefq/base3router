@@ -464,7 +464,7 @@ it.effect("releases when the provider event stream ends and interrupt confirms s
 );
 
 it.effect(
-  "keeps the lease after stream-end when a fake provider stays active (enforcement limitation)",
+  "Internal Beta: stream-end interrupt is a cancel request; ignored cancel keeps the slot and a second request cannot exceed the limit",
   () =>
     provideTight(
       Effect.gen(function* () {
@@ -472,13 +472,14 @@ it.effect(
         const returned = yield* Deferred.make<void>();
         const workActive = yield* Ref.make(true);
         const interrupts = yield* Ref.make(0);
+        const unresolved = yield* Ref.make(0);
         const fiber = yield* forkAdmission(
           budget.withAdmission(
             {
               workloadClass: "foreground-turn",
               environmentId,
               threadId,
-              requestedAt: "2026-10-04T00:00:13.500Z",
+              requestedAt: "2026-10-05T00:00:13.500Z",
             },
             sendTurnUntilTerminal(
               startReturnSend(turnId, returned),
@@ -486,7 +487,7 @@ it.effect(
                 type: "content.delta",
                 eventId: EventId.make("evt-delta-live"),
                 provider: "codex",
-                createdAt: "2026-10-04T00:00:13.500Z",
+                createdAt: "2026-10-05T00:00:13.500Z",
                 threadId,
                 turnId,
                 payload: { streamKind: "assistant_text", delta: "still running" },
@@ -499,56 +500,94 @@ it.effect(
                     yield* Ref.update(interrupts, (count) => count + 1);
                     return { executionStopped: false };
                   }),
+                onUnresolved: (_started, reason) =>
+                  Effect.gen(function* () {
+                    assert.equal(reason, "stream-ended");
+                    yield* Ref.update(unresolved, (count) => count + 1);
+                  }),
               },
             ),
           ),
         );
         yield* Deferred.await(returned);
+        yield* TestClock.adjust("20 millis");
         yield* Effect.yieldNow;
         assert.equal(yield* Ref.get(interrupts), 1);
+        assert.equal(yield* Ref.get(unresolved), 1);
         assert.equal(yield* Ref.get(workActive), true);
         assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 1);
+
+        const secondBegan = yield* Ref.make(false);
+        const secondRelease = yield* Deferred.make<void>();
+        const second = yield* forkAdmission(
+          budget.withAdmission(
+            {
+              workloadClass: "foreground-turn",
+              environmentId,
+              threadId: ThreadId.make("thread-async-other"),
+              requestedAt: "2026-10-05T00:00:14.000Z",
+            },
+            Effect.gen(function* () {
+              yield* Ref.set(secondBegan, true);
+              yield* Deferred.await(secondRelease);
+            }),
+          ),
+        );
+        yield* Effect.yieldNow;
+        assert.equal(yield* Ref.get(secondBegan), false);
+        const duringSecond = yield* budget.snapshot(environmentId);
+        assert.equal(duringSecond.foregroundActive, 1);
+        assert.equal(duringSecond.queued >= 1, true);
+
         yield* Fiber.interrupt(fiber);
+        while (!(yield* Ref.get(secondBegan))) {
+          yield* Effect.yieldNow;
+        }
+        assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 1);
+        yield* Deferred.succeed(secondRelease, undefined);
+        yield* Fiber.join(second);
         assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
         assert.equal(yield* Ref.get(workActive), true);
       }),
     ),
 );
 
-it.effect(
-  "releases on stream-end without onCleanup because remaining work cannot be observed",
-  () =>
-    provideTight(
-      Effect.gen(function* () {
-        const budget = yield* ConcurrencyBudgetService;
-        const returned = yield* Deferred.make<void>();
-        const fiber = yield* forkAdmission(
-          budget.withAdmission(
-            {
-              workloadClass: "foreground-turn",
-              environmentId,
+it.effect("keeps the lease on stream-end without onCleanup when stop cannot be confirmed", () =>
+  provideTight(
+    Effect.gen(function* () {
+      const budget = yield* ConcurrencyBudgetService;
+      const returned = yield* Deferred.make<void>();
+      const fiber = yield* forkAdmission(
+        budget.withAdmission(
+          {
+            workloadClass: "foreground-turn",
+            environmentId,
+            threadId,
+            requestedAt: "2026-10-05T00:00:14.000Z",
+          },
+          sendTurnUntilTerminal(
+            startReturnSend(turnId, returned),
+            Stream.succeed({
+              type: "content.delta",
+              eventId: EventId.make("evt-delta-limit"),
+              provider: "codex",
+              createdAt: "2026-10-05T00:00:14.000Z",
               threadId,
-              requestedAt: "2026-10-04T00:00:14.000Z",
-            },
-            sendTurnUntilTerminal(
-              startReturnSend(turnId, returned),
-              Stream.succeed({
-                type: "content.delta",
-                eventId: EventId.make("evt-delta-limit"),
-                provider: "codex",
-                createdAt: "2026-10-04T00:00:14.000Z",
-                threadId,
-                turnId,
-                payload: { streamKind: "assistant_text", delta: "unobserved" },
-              } as ProviderRuntimeEvent),
-            ),
+              turnId,
+              payload: { streamKind: "assistant_text", delta: "unobserved" },
+            } as ProviderRuntimeEvent),
+            { interruptAckTimeout: "20 millis" },
           ),
-        );
-        yield* Deferred.await(returned);
-        yield* Fiber.join(fiber);
-        assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
-      }),
-    ),
+        ),
+      );
+      yield* Deferred.await(returned);
+      yield* TestClock.adjust("20 millis");
+      yield* Effect.yieldNow;
+      assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 1);
+      yield* Fiber.interrupt(fiber);
+      assert.equal((yield* budget.snapshot(environmentId)).foregroundActive, 0);
+    }),
+  ),
 );
 
 it.effect(

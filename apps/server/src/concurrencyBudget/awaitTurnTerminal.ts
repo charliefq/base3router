@@ -48,17 +48,12 @@ const matchesTurn = (
  * Subscribe before `sendTurn`. Wait until the matching turn completes or
  * aborts, then return.
  *
- * Timeout (live stream): invoke `onCleanup` (PCR maps this to `interruptTurn`)
- * and keep the lease until a terminal arrives or cleanup reports that
- * execution stopped.
- *
- * Stream-end without a terminal: invoke `onCleanup`. After the event stream
- * closes, T3 cannot observe remaining adapter work. Production PCR reports
- * `executionStopped: true` after delivering interrupt so compaction and
- * start-return adapters whose streams ended cleanly can release. A test fake
- * that stays active after disconnect must return `executionStopped: false`,
- * which pins the lease until the wait fiber is interrupted. That pin-vs-release
- * gap is the documented enforcement limitation.
+ * Timeout (live stream) and stream-end without a terminal both invoke
+ * `onCleanup` (PCR maps this to `interruptTurn`). `interruptTurn` requests
+ * cancellation; it does not confirm that the provider process stopped.
+ * Capacity is released only when a terminal arrives or cleanup reports
+ * `executionStopped: true`. Otherwise the lease stays occupied (`onUnresolved`)
+ * so a later admission cannot exceed the limit while work continues.
  */
 export const sendTurnUntilTerminal = <A extends ProviderTurnStartResult, E, R, R2 = never>(
   send: Effect.Effect<A, E, R>,
@@ -71,6 +66,10 @@ export const sendTurnUntilTerminal = <A extends ProviderTurnStartResult, E, R, R
       started: A,
       reason: TerminalWaitCleanupReason,
     ) => Effect.Effect<TerminalWaitCleanupResult, never, R2>;
+    readonly onUnresolved?: (
+      started: A,
+      reason: TerminalWaitCleanupReason,
+    ) => Effect.Effect<void, never, R2>;
   },
 ): Effect.Effect<A, E, R | R2> =>
   Effect.scoped(
@@ -118,7 +117,7 @@ export const sendTurnUntilTerminal = <A extends ProviderTurnStartResult, E, R, R
       const cleanup =
         options?.onCleanup !== undefined
           ? yield* options.onCleanup(started, reason)
-          : { executionStopped: ended };
+          : { executionStopped: false };
       if (cleanup.executionStopped) {
         return started;
       }
@@ -126,8 +125,11 @@ export const sendTurnUntilTerminal = <A extends ProviderTurnStartResult, E, R, R
       if (Option.isSome(ack)) {
         return started;
       }
+      if (options?.onUnresolved !== undefined) {
+        yield* options.onUnresolved(started, reason);
+      }
       if (ended) {
-        // Event stream is gone and execution was not confirmed stopped.
+        // Stream closed and stop was not confirmed. Keep the lease occupied.
         return yield* Effect.never;
       }
       yield* waitMatching();

@@ -382,6 +382,7 @@ const make = Effect.gen(function* () {
     readonly kind:
       | "provider.turn.start.failed"
       | "provider.turn.interrupt.failed"
+      | "provider.turn.interrupt.unconfirmed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
       | "provider.session.stop.failed";
@@ -2104,24 +2105,62 @@ const make = Effect.gen(function* () {
         );
       });
 
+    /**
+     * interruptTurn requests cancellation. It does not confirm the provider
+     * process stopped:
+     * - Codex: `turn/interrupt` RPC ack; child turns best-effort bounded.
+     * - Claude: stopSession (query close, SIGKILL fallback). Session closed locally.
+     * - Cursor / Grok / Antigravity: ACP or runtime cancel.
+     * - OpenCode: `session.abort` with timeout (control-plane ack).
+     * - OpenRouter: AbortController.abort (local HTTP; remote may continue).
+     * Stop is confirmed only by `turn.completed` / `turn.aborted`. Until then
+     * the foreground lease stays occupied.
+     */
     const interruptOnStaleTerminal = (
-      started: { readonly threadId: ThreadId },
-      reason: "timeout" | "stream-ended",
+      started: { readonly threadId: ThreadId; readonly turnId: TurnId },
+      _reason: "timeout" | "stream-ended",
     ) =>
       providerService.interruptTurn({ threadId: started.threadId }).pipe(
-        // Stream-end cannot observe remaining adapter work. After interrupt is
-        // delivered, production releases so finite streams (compaction) cannot
-        // pin capacity forever. Timeout keeps the lease unless a terminal
-        // arrives — a still-running fake after timeout must not free the slot.
-        Effect.as({ executionStopped: reason === "stream-ended" }),
-        Effect.catchCause(() => Effect.succeed({ executionStopped: reason === "stream-ended" })),
+        Effect.as({ executionStopped: false as const }),
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            yield* appendProviderFailureActivity({
+              threadId: started.threadId,
+              kind: "provider.turn.interrupt.failed",
+              summary: "Provider turn interrupt failed",
+              detail: formatFailureDetail(cause),
+              turnId: started.turnId,
+              createdAt: DateTime.formatIso(yield* DateTime.now),
+            }).pipe(Effect.ignore);
+            return { executionStopped: false as const };
+          }),
+        ),
       );
+
+    const surfaceUnresolvedExecution = (
+      started: { readonly threadId: ThreadId; readonly turnId: TurnId },
+      reason: "timeout" | "stream-ended",
+    ) =>
+      Effect.gen(function* () {
+        yield* appendProviderFailureActivity({
+          threadId: started.threadId,
+          kind: "provider.turn.interrupt.unconfirmed",
+          summary: "Provider execution is still unresolved",
+          detail:
+            reason === "stream-ended"
+              ? "The provider event stream closed without a terminal. interruptTurn only requested cancellation. Capacity stays occupied until turn.completed or turn.aborted."
+              : "The turn wait bound requested interrupt. interruptTurn only requested cancellation. Capacity stays occupied until a terminal event.",
+          turnId: started.turnId,
+          createdAt: DateTime.formatIso(yield* DateTime.now),
+        });
+      }).pipe(Effect.ignore);
 
     const sendRoutedTurn = (routeFailover: boolean) =>
       buildRoutedTurnRequest(routeFailover).pipe(
         Effect.flatMap((request) =>
           sendTurnUntilTerminal(providerService.sendTurn(request), providerService.streamEvents, {
             onCleanup: interruptOnStaleTerminal,
+            onUnresolved: surfaceUnresolvedExecution,
           }).pipe(Effect.asVoid),
         ),
       );
@@ -2150,6 +2189,7 @@ const make = Effect.gen(function* () {
       {
         afterStart: () => registerCurrentPending(),
         onCleanup: interruptOnStaleTerminal,
+        onUnresolved: surfaceUnresolvedExecution,
       },
     ).pipe(
       Effect.asVoid,
