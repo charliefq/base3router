@@ -138,7 +138,7 @@ test("Internal Beta: production web UI talks to real RPC for memory, approvals, 
 
   await page.goto("/settings");
   await expect(page).toHaveURL(/\/settings/);
-  await page.locator("#dream-memory").scrollIntoViewIfNeeded();
+  await page.getByRole("heading", { name: "Dream Memory" }).scrollIntoViewIfNeeded();
   await expect(page.getByRole("heading", { name: "Dream Memory" })).toBeVisible();
   await page.getByLabel("Memory to save").fill("Prefer focused Internal Beta tests.");
   await page.getByRole("button", { name: "Save memory" }).click();
