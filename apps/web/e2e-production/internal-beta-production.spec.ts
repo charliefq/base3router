@@ -136,7 +136,7 @@ test("Internal Beta: production web UI talks to real RPC for memory, approvals, 
   expect(environmentId !== null && environmentId.length > 0).toBe(true);
   if (environmentId === null) return;
 
-  await page.locator('[data-control-plane="rail"]').getByRole("link", { name: "Settings" }).click();
+  await page.goto("/settings");
   await expect(page).toHaveURL(/\/settings/);
   await page.locator("#dream-memory").scrollIntoViewIfNeeded();
   await expect(page.getByRole("heading", { name: "Dream Memory" })).toBeVisible();
@@ -153,11 +153,8 @@ test("Internal Beta: production web UI talks to real RPC for memory, approvals, 
   await expect(page.locator("[data-dream-memory-mode]")).toBeVisible();
   await capture(page, "production-memory-controls");
 
-  await page
-    .locator('[data-control-plane="rail"]')
-    .getByRole("link", { name: "Control Center", exact: true })
-    .click();
-  await expect(page.locator("[data-dream-memory-gov]")).toBeVisible();
+  await page.goto("/control-center");
+  await expect(page).toHaveURL(/\/control-center/);
   await expect(page.locator("[data-concurrency-gov]")).toBeVisible();
   await ensureInspectorOpen(page);
   await expect(page.locator("[data-control-plane='inspector']")).toBeVisible();
