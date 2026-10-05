@@ -50,28 +50,43 @@ function stopChild(child: NodeChildProcess.ChildProcess): Promise<void> {
   });
 }
 
-function waitForOrigin(origin: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
+function probeOrigin(origin: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const attempt = () => {
-      const request = NodeHttp.get(`${origin}/pair`, (response) => {
-        response.resume();
-        if ((response.statusCode ?? 500) < 500) {
-          resolve();
-          return;
-        }
-        retry(new Error(`Production web HTTP ${String(response.statusCode)}`));
-      });
-      request.on("error", retry);
-    };
-    const retry = (error: Error) => {
-      if (Date.now() >= deadline) {
-        reject(error);
+    const request = NodeHttp.get(`${origin}/pair`, (response) => {
+      response.resume();
+      if ((response.statusCode ?? 500) < 500) {
+        resolve();
         return;
       }
-      setTimeout(attempt, 400);
+      reject(new Error(`Production web HTTP ${String(response.statusCode)}`));
+    });
+    request.on("error", reject);
+  });
+}
+
+function waitForReadyOrigin(candidates: ReadonlyArray<string>, timeoutMs: number): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    let lastError: Error = new Error("Production web origin was not reachable.");
+    const attempt = (index: number) => {
+      const origin = candidates[index];
+      if (origin === undefined) {
+        if (Date.now() >= deadline) {
+          reject(lastError);
+          return;
+        }
+        setTimeout(() => attempt(0), 400);
+        return;
+      }
+      probeOrigin(origin).then(
+        () => resolve(origin),
+        (error: unknown) => {
+          lastError = error instanceof Error ? error : new Error(String(error));
+          attempt(index + 1);
+        },
+      );
     };
-    attempt();
+    attempt(0);
   });
 }
 
@@ -203,13 +218,15 @@ async function main(): Promise<number> {
     if (webPort === undefined) {
       throw new Error("Production browser runner did not observe [dev-runner] webPort.");
     }
-    const origin = `http://127.0.0.1:${String(webPort)}`;
+    const origin = await waitForReadyOrigin(
+      [`http://localhost:${String(webPort)}`, `http://127.0.0.1:${String(webPort)}`],
+      120_000,
+    );
     if (pairingUrl === undefined) {
       pairingUrl = `${origin}/pair#token=${DEV_TOKEN}`;
     } else {
       pairingUrl = rewritePairingUrl(pairingUrl, origin);
     }
-    await waitForOrigin(origin, 120_000);
     console.log(`Production browser origin: ${origin}`);
     console.log(`Production browser home: ${observedHome}`);
     const status = runPlaywright({ origin, pairingUrl, home: observedHome });
