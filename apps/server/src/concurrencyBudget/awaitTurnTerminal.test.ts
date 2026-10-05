@@ -360,6 +360,41 @@ it.effect("releases on bounded timeout when the terminal event never arrives", (
   ),
 );
 
+it.effect("releases when the provider event stream ends without a terminal event", () =>
+  provideTight(
+    Effect.gen(function* () {
+      const budget = yield* ConcurrencyBudgetService;
+      const returned = yield* Deferred.make<void>();
+      const fiber = yield* forkAdmission(
+        budget.withAdmission(
+          {
+            workloadClass: "foreground-turn",
+            environmentId,
+            threadId,
+            requestedAt: "2026-10-04T00:00:13.000Z",
+          },
+          sendTurnUntilTerminal(
+            startReturnSend(turnId, returned),
+            Stream.succeed({
+              type: "content.delta",
+              eventId: EventId.make("evt-delta"),
+              provider: "codex",
+              createdAt: "2026-10-04T00:00:13.000Z",
+              threadId,
+              turnId,
+              payload: { streamKind: "assistant_text", delta: "partial" },
+            } as ProviderRuntimeEvent),
+          ),
+        ),
+      );
+      yield* Deferred.await(returned);
+      yield* Fiber.join(fiber);
+      const after = yield* budget.snapshot(environmentId);
+      assert.equal(after.foregroundActive, 0);
+    }),
+  ),
+);
+
 it.effect(
   "shutdown cancels queued work; missing terminals still release on the timeout bound",
   () =>

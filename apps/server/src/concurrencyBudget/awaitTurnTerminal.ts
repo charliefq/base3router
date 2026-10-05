@@ -31,7 +31,9 @@ const matchesTurn = (
 
 /**
  * Subscribe before `sendTurn`. Wait until the matching turn completes or
- * aborts, then return. Timeout is an explicit bounded release, not a hidden
+ * aborts, then return. If the provider event stream ends without a terminal,
+ * the wait completes as stream-ended and the lease releases. Timeout is an
+ * explicit bounded release for never-ending live streams, not a hidden
  * start-call limit.
  */
 export const sendTurnUntilTerminal = <A extends ProviderTurnStartResult, E, R, R2 = never>(
@@ -50,7 +52,10 @@ export const sendTurnUntilTerminal = <A extends ProviderTurnStartResult, E, R, R
         >();
       yield* Stream.runForEach(stream, (event) =>
         isTurnTerminalEvent(event) ? Queue.offer(terminals, event) : Effect.void,
-      ).pipe(Effect.forkScoped({ startImmediately: true }));
+      ).pipe(
+        Effect.ensuring(Queue.end(terminals).pipe(Effect.asVoid, Effect.ignore)),
+        Effect.forkScoped({ startImmediately: true }),
+      );
       const started = yield* send;
       if (options?.afterStart !== undefined) {
         yield* options.afterStart(started);

@@ -438,7 +438,22 @@ describe("ProviderCommandReactor", () => {
     const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
     const service: ProviderServiceShape = {
       startSession: startSession as ProviderServiceShape["startSession"],
-      sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
+      // Start-return mocks still occupy the reactor until a terminal event.
+      // Publish completion after sendTurn succeeds so compaction replay can proceed.
+      sendTurn: ((request) =>
+        (sendTurn as ProviderServiceShape["sendTurn"])(request).pipe(
+          Effect.tap((started) =>
+            PubSub.publish(runtimeEventPubSub, {
+              type: "turn.completed",
+              eventId: EventId.make(`harness-turn-completed-${started.turnId}`),
+              provider: ProviderDriverKind.make("codex"),
+              createdAt: "2026-01-01T00:00:00.000Z",
+              threadId: started.threadId,
+              turnId: started.turnId,
+              payload: { state: "completed" },
+            } as ProviderRuntimeEvent),
+          ),
+        )) as ProviderServiceShape["sendTurn"],
       compactThread,
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
