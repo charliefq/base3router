@@ -130,6 +130,7 @@ it.effect("measures mixed foreground/background occupancy and cancellation-cycle
     const durationMs = Date.now() - startedAt;
     const rssAfter = process.memoryUsage().rss;
     const evidence = {
+      note: "durationMs is scheduler-harness wall time, not application performance.",
       workload: {
         foregroundAttempted: 3,
         foregroundLimit: 2,
