@@ -17,6 +17,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { ActionGateService, layer as actionGateLayer } from "../actionGate/ActionGateService.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import {
   argumentHash,
   authorizeDispatch,
@@ -77,6 +78,7 @@ const model = { instanceId: ready.instanceId, model: "gpt-5.4" as const };
 
 const StoredRoute = Schema.Struct({
   source: Schema.optionalKey(Schema.String),
+  fallbackIndex: Schema.optionalKey(Schema.Number),
   target: Schema.optionalKey(
     Schema.Struct({
       model: Schema.optionalKey(Schema.String),
@@ -155,6 +157,42 @@ it.effect("Auto binds the eligible model and Manual keeps an explicit target", (
     `;
     expect(still[0]?.binding_json).toContain("claude-down");
   }).pipe(Effect.provide(gateLayer)),
+);
+
+it.effect("Auto failovers from an unavailable environment default", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* dispatch({
+      type: "message.dispatch",
+      commandId: "auto-failover-1",
+      threadId: "thread-auto-failover",
+      messageId: "message-auto-failover",
+      text: "Fail over.",
+      routingMode: "auto",
+      attachments: [],
+      dispatchMode: { type: "start_immediately" },
+    });
+    const rows = yield* sql<{ readonly binding_json: string }>`
+      SELECT binding_json FROM projection_dispatcher_task_routes
+      WHERE message_id = 'message-auto-failover'
+    `;
+    const auto = yield* decodeStoredRoute(rows[0]?.binding_json ?? "{}");
+    expect(auto.modelRoute?.mode).toBe("auto");
+    expect(auto.target?.instanceId).toBe("codex-work");
+    expect(auto.fallbackIndex ?? 0).toBeGreaterThanOrEqual(1);
+    expect(auto.source).not.toBe("environment-default");
+    expect(auto.source).not.toBe("explicit");
+  }).pipe(
+    Effect.provide(
+      gateLayer.pipe(
+        Layer.provideMerge(
+          serverSettingsLayerTest({
+            defaultModelSelection: { instanceId: unavailable.instanceId, model: "claude" },
+          }),
+        ),
+      ),
+    ),
+  ),
 );
 
 it.effect("schedule execution requires a grant and revalidates the prompt", () =>

@@ -30,6 +30,7 @@ import {
 import { deleteTaskHandoffsByThread } from "../dispatcher/Handoff.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import {
   PolicyExecutionContext,
   type PolicyExecutionContext as PolicyContext,
@@ -463,6 +464,13 @@ const bindRoute = (input: {
       );
     }
     const routingMode = input.command.routingMode ?? "manual";
+    const settings = yield* Effect.serviceOption(ServerSettingsService);
+    const environmentDefaultModelSelection = Option.isNone(settings)
+      ? null
+      : yield* settings.value.getSettings.pipe(
+          Effect.map((current) => current.defaultModelSelection),
+          Effect.orElseSucceed(() => null),
+        );
     const threadRows = yield* input.sql<{ readonly model_selection_json: string | null }>`
       SELECT model_selection_json AS "model_selection_json"
       FROM projection_threads
@@ -485,7 +493,7 @@ const bindRoute = (input: {
       enabled: true,
       environmentId: Effect.succeed(input.environmentId),
       providers: Effect.succeed(input.providers),
-      environmentDefaultModelSelection: Effect.succeed(null),
+      environmentDefaultModelSelection: Effect.succeed(environmentDefaultModelSelection),
       sql: input.sql,
     }).pipe(
       Effect.provideService(SqlClient.SqlClient, input.sql),

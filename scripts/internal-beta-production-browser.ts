@@ -82,9 +82,16 @@ function seedDefaultModelSelection(
 ) {
   const dir = NodePath.join(homeDir, "userdata");
   NodeFS.mkdirSync(dir, { recursive: true });
+  const path = NodePath.join(dir, "settings.json");
+  let current: Record<string, unknown> = {};
+  try {
+    current = JSON.parse(NodeFS.readFileSync(path, "utf8")) as Record<string, unknown>;
+  } catch {
+    current = {};
+  }
   NodeFS.writeFileSync(
-    NodePath.join(dir, "settings.json"),
-    `${JSON.stringify({ defaultModelSelection: selection }, null, 2)}\n`,
+    path,
+    `${JSON.stringify({ ...current, defaultModelSelection: selection }, null, 2)}\n`,
   );
 }
 
