@@ -76,18 +76,15 @@ function installFakeProviders() {
   NodeFS.writeFileSync(fakeLog, "");
 }
 
-function seedAutoPreferred(homeDir: string) {
+function seedDefaultModelSelection(
+  homeDir: string,
+  selection: { instanceId: string; model: string },
+) {
   const dir = NodePath.join(homeDir, "userdata");
   NodeFS.mkdirSync(dir, { recursive: true });
   NodeFS.writeFileSync(
     NodePath.join(dir, "settings.json"),
-    `${JSON.stringify(
-      {
-        defaultModelSelection: { instanceId: "claudeAgent", model: "sonnet" },
-      },
-      null,
-      2,
-    )}\n`,
+    `${JSON.stringify({ defaultModelSelection: selection }, null, 2)}\n`,
   );
 }
 
@@ -391,6 +388,7 @@ async function openControlCenter(
 async function main() {
   NodeFS.mkdirSync(artifactDir, { recursive: true });
   installFakeProviders();
+  seedDefaultModelSelection(home, { instanceId: "codex", model: "gpt-5.4" });
   let { child, log, pairingUrl } = await startDev(home);
   if (pairingUrl.length === 0) {
     stop(child, home);
@@ -444,9 +442,10 @@ async function main() {
       }
     }
     await waitForSqlite(home);
-    await selectBoundFakeCodex(page);
     const turnsBefore = fakeTurnStarts();
     try {
+      await page.locator("[data-composer-routing]").first().waitFor({ timeout: 60_000 });
+      await selectBoundFakeCodex(page);
       await sendComposerTurn(page, "manual", "manual route proof");
     } catch (error) {
       await page.screenshot({
@@ -484,7 +483,7 @@ async function main() {
       "Composer did not return to idle after Manual send.",
     );
     const afterManualTurns = fakeTurnStarts();
-    seedAutoPreferred(home);
+    seedDefaultModelSelection(home, { instanceId: "claudeAgent", model: "sonnet" });
     await sleep(1_500);
     await selectBoundFakeCodex(page);
     try {
