@@ -154,9 +154,26 @@ function memoryRows(homeDir: string) {
 function expirePendingApprovals(homeDir: string) {
   const db = new DatabaseSync(sqlitePath(homeDir));
   try {
-    db.prepare(
-      `UPDATE action_gate_approvals SET expires_at = '2000-01-01T00:00:00.000Z' WHERE status = 'pending'`,
-    ).run();
+    const expired = "2000-01-01T00:00:00.000Z";
+    const rows = db
+      .prepare(
+        `SELECT approval_id AS approvalId, payload_json AS payloadJson
+         FROM action_gate_approvals WHERE status = 'pending'`,
+      )
+      .all() as { approvalId: string; payloadJson: string }[];
+    const update = db.prepare(
+      `UPDATE action_gate_approvals SET expires_at = ?, payload_json = ? WHERE approval_id = ?`,
+    );
+    for (const row of rows) {
+      let payload: Record<string, unknown> = {};
+      try {
+        payload = JSON.parse(row.payloadJson) as Record<string, unknown>;
+      } catch {
+        payload = {};
+      }
+      payload.expiresAt = expired;
+      update.run(expired, JSON.stringify(payload), row.approvalId);
+    }
   } finally {
     db.close();
   }
