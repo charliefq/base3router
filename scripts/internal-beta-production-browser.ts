@@ -295,6 +295,7 @@ async function sendComposerTurn(
   mode: "auto" | "manual",
   text: string,
 ) {
+  await dismissOverlays(page);
   const routing = page.locator(`[data-composer-routing]`);
   await routing.first().waitFor({ timeout: 60_000 });
   const current = await routing.first().getAttribute("data-composer-routing");
@@ -334,10 +335,30 @@ async function waitForProbedFakeLabel(page: import("playwright-core").Page) {
   }, "Composer picker never showed the probed GPT Fake catalog.");
 }
 
-async function openFreshThread(page: import("playwright-core").Page) {
-  const button = page.getByRole("button", { name: /^New thread$/i }).first();
-  if ((await button.count()) === 0) return;
-  await button.click();
+async function dismissOverlays(page: import("playwright-core").Page) {
+  for (let i = 0; i < 3; i += 1) {
+    const backdrop = page.locator(
+      "[data-slot='command-dialog-backdrop'], [data-slot='dialog-backdrop']",
+    );
+    if ((await backdrop.count()) === 0) break;
+    await page.keyboard.press("Escape");
+    await sleep(200);
+  }
+}
+
+async function openFreshThread(page: import("playwright-core").Page, origin: string) {
+  await dismissOverlays(page);
+  const create = page.getByRole("button", { name: "New thread", exact: true }).last();
+  if ((await create.count()) > 0) {
+    await create.click();
+  } else {
+    await page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
+    const startWithout = page.getByRole("button", { name: "Start without a project" });
+    if (await startWithout.isVisible().catch(() => false)) {
+      await startWithout.click();
+    }
+  }
+  await dismissOverlays(page);
   await page.locator("[data-composer-routing]").first().waitFor({ timeout: 30_000 });
 }
 
@@ -458,11 +479,12 @@ async function runManual(
 
 async function runAuto(
   page: import("playwright-core").Page,
+  origin: string,
   consoleLog: string[],
 ): Promise<JourneyResult> {
   const prompt = "auto-failover-proof-turn";
   try {
-    await openFreshThread(page);
+    await openFreshThread(page, origin);
     pinFakeDiscovery(home, { instanceId: "claudeAgent", model: "claude-sonnet-5" });
     await sleep(2_500);
     const turnsBefore = fakeMethodCount("turn/start");
@@ -547,9 +569,15 @@ async function runAsk(
     await requestAsk("https://example.invalid/ask-grant");
     await page.reload({ waitUntil: "domcontentloaded" });
     await surface.waitFor({ timeout: 20_000 });
-    if ((await page.locator("[data-approval-status='pending']").count()) === 0) {
-      throw new Error("Pending ASK did not survive refresh.");
-    }
+    await page.locator("[data-governance-refresh]").click();
+    await waitUntil(
+      () =>
+        page
+          .locator("[data-approval-status='pending']")
+          .count()
+          .then((count) => count > 0),
+      "Pending ASK did not survive refresh.",
+    );
     const startedBeforeGrant = countAuditKind(home, "action.started");
     await page.locator("[data-action-gate-grant]").click();
     await waitUntil(
@@ -759,7 +787,7 @@ async function main() {
     });
     await pairAndOpenComposer(page, started.pairingUrl, origin);
     results.push(await runManual(page, consoleLog));
-    results.push(await runAuto(page, consoleLog));
+    results.push(await runAuto(page, origin, consoleLog));
     results.push(await runAsk(page, origin, consoleLog));
     results.push(await runMemory(page, origin, consoleLog, childRef));
     NodeFS.writeFileSync(journeyLogPath, `${JSON.stringify({ origin, results }, null, 2)}\n`);
