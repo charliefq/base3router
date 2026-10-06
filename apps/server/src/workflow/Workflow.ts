@@ -174,7 +174,7 @@ const matchesExistingAction = (input: WorkflowActionInput, mutation: WorkflowMut
   }
 };
 
-export const requireWorkflowProject = Effect.fn("Workflow.requireProject")(function* (
+const requireWorkflowProject = Effect.fn("Workflow.requireProject")(function* (
   projectId: ProjectId,
 ) {
   const sql = yield* SqlClient.SqlClient;
@@ -415,11 +415,7 @@ const stageContext = (catalog: WorkflowCatalog, projectId: ProjectId, runId: str
   return { run, template, stage, attempt };
 };
 
-export const buildWorkflowTaskPacket = (
-  catalog: WorkflowCatalog,
-  projectId: ProjectId,
-  runId: string,
-) => {
+const buildWorkflowTaskPacket = (catalog: WorkflowCatalog, projectId: ProjectId, runId: string) => {
   const { run, stage, attempt } = stageContext(catalog, projectId, runId);
   const profileId = stage.profileId;
   const profileVersionNumber = stage.profileVersion;

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @effect-diagnostics nodeBuiltinImport:off - Host-side probe reads the worktree with Node before an Effect runtime exists.
 // Confirms the V1 UI Lab fixture app was not copied onto the V2 engine,
 // and that Inspector and Control Center mount the governance projection.
 import * as NodeFS from "node:fs";
