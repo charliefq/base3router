@@ -25,32 +25,12 @@ export const initializeV2Database = Effect.fn("initializeV2Database")(function* 
   yield* Effect.gen(function* () {
     if (yield* fs.exists(destinationPath)) return;
     if (!(yield* fs.exists(sourcePath))) return;
-    const hasBase3PolicyTables = yield* Effect.tryPromise(async () => {
-      const probe = new NodeSqlite.DatabaseSync(sourcePath, { readOnly: true });
-      try {
-        const rows = probe
-          .prepare(
-            `SELECT name FROM sqlite_master
-             WHERE type = 'table'
-               AND name IN (
-                 'projection_dispatcher_task_routes',
-                 'action_gate_approvals',
-                 'dream_memories',
-                 'projection_task_handoffs'
-               )`,
-          )
-          .all() as unknown as ReadonlyArray<{ readonly name: string }>;
-        return rows.length > 0;
-      } finally {
-        probe.close();
-      }
-    });
-    if (hasBase3PolicyTables) {
-      yield* Effect.logWarning(
-        "Skipped copying a Base3Router database into V2. Import policy rows with importBase3Policy instead of the upstream id-only copy.",
-      );
-      return;
-    }
+    // The Base3 ledger creates its tables on every migrated file, including a
+    // V1 database that has not stored policy rows. Table presence is not a
+    // reason to drop the transcript. This backup keeps the legacy tables the
+    // importer reads and any policy rows already in the file. importBase3Policy
+    // copies policy into an existing V2 file and refuses a live T3 home, so
+    // startup cannot use it in place of the snapshot.
     const temporaryDirectory = yield* fs.makeTempDirectoryScoped({
       directory,
       prefix: ".v2-import-",

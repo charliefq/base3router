@@ -1,7 +1,6 @@
 import {
   EnvironmentId,
   MessageId,
-  ModelSelection,
   ProviderDriverKind,
   ProviderInstanceId,
   TaskHandoffId,
@@ -36,17 +35,33 @@ const sourceInstanceId = ProviderInstanceId.make("codex-work");
 const targetInstanceId = ProviderInstanceId.make("claude-work");
 const target = { instanceId: targetInstanceId, model: "claude-sonnet" } as const;
 const now = "2026-09-26T12:00:00.000Z";
-const encodeModelSelection = Schema.encodeSync(Schema.fromJsonString(ModelSelection));
-const CheckpointFile = Schema.Struct({
-  path: Schema.String,
-  kind: Schema.optional(Schema.String),
-  additions: Schema.optional(Schema.Number),
-  deletions: Schema.optional(Schema.Number),
-});
-const encodeCheckpointFiles = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Array(CheckpointFile)),
-);
 const encodeRouteBinding = Schema.encodeSync(Schema.fromJsonString(DispatcherTaskRouteBinding));
+const encodePayload = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      branch: Schema.optional(Schema.String),
+      worktreePath: Schema.optional(Schema.Null),
+      modelSelection: Schema.optional(
+        Schema.Struct({
+          instanceId: Schema.String,
+          model: Schema.String,
+        }),
+      ),
+      text: Schema.optional(Schema.String),
+      userMessageId: Schema.optional(Schema.String),
+      files: Schema.optional(
+        Schema.Array(
+          Schema.Struct({
+            path: Schema.String,
+            kind: Schema.String,
+            additions: Schema.Number,
+            deletions: Schema.Number,
+          }),
+        ),
+      ),
+    }),
+  ),
+);
 const encodeHandoffPacket = Schema.encodeSync(Schema.fromJsonString(DispatcherHandoffPacket));
 const decodeRouteBinding = Schema.decodeSync(Schema.fromJsonString(DispatcherTaskRouteBinding));
 
@@ -115,27 +130,7 @@ const seed = Effect.gen(function* () {
       default_model_selection_json, deleted_at
     ) VALUES ('project-1', 'Project', '/workspace/project', '[]', ${now}, ${now}, NULL, NULL)
   `;
-  yield* sql`
-    INSERT INTO projection_threads (
-      thread_id, project_id, title, model_selection_json, branch, worktree_path,
-      latest_turn_id, created_at, updated_at, deleted_at
-    ) VALUES (
-      ${threadId}, 'project-1', 'Task',
-      ${encodeModelSelection({ instanceId: sourceInstanceId, model: "gpt-5.4" })},
-      'feature/handoff', NULL, ${sourceTurnId}, ${now}, ${now}, NULL
-    )
-  `;
-  yield* sql`
-    INSERT INTO projection_thread_messages (
-      message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at
-    ) VALUES (${sourceMessageId}, ${threadId}, ${sourceTurnId}, 'user', 'Build the feature', 0, ${now}, ${now})
-  `;
-  yield* sql`
-    INSERT INTO projection_thread_messages (
-      message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at
-    ) VALUES (
-      'assistant-1', ${threadId}, ${sourceTurnId}, 'assistant',
-      ${`## Completed work
+  const assistantText = `## Completed work
 
 Implemented [handoff](/workspace/project/src/handoff.ts). A private file at /private/secret was not used.
 
@@ -145,21 +140,56 @@ Add the destination validation tests.
 
 ## Test results
 
-The focused handoff test passed.`},
-      0, ${now}, ${now}
+The focused handoff test passed.`;
+  yield* sql`
+    INSERT INTO orchestration_v2_projection_threads (
+      thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+      created_at, updated_at, payload_json
+    ) VALUES (
+      ${threadId}, 'project-1', 'Task', 'codex', 'full-access', 'default', ${now}, ${now},
+      ${encodePayload({
+        branch: "feature/handoff",
+        worktreePath: null,
+        modelSelection: { instanceId: sourceInstanceId, model: "gpt-5.4" },
+      })}
     )
   `;
   yield* sql`
-    INSERT INTO projection_turns (
-      thread_id, turn_id, pending_message_id, assistant_message_id, state,
-      requested_at, started_at, completed_at, checkpoint_files_json
+    INSERT INTO orchestration_v2_projection_messages (
+      message_id, thread_id, run_id, role, streaming, created_at, updated_at, payload_json
     ) VALUES (
-      ${threadId}, ${sourceTurnId}, ${sourceMessageId}, 'assistant-1', 'completed',
-      ${now}, ${now}, ${now},
-      ${encodeCheckpointFiles([
-        { path: "src/handoff.ts", kind: "modified", additions: 2, deletions: 0 },
-        { path: "/private/secret", kind: "modified", additions: 1, deletions: 0 },
-      ])}
+      ${sourceMessageId}, ${threadId}, ${sourceTurnId}, 'user', 0, ${now}, ${now},
+      ${encodePayload({ text: "Build the feature" })}
+    )
+  `;
+  yield* sql`
+    INSERT INTO orchestration_v2_projection_messages (
+      message_id, thread_id, run_id, role, streaming, created_at, updated_at, payload_json
+    ) VALUES (
+      'assistant-1', ${threadId}, ${sourceTurnId}, 'assistant', 0, ${now}, ${now},
+      ${encodePayload({ text: assistantText })}
+    )
+  `;
+  yield* sql`
+    INSERT INTO orchestration_v2_projection_runs (
+      run_id, thread_id, ordinal, provider, status, requested_at, completed_at, payload_json
+    ) VALUES (
+      ${sourceTurnId}, ${threadId}, 1, 'codex', 'completed', ${now}, ${now},
+      ${encodePayload({ userMessageId: sourceMessageId })}
+    )
+  `;
+  yield* sql`
+    INSERT INTO orchestration_v2_projection_checkpoints (
+      checkpoint_id, thread_id, scope_id, run_id, node_id, ordinal_within_scope,
+      status, captured_at, payload_json
+    ) VALUES (
+      'checkpoint-1', ${threadId}, 'scope-1', ${sourceTurnId}, 'node-1', 1, 'ready', ${now},
+      ${encodePayload({
+        files: [
+          { path: "src/handoff.ts", kind: "modified", additions: 2, deletions: 0 },
+          { path: "/private/secret", kind: "modified", additions: 1, deletions: 0 },
+        ],
+      })}
     )
   `;
   yield* sql`
@@ -207,7 +237,7 @@ describe("explicit task handoff", () => {
     Effect.gen(function* () {
       yield* seed;
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`UPDATE projection_thread_messages SET text = 'Phase A is done.' WHERE message_id = 'assistant-1'`;
+      yield* sql`UPDATE orchestration_v2_projection_messages SET payload_json = ${encodePayload({ text: "Phase A is done." })} WHERE message_id = 'assistant-1'`;
       const result = yield* preview();
       expect(result.packet).toMatchObject({
         completedWork: "Unknown",
@@ -222,8 +252,9 @@ describe("explicit task handoff", () => {
       yield* seed;
       const sql = yield* SqlClient.SqlClient;
       yield* sql`
-        UPDATE projection_thread_messages
-        SET text = ${`## Completed work
+        UPDATE orchestration_v2_projection_messages
+        SET payload_json = ${encodePayload({
+          text: `## Completed work
 
 Used Bearer secret-bearer-value and sk-secretvalue1234 while reviewing https://example.test/private.
 
@@ -235,7 +266,8 @@ Inspect /home/example/private and [the workspace file](/workspace/project/src/ha
 
 ## Test results
 
-Unknown`}
+Unknown`,
+        })}
         WHERE message_id = 'assistant-1'
       `;
       const result = yield* preview();

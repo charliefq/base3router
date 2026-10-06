@@ -35,6 +35,12 @@ it.effect(
       VALUES ('project', 'Project', '/tmp/project', '[]', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`;
       yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at)
       VALUES (${threadId}, 'project', 'V1 thread', '{"instanceId":"codex","model":"gpt-5.4"}', 'full-access', 'default', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`;
+      yield* sql`INSERT INTO action_gate_approvals (
+        approval_id, environment_id, fingerprint, status, created_at, expires_at, payload_json
+      ) VALUES (
+        'approval-legacy', 'env-1', 'fp-legacy', 'pending',
+        '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z', '{}'
+      )`;
       for (let index = 0; index < 6; index++) {
         yield* sql`INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
         VALUES (${`message-${index}`}, ${threadId}, ${index % 2 ? "assistant" : "user"}, ${`Text ${index}`}, 0, ${`2026-01-0${index + 1}T00:00:00.000Z`}, ${`2026-01-0${index + 1}T00:00:00.000Z`})`;
@@ -60,6 +66,9 @@ it.effect(
         const legacy = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
         yield* legacy.reconcileShells;
         const projections = yield* ProjectionStore.ProjectionStoreV2;
+        const approval =
+          yield* sql`SELECT status AS "status" FROM action_gate_approvals WHERE approval_id = 'approval-legacy'`;
+        assert.equal(approval[0]?.status, "pending");
         const shell = yield* projections.getThreadProjection(threadId);
         assert.equal(shell.thread.id, threadId);
         assert.deepEqual(

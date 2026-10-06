@@ -113,28 +113,51 @@ const readSource = Effect.fn("DispatcherHandoff.readSource")(function* (input: {
   readonly sourceTurnId: TurnId;
 }) {
   const sql = yield* SqlClient.SqlClient;
+  // A V2 run is the settled unit the handoff used to read as a V1 turn.
+  // `failed` is that model's name for a settled error.
   const rows = yield* sql`
     SELECT
       t.thread_id AS "threadId",
-      t.turn_id AS "sourceTurnId",
-      t.pending_message_id AS "sourceMessageId",
-      t.assistant_message_id AS "assistantMessageId",
-      m.text AS "sourceText",
-      am.text AS "assistantText",
-      t.state AS "state",
-      t.checkpoint_files_json AS "checkpointFiles",
-      th.branch AS "branch",
-      th.worktree_path AS "worktreePath",
+      t.run_id AS "sourceTurnId",
+      json_extract(t.payload_json, '$.userMessageId') AS "sourceMessageId",
+      am.message_id AS "assistantMessageId",
+      json_extract(m.payload_json, '$.text') AS "sourceText",
+      json_extract(am.payload_json, '$.text') AS "assistantText",
+      CASE t.status WHEN 'failed' THEN 'error' ELSE t.status END AS "state",
+      COALESCE(
+        (
+          SELECT json_extract(c.payload_json, '$.files')
+          FROM orchestration_v2_projection_checkpoints c
+          WHERE c.thread_id = t.thread_id AND c.run_id = t.run_id
+          ORDER BY c.captured_at DESC, c.checkpoint_id DESC
+          LIMIT 1
+        ),
+        '[]'
+      ) AS "checkpointFiles",
+      json_extract(th.payload_json, '$.branch') AS "branch",
+      json_extract(th.payload_json, '$.worktreePath') AS "worktreePath",
       p.workspace_root AS "workspaceRoot",
-      s.status AS "sessionStatus"
-    FROM projection_turns t
-    JOIN projection_threads th ON th.thread_id = t.thread_id
+      (
+        SELECT s.status
+        FROM orchestration_v2_projection_provider_sessions s
+        WHERE s.thread_id = t.thread_id AND s.status IN ('starting', 'running')
+        LIMIT 1
+      ) AS "sessionStatus"
+    FROM orchestration_v2_projection_runs t
+    JOIN orchestration_v2_projection_threads th ON th.thread_id = t.thread_id
     JOIN projection_projects p ON p.project_id = th.project_id
-    LEFT JOIN projection_thread_messages m ON m.message_id = t.pending_message_id
-    LEFT JOIN projection_thread_messages am ON am.message_id = t.assistant_message_id
-    LEFT JOIN projection_thread_sessions s ON s.thread_id = t.thread_id
+    LEFT JOIN orchestration_v2_projection_messages m
+      ON m.message_id = json_extract(t.payload_json, '$.userMessageId')
+    LEFT JOIN orchestration_v2_projection_messages am
+      ON am.message_id = (
+        SELECT message_id
+        FROM orchestration_v2_projection_messages
+        WHERE thread_id = t.thread_id AND run_id = t.run_id AND role = 'assistant'
+        ORDER BY created_at DESC, message_id DESC
+        LIMIT 1
+      )
     WHERE t.thread_id = ${input.threadId}
-      AND t.turn_id = ${input.sourceTurnId}
+      AND t.run_id = ${input.sourceTurnId}
     LIMIT 1
   `;
   return (yield* decodeSourceRows(rows))[0] ?? null;
@@ -145,8 +168,8 @@ const readOriginalObjective = Effect.fn("DispatcherHandoff.readOriginalObjective
 ) {
   const sql = yield* SqlClient.SqlClient;
   const rows = yield* sql`
-    SELECT text
-    FROM projection_thread_messages
+    SELECT json_extract(payload_json, '$.text') AS "text"
+    FROM orchestration_v2_projection_messages
     WHERE thread_id = ${threadId} AND role = 'user'
     ORDER BY created_at ASC, message_id ASC
     LIMIT 1

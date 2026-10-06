@@ -539,17 +539,33 @@ export const proposeWorkflowArtifact = Effect.fn("Workflow.proposeArtifact")(fun
       message: "The provider stage has not been dispatched.",
     });
   const sql = yield* SqlClient.SqlClient;
+  // The stage turn is the V2 run started by the destination message.
+  // A failed run is settled, matching the former V1 error state.
   const raw = yield* sql`
-    SELECT t.turn_id AS "turnId", t.state AS "state", am.text AS "assistantText",
-      s.status AS "sessionStatus",
-      p.workspace_root AS "workspaceRoot", th.worktree_path AS "worktreePath"
-    FROM projection_turns t
-    JOIN projection_threads th ON th.thread_id = t.thread_id
+    SELECT t.run_id AS "turnId",
+      CASE t.status WHEN 'failed' THEN 'error' ELSE t.status END AS "state",
+      json_extract(am.payload_json, '$.text') AS "assistantText",
+      (
+        SELECT s.status
+        FROM orchestration_v2_projection_provider_sessions s
+        WHERE s.thread_id = t.thread_id AND s.status IN ('starting', 'running')
+        LIMIT 1
+      ) AS "sessionStatus",
+      p.workspace_root AS "workspaceRoot",
+      json_extract(th.payload_json, '$.worktreePath') AS "worktreePath"
+    FROM orchestration_v2_projection_runs t
+    JOIN orchestration_v2_projection_threads th ON th.thread_id = t.thread_id
     JOIN projection_projects p ON p.project_id = th.project_id
-    LEFT JOIN projection_thread_messages am ON am.message_id = t.assistant_message_id
-    LEFT JOIN projection_thread_sessions s ON s.thread_id = t.thread_id
+    LEFT JOIN orchestration_v2_projection_messages am
+      ON am.message_id = (
+        SELECT message_id
+        FROM orchestration_v2_projection_messages
+        WHERE thread_id = t.thread_id AND run_id = t.run_id AND role = 'assistant'
+        ORDER BY created_at DESC, message_id DESC
+        LIMIT 1
+      )
     WHERE t.thread_id = ${attempt.destinationThreadId}
-      AND t.pending_message_id = ${attempt.destinationMessageId}
+      AND json_extract(t.payload_json, '$.userMessageId') = ${attempt.destinationMessageId}
       AND th.project_id = ${input.projectId}
     LIMIT 1
   `;
