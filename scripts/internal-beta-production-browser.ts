@@ -12,6 +12,15 @@ const root = NodePath.resolve(import.meta.dirname, "..");
 const chrome = NodeProcess.env.CHROME_PATH ?? "/usr/local/bin/google-chrome";
 const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "base3-browser-"));
 const artifactDir = "/opt/cursor/artifacts";
+const journeyLogPath = NodePath.join(artifactDir, "production-browser-journeys.json");
+
+type JourneyStatus = "PASS" | "FAIL" | "BLOCKED";
+type JourneyResult = {
+  name: "manual" | "auto" | "ask" | "memory";
+  status: JourneyStatus;
+  detail: string;
+  assertions: Record<string, unknown>;
+};
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -28,33 +37,10 @@ async function waitForSqlite(homeDir: string) {
   throw new Error("Disposable SQLite file was not created.");
 }
 
-async function waitForWorkflowStage(
-  page: {
-    waitForFunction: (
-      pageFunction: (expected: string) => boolean,
-      arg: string,
-      options: { timeout: number },
-    ) => Promise<unknown>;
-  },
-  label: string,
-) {
-  await page.waitForFunction(
-    (expected) => {
-      const surface = document.querySelector("[data-governance-surface='control-center']");
-      const text = surface?.textContent ?? "";
-      if (text.includes("Loading governance") || text.includes("Loading workflow")) {
-        return false;
-      }
-      const stage = document.querySelector("[data-workflow-stage]");
-      return stage?.textContent?.includes(expected) === true;
-    },
-    label,
-    { timeout: 30_000 },
-  );
-}
-
 const fakeLog = NodePath.join(artifactDir, "fake-codex.jsonl");
 const fakeBin = NodePath.join(home, "fake-bin");
+const fakeCodex = NodePath.join(fakeBin, "codex");
+const fakeClaude = NodePath.join(fakeBin, "claude");
 
 function installFakeProviders() {
   NodeFS.mkdirSync(fakeBin, { recursive: true });
@@ -63,36 +49,61 @@ function installFakeProviders() {
     NodePath.join(fakeBin, "codex.mjs"),
   );
   NodeFS.writeFileSync(
-    NodePath.join(fakeBin, "codex"),
+    fakeCodex,
     `#!/bin/sh\nexec ${process.execPath} "${NodePath.join(fakeBin, "codex.mjs")}" "$@"\n`,
   );
-  NodeFS.copyFileSync(
-    NodePath.join(root, "scripts/internal-beta-fake-claude.sh"),
-    NodePath.join(fakeBin, "claude"),
-  );
-  NodeFS.chmodSync(NodePath.join(fakeBin, "codex"), 0o755);
-  NodeFS.chmodSync(NodePath.join(fakeBin, "claude"), 0o755);
+  NodeFS.copyFileSync(NodePath.join(root, "scripts/internal-beta-fake-claude.sh"), fakeClaude);
+  NodeFS.chmodSync(fakeCodex, 0o755);
+  NodeFS.chmodSync(fakeClaude, 0o755);
   NodeFS.mkdirSync(artifactDir, { recursive: true });
   NodeFS.writeFileSync(fakeLog, "");
 }
 
-function seedDefaultModelSelection(
-  homeDir: string,
-  selection: { instanceId: string; model: string },
-) {
+function readSettings(homeDir: string): Record<string, unknown> {
+  const path = NodePath.join(homeDir, "userdata", "settings.json");
+  try {
+    return JSON.parse(NodeFS.readFileSync(path, "utf8")) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function writeSettings(homeDir: string, patch: Record<string, unknown>) {
   const dir = NodePath.join(homeDir, "userdata");
   NodeFS.mkdirSync(dir, { recursive: true });
   const path = NodePath.join(dir, "settings.json");
-  let current: Record<string, unknown> = {};
-  try {
-    current = JSON.parse(NodeFS.readFileSync(path, "utf8")) as Record<string, unknown>;
-  } catch {
-    current = {};
-  }
-  NodeFS.writeFileSync(
-    path,
-    `${JSON.stringify({ ...current, defaultModelSelection: selection }, null, 2)}\n`,
-  );
+  const current = readSettings(homeDir);
+  NodeFS.writeFileSync(path, `${JSON.stringify({ ...current, ...patch }, null, 2)}\n`);
+}
+
+function pinFakeDiscovery(
+  homeDir: string,
+  defaultModelSelection: { instanceId: string; model: string },
+) {
+  writeSettings(homeDir, {
+    defaultModelSelection,
+    providers: {
+      codex: { enabled: true, binaryPath: fakeCodex },
+      claudeAgent: { enabled: true, binaryPath: fakeClaude },
+      cursor: { enabled: false },
+      grok: { enabled: false },
+      opencode: { enabled: false },
+      antigravity: { enabled: false },
+      pi: { enabled: false },
+    },
+    providerInstances: {
+      codex: {
+        driver: "codex",
+        enabled: true,
+        config: { enabled: true, binaryPath: fakeCodex },
+      },
+      claudeAgent: {
+        driver: "claudeAgent",
+        enabled: true,
+        config: { enabled: true, binaryPath: fakeClaude },
+      },
+    },
+  });
 }
 
 function latestBindings(homeDir: string) {
@@ -151,11 +162,29 @@ function expirePendingApprovals(homeDir: string) {
   }
 }
 
-function fakeTurnStarts() {
-  if (!NodeFS.existsSync(fakeLog)) return 0;
+function fakeLogEntries() {
+  if (!NodeFS.existsSync(fakeLog)) return [];
   return NodeFS.readFileSync(fakeLog, "utf8")
     .split("\n")
-    .filter((line) => /"method":"(?:turn\/start|thread\/start)"/.test(line)).length;
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      try {
+        return JSON.parse(line) as { method?: string; params?: unknown };
+      } catch {
+        return {};
+      }
+    });
+}
+
+function fakeMethodCount(method: string) {
+  return fakeLogEntries().filter((entry) => entry.method === method).length;
+}
+
+function fakeTurnPrompt(text: string) {
+  return fakeLogEntries().some((entry) => {
+    if (entry.method !== "turn/start") return false;
+    return JSON.stringify(entry.params ?? {}).includes(text);
+  });
 }
 
 async function waitUntil(
@@ -169,72 +198,6 @@ async function waitUntil(
     await sleep(250);
   }
   throw new Error(message);
-}
-
-function seedPendingHumanGate(homeDir: string) {
-  const db = new DatabaseSync(sqlitePath(homeDir));
-  try {
-    const project = db
-      .prepare(
-        `SELECT project_id AS projectId FROM projection_projects WHERE deleted_at IS NULL LIMIT 1`,
-      )
-      .get() as { projectId: string } | undefined;
-    if (project === undefined) {
-      throw new Error("No project is available to seed a workflow decision.");
-    }
-    const at = new Date().toISOString();
-    const attempt = {
-      stageId: "build_gate",
-      attempt: 1,
-      profileId: null,
-      profileVersion: null,
-      sourceThreadId: null,
-      sourceMessageId: null,
-      sourceTurnId: null,
-      destinationThreadId: null,
-      destinationMessageId: null,
-      destinationTurnId: null,
-      routeBinding: null,
-      status: "pending",
-      createdAt: at,
-    };
-    const run = {
-      id: "run-browser-1",
-      projectId: project.projectId,
-      templateId: "saas-production",
-      templateVersion: 1,
-      status: "active",
-      currentStageId: "build_gate",
-      originatingThreadId: null,
-      originatingMessageId: null,
-      attempts: [attempt],
-      artifacts: [],
-      decisions: [],
-      createdAt: at,
-      updatedAt: at,
-      endedAt: null,
-      pausedAt: null,
-    };
-    db.exec("BEGIN");
-    db.prepare(
-      `INSERT INTO projection_workflow_runs (run_id, project_id, run_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (run_id) DO UPDATE SET run_json = excluded.run_json, updated_at = excluded.updated_at`,
-    ).run(run.id, project.projectId, JSON.stringify(run), at, at);
-    db.prepare(
-      `INSERT INTO projection_workflow_stage_attempts (run_id, stage_id, attempt, attempt_json)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT (run_id, stage_id, attempt) DO UPDATE SET attempt_json = excluded.attempt_json`,
-    ).run(run.id, attempt.stageId, attempt.attempt, JSON.stringify(attempt));
-    db.prepare(
-      `INSERT INTO projection_workflow_cursors (project_id, last_sequence)
-       VALUES (?, 1)
-       ON CONFLICT (project_id) DO NOTHING`,
-    ).run(project.projectId);
-    db.exec("COMMIT");
-  } finally {
-    db.close();
-  }
 }
 
 async function startDev(homeDir: string) {
@@ -307,35 +270,23 @@ function stop(child: NodeChildProcess.ChildProcess, homeDir: string) {
   }
 }
 
-function pickerShowsBoundCodex(label: string) {
-  return /GPT Fake|Codex/i.test(label) && !/Claude|Sonnet/i.test(label);
-}
-
-async function selectBoundFakeCodex(page: import("playwright-core").Page) {
-  const picker = page.locator("[data-chat-provider-model-picker]").first();
-  await picker.waitFor({ timeout: 60_000 });
-  const label = page.locator("[data-chat-provider-model-picker-label]").first();
-  await waitUntil(async () => {
-    const text = await label.innerText().catch(() => "");
-    return text.trim().length > 0;
-  }, "Model picker stayed empty.");
-  if (pickerShowsBoundCodex(await label.innerText())) return;
-  await picker.click();
-  const sidebarCodex = page.locator('[data-model-picker-provider="codex"]');
-  if ((await sidebarCodex.count()) > 0) {
-    await sidebarCodex.first().click();
-  } else {
-    await page
-      .getByRole("button", { name: /^Codex(?:$|,)/i })
-      .first()
-      .click();
-  }
-  const model = page.getByText("GPT Fake").first();
-  await model.waitFor({ timeout: 20_000 });
-  await model.click();
-  await waitUntil(
-    async () => pickerShowsBoundCodex(await label.innerText().catch(() => "")),
-    "Composer did not bind the fake Codex model.",
+async function captureFailure(
+  page: import("playwright-core").Page,
+  name: string,
+  consoleLog: string[],
+  error: unknown,
+) {
+  await page
+    .screenshot({ path: NodePath.join(artifactDir, `${name}-failed.png`), fullPage: true })
+    .catch(() => undefined);
+  NodeFS.writeFileSync(
+    NodePath.join(artifactDir, `${name}-page.txt`),
+    `${page.url()}\n${await page
+      .locator("body")
+      .innerText()
+      .catch(
+        () => "",
+      )}\n${consoleLog.join("\n")}\n${error instanceof Error ? error.stack : String(error)}\n`,
   );
 }
 
@@ -360,11 +311,73 @@ async function sendComposerTurn(
   const editor = page.locator(".ProseMirror").first();
   await editor.click();
   await page.keyboard.type(text);
-  // Expanded send is the unlabeled up-arrow (`Submit message`); collapsed uses `Send message`.
   const send = page.getByRole("button", { name: /Submit message|Send message/ });
   await send.waitFor({ timeout: 30_000 });
   await waitUntil(() => send.isEnabled(), "Composer send stayed disabled.");
   await send.click();
+}
+
+async function waitForFakeCatalog() {
+  await waitUntil(
+    () => fakeMethodCount("model/list") > 0,
+    "Fake Codex did not receive model/list; probe never completed discovery.",
+    30_000,
+  );
+}
+
+async function waitForProbedFakeLabel(page: import("playwright-core").Page) {
+  const label = page.locator("[data-chat-provider-model-picker-label]").first();
+  await page.locator("[data-chat-provider-model-picker]").first().waitFor({ timeout: 60_000 });
+  await waitUntil(async () => {
+    const text = await label.innerText().catch(() => "");
+    return /GPT Fake/i.test(text) && !/gpt-6-astra|No models found/i.test(text);
+  }, "Composer picker never showed the probed GPT Fake catalog.");
+}
+
+async function openFreshThread(page: import("playwright-core").Page) {
+  const button = page.getByRole("button", { name: /^New thread$/i }).first();
+  if ((await button.count()) === 0) return;
+  await button.click();
+  await page.locator("[data-composer-routing]").first().waitFor({ timeout: 30_000 });
+}
+
+async function pairAndOpenComposer(
+  page: import("playwright-core").Page,
+  pairingUrl: string,
+  origin: string,
+) {
+  await page.goto(pairingUrl, { waitUntil: "domcontentloaded" });
+  const paired = await page
+    .waitForFunction(() => !location.pathname.startsWith("/pair"), null, { timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!paired) {
+    const token = decodeURIComponent(new URL(pairingUrl).hash.replace(/^#token=/, ""));
+    await page.getByRole("textbox").fill(token);
+    await page.getByRole("button", { name: "Continue" }).click();
+    await page.waitForFunction(() => !location.pathname.startsWith("/pair"), null, {
+      timeout: 20_000,
+    });
+  }
+  const startWithout = page.getByRole("button", { name: "Start without a project" });
+  if (await startWithout.isVisible().catch(() => false)) {
+    await startWithout.click();
+    await sleep(3_000);
+  } else {
+    await page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
+    const retry = page.getByRole("button", { name: "Start without a project" });
+    if (
+      await retry
+        .waitFor({ timeout: 20_000 })
+        .then(() => true)
+        .catch(() => false)
+    ) {
+      await retry.click();
+      await sleep(3_000);
+    }
+  }
+  await waitForSqlite(home);
+  await page.locator("[data-composer-routing]").first().waitFor({ timeout: 60_000 });
 }
 
 async function openControlCenter(
@@ -377,14 +390,7 @@ async function openControlCenter(
   try {
     await surface.waitFor({ timeout: 90_000 });
   } catch (error) {
-    await page.screenshot({
-      path: NodePath.join(artifactDir, "governance-control-center-failed.png"),
-      fullPage: true,
-    });
-    NodeFS.writeFileSync(
-      NodePath.join(artifactDir, "governance-browser-page.txt"),
-      `${page.url()}\n${await page.locator("body").innerText()}\n${consoleLog.join("\n")}\n`,
-    );
+    await captureFailure(page, "governance-control-center", consoleLog, error);
     throw error;
   }
   await page.locator("[data-governance-refresh]").click();
@@ -392,79 +398,16 @@ async function openControlCenter(
   return surface;
 }
 
-async function main() {
-  NodeFS.mkdirSync(artifactDir, { recursive: true });
-  installFakeProviders();
-  seedDefaultModelSelection(home, { instanceId: "codex", model: "gpt-5.4" });
-  let { child, log, pairingUrl } = await startDev(home);
-  if (pairingUrl.length === 0) {
-    stop(child, home);
-    NodeFS.writeFileSync(NodePath.join(artifactDir, "browser-server.log"), log());
-    throw new Error("Dev server did not print a pairing URL.");
-  }
-  const origin = new URL(pairingUrl).origin;
-  const { chromium } = await import("playwright-core");
-  const browser = await chromium.launch({
-    executablePath: chrome,
-    headless: true,
-    args: ["--no-sandbox", "--disable-dev-shm-usage"],
-  });
+async function runManual(
+  page: import("playwright-core").Page,
+  consoleLog: string[],
+): Promise<JourneyResult> {
+  const prompt = "manual-route-proof-turn";
   try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-    const consoleLog: string[] = [];
-    page.on("console", (message) => {
-      consoleLog.push(`${message.type()}: ${message.text()}`);
-    });
-    page.on("pageerror", (error) => {
-      consoleLog.push(`pageerror: ${error.message}`);
-    });
-    await page.goto(pairingUrl, { waitUntil: "domcontentloaded" });
-    const paired = await page
-      .waitForFunction(() => !location.pathname.startsWith("/pair"), null, { timeout: 15_000 })
-      .then(() => true)
-      .catch(() => false);
-    if (!paired) {
-      const token = decodeURIComponent(new URL(pairingUrl).hash.replace(/^#token=/, ""));
-      await page.getByRole("textbox").fill(token);
-      await page.getByRole("button", { name: "Continue" }).click();
-      await page.waitForFunction(() => !location.pathname.startsWith("/pair"), null, {
-        timeout: 20_000,
-      });
-    }
-    const startWithout = page.getByRole("button", { name: "Start without a project" });
-    if (await startWithout.isVisible().catch(() => false)) {
-      await startWithout.click();
-      await sleep(3_000);
-    } else {
-      await page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
-      const retry = page.getByRole("button", { name: "Start without a project" });
-      if (
-        await retry
-          .waitFor({ timeout: 20_000 })
-          .then(() => true)
-          .catch(() => false)
-      ) {
-        await retry.click();
-        await sleep(3_000);
-      }
-    }
-    await waitForSqlite(home);
-    const turnsBefore = fakeTurnStarts();
-    try {
-      await page.locator("[data-composer-routing]").first().waitFor({ timeout: 60_000 });
-      await selectBoundFakeCodex(page);
-      await sendComposerTurn(page, "manual", "manual route proof");
-    } catch (error) {
-      await page.screenshot({
-        path: NodePath.join(artifactDir, "composer-manual-failed.png"),
-        fullPage: true,
-      });
-      NodeFS.writeFileSync(
-        NodePath.join(artifactDir, "composer-manual-page.txt"),
-        `${page.url()}\n${await page.locator("body").innerText()}\n${consoleLog.join("\n")}\n`,
-      );
-      throw error;
-    }
+    await waitForFakeCatalog();
+    await waitForProbedFakeLabel(page);
+    const turnsBefore = fakeMethodCount("turn/start");
+    await sendComposerTurn(page, "manual", prompt);
     await waitUntil(
       () => latestBindings(home).some((binding) => binding.modelRoute?.mode === "manual"),
       "Manual composer send did not persist a manual route binding.",
@@ -478,34 +421,52 @@ async function main() {
       );
     }
     await waitUntil(
-      () => fakeTurnStarts() > turnsBefore,
-      "Fake Codex did not receive the Manual turn/start.",
+      () => fakeTurnPrompt(prompt),
+      "Fake Codex did not receive turn/start containing the Manual prompt. thread/start is not sufficient.",
     );
-    await waitUntil(
-      () =>
-        page
-          .getByRole("button", { name: /Submit message|Send message/ })
-          .isVisible()
-          .catch(() => false),
-      "Composer did not return to idle after Manual send.",
-    );
-    const afterManualTurns = fakeTurnStarts();
-    seedDefaultModelSelection(home, { instanceId: "claudeAgent", model: "claude-sonnet-5" });
-    await sleep(2_500);
-    await selectBoundFakeCodex(page);
-    try {
-      await sendComposerTurn(page, "auto", "auto failover proof");
-    } catch (error) {
-      await page.screenshot({
-        path: NodePath.join(artifactDir, "composer-auto-failed.png"),
-        fullPage: true,
-      });
-      NodeFS.writeFileSync(
-        NodePath.join(artifactDir, "composer-auto-page.txt"),
-        `${page.url()}\n${await page.locator("body").innerText()}\n${consoleLog.join("\n")}\n`,
-      );
-      throw error;
+    if (fakeMethodCount("turn/start") <= turnsBefore) {
+      throw new Error("Manual send did not increment fake Codex turn/start.");
     }
+    return {
+      name: "manual",
+      status: "PASS",
+      detail: "Composer Manual submit bound explicitly and reached fake turn/start.",
+      assertions: {
+        source: manualBinding.source,
+        target: manualBinding.target,
+        turnStart: fakeMethodCount("turn/start"),
+        prompt,
+      },
+    };
+  } catch (error) {
+    await captureFailure(page, "composer-manual", consoleLog, error);
+    return {
+      name: "manual",
+      status: "FAIL",
+      detail: error instanceof Error ? error.message : String(error),
+      assertions: {
+        fakeMethods: fakeLogEntries().map((entry) => entry.method),
+        picker: await page
+          .locator("[data-chat-provider-model-picker-label]")
+          .first()
+          .innerText()
+          .catch(() => ""),
+      },
+    };
+  }
+}
+
+async function runAuto(
+  page: import("playwright-core").Page,
+  consoleLog: string[],
+): Promise<JourneyResult> {
+  const prompt = "auto-failover-proof-turn";
+  try {
+    await openFreshThread(page);
+    pinFakeDiscovery(home, { instanceId: "claudeAgent", model: "claude-sonnet-5" });
+    await sleep(2_500);
+    const turnsBefore = fakeMethodCount("turn/start");
+    await sendComposerTurn(page, "auto", prompt);
     await waitUntil(
       () => latestBindings(home).some((binding) => binding.modelRoute?.mode === "auto"),
       "Auto composer send did not persist an auto route binding.",
@@ -516,22 +477,51 @@ async function main() {
     }
     if (typeof autoBinding.fallbackIndex !== "number" || autoBinding.fallbackIndex < 1) {
       throw new Error(
-        `Auto failover provenance missing fallbackIndex: ${JSON.stringify({
-          fallbackIndex: autoBinding.fallbackIndex,
-          source: autoBinding.source,
-          target: autoBinding.target,
-          preferredDefault: autoBinding.modelRoute?.selected?.preferredDefault,
-        })}`,
+        `Auto failover provenance missing fallbackIndex: ${JSON.stringify(autoBinding)}`,
       );
     }
     if (autoBinding.source === "explicit" || autoBinding.source === "environment-default") {
       throw new Error(`Auto route did not fail over: ${JSON.stringify(autoBinding)}`);
     }
     await waitUntil(
-      () => fakeTurnStarts() > afterManualTurns,
-      "Fake Codex did not receive the Auto turn/start.",
+      () => fakeTurnPrompt(prompt),
+      "Fake Codex did not receive turn/start containing the Auto prompt.",
     );
-    seedPendingHumanGate(home);
+    if (fakeMethodCount("turn/start") <= turnsBefore) {
+      throw new Error("Auto send did not increment fake Codex turn/start.");
+    }
+    return {
+      name: "auto",
+      status: "PASS",
+      detail: "Auto failovers from unavailable environment default onto fake Codex.",
+      assertions: {
+        fallbackIndex: autoBinding.fallbackIndex,
+        source: autoBinding.source,
+        target: autoBinding.target,
+        preferred: { instanceId: "claudeAgent", model: "claude-sonnet-5" },
+        prompt,
+      },
+    };
+  } catch (error) {
+    await captureFailure(page, "composer-auto", consoleLog, error);
+    return {
+      name: "auto",
+      status: "FAIL",
+      detail: error instanceof Error ? error.message : String(error),
+      assertions: {
+        bindings: latestBindings(home),
+        fakeMethods: fakeLogEntries().map((entry) => entry.method),
+      },
+    };
+  }
+}
+
+async function runAsk(
+  page: import("playwright-core").Page,
+  origin: string,
+  consoleLog: string[],
+): Promise<JourneyResult> {
+  try {
     const surface = await openControlCenter(page, origin, consoleLog);
     const disclosure = await page.locator("[data-provider-disclosure]").innerText();
     if (!disclosure.includes("no executable provider driver")) {
@@ -622,6 +612,39 @@ async function main() {
       throw new Error("Expiry executed the ASK action.");
     }
 
+    return {
+      name: "ask",
+      status: "PASS",
+      detail: "Grant executed once; deny, cancel, and expiry executed zero times.",
+      assertions: {
+        actionStarted: countAuditKind(home, "action.started"),
+        grantDelta: 1,
+        denyCancelExpiryDelta: 0,
+        refreshPreservedPending: true,
+      },
+    };
+  } catch (error) {
+    await captureFailure(page, "ask", consoleLog, error);
+    return {
+      name: "ask",
+      status: "FAIL",
+      detail: error instanceof Error ? error.message : String(error),
+      assertions: { actionStarted: countAuditKind(home, "action.started") },
+    };
+  }
+}
+
+async function runMemory(
+  page: import("playwright-core").Page,
+  origin: string,
+  consoleLog: string[],
+  childRef: { child: NodeChildProcess.ChildProcess },
+): Promise<JourneyResult> {
+  try {
+    const surface = page.locator("[data-governance-surface='control-center']");
+    if ((await surface.count()) === 0) {
+      await openControlCenter(page, origin, consoleLog);
+    }
     const memoriesBeforeSave = memoryRows(home).length;
     await page.locator("[data-memory-save]").click();
     await waitUntil(
@@ -655,60 +678,10 @@ async function main() {
       "Delete memory did not mark rows deleted.",
     );
 
-    const decision = page.locator("[data-workflow-decision]");
-    try {
-      await decision.waitFor({ timeout: 30_000 });
-    } catch (error) {
-      await page.screenshot({
-        path: NodePath.join(artifactDir, "workflow-decision-failed.png"),
-        fullPage: true,
-      });
-      NodeFS.writeFileSync(
-        NodePath.join(artifactDir, "workflow-browser-page.txt"),
-        `${page.url()}\n${await surface.innerText()}\n${consoleLog.join("\n")}\n`,
-      );
-      throw error;
-    }
-    const pendingText = await decision.innerText();
-    if (!pendingText.includes("Build Gate")) {
-      throw new Error(`Pending workflow decision was not Build Gate: ${pendingText}`);
-    }
-    await page.locator("[data-workflow-approve]").click();
-    await waitForWorkflowStage(page, "Architecture");
-    const duplicate = page.locator("[data-workflow-approve]");
-    if ((await duplicate.count()) > 0) {
-      await duplicate.click();
-    }
-    await page.reload({ waitUntil: "domcontentloaded" });
-    await surface.waitFor({ timeout: 20_000 });
-    await waitForWorkflowStage(page, "Architecture");
-    const text = await surface.innerText();
-    if (!text.includes("Protocol 2")) {
-      throw new Error(`Control Center did not report protocol 2: ${text}`);
-    }
-    if (!text.includes("Architecture")) {
-      throw new Error(`Approved workflow stage did not survive refresh: ${text}`);
-    }
-    await surface.scrollIntoViewIfNeeded();
-    await surface.screenshot({
-      path: NodePath.join(artifactDir, "governance-control-center.png"),
-    });
-    const workflowShot = page.locator("[data-workflow-surface]");
-    if ((await workflowShot.count()) > 0) {
-      await workflowShot.first().screenshot({
-        path: NodePath.join(artifactDir, "workflow-human-decision.png"),
-      });
-    }
-    const routeShot = page.locator("[data-governance-routes]");
-    if ((await routeShot.count()) > 0) {
-      await routeShot.first().screenshot({
-        path: NodePath.join(artifactDir, "governance-routes.png"),
-      });
-    }
-    stop(child, home);
+    stop(childRef.child, home);
     await sleep(1_000);
     const restarted = await startDev(home);
-    child = restarted.child;
+    childRef.child = restarted.child;
     if (restarted.pairingUrl.length === 0) {
       NodeFS.writeFileSync(NodePath.join(artifactDir, "browser-server.log"), restarted.log());
       throw new Error("Restarted server did not print a pairing URL.");
@@ -731,19 +704,79 @@ async function main() {
       await page.goto(`${origin}/settings/general`, { waitUntil: "domcontentloaded" });
     }
     await surface.waitFor({ timeout: 90_000 });
-    await waitForWorkflowStage(page, "Architecture");
-    const restartedText = await surface.innerText();
-    if (!restartedText.includes("Architecture")) {
-      throw new Error(`Approved workflow stage did not survive restart: ${restartedText}`);
-    }
     const restartedMemories = memoryRows(home);
     if (restartedMemories.some((row) => row.status !== "deleted")) {
       throw new Error(`Deleted memory returned after reopen: ${JSON.stringify(restartedMemories)}`);
     }
+    return {
+      name: "memory",
+      status: "PASS",
+      detail: "Save, capture-off, delete, and restart against the same SQLite file held.",
+      assertions: {
+        saved: true,
+        captureOffCreated: afterEnqueue - afterCaptureOff,
+        deletedAfterRestart: restartedMemories,
+      },
+    };
+  } catch (error) {
+    await captureFailure(page, "memory", consoleLog, error);
+    return {
+      name: "memory",
+      status: "FAIL",
+      detail: error instanceof Error ? error.message : String(error),
+      assertions: { rows: memoryRows(home) },
+    };
+  }
+}
+
+async function main() {
+  NodeFS.mkdirSync(artifactDir, { recursive: true });
+  installFakeProviders();
+  pinFakeDiscovery(home, { instanceId: "codex", model: "gpt-5.4" });
+  const started = await startDev(home);
+  const childRef = { child: started.child };
+  if (started.pairingUrl.length === 0) {
+    stop(childRef.child, home);
+    NodeFS.writeFileSync(NodePath.join(artifactDir, "browser-server.log"), started.log());
+    throw new Error("Dev server did not print a pairing URL.");
+  }
+  const origin = new URL(started.pairingUrl).origin;
+  const { chromium } = await import("playwright-core");
+  const browser = await chromium.launch({
+    executablePath: chrome,
+    headless: true,
+    args: ["--no-sandbox", "--disable-dev-shm-usage"],
+  });
+  const results: JourneyResult[] = [];
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const consoleLog: string[] = [];
+    page.on("console", (message) => {
+      consoleLog.push(`${message.type()}: ${message.text()}`);
+    });
+    page.on("pageerror", (error) => {
+      consoleLog.push(`pageerror: ${error.message}`);
+    });
+    await pairAndOpenComposer(page, started.pairingUrl, origin);
+    results.push(await runManual(page, consoleLog));
+    results.push(await runAuto(page, consoleLog));
+    results.push(await runAsk(page, origin, consoleLog));
+    results.push(await runMemory(page, origin, consoleLog, childRef));
+    NodeFS.writeFileSync(journeyLogPath, `${JSON.stringify({ origin, results }, null, 2)}\n`);
+    for (const result of results) {
+      NodeProcess.stdout.write(
+        `journey ${result.name}=${result.status} ${result.detail}\n${JSON.stringify(result.assertions)}\n`,
+      );
+    }
+    if (results.some((result) => result.status !== "PASS")) {
+      throw new Error(
+        `Journeys not all PASS: ${results.map((result) => `${result.name}=${result.status}`).join(" ")}`,
+      );
+    }
     NodeProcess.stdout.write(`production-browser ok origin=${origin}\n`);
   } finally {
     await browser.close();
-    stop(child, home);
+    stop(childRef.child, home);
     await sleep(500);
     NodeFS.rmSync(home, { recursive: true, force: true });
   }

@@ -1,40 +1,53 @@
 #!/usr/bin/env node
-// Minimal Codex app-server stand-in for production-browser journeys.
-// Logs JSON-RPC methods to T3_FAKE_CODEX_LOG. No paid network.
+// Deterministic Codex app-server peer for production-browser journeys.
+// NDJSON JSON-RPC at the transport boundary. No paid network.
 import * as NodeFS from "node:fs";
-import * as NodeReadline from "node:readline";
+import * as NodeOS from "node:os";
 import * as NodeProcess from "node:process";
+import * as NodeReadline from "node:readline";
 
 const logPath = NodeProcess.env.T3_FAKE_CODEX_LOG;
+
 const writeLog = (entry) => {
   if (logPath === undefined) return;
   NodeFS.appendFileSync(logPath, `${JSON.stringify(entry)}\n`);
 };
 
+const write = (message) => {
+  NodeFS.writeSync(1, `${JSON.stringify(message)}\n`);
+};
+
 if (!NodeProcess.argv.includes("app-server")) {
-  NodeProcess.stdout.write("t3-fake-codex 0.0.0\n");
+  NodeFS.writeSync(1, "t3-fake-codex 0.0.0\n");
   NodeProcess.exit(0);
 }
 
-const write = (message) => NodeProcess.stdout.write(`${JSON.stringify(message)}\n`);
-const thread = {
-  id: "fake-codex-thread",
+const nowSec = () => Math.floor(Date.now() / 1000);
+const cwd = NodeProcess.cwd();
+const makeThread = (threadId) => ({
+  id: threadId,
+  environments: [{ environmentId: "local", cwd, runtimeWorkspaceRoots: [cwd] }],
   extra: null,
-  sessionId: "fake-codex-thread",
+  sessionId: threadId,
   forkedFromId: null,
   parentThreadId: null,
   preview: "",
-  projectId: null,
   ephemeral: false,
-  historyMode: "legacy",
+  section: null,
+  sectionEnteredAt: null,
+  projectId: null,
+  historyMode: "paginated",
   modelProvider: "openai",
-  createdAt: 1_700_000_000,
-  updatedAt: 1_700_000_000,
-  recencyAt: 1_700_000_000,
+  model: "gpt-5.4",
+  reasoningEffort: null,
+  createdAt: nowSec(),
+  updatedAt: nowSec(),
+  recencyAt: nowSec(),
   status: { type: "idle" },
   path: "/tmp/fake-codex-rollout.jsonl",
-  cwd: NodeProcess.cwd(),
+  cwd,
   cliVersion: "0.0.0",
+  originator: "t3-fake",
   source: "t3-fake",
   canAcceptDirectInput: true,
   threadSource: null,
@@ -42,8 +55,10 @@ const thread = {
   agentRole: null,
   gitInfo: null,
   name: null,
+  daybreakEnabled: null,
   turns: [],
-};
+});
+
 const model = {
   additionalSpeedTiers: [],
   defaultReasoningEffort: "medium",
@@ -61,6 +76,18 @@ const model = {
   supportedReasoningEfforts: [{ description: "Medium reasoning", reasoningEffort: "medium" }],
 };
 
+const promptText = (params) => {
+  const items = params?.input;
+  if (!Array.isArray(items)) return "";
+  return items
+    .map((item) => (typeof item?.text === "string" ? item.text : ""))
+    .filter((text) => text.length > 0)
+    .join("\n");
+};
+
+let thread = makeThread("fake-codex-thread");
+let turnCount = 0;
+
 const rl = NodeReadline.createInterface({ input: NodeProcess.stdin });
 rl.on("line", (line) => {
   let message;
@@ -74,73 +101,145 @@ rl.on("line", (line) => {
   writeLog({ method, params: params ?? null, at: new Date().toISOString() });
   if (method === "initialize") {
     write({
-      jsonrpc: "2.0",
       id,
       result: {
         userAgent: "t3-fake-codex/0.0.0",
         codexHome: "/tmp",
         platformFamily: "unix",
-        platformOs: "linux",
+        platformOs: NodeOS.platform() === "darwin" ? "macos" : "linux",
       },
     });
     return;
   }
+  if (method === "initialized") {
+    return;
+  }
   if (method === "account/read") {
     write({
-      jsonrpc: "2.0",
       id,
       result: { account: { type: "apiKey" }, requiresOpenaiAuth: false },
     });
     return;
   }
   if (method === "account/rateLimits/read") {
-    write({ jsonrpc: "2.0", id, result: { rateLimits: null } });
-    return;
-  }
-  if (method === "skills/list") {
-    write({ jsonrpc: "2.0", id, result: { data: [] } });
-    return;
-  }
-  if (method === "model/list") {
-    write({ jsonrpc: "2.0", id, result: { data: [model], nextCursor: null } });
-    return;
-  }
-  if (method === "thread/start" || method === "thread/resume") {
-    const threadId = params?.threadId ?? thread.id;
     write({
-      jsonrpc: "2.0",
       id,
       result: {
-        thread: { ...thread, id: threadId, sessionId: threadId },
-        model: "gpt-5.4",
-        modelProvider: "openai",
+        rateLimits: {
+          limitId: "fake",
+          windowDurationMins: 60,
+          usedPercent: 0,
+          remainingPercent: 100,
+        },
       },
     });
     return;
   }
+  if (method === "skills/list") {
+    const cwds = Array.isArray(params?.cwds) && params.cwds.length > 0 ? params.cwds : [cwd];
+    write({
+      id,
+      result: {
+        data: cwds.map((entry) => ({ cwd: entry, errors: [], skills: [] })),
+      },
+    });
+    return;
+  }
+  if (method === "model/list") {
+    write({ id, result: { data: [model], nextCursor: null } });
+    return;
+  }
+  if (method === "thread/start" || method === "thread/resume") {
+    const threadId = params?.threadId ?? thread.id;
+    thread = makeThread(threadId);
+    const result = {
+      thread,
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      serviceTier: null,
+      disabledPluginIds: [],
+      cwd,
+      runtimeWorkspaceRoots: [cwd],
+      instructionSources: [],
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandbox: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      },
+      activePermissionProfile: { id: ":workspace", extends: null },
+      reasoningEffort: null,
+      multiAgentMode: "explicitRequestOnly",
+    };
+    write({ id, result });
+    write({ method: "thread/started", params: { thread } });
+    return;
+  }
   if (method === "turn/start") {
+    turnCount += 1;
+    const turnId = `fake-turn-${turnCount}`;
+    const text = promptText(params);
     const turn = {
-      id: `fake-turn-${Date.now()}`,
+      id: turnId,
       items: [],
       itemsView: "notLoaded",
-      status: "completed",
+      status: "inProgress",
       error: null,
-      startedAt: Date.now(),
-      completedAt: Date.now(),
-      durationMs: 1,
+      startedAt: nowSec(),
+      completedAt: null,
+      durationMs: null,
     };
-    write({ jsonrpc: "2.0", id, result: { turn: { ...turn, status: "inProgress" } } });
+    const threadId = params?.threadId ?? thread.id;
+    const agentText = text.length > 0 ? `fake-codex received: ${text}` : "fake-codex turn complete";
+    const agentItem = {
+      type: "agentMessage",
+      id: `fake-msg-${turnCount}`,
+      text: agentText,
+      phase: "final_answer",
+      memoryCitation: null,
+      delivery: null,
+      questions: null,
+    };
+    write({ id, result: { turn } });
+    write({ method: "turn/started", params: { threadId, turn } });
     write({
-      jsonrpc: "2.0",
+      method: "item/started",
+      params: {
+        item: agentItem,
+        threadId,
+        turnId,
+        startedAtMs: Date.now(),
+      },
+    });
+    write({
+      method: "item/completed",
+      params: {
+        item: agentItem,
+        threadId,
+        turnId,
+        completedAtMs: Date.now(),
+      },
+    });
+    write({
       method: "turn/completed",
       params: {
-        threadId: params?.threadId ?? thread.id,
-        turn,
+        threadId,
+        turn: {
+          ...turn,
+          items: [agentItem],
+          itemsView: "summary",
+          status: "completed",
+          completedAt: nowSec(),
+          durationMs: 1,
+        },
       },
     });
     return;
   }
   if (id !== undefined) {
-    write({ jsonrpc: "2.0", id, result: {} });
+    write({ id, result: {} });
   }
 });
