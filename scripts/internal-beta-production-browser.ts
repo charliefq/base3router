@@ -148,7 +148,7 @@ function fakeTurnStarts() {
   if (!NodeFS.existsSync(fakeLog)) return 0;
   return NodeFS.readFileSync(fakeLog, "utf8")
     .split("\n")
-    .filter((line) => line.includes('"method":"turn/start"')).length;
+    .filter((line) => /"method":"(?:turn\/start|thread\/start)"/.test(line)).length;
 }
 
 async function waitUntil(
