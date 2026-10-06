@@ -52,6 +52,142 @@ export type EvidenceDocument = {
   readonly verdict: Verdict;
 };
 
+export type PreservationKind =
+  | "covered"
+  | "structural-only"
+  | "unsupported"
+  | "blocked"
+  | "limitation";
+
+export type PreservationRow = {
+  readonly id: string;
+  readonly title: string;
+  readonly kind: PreservationKind;
+  readonly gateIds: ReadonlyArray<string>;
+  readonly notes: string;
+};
+
+export const PRESERVATION_MATRIX: ReadonlyArray<PreservationRow> = [
+  {
+    id: "routing-outcome-capture",
+    title: "Routing outcome capture",
+    kind: "covered",
+    gateIds: ["L-auto-manual"],
+    notes:
+      "Terminal V2 provider turns persist one observation keyed by environmentId:threadId:messageId. Unknown cost stays unknown.",
+  },
+  {
+    id: "workflow-human-decisions",
+    title: "Workflow human decisions",
+    kind: "covered",
+    gateIds: ["L-workflow", "L-ws-production"],
+    notes:
+      "Phase 5 catalog/read/action on the authenticated session. orchestration:read views a pending gate; orchestration:operate records approve, reject, or cancel.",
+  },
+  {
+    id: "governed-dispatch",
+    title: "Governed dispatch paths",
+    kind: "covered",
+    gateIds: ["L-auto-manual", "L-successor-ask", "L-mcp-ask"],
+    notes:
+      "One authorizeDispatch gate. Ordinary message.dispatch does not require an external-write approval. ASK applies to delegation, unattended schedules, and external-write MCP tools.",
+  },
+  {
+    id: "terminal-confirmed-leases",
+    title: "Terminal-confirmed leases",
+    kind: "covered",
+    gateIds: ["L-lease-terminal", "L-workload"],
+    notes:
+      "A slot stays occupied until a matching ingested terminal writes released_at. Local projection completed|failed|cancelled|interrupted|rolled_back does not free capacity.",
+  },
+  {
+    id: "schema-import-recovery",
+    title: "Schema import and recovery",
+    kind: "covered",
+    gateIds: ["L-recovery"],
+    notes:
+      "importBase3Policy maps a disposable Base3Router database into the V2 file. Approvals copy as stored. Ambiguous external outcomes are held, not replayed.",
+  },
+  {
+    id: "production-browser-journeys",
+    title: "Production-browser journeys",
+    kind: "covered",
+    gateIds: ["L-production-browser"],
+    notes:
+      "Composer Auto/Manual, ASK grant/deny/cancel/expiry, and Dream Memory against real RPC and disposable SQLite. Browser providers are fake transports, not live CLIs.",
+  },
+  {
+    id: "sustained-workload",
+    title: "Sustained fake-provider workload",
+    kind: "covered",
+    gateIds: ["L-workload"],
+    notes:
+      "Bounded 60-second overlapping FG/BG work, 50 cancel cycles, capacity bounds, and terminal-confirmed cleanup. testHarnessDurationMs is harness wall time, not application latency.",
+  },
+  {
+    id: "ask-expiry-deadline",
+    title: "ASK expiry deadline consistency",
+    kind: "covered",
+    gateIds: ["L-successor-ask", "L-production-browser"],
+    notes:
+      "Production authorizeTool/putApproval writes the same expiresAt onto expires_at and payload_json. expireIfDue reads payload_json.expiresAt. The browser expirePendingApprovals helper is a harness fixture that patches both fields; it is not a user-facing journey.",
+  },
+  {
+    id: "ui-lab-structural",
+    title: "L-ui-lab structural check",
+    kind: "structural-only",
+    gateIds: ["L-ui-lab"],
+    notes:
+      "Confirms V1 UI Lab files are absent and V2 Inspector/Control Center mounts exist. It is not a behavioral substitute for production-browser or RPC gates.",
+  },
+  {
+    id: "fake-transports",
+    title: "Browser providers are fake transports",
+    kind: "limitation",
+    gateIds: ["L-production-browser", "L-workload"],
+    notes:
+      "Production-browser pins fake Codex/Claude absolute binaryPath values. The 60-second workload uses in-process fake turns. Neither is a live provider CLI.",
+  },
+  {
+    id: "openrouter-no-driver",
+    title: "OpenRouter has no executable driver",
+    kind: "unsupported",
+    gateIds: ["L-auto-manual", "L-production-browser"],
+    notes:
+      "Guidance / Teacher / Shadow only on this pin. Control Center must disclose that OpenRouter cannot execute product sessions.",
+  },
+  {
+    id: "cursor-cloud-fail-closed",
+    title: "Cursor Cloud REST is fail-closed for product sessions",
+    kind: "unsupported",
+    gateIds: ["L-auto-manual", "L-workflow"],
+    notes:
+      "Not a second engine. Product sessions fail that path closed. Explicit handoff remains the provider-switch contract.",
+  },
+  {
+    id: "unconfirmed-lease-pin",
+    title: "Unconfirmed disconnects and missing runId can leave leases pinned",
+    kind: "limitation",
+    gateIds: ["L-lease-terminal"],
+    notes:
+      "A closed event stream without confirmProviderTermination leaves the slot occupied. ProviderRuntimeRecoveryService can terminalize projection runs without releasing the lease. A missing runId or run_id IS NULL stays pinned.",
+  },
+  {
+    id: "live-provider",
+    title: "Live paid providers",
+    kind: "blocked",
+    gateIds: ["E-live-provider"],
+    notes: "E-live-provider remains BLOCKED. No paid calls in Task 3A.",
+  },
+  {
+    id: "native-signing",
+    title: "Native install and signing",
+    kind: "blocked",
+    gateIds: ["E-native-signing"],
+    notes: "E-native-signing remains BLOCKED. No native-release readiness in Task 3A.",
+  },
+];
+
 export const GATES: ReadonlyArray<GateDefinition> = [
   {
     id: "L-lease-terminal",
@@ -63,6 +199,7 @@ export const GATES: ReadonlyArray<GateDefinition> = [
       files: [
         "apps/server/src/concurrencyBudget/awaitTurnTerminal.test.ts",
         "apps/server/src/policy/Base3Policy.integration.test.ts",
+        "apps/server/src/policy/Base3Policy.continuingProvider.test.ts",
       ],
     },
   },
@@ -105,7 +242,8 @@ export const GATES: ReadonlyArray<GateDefinition> = [
   {
     id: "L-workload",
     requirementIds: ["R6"],
-    title: "Scheduler occupancy plus bounded 60-second fake-provider workload",
+    title:
+      "Scheduler occupancy plus bounded 60-second fake-provider workload with 50 cancel cycles",
     requiredLocal: true,
     command: {
       kind: "vp-test",
@@ -128,6 +266,19 @@ export const GATES: ReadonlyArray<GateDefinition> = [
         "apps/server/src/routerEvaluation/persistTurnOutcome.test.ts",
         "apps/server/src/routerEvaluation/persistTurnOutcome.v2.test.ts",
         "apps/server/src/policy/Base3Policy.dispatch.test.ts",
+      ],
+    },
+  },
+  {
+    id: "L-workflow",
+    requirementIds: ["O1", "R4"],
+    title: "Workflow Phase 5 human decisions on the authenticated V2 session",
+    requiredLocal: true,
+    command: {
+      kind: "vp-test",
+      files: [
+        "apps/server/src/workflow/Workflow.rpc.test.ts",
+        "apps/server/src/auth/RpcAuthorization.test.ts",
       ],
     },
   },
@@ -165,7 +316,7 @@ export const GATES: ReadonlyArray<GateDefinition> = [
   {
     id: "L-ui-lab",
     requirementIds: ["R13"],
-    title: "V1 UI Lab is not a second engine; V2 governance surfaces are mounted",
+    title: "V1 UI Lab is not a second engine; V2 governance surfaces are mounted (structural only)",
     requiredLocal: false,
     command: {
       kind: "node-script",

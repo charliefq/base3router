@@ -57,10 +57,16 @@ const runGate = (gate: (typeof GATES)[number], evidenceDir: string): GateEvidenc
     INTERNAL_BETA_EVIDENCE_DIR: evidenceDir,
   };
   const [bin, ...args] = mapped.argv;
+  const nvmBin = `${NodeProcess.env.HOME ?? ""}/.nvm/versions/node/v24.13.1/bin`;
+  const pathValue = NodeProcess.env.PATH ?? "";
   const result = NodeChildProcess.spawnSync(bin ?? "vp", args, {
     cwd: repoRoot,
     encoding: "utf8",
-    env,
+    maxBuffer: 64 * 1024 * 1024,
+    env: {
+      ...env,
+      PATH: pathValue.includes(nvmBin) ? pathValue : `${nvmBin}:${pathValue}`,
+    },
   });
   const logPath = NodePath.join(evidenceDir, `${gate.id}.log`);
   NodeFS.writeFileSync(

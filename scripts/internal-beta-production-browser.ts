@@ -151,6 +151,9 @@ function memoryRows(homeDir: string) {
   }
 }
 
+// Harness fixture only: expireIfDue compares payload_json.expiresAt, not the
+// expires_at column alone. Patch both so Grant fails closed. This is not a
+// user-facing journey and must not be presented as one.
 function expirePendingApprovals(homeDir: string) {
   const db = new DatabaseSync(sqlitePath(homeDir));
   try {

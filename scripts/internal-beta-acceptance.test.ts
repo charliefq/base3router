@@ -8,6 +8,7 @@ import {
   checkEvidence,
   EVIDENCE_SCHEMA_VERSION,
   GATES,
+  PRESERVATION_MATRIX,
   argvFor,
   type EvidenceDocument,
   type GateEvidence,
@@ -91,16 +92,28 @@ it("rejects evidence that omits a required local gate", () => {
   expect(checked.detail).toContain("L-mcp-ask");
 });
 
-it("keeps production browser, routing execution, lease cleanup, and sustained workload required", () => {
+it("keeps production browser, routing, workflow, lease cleanup, and sustained workload required", () => {
   const required = new Set(GATES.filter((gate) => gate.requiredLocal).map((gate) => gate.id));
   expect(required.has("L-production-browser")).toBe(true);
   expect(required.has("L-auto-manual")).toBe(true);
+  expect(required.has("L-workflow")).toBe(true);
   expect(required.has("L-lease-terminal")).toBe(true);
   expect(required.has("L-workload")).toBe(true);
+  expect(required.has("L-ui-lab")).toBe(false);
   const autoManual = GATES.find((gate) => gate.id === "L-auto-manual");
   expect(
     autoManual?.command.kind === "vp-test" &&
       autoManual.command.files.some((file) => file.includes("Base3Policy.dispatch.test.ts")),
+  ).toBe(true);
+  const workflow = GATES.find((gate) => gate.id === "L-workflow");
+  expect(
+    workflow?.command.kind === "vp-test" &&
+      workflow.command.files.some((file) => file.includes("Workflow.rpc.test.ts")),
+  ).toBe(true);
+  const lease = GATES.find((gate) => gate.id === "L-lease-terminal");
+  expect(
+    lease?.command.kind === "vp-test" &&
+      lease.command.files.some((file) => file.includes("Base3Policy.continuingProvider.test.ts")),
   ).toBe(true);
   const workload = GATES.find((gate) => gate.id === "L-workload");
   expect(
@@ -109,6 +122,51 @@ it("keeps production browser, routing execution, lease cleanup, and sustained wo
         file.includes("ConcurrencyBudget.sustainedWorkload.test.ts"),
       ),
   ).toBe(true);
+});
+
+it("keeps L-ui-lab structural-only and live/native gates blocked", () => {
+  const uiLab = GATES.find((gate) => gate.id === "L-ui-lab");
+  expect(uiLab?.requiredLocal).toBe(false);
+  expect(uiLab?.command.kind).toBe("node-script");
+  const live = argvFor({ kind: "external", gate: "live-provider" }, "/workspace");
+  const native = argvFor({ kind: "external", gate: "native-signing" }, "/workspace");
+  expect("blocked" in live).toBe(true);
+  expect("blocked" in native).toBe(true);
+  if ("blocked" in live) {
+    expect(live.blocked).toContain("Live paid-provider");
+  }
+  if ("blocked" in native) {
+    expect(native.blocked).toContain("Native install/signing");
+  }
+});
+
+it("freezes the preservation matrix distinctions for Task 3A", () => {
+  const byId = new Map(PRESERVATION_MATRIX.map((row) => [row.id, row]));
+  expect(byId.get("ui-lab-structural")?.kind).toBe("structural-only");
+  expect(byId.get("fake-transports")?.notes).toContain("fake");
+  expect(byId.get("openrouter-no-driver")?.kind).toBe("unsupported");
+  expect(byId.get("cursor-cloud-fail-closed")?.kind).toBe("unsupported");
+  expect(byId.get("unconfirmed-lease-pin")?.kind).toBe("limitation");
+  expect(byId.get("live-provider")?.kind).toBe("blocked");
+  expect(byId.get("native-signing")?.kind).toBe("blocked");
+  expect(byId.get("ask-expiry-deadline")?.notes).toContain("harness fixture");
+  expect(byId.get("ask-expiry-deadline")?.notes).toContain("not a user-facing journey");
+  const covered = [
+    "routing-outcome-capture",
+    "workflow-human-decisions",
+    "governed-dispatch",
+    "terminal-confirmed-leases",
+    "schema-import-recovery",
+    "production-browser-journeys",
+    "sustained-workload",
+  ];
+  for (const id of covered) {
+    expect(byId.get(id)?.kind).toBe("covered");
+  }
+  const requiredIds = new Set(GATES.filter((gate) => gate.requiredLocal).map((gate) => gate.id));
+  for (const row of PRESERVATION_MATRIX.filter((item) => item.kind === "covered")) {
+    expect(row.gateIds.some((gateId) => requiredIds.has(gateId))).toBe(true);
+  }
 });
 
 it("accepts valid SHA-bound evidence for the current tree", () => {

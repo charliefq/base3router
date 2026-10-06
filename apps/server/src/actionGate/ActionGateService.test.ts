@@ -23,6 +23,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { requireAllowedMcpTool } from "../mcp/McpActionAuthorization.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
@@ -562,6 +563,37 @@ it.effect("deny, expire, and cancel execute the tool zero times", () =>
       .respond({ approvalId: expired.approvalId, decision: "grant" }, FUTURE)
       .pipe(Effect.flip);
     assert.equal(isActionGateError(lateGrant), true);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("authorizeTool writes the same expiry deadline expireIfDue reads", () =>
+  Effect.gen(function* () {
+    const service = yield* ActionGateService;
+    const sql = yield* SqlClient.SqlClient;
+    const asked = yield* service.authorizeTool({
+      toolName: "preview_open",
+      args: { url: "https://example.test/expiry-deadline" },
+      environmentId,
+      threadId: ThreadId.make("thread-expiry-deadline"),
+    });
+    const approvalId = asked.approvalId;
+    if (approvalId === undefined) {
+      assert.equal(asked.requiresApproval, true, "expected approval");
+      return;
+    }
+    const rows = yield* sql<{ expiresAt: string }>`
+      SELECT expires_at AS "expiresAt"
+      FROM action_gate_approvals
+      WHERE approval_id = ${approvalId}
+    `;
+    const row = rows[0];
+    assert.equal(row !== undefined, true);
+    if (row === undefined) return;
+    const loaded = yield* service.getApproval(approvalId);
+    assert.equal(loaded._tag === "Some", true);
+    if (loaded._tag !== "Some") return;
+    assert.equal(row.expiresAt, loaded.value.expiresAt);
+    assert.equal(Date.parse(loaded.value.expiresAt) > Date.parse(loaded.value.createdAt), true);
   }).pipe(Effect.provide(layer)),
 );
 

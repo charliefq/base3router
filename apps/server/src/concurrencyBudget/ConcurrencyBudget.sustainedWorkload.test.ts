@@ -28,6 +28,9 @@ const environmentId = EnvironmentId.make("env-sustained");
 const WORKLOAD_MS = 60_000;
 const SAMPLE_EVERY_MS = 5_000;
 const TURN_WORK_MS = 1_500;
+const CANCEL_CYCLES = 50;
+const FOREGROUND_LIMIT = 2;
+const BACKGROUND_LIMIT = 2;
 
 const mixedPolicy = () => {
   const policy = defaultConcurrencyBudgetPolicy();
@@ -168,34 +171,42 @@ it.effect(
         ).pipe(Effect.forkChild({ startImmediately: true }));
 
         let cycle = 0;
-        while ((yield* Clock.currentTimeMillis) - startedAt < WORKLOAD_MS) {
-          yield* fakeTurn({ workloadClass: "foreground-turn" }).pipe(Effect.flatMap(track));
-          yield* fakeTurn({ workloadClass: "foreground-turn" }).pipe(Effect.flatMap(track));
-          yield* fakeTurn({ workloadClass: "dream-job" }).pipe(Effect.flatMap(track));
-          yield* fakeTurn({ workloadClass: "detached-background" }).pipe(Effect.flatMap(track));
+        while (
+          (yield* Clock.currentTimeMillis) - startedAt < WORKLOAD_MS ||
+          cycle < CANCEL_CYCLES
+        ) {
+          const elapsed = (yield* Clock.currentTimeMillis) - startedAt;
+          if (elapsed < WORKLOAD_MS) {
+            yield* fakeTurn({ workloadClass: "foreground-turn" }).pipe(Effect.flatMap(track));
+            yield* fakeTurn({ workloadClass: "foreground-turn" }).pipe(Effect.flatMap(track));
+            yield* fakeTurn({ workloadClass: "dream-job" }).pipe(Effect.flatMap(track));
+            yield* fakeTurn({ workloadClass: "detached-background" }).pipe(Effect.flatMap(track));
+          }
 
-          const waiter = yield* budget
-            .withAdmission(
-              {
-                workloadClass: "foreground-turn",
-                environmentId,
-                threadId: ThreadId.make("thread-cancel-cycle"),
-                requestedAt: `2026-10-05T00:01:00.000Z`,
-              },
-              Effect.void,
-            )
-            .pipe(Effect.forkChild({ startImmediately: true }));
-          yield* Effect.sleep("200 millis");
-          const cancelled = yield* budget.cancelQueuedForThread(
-            environmentId,
-            ThreadId.make("thread-cancel-cycle"),
-          );
-          yield* Fiber.join(waiter).pipe(Effect.exit);
-          const afterCancel = yield* budget.snapshot(environmentId);
-          yield* recordPeak(afterCancel);
-          cancellationCycles.push({ cycle, cancelled, queuedAfter: afterCancel.queued });
-          cycle += 1;
-          yield* Effect.sleep("1 second");
+          if (cycle < CANCEL_CYCLES) {
+            const waiter = yield* budget
+              .withAdmission(
+                {
+                  workloadClass: "foreground-turn",
+                  environmentId,
+                  threadId: ThreadId.make("thread-cancel-cycle"),
+                  requestedAt: `2026-10-05T00:01:00.000Z`,
+                },
+                Effect.void,
+              )
+              .pipe(Effect.forkChild({ startImmediately: true }));
+            yield* Effect.sleep("200 millis");
+            const cancelled = yield* budget.cancelQueuedForThread(
+              environmentId,
+              ThreadId.make("thread-cancel-cycle"),
+            );
+            yield* Fiber.join(waiter).pipe(Effect.exit);
+            const afterCancel = yield* budget.snapshot(environmentId);
+            yield* recordPeak(afterCancel);
+            cancellationCycles.push({ cycle, cancelled, queuedAfter: afterCancel.queued });
+            cycle += 1;
+          }
+          yield* Effect.sleep(cycle < CANCEL_CYCLES ? "200 millis" : "1 second");
         }
 
         const remaining = yield* Ref.get(live);
@@ -211,11 +222,12 @@ it.effect(
         const testHarnessDurationMs = (yield* Clock.currentTimeMillis) - startedAt;
         const rssAfter = process.memoryUsage().rss;
         const evidence = {
-          note: "testHarnessDurationMs is harness wall time for this 60-second bounded fake-provider run. It is not application performance.",
+          note: "testHarnessDurationMs is harness wall time for this 60-second bounded fake-provider run. It is not application latency.",
           workload: {
             foregroundAttempted: yield* Ref.get(foregroundAttempted),
             backgroundAttempted: yield* Ref.get(backgroundAttempted),
             cancellationCycles: cancellationCycles.length,
+            cancelCycleTarget: CANCEL_CYCLES,
             completedWork: finished,
           },
           peak: peaks,
@@ -241,12 +253,14 @@ it.effect(
         assert.equal(testHarnessDurationMs >= WORKLOAD_MS, true);
         assert.equal(finished >= 1, true);
         assert.equal(peaks.foregroundActive >= 1, true);
+        assert.equal(peaks.foregroundActive <= FOREGROUND_LIMIT, true);
+        assert.equal(peaks.backgroundActive <= BACKGROUND_LIMIT, true);
         assert.equal(resourceSamples.length >= 10, true);
-        assert.equal(cancellationCycles.length >= 10, true);
+        assert.equal(cancellationCycles.length >= CANCEL_CYCLES, true);
         assert.equal(finalSnapshot.foregroundActive, 0);
         assert.equal(finalSnapshot.queued, 0);
         assert.equal(evidence.cleanup.allIdle, true);
       }),
     ).pipe(Effect.provide(layerWithPolicy(mixedPolicy()))),
-  90_000,
+  120_000,
 );
