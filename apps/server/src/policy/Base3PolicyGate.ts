@@ -910,7 +910,6 @@ export const authorizeScheduleUpsert = (input: {
 }) =>
   Effect.gen(function* () {
     const context = yield* PolicyExecutionContext;
-    if (context.kind === "kernel-test") return;
     const unattended = input.createdBy === "agent" || input.creationSource === "mcp";
     const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
     if (Option.isNone(sqlOption)) return yield* deny("schedule_task", "policy-store-unavailable");
@@ -918,6 +917,8 @@ export const authorizeScheduleUpsert = (input: {
     const env = yield* environmentId;
     let approvalId: string | null = null;
     if (unattended) {
+      // Kernel tests are not a session and cannot satisfy ASK. Agent and MCP
+      // schedules stay fail-closed until a real operate session is approved.
       if (context.kind !== "session" || !hasOperate(context.scopes)) {
         return yield* deny("schedule_task", "unauthenticated");
       }
@@ -934,8 +935,13 @@ export const authorizeScheduleUpsert = (input: {
     } else if (context.kind === "session" && !hasOperate(context.scopes)) {
       return yield* deny("schedule_task", "missing-operate-scope");
     }
-    const actorId = context.kind === "session" ? context.actorId : "server";
-    const scopes = context.kind === "session" ? context.scopes : [];
+    // User schedules from the Vitest operate subject must leave a grant.
+    // Firing replaces that subject with server-continuation, which revalidates
+    // the stored grant instead of trusting the caller.
+    const actorId =
+      context.kind === "session" || context.kind === "kernel-test" ? context.actorId : "server";
+    const scopes =
+      context.kind === "session" || context.kind === "kernel-test" ? context.scopes : [];
     yield* insertGrant({
       sql,
       grantId: `grant:schedule:${input.taskId}`,

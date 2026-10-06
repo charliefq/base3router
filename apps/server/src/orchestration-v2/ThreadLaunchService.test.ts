@@ -10,6 +10,8 @@ import * as ThreadMessageIntake from "./ThreadMessageIntake.ts";
 import { assert, it, vi } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
+  ActionApprovalId,
+  AuthOrchestrationOperateScope,
   ChatAttachmentId,
   ComposerContextId,
   type ChatAttachment,
@@ -22,6 +24,7 @@ import {
   ProviderInstanceId,
   OrchestrationV2ThreadProjectionJson,
   ScheduledTaskId,
+  ScheduledTaskUpsertInput,
   type ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
@@ -36,7 +39,12 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
+
+import { ActionGateService, layer as actionGateLayer } from "../actionGate/ActionGateService.ts";
+import { Base3PolicyDeniedError } from "../policy/Base3PolicyGate.ts";
+import { PolicyExecutionContext } from "../policy/executionContext.ts";
 
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
@@ -279,9 +287,16 @@ it.effect.each(
   "attributes $createdBy-configured automations in $target threads without changing their prompt",
   ({ target, createdBy }) => {
     const harness = makeHarness();
+    const gate = actionGateLayer.pipe(Layer.provide(harness.layer));
     const scheduledTasks = ScheduledTasks.layer.pipe(
       Layer.provide(Layer.mergeAll(harness.layer, NodeCrypto.layer, Scheduler.layer)),
     );
+    const session = {
+      kind: "session" as const,
+      actorId: "user-1",
+      sessionId: "session-1",
+      scopes: [AuthOrchestrationOperateScope],
+    };
     return Effect.gen(function* () {
       const tasks = yield* ScheduledTasks.ScheduledTaskService;
       const launches = yield* ThreadLaunch.ThreadLaunchService;
@@ -292,7 +307,7 @@ it.effect.each(
               launchInput({ command: "command:existing", thread: "thread:existing" }),
             )
           : null;
-      const { task } = yield* tasks.upsert({
+      const upsertInput: typeof ScheduledTaskUpsertInput.Type = {
         id: ScheduledTaskId.make("scheduled-task:attribution"),
         title: "Daily audit",
         prompt: "Audit performance and crashes.",
@@ -306,7 +321,31 @@ it.effect.each(
         interactionMode: "default",
         createdBy,
         creationSource: createdBy === "agent" ? "mcp" : "web",
-      });
+      };
+      const asSession = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        createdBy === "agent"
+          ? effect.pipe(Effect.provideService(PolicyExecutionContext, session))
+          : effect;
+      if (createdBy === "agent") {
+        const denied = yield* asSession(tasks.upsert(upsertInput)).pipe(Effect.flip);
+        if (!Schema.is(Base3PolicyDeniedError)(denied.cause)) {
+          assert.fail("Agent schedule upsert did not deny with policy.");
+        }
+        assert.equal(denied.cause.reason, "approval-required");
+        const sql = yield* SqlClient.SqlClient;
+        const row = yield* sql<{ readonly approval_id: string }>`
+          SELECT approval_id FROM action_gate_approvals WHERE status = 'pending' LIMIT 1
+        `;
+        const approvalId = row[0]?.approval_id;
+        assert.isDefined(approvalId);
+        const gateService = yield* ActionGateService;
+        const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
+        yield* gateService.respond(
+          { approvalId: ActionApprovalId.make(approvalId), decision: "grant" },
+          now,
+        );
+      }
+      const { task } = yield* asSession(tasks.upsert(upsertInput));
       const result = yield* tasks.runNow({ id: task.id });
       assert.equal(result.task.lastRunStatus, "succeeded");
       const projectThreads = yield* threads.listProjectThreads({
@@ -326,7 +365,7 @@ it.effect.each(
       const turnItem = wire.turnItems.find((item) => item.type === "user_message");
       assert.equal(turnItem?.text, task.prompt);
       assert.equal(turnItem?.scheduledTaskId, task.id);
-    }).pipe(Effect.provide(Layer.mergeAll(harness.layer, scheduledTasks)));
+    }).pipe(Effect.provide(Layer.mergeAll(harness.layer, scheduledTasks, gate)));
   },
 );
 

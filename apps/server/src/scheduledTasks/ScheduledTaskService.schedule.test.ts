@@ -78,7 +78,7 @@ it.effect("preserves a due run when a save only pads the scheduled hour", () =>
         modelSelection: { instanceId: "codex", model: "gpt-5.4" },
         runtimeMode: "full-access",
         interactionMode: "default",
-        creationSource: "mcp",
+        creationSource: "web",
       });
       const created = yield* service.upsert(input);
       const expectedDueAt = DateTime.formatIso(DateTime.toUtc(dueAt));
