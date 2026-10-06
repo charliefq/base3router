@@ -567,17 +567,6 @@ async function runAsk(
     };
 
     await requestAsk("https://example.invalid/ask-grant");
-    await page.reload({ waitUntil: "domcontentloaded" });
-    await surface.waitFor({ timeout: 20_000 });
-    await page.locator("[data-governance-refresh]").click();
-    await waitUntil(
-      () =>
-        page
-          .locator("[data-approval-status='pending']")
-          .count()
-          .then((count) => count > 0),
-      "Pending ASK did not survive refresh.",
-    );
     const startedBeforeGrant = countAuditKind(home, "action.started");
     await page.locator("[data-action-gate-grant]").click();
     await waitUntil(
@@ -598,6 +587,17 @@ async function runAsk(
     }
 
     await requestAsk("https://example.invalid/ask-deny");
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await surface.waitFor({ timeout: 20_000 });
+    await page.locator("[data-governance-refresh]").click();
+    await waitUntil(
+      () =>
+        page
+          .locator("[data-approval-status='pending']")
+          .count()
+          .then((count) => count > 0),
+      "Pending ASK did not survive refresh.",
+    );
     await page.locator("[data-action-gate-deny]").click();
     await waitUntil(
       () =>
