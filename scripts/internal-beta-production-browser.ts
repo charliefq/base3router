@@ -483,8 +483,8 @@ async function main() {
       "Composer did not return to idle after Manual send.",
     );
     const afterManualTurns = fakeTurnStarts();
-    seedDefaultModelSelection(home, { instanceId: "claudeAgent", model: "sonnet" });
-    await sleep(1_500);
+    seedDefaultModelSelection(home, { instanceId: "claudeAgent", model: "claude-sonnet-5" });
+    await sleep(2_500);
     await selectBoundFakeCodex(page);
     try {
       await sendComposerTurn(page, "auto", "auto failover proof");
@@ -509,7 +509,12 @@ async function main() {
     }
     if (typeof autoBinding.fallbackIndex !== "number" || autoBinding.fallbackIndex < 1) {
       throw new Error(
-        `Auto failover provenance missing fallbackIndex: ${JSON.stringify(autoBinding)}`,
+        `Auto failover provenance missing fallbackIndex: ${JSON.stringify({
+          fallbackIndex: autoBinding.fallbackIndex,
+          source: autoBinding.source,
+          target: autoBinding.target,
+          preferredDefault: autoBinding.modelRoute?.selected?.preferredDefault,
+        })}`,
       );
     }
     if (autoBinding.source === "explicit" || autoBinding.source === "environment-default") {
