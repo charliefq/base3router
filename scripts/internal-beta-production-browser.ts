@@ -303,6 +303,38 @@ function stop(child: NodeChildProcess.ChildProcess, homeDir: string) {
   }
 }
 
+function pickerShowsBoundCodex(label: string) {
+  return /GPT Fake|Codex/i.test(label) && !/Claude|Sonnet/i.test(label);
+}
+
+async function selectBoundFakeCodex(page: import("playwright-core").Page) {
+  const picker = page.locator("[data-chat-provider-model-picker]").first();
+  await picker.waitFor({ timeout: 60_000 });
+  const label = page.locator("[data-chat-provider-model-picker-label]").first();
+  await waitUntil(async () => {
+    const text = await label.innerText().catch(() => "");
+    return text.trim().length > 0;
+  }, "Model picker stayed empty.");
+  if (pickerShowsBoundCodex(await label.innerText())) return;
+  await picker.click();
+  const sidebarCodex = page.locator('[data-model-picker-provider="codex"]');
+  if ((await sidebarCodex.count()) > 0) {
+    await sidebarCodex.first().click();
+  } else {
+    await page
+      .getByRole("button", { name: /^Codex(?:$|,)/i })
+      .first()
+      .click();
+  }
+  const model = page.getByText("GPT Fake").first();
+  await model.waitFor({ timeout: 20_000 });
+  await model.click();
+  await waitUntil(
+    async () => pickerShowsBoundCodex(await label.innerText().catch(() => "")),
+    "Composer did not bind the fake Codex model.",
+  );
+}
+
 async function sendComposerTurn(
   page: import("playwright-core").Page,
   mode: "auto" | "manual",
@@ -324,7 +356,8 @@ async function sendComposerTurn(
   const editor = page.locator(".ProseMirror").first();
   await editor.click();
   await page.keyboard.type(text);
-  const send = page.getByRole("button", { name: "Send message" });
+  // Expanded send is the unlabeled up-arrow (`Submit message`); collapsed uses `Send message`.
+  const send = page.getByRole("button", { name: /Submit message|Send message/ });
   await send.waitFor({ timeout: 30_000 });
   await waitUntil(() => send.isEnabled(), "Composer send stayed disabled.");
   await send.click();
@@ -358,7 +391,6 @@ async function openControlCenter(
 async function main() {
   NodeFS.mkdirSync(artifactDir, { recursive: true });
   installFakeProviders();
-  seedAutoPreferred(home);
   let { child, log, pairingUrl } = await startDev(home);
   if (pairingUrl.length === 0) {
     stop(child, home);
@@ -412,6 +444,7 @@ async function main() {
       }
     }
     await waitForSqlite(home);
+    await selectBoundFakeCodex(page);
     const turnsBefore = fakeTurnStarts();
     try {
       await sendComposerTurn(page, "manual", "manual route proof");
@@ -442,8 +475,31 @@ async function main() {
       () => fakeTurnStarts() > turnsBefore,
       "Fake Codex did not receive the Manual turn/start.",
     );
+    await waitUntil(
+      () =>
+        page
+          .getByRole("button", { name: /Submit message|Send message/ })
+          .isVisible()
+          .catch(() => false),
+      "Composer did not return to idle after Manual send.",
+    );
     const afterManualTurns = fakeTurnStarts();
-    await sendComposerTurn(page, "auto", "auto failover proof");
+    seedAutoPreferred(home);
+    await sleep(1_500);
+    await selectBoundFakeCodex(page);
+    try {
+      await sendComposerTurn(page, "auto", "auto failover proof");
+    } catch (error) {
+      await page.screenshot({
+        path: NodePath.join(artifactDir, "composer-auto-failed.png"),
+        fullPage: true,
+      });
+      NodeFS.writeFileSync(
+        NodePath.join(artifactDir, "composer-auto-page.txt"),
+        `${page.url()}\n${await page.locator("body").innerText()}\n${consoleLog.join("\n")}\n`,
+      );
+      throw error;
+    }
     await waitUntil(
       () => latestBindings(home).some((binding) => binding.modelRoute?.mode === "auto"),
       "Auto composer send did not persist an auto route binding.",
@@ -452,13 +508,13 @@ async function main() {
     if (autoBinding === undefined) {
       throw new Error("Auto route binding missing after composer send.");
     }
-    if (typeof autoBinding.fallbackIndex !== "number") {
+    if (typeof autoBinding.fallbackIndex !== "number" || autoBinding.fallbackIndex < 1) {
       throw new Error(
         `Auto failover provenance missing fallbackIndex: ${JSON.stringify(autoBinding)}`,
       );
     }
-    if (autoBinding.source === "explicit") {
-      throw new Error(`Auto route kept an explicit source: ${JSON.stringify(autoBinding)}`);
+    if (autoBinding.source === "explicit" || autoBinding.source === "environment-default") {
+      throw new Error(`Auto route did not fail over: ${JSON.stringify(autoBinding)}`);
     }
     await waitUntil(
       () => fakeTurnStarts() > afterManualTurns,
