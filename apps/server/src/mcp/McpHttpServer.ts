@@ -19,7 +19,10 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
-import { kernelTestPolicyContext, PolicyExecutionContext } from "../policy/executionContext.ts";
+import {
+  PolicyExecutionContext,
+  type PolicyExecutionContext as PolicyExecutionContextValue,
+} from "../policy/executionContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import { PreviewControlsHandlersLive } from "./toolkits/previewControls/handlers.ts";
@@ -88,6 +91,19 @@ type McpAuthMiddleware = (
   HttpServerRequest.HttpServerRequest
 >;
 
+/** Production MCP never selects the Vitest kernel subject, even if a grant actor id matches that string. */
+export const policyExecutionContextFromMcpActor = (
+  actor: McpInvocationContext.McpInvocationScope["actor"],
+): PolicyExecutionContextValue =>
+  actor === undefined
+    ? { kind: "absent" }
+    : {
+        kind: "session",
+        actorId: actor.actorId,
+        sessionId: actor.sessionId,
+        scopes: actor.scopes,
+      };
+
 export const normalizeMcpHttpResponse = (
   response: HttpServerResponse.HttpServerResponse,
 ): HttpServerResponse.HttpServerResponse => {
@@ -119,18 +135,7 @@ const makeMcpAuthMiddleware = McpSessionRegistry.McpSessionRegistry.pipe(
         });
         return unauthorized;
       }
-      const actor = invocation.actor;
-      const policyContext =
-        actor === undefined
-          ? { kind: "absent" as const }
-          : actor.actorId === "kernel-test"
-            ? kernelTestPolicyContext
-            : {
-                kind: "session" as const,
-                actorId: actor.actorId,
-                sessionId: actor.sessionId,
-                scopes: actor.scopes,
-              };
+      const policyContext = policyExecutionContextFromMcpActor(invocation.actor);
       return yield* httpEffect.pipe(
         Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
         Effect.provideService(PolicyExecutionContext, policyContext),

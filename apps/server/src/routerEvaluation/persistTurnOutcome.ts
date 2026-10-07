@@ -229,7 +229,7 @@ export const detectReworkProxy = (input: {
   return undefined;
 };
 
-export const persistTurnOutcomeFromRuntimeEvent = Effect.fn("persistTurnOutcomeFromRuntimeEvent")(
+const persistTurnOutcomeFromRuntimeEvent = Effect.fn("persistTurnOutcomeFromRuntimeEvent")(
   function* (input: {
     readonly environmentId: EnvironmentId;
     readonly threadId: ThreadId;

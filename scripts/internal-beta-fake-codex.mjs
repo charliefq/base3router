@@ -2,7 +2,6 @@
 // Deterministic Codex app-server peer for production-browser journeys.
 // NDJSON JSON-RPC at the transport boundary. No paid network.
 import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
 import * as NodeProcess from "node:process";
 import * as NodeReadline from "node:readline";
 
@@ -90,7 +89,7 @@ rl.on("line", (line) => {
         userAgent: "t3-fake-codex/0.159.0",
         codexHome: "/tmp",
         platformFamily: "unix",
-        platformOs: NodeOS.platform() === "darwin" ? "macos" : "linux",
+        platformOs: NodeProcess.platform === "darwin" ? "macos" : "linux",
       },
     });
     return;

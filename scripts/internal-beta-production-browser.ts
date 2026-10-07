@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off - Host-side harness spawns fake providers and polls a disposable home with Node.
 // Production browser check for the V2 governance surfaces.
 // Disposable home directory, fake local transports, no paid providers.
 import * as NodeChildProcess from "node:child_process";
@@ -6,13 +7,22 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeProcess from "node:process";
-import { DatabaseSync } from "node:sqlite";
+import * as NodeSqlite from "node:sqlite";
 
 const root = NodePath.resolve(import.meta.dirname, "..");
 const chrome = NodeProcess.env.CHROME_PATH ?? "/usr/local/bin/google-chrome";
 const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "base3-browser-"));
 const artifactDir = "/opt/cursor/artifacts";
 const journeyLogPath = NodePath.join(artifactDir, "production-browser-journeys.json");
+
+// Playwright serializes these callbacks into the page. The DOM shape stays on
+// that evaluated code; the Node program does not take a DOM lib.
+type BrowserPage = {
+  document: {
+    querySelector(selector: string): { getAttribute(name: string): string | null } | null;
+  };
+  location: { pathname: string };
+};
 
 type JourneyStatus = "PASS" | "FAIL" | "BLOCKED";
 type JourneyResult = {
@@ -107,7 +117,7 @@ function pinFakeDiscovery(
 }
 
 function latestBindings(homeDir: string) {
-  const db = new DatabaseSync(sqlitePath(homeDir));
+  const db = new NodeSqlite.DatabaseSync(sqlitePath(homeDir));
   try {
     return db
       .prepare(
@@ -121,7 +131,7 @@ function latestBindings(homeDir: string) {
 }
 
 function countAuditKind(homeDir: string, kind: string) {
-  const db = new DatabaseSync(sqlitePath(homeDir));
+  const db = new NodeSqlite.DatabaseSync(sqlitePath(homeDir));
   try {
     const rows = db.prepare(`SELECT payload_json AS payloadJson FROM action_gate_audit`).all() as {
       payloadJson: string;
@@ -139,7 +149,7 @@ function countAuditKind(homeDir: string, kind: string) {
 }
 
 function memoryRows(homeDir: string) {
-  const db = new DatabaseSync(sqlitePath(homeDir));
+  const db = new NodeSqlite.DatabaseSync(sqlitePath(homeDir));
   try {
     return db
       .prepare(
@@ -155,7 +165,7 @@ function memoryRows(homeDir: string) {
 // expires_at column alone. Patch both so Grant fails closed. This is not a
 // user-facing journey and must not be presented as one.
 function expirePendingApprovals(homeDir: string) {
-  const db = new DatabaseSync(sqlitePath(homeDir));
+  const db = new NodeSqlite.DatabaseSync(sqlitePath(homeDir));
   try {
     const expired = "2000-01-01T00:00:00.000Z";
     const rows = db
@@ -323,8 +333,9 @@ async function sendComposerTurn(
     await routing.first().click();
     await page.waitForFunction(
       (expected) =>
-        document.querySelector("[data-composer-routing]")?.getAttribute("data-composer-routing") ===
-        expected,
+        (globalThis as unknown as BrowserPage).document
+          .querySelector("[data-composer-routing]")
+          ?.getAttribute("data-composer-routing") === expected,
       mode,
       { timeout: 10_000 },
     );
@@ -389,16 +400,24 @@ async function pairAndOpenComposer(
 ) {
   await page.goto(pairingUrl, { waitUntil: "domcontentloaded" });
   const paired = await page
-    .waitForFunction(() => !location.pathname.startsWith("/pair"), null, { timeout: 15_000 })
+    .waitForFunction(
+      () => !(globalThis as unknown as BrowserPage).location.pathname.startsWith("/pair"),
+      null,
+      { timeout: 15_000 },
+    )
     .then(() => true)
     .catch(() => false);
   if (!paired) {
     const token = decodeURIComponent(new URL(pairingUrl).hash.replace(/^#token=/, ""));
     await page.getByRole("textbox").fill(token);
     await page.getByRole("button", { name: "Continue" }).click();
-    await page.waitForFunction(() => !location.pathname.startsWith("/pair"), null, {
-      timeout: 20_000,
-    });
+    await page.waitForFunction(
+      () => !(globalThis as unknown as BrowserPage).location.pathname.startsWith("/pair"),
+      null,
+      {
+        timeout: 20_000,
+      },
+    );
   }
   const startWithout = page.getByRole("button", { name: "Start without a project" });
   if (await startWithout.isVisible().catch(() => false)) {
@@ -738,16 +757,24 @@ async function runMemory(
     if (page.url().includes("/pair")) {
       await page.goto(restarted.pairingUrl, { waitUntil: "domcontentloaded" });
       await page
-        .waitForFunction(() => !location.pathname.startsWith("/pair"), null, { timeout: 20_000 })
+        .waitForFunction(
+          () => !(globalThis as unknown as BrowserPage).location.pathname.startsWith("/pair"),
+          null,
+          { timeout: 20_000 },
+        )
         .catch(async () => {
           const token = decodeURIComponent(
             new URL(restarted.pairingUrl).hash.replace(/^#token=/, ""),
           );
           await page.getByRole("textbox").fill(token);
           await page.getByRole("button", { name: "Continue" }).click();
-          await page.waitForFunction(() => !location.pathname.startsWith("/pair"), null, {
-            timeout: 20_000,
-          });
+          await page.waitForFunction(
+            () => !(globalThis as unknown as BrowserPage).location.pathname.startsWith("/pair"),
+            null,
+            {
+              timeout: 20_000,
+            },
+          );
         });
       await page.goto(`${origin}/settings/general`, { waitUntil: "domcontentloaded" });
     }

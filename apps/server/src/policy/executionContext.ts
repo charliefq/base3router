@@ -35,5 +35,3 @@ export const PolicyExecutionContext = Context.Reference<PolicyExecutionContext>(
     defaultValue: () => (process.env.VITEST ? kernelTest : { kind: "absent" as const }),
   },
 );
-
-export const kernelTestPolicyContext: PolicyExecutionContext = kernelTest;

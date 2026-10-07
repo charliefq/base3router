@@ -3,7 +3,13 @@ import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId, PreviewTabId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  EnvironmentId,
+  PreviewTabId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -113,6 +119,29 @@ const callSnapshot = (args: Record<string, unknown>) =>
         Effect.provideService(McpSchema.McpServerClient, client),
       );
   });
+
+it("maps MCP actors to session or absent, never kernel-test", () => {
+  expect(McpHttpServer.policyExecutionContextFromMcpActor(undefined)).toEqual({ kind: "absent" });
+  expect(
+    McpHttpServer.policyExecutionContextFromMcpActor({
+      actorId: "kernel-test",
+      sessionId: "grant",
+      scopes: [AuthOrchestrationOperateScope],
+    }),
+  ).toEqual({
+    kind: "session",
+    actorId: "kernel-test",
+    sessionId: "grant",
+    scopes: [AuthOrchestrationOperateScope],
+  });
+  expect(
+    McpHttpServer.policyExecutionContextFromMcpActor({
+      actorId: "user-1",
+      sessionId: "session-1",
+      scopes: [AuthOrchestrationOperateScope],
+    }).kind,
+  ).toBe("session");
+});
 
 it("normalizes empty successful notification responses to accepted", () => {
   const notificationResponse = McpHttpServer.normalizeMcpHttpResponse(

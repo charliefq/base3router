@@ -132,6 +132,27 @@ it.effect.each(["on time", "after restart"])(
         });
         const sql = yield* SqlClient.SqlClient;
         yield* sql`UPDATE scheduled_tasks SET next_run_at = ${resetAt} WHERE task_id = ${task.id}`;
+        // The limited turn already ran under the kernel subject. Recovery copies
+        // that actor and refuses to invent one when the grant is missing.
+        yield* sql`
+          INSERT INTO base3_execution_grants (
+            grant_id, thread_id, message_id, run_id, operation, actor_id, scopes_json,
+            expires_at, argument_hash, approval_id, revoked_at, created_at
+          ) VALUES (
+            ${"grant:message:thread:limited:message:limited"},
+            ${thread.id},
+            ${"message:limited"},
+            ${thread.latestRunId},
+            ${"message"},
+            ${"kernel-test"},
+            ${'["orchestration:operate"]'},
+            ${null},
+            ${"prior-turn"},
+            ${null},
+            ${null},
+            ${DateTime.formatIso(now)}
+          )
+        `;
         if (scenario === "on time") {
           yield* TestClock.adjust("55 seconds");
           assert.deepEqual(yield* Ref.get(commands), []);

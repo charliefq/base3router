@@ -31,7 +31,7 @@ const reject = (message: string): never => {
   throw new WorkflowPolicyError(message);
 };
 
-export const availableProfiles = (
+const availableProfiles = (
   catalog: WorkflowCatalog,
   projectId: string,
 ): ReadonlyArray<AgentProfile> => [
@@ -39,7 +39,7 @@ export const availableProfiles = (
   ...catalog.profiles.filter((profile) => profile.projectId === projectId),
 ];
 
-export const availableTemplates = (
+const availableTemplates = (
   catalog: WorkflowCatalog,
   projectId: string,
 ): ReadonlyArray<WorkflowTemplate> => [

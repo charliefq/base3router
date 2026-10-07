@@ -31,10 +31,7 @@ import { deleteTaskHandoffsByThread } from "../dispatcher/Handoff.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
-import {
-  PolicyExecutionContext,
-  type PolicyExecutionContext as PolicyContext,
-} from "./executionContext.ts";
+import { PolicyExecutionContext } from "./executionContext.ts";
 import { classifyCommand, commandNeedsCapacity, type OperationClass } from "./operationPolicy.ts";
 
 const TERMINAL_RUN_STATUSES = [
@@ -471,13 +468,22 @@ const bindRoute = (input: {
           Effect.map((current) => current.defaultModelSelection),
           Effect.orElseSucceed(() => null),
         );
-    const threadRows = yield* input.sql<{ readonly model_selection_json: string | null }>`
-      SELECT model_selection_json AS "model_selection_json"
-      FROM projection_threads
+    const threadRows = yield* input.sql<{
+      readonly instanceId: string | null;
+      readonly model: string | null;
+    }>`
+      SELECT
+        json_extract(payload_json, '$.modelSelection.instanceId') AS "instanceId",
+        json_extract(payload_json, '$.modelSelection.model') AS "model"
+      FROM orchestration_v2_projection_threads
       WHERE thread_id = ${input.command.threadId}
       LIMIT 1
-    `.pipe(Effect.orElseSucceed(() => [] as { readonly model_selection_json: string | null }[]));
-    const threadModel = decodeModel(threadRows[0]?.model_selection_json);
+    `.pipe(
+      Effect.orElseSucceed(
+        () => [] as { readonly instanceId: string | null; readonly model: string | null }[],
+      ),
+    );
+    const threadModel = decodeModel(threadRows[0]?.instanceId, threadRows[0]?.model);
     const preferred = input.command.modelSelection ?? threadModel ?? undefined;
     const turn: DispatcherTurnStartCommand = {
       type: "thread.turn.start",
@@ -542,18 +548,16 @@ const bindRoute = (input: {
     return binding;
   });
 
-function decodeModel(json: string | null | undefined): ModelSelection | null {
-  if (json === null || json === undefined || json.length === 0) return null;
-  try {
-    const parsed = JSON.parse(json) as { instanceId?: string; model?: string };
-    if (parsed.instanceId === undefined || parsed.model === undefined) return null;
-    return {
-      instanceId: ProviderInstanceId.make(parsed.instanceId),
-      model: parsed.model,
-    };
-  } catch {
-    return null;
-  }
+function decodeModel(
+  instanceId: string | null | undefined,
+  model: string | null | undefined,
+): ModelSelection | null {
+  if (instanceId === null || instanceId === undefined || instanceId.length === 0) return null;
+  if (model === null || model === undefined || model.length === 0) return null;
+  return {
+    instanceId: ProviderInstanceId.make(instanceId),
+    model,
+  };
 }
 
 const continuationGrantId = (command: DispatchPolicyCommand): string | null => {
@@ -910,7 +914,6 @@ export const authorizeScheduleUpsert = (input: {
 }) =>
   Effect.gen(function* () {
     const context = yield* PolicyExecutionContext;
-    if (context.kind === "kernel-test") return;
     const unattended = input.createdBy === "agent" || input.creationSource === "mcp";
     const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
     if (Option.isNone(sqlOption)) return yield* deny("schedule_task", "policy-store-unavailable");
@@ -918,6 +921,8 @@ export const authorizeScheduleUpsert = (input: {
     const env = yield* environmentId;
     let approvalId: string | null = null;
     if (unattended) {
+      // Kernel tests are not a session and cannot satisfy ASK. Agent and MCP
+      // schedules stay fail-closed until a real operate session is approved.
       if (context.kind !== "session" || !hasOperate(context.scopes)) {
         return yield* deny("schedule_task", "unauthenticated");
       }
@@ -934,8 +939,13 @@ export const authorizeScheduleUpsert = (input: {
     } else if (context.kind === "session" && !hasOperate(context.scopes)) {
       return yield* deny("schedule_task", "missing-operate-scope");
     }
-    const actorId = context.kind === "session" ? context.actorId : "server";
-    const scopes = context.kind === "session" ? context.scopes : [];
+    // User schedules from the Vitest operate subject must leave a grant.
+    // Firing replaces that subject with server-continuation, which revalidates
+    // the stored grant instead of trusting the caller.
+    const actorId =
+      context.kind === "session" || context.kind === "kernel-test" ? context.actorId : "server";
+    const scopes =
+      context.kind === "session" || context.kind === "kernel-test" ? context.scopes : [];
     yield* insertGrant({
       sql,
       grantId: `grant:schedule:${input.taskId}`,

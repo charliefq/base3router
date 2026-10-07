@@ -86,7 +86,8 @@ const DispatcherThreadRows = Schema.Array(
   Schema.Struct({
     id: ThreadId,
     projectId: ProjectId,
-    modelSelection: Schema.fromJsonString(ModelSelection),
+    instanceId: Schema.NullOr(Schema.String),
+    model: Schema.NullOr(Schema.String),
     deletedAt: Schema.NullOr(Schema.String),
   }),
 );
@@ -124,16 +125,30 @@ export const readDispatcherProjectedState = Effect.fn("Dispatcher.readDispatcher
           SELECT
             thread_id AS "id",
             project_id AS "projectId",
-            model_selection_json AS "modelSelection",
+            json_extract(payload_json, '$.modelSelection.instanceId') AS "instanceId",
+            json_extract(payload_json, '$.modelSelection.model') AS "model",
             deleted_at AS "deletedAt"
-          FROM projection_threads
+          FROM orchestration_v2_projection_threads
           WHERE thread_id = ${input.threadId}
           LIMIT 1
         `;
-
+    const threads = yield* decodeDispatcherThreadRows(threadRows);
     return {
       projects: yield* decodeDispatcherProjectRows(projectRows),
-      threads: yield* decodeDispatcherThreadRows(threadRows),
+      threads: threads.flatMap((thread) => {
+        if (thread.instanceId === null || thread.model === null) return [];
+        return [
+          {
+            id: thread.id,
+            projectId: thread.projectId,
+            modelSelection: {
+              instanceId: ProviderInstanceId.make(thread.instanceId),
+              model: thread.model,
+            },
+            deletedAt: thread.deletedAt,
+          },
+        ];
+      }),
     } satisfies DispatcherProjectedState;
   },
 );

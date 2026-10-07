@@ -103,8 +103,12 @@ does not release the lease. A missing run row stays occupied.
 `importBase3Policy` maps a disposable Base3Router database into the V2 file.
 Approvals are copied as stored. Ambiguous external outcomes are held and are
 not replayed. Import retry uses the batch id so rows are not duplicated.
-`initializeV2Database` does not copy a source that already has Base3Router
-policy tables.
+`initializeV2Database` snapshots `state.sqlite` into a missing
+`statev2.sqlite` when the source has V1 transcript tables. A policy-only
+Base3Router file with no `projection_threads` is left uncopied;
+`importBase3Policy` is the import path for those rows. An existing V2 file
+is never replaced, so repeated startup does not overwrite data or duplicate
+the snapshot.
 
 ## Governance surfaces
 

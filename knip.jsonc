@@ -15,13 +15,15 @@
     "scripts": {
       // Knip loads its preprocessor through a CLI option; native verification and
       // worktree setup (from t3.json) run directly. The V2 acceptance scripts are
-      // invoked by the acceptance runner, not imported.
+      // invoked by the acceptance runner, not imported. The fake Codex peer is
+      // copied and executed by internal-beta-production-browser.ts.
       "entry": [
         "knip-schemas.ts",
         "mobile-native-client.ts",
         "setup-worktree.ts",
         "internal-beta-acceptance.ts",
         "internal-beta-production-browser.ts",
+        "internal-beta-fake-codex.mjs",
         "v2-governance-surfaces.ts",
       ],
     },

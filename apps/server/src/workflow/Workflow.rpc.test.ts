@@ -13,7 +13,7 @@ import {
 import { assert, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as NodeOs from "node:os";
+import * as NodeOS from "node:os";
 
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runMigrations } from "../persistence/Migrations.ts";
@@ -392,7 +392,7 @@ memoryLayer("workflow human decisions", (it) => {
 });
 
 it.effect("workflow decisions survive a file-backed server restart", () => {
-  const filename = `${NodeOs.tmpdir()}/workflow-rpc-human-decision.sqlite`;
+  const filename = `${NodeOS.tmpdir()}/workflow-rpc-human-decision.sqlite`;
   const layer = NodeSqliteClient.layer({ filename });
   const write = Effect.gen(function* () {
     yield* runMigrations({ toMigrationInclusive: 56 });
