@@ -9,10 +9,12 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import {
-  ChatAttachment,
-  ModelSelection,
   getProviderAttachmentLimitError,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  ChatAttachment,
+} from "./chatAttachment.ts";
+import { ModelSelection } from "./modelSelection.ts";
+import {
   ProviderApprovalDecision,
   ProviderApprovalPolicy,
   ProviderInteractionMode,
@@ -21,9 +23,8 @@ import {
   ProviderUserInputAnswers,
   UserInputAttachments,
   RuntimeMode,
-} from "./orchestration.ts";
+} from "./providerPolicy.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
-import { OpenRouterCostTier } from "./openRouter.ts";
 
 const ProviderSessionStatus = Schema.Literals([
   "connecting",
@@ -82,18 +83,6 @@ export const ProviderSendTurnInput = Schema.Struct({
   ),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),
-  /**
-   * Teacher-mode allowlist and cost band. Absent for every non-OpenRouter
-   * turn and for clients that predate Phase 10. Never carries credentials.
-   */
-  openRouter: Schema.optional(
-    Schema.Struct({
-      allowedModels: Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(256))).check(
-        Schema.isMaxLength(64),
-      ),
-      costTier: OpenRouterCostTier,
-    }),
-  ),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 

@@ -69,18 +69,6 @@ describe("ThreadErrorBanner", () => {
   it("never shows a null error", () => {
     expect(shouldShowThreadErrorBanner("env:thread-e", null, false)).toBe(false);
   });
-
-  it("offers Provider settings when no alternate provider is configured", () => {
-    const markup = renderToStaticMarkup(
-      <ThreadErrorBanner
-        error="Codex usage limit reached. No eligible alternate provider is currently configured."
-        onOpenProviderSetup={() => {}}
-        onDismiss={() => {}}
-      />,
-    );
-    expect(markup).toContain("Provider settings");
-    expect(markup).not.toContain("sk-");
-  });
   it("aligns the warning and dismiss icons with the first line of a multi-line error", () => {
     const markup = renderToStaticMarkup(
       <ThreadErrorBanner

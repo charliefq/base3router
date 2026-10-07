@@ -6,8 +6,8 @@ import {
   WorkflowDecision,
   WorkflowRun,
   WorkflowStageAttempt,
+  WorkflowMutation,
   WorkflowTemplate,
-  type OrchestrationEvent,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -53,8 +53,18 @@ export const readWorkflowCatalog = Effect.fn("WorkflowProjection.readCatalog")(f
   } satisfies WorkflowCatalog;
 });
 
+export interface WorkflowRecordedEvent {
+  readonly type: "workflow.recorded";
+  readonly sequence: number;
+  readonly commandId?: string;
+  readonly payload: {
+    readonly projectId: ProjectId;
+    readonly mutation: WorkflowMutation;
+  };
+}
+
 export const projectWorkflowEvent = Effect.fn("WorkflowProjection.projectEvent")(function* (
-  event: OrchestrationEvent,
+  event: WorkflowRecordedEvent,
 ) {
   if (event.type !== "workflow.recorded") return;
   const sql = yield* SqlClient.SqlClient;

@@ -1,11 +1,8 @@
 import {
-  CommandId,
   EnvironmentId,
-  EventId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
-  type OrchestrationEvent,
   type ServerProvider,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
@@ -16,7 +13,7 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./Builtins.ts";
 import { initialWorkflowRun } from "./Policy.ts";
-import { projectWorkflowEvent } from "./Projection.ts";
+import { projectWorkflowEvent, type WorkflowRecordedEvent } from "./Projection.ts";
 import { previewWorkflowStage } from "./Workflow.ts";
 
 const projectId = ProjectId.make("project-1");
@@ -35,17 +32,10 @@ const provider = (installed: boolean): ServerProvider => ({
   slashCommands: [],
   skills: [],
 });
-const event: OrchestrationEvent = {
+const event: WorkflowRecordedEvent = {
   sequence: 1,
-  eventId: EventId.make("event-1"),
   type: "workflow.recorded",
-  aggregateKind: "project",
-  aggregateId: projectId,
-  occurredAt: at,
-  commandId: CommandId.make("command-1"),
-  causationEventId: null,
-  correlationId: null,
-  metadata: {},
+  commandId: "command-1",
   payload: {
     projectId,
     mutation: {

@@ -44,7 +44,6 @@ export interface ServerDerivedPaths {
   /** Screenshots the agent asks the collaborative browser to keep for the user. */
   readonly browserArtifactsDir: string;
   readonly logsDir: string;
-  readonly serverLogPath: string;
   readonly serverTracePath: string;
   readonly providerLogsDir: string;
   readonly providerEventLogPath: string;
@@ -82,7 +81,6 @@ export class ServerConfig extends Context.Service<
     readonly otlpTracesExport: SignalExport;
     readonly otlpMetricsExport: SignalExport;
     readonly otlpLogsExport: SignalExport;
-    readonly otlpServiceName: string;
     readonly otelEnvironment: OtelEnvironment.OtelEnvironment;
     readonly mode: RuntimeMode;
     readonly port: number;
@@ -101,8 +99,6 @@ export class ServerConfig extends Context.Service<
     readonly resourceMonitorPath?: string | undefined;
     readonly autoBootstrapProjectFromCwd: boolean;
     readonly logWebSocketEvents: boolean;
-    /** Enables dispatcher binding for newly accepted turn-start commands. */
-    readonly dispatcherEnabled?: boolean | undefined;
     readonly tailscaleServeEnabled: boolean;
     readonly tailscaleServePort: number;
   }
@@ -111,8 +107,7 @@ export class ServerConfig extends Context.Service<
   static readonly layerTest = (
     cwd: string,
     baseDirOrPrefix: string | { readonly prefix: string },
-    overrides: Partial<ServerConfig["Service"]> = {},
-  ) => layerTest(cwd, baseDirOrPrefix, overrides);
+  ) => layerTest(cwd, baseDirOrPrefix);
 }
 
 export const make = (config: ServerConfig["Service"]) => ServerConfig.of(config);
@@ -122,8 +117,9 @@ export const make = (config: ServerConfig["Service"]) => ServerConfig.of(config)
  * logs report the same service identity to the collector.
  */
 export const otlpResource = (config: ServerConfig["Service"]) => ({
-  serviceName: config.otlpServiceName,
+  serviceName: "t3code-server",
   attributes: {
+    "service.namespace": "t3code",
     "service.runtime": "t3-server",
     "service.mode": config.mode,
   },
@@ -141,7 +137,7 @@ export const deriveServerPaths = Effect.fn(function* (
     baseDir,
     devUrl !== undefined && !options.baseDirIsExplicit ? "dev" : "userdata",
   );
-  const dbPath = join(stateDir, "state.sqlite");
+  const dbPath = join(stateDir, "statev2.sqlite");
   const attachmentsDir = join(stateDir, "attachments");
   const logsDir = join(stateDir, "logs");
   const providerLogsDir = join(logsDir, "provider");
@@ -157,7 +153,6 @@ export const deriveServerPaths = Effect.fn(function* (
     attachmentsDir,
     browserArtifactsDir: join(stateDir, "browser-artifacts"),
     logsDir,
-    serverLogPath: join(logsDir, "server.log"),
     serverTracePath: join(logsDir, "server.trace.ndjson"),
     providerLogsDir,
     providerEventLogPath: join(providerLogsDir, "events.log"),
@@ -202,7 +197,6 @@ export const ensureServerDirectories = Effect.fn(function* (derivedPaths: Server
 const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
   cwd: string,
   baseDirOrPrefix: string | { readonly prefix: string },
-  overrides: Partial<ServerConfig["Service"]> = {},
 ) {
   const devUrl = undefined;
   const fs = yield* FileSystem.FileSystem;
@@ -226,7 +220,6 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
     otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
     otlpLogsExport: DEFAULT_SIGNAL_EXPORT,
-    otlpServiceName: "t3-server",
     otelEnvironment: OtelEnvironment.none,
     cwd,
     baseDir,
@@ -234,7 +227,6 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     mode: "web",
     autoBootstrapProjectFromCwd: false,
     logWebSocketEvents: false,
-    dispatcherEnabled: false,
     tailscaleServeEnabled: false,
     tailscaleServePort: 443,
     port: 0,
@@ -248,15 +240,11 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     devAllowedOrigins: [],
     noBrowser: false,
     startupPresentation: "browser",
-    ...overrides,
   });
 });
 
-export const layerTest = (
-  cwd: string,
-  baseDirOrPrefix: string | { readonly prefix: string },
-  overrides: Partial<ServerConfig["Service"]> = {},
-) => Layer.effect(ServerConfig, makeTest(cwd, baseDirOrPrefix, overrides));
+export const layerTest = (cwd: string, baseDirOrPrefix: string | { readonly prefix: string }) =>
+  Layer.effect(ServerConfig, makeTest(cwd, baseDirOrPrefix));
 
 export const resolveStaticDir = Effect.fn(function* () {
   const { join, resolve } = yield* Path.Path;

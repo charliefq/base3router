@@ -1,4 +1,4 @@
-import { CommandId, EventId, ProjectId, type OrchestrationEvent } from "@t3tools/contracts";
+import { ProjectId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -7,21 +7,18 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { BUILTIN_AGENT_PROFILES, BUILTIN_WORKFLOW_TEMPLATES } from "./Builtins.ts";
 import { initialWorkflowRun } from "./Policy.ts";
-import { projectWorkflowEvent, readWorkflowCatalog } from "./Projection.ts";
+import {
+  projectWorkflowEvent,
+  readWorkflowCatalog,
+  type WorkflowRecordedEvent,
+} from "./Projection.ts";
 
 const projectId = ProjectId.make("project-1");
 const at = "2026-09-28T00:00:00.000Z";
-const event: OrchestrationEvent = {
+const event: WorkflowRecordedEvent = {
   sequence: 1,
-  eventId: EventId.make("workflow-event-1"),
   type: "workflow.recorded",
-  aggregateKind: "project",
-  aggregateId: projectId,
-  occurredAt: at,
-  commandId: CommandId.make("workflow-command-1"),
-  causationEventId: null,
-  correlationId: null,
-  metadata: {},
+  commandId: "workflow-command-1",
   payload: {
     projectId,
     mutation: {
@@ -70,7 +67,6 @@ layer("workflow projection", (it) => {
       yield* projectWorkflowEvent({
         ...event,
         sequence: 10,
-        eventId: EventId.make("workflow-event-10"),
         payload: { projectId, mutation: { type: "profile.save", profile } },
       });
       assert.deepStrictEqual(
@@ -80,7 +76,6 @@ layer("workflow projection", (it) => {
       yield* projectWorkflowEvent({
         ...event,
         sequence: 11,
-        eventId: EventId.make("workflow-event-11"),
         payload: {
           projectId,
           mutation: { type: "profile.save", profile: { ...profile, version: 2 } },
@@ -89,8 +84,6 @@ layer("workflow projection", (it) => {
       yield* projectWorkflowEvent({
         ...event,
         sequence: 12,
-        eventId: EventId.make("workflow-event-12"),
-        aggregateId: secondProject,
         payload: {
           projectId: secondProject,
           mutation: { type: "profile.save", profile: { ...profile, projectId: secondProject } },

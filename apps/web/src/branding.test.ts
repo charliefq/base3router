@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   resolveServerBackedAppDisplayName,
   resolveServerBackedAppStageLabel,
-  visibleAppStageLabel,
 } from "./branding.logic";
 
 const originalWindow = globalThis.window;
@@ -19,27 +18,6 @@ afterEach(() => {
 });
 
 describe("branding", () => {
-  it("maps an injected Alpha stage label to Internal Alpha", async () => {
-    Object.defineProperty(globalThis, "window", {
-      configurable: true,
-      value: {
-        desktopBridge: {
-          getAppBranding: () => ({
-            baseName: "Base3Router",
-            stageLabel: "Alpha",
-            displayName: "Base3Router (Internal Alpha)",
-          }),
-        },
-      },
-    });
-
-    const branding = await import("./branding");
-
-    expect(branding.APP_BASE_NAME).toBe("Base3Router");
-    expect(branding.APP_STAGE_LABEL).toBe("Internal Alpha");
-    expect(branding.APP_DISPLAY_NAME).toBe("Base3Router (Internal Alpha)");
-  });
-
   it("uses injected desktop branding when available", async () => {
     Object.defineProperty(globalThis, "window", {
       configurable: true,
@@ -69,7 +47,7 @@ describe("branding", () => {
     expect(branding.HOSTED_APP_CHANNEL).toBe("nightly");
     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Nightly");
     expect(branding.APP_STAGE_LABEL).toBe("Nightly");
-    expect(branding.APP_DISPLAY_NAME).toBe("Base3Router (Nightly)");
+    expect(branding.APP_DISPLAY_NAME).toBe("T3 Code (Nightly)");
   });
 
   it("does not label the latest hosted app channel", async () => {
@@ -80,7 +58,7 @@ describe("branding", () => {
     expect(branding.HOSTED_APP_CHANNEL).toBe("latest");
     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Latest");
     expect(branding.APP_STAGE_LABEL).toBe("Latest");
-    expect(branding.APP_DISPLAY_NAME).toBe("Base3Router");
+    expect(branding.APP_DISPLAY_NAME).toBe("T3 Code");
   });
 
   it("ignores unknown hosted app channels", async () => {
@@ -94,12 +72,6 @@ describe("branding", () => {
 });
 
 describe("branding logic", () => {
-  it("maps the desktop Alpha IPC label to Internal Alpha without changing Dev or Nightly", () => {
-    expect(visibleAppStageLabel("Alpha")).toBe("Internal Alpha");
-    expect(visibleAppStageLabel("Dev")).toBe("Dev");
-    expect(visibleAppStageLabel("Nightly")).toBe("Nightly");
-  });
-
   it("returns Nightly for nightly primary server versions", () => {
     expect(
       resolveServerBackedAppStageLabel({

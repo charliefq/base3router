@@ -50,16 +50,16 @@ const relayClientRpcError = (message: string) => (cause: unknown) =>
 
 function ensureRelayClientAvailable(
   environmentId: EnvironmentId,
-): Effect.Effect<void, CloudEnvironmentLinkError, EnvironmentRegistry> {
+): Effect.Effect<void, CloudEnvironmentLinkError, EnvironmentRegistry.EnvironmentRegistry> {
   return Effect.gen(function* () {
-    const registry = yield* EnvironmentRegistry;
+    const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
     const status = yield* registry
       .run(environmentId, request(WS_METHODS.cloudGetRelayClientStatus, {}))
       .pipe(Effect.mapError(relayClientRpcError("Could not check relay client availability.")));
     if (status.status === "available") return;
     if (status.status === "unsupported") {
       return yield* new CloudEnvironmentLinkError({
-        message: `Base3Router cannot install the relay client automatically on ${status.platform}-${status.arch}.`,
+        message: `T3 Code cannot install the relay client automatically on ${status.platform}-${status.arch}.`,
       });
     }
 
@@ -95,7 +95,7 @@ function ensureRelayClientAvailable(
       return yield* new CloudEnvironmentLinkError({
         message:
           installedStatus.status === "unsupported"
-            ? `Base3Router cannot install the relay client automatically on ${installedStatus.platform}-${installedStatus.arch}.`
+            ? `T3 Code cannot install the relay client automatically on ${installedStatus.platform}-${installedStatus.arch}.`
             : "The relay client is still unavailable after installation.",
       });
     }
@@ -260,7 +260,7 @@ export function linkPrimaryEnvironmentToCloud(input: {
 }): Effect.Effect<
   void,
   CloudEnvironmentLinkError,
-  EnvironmentRegistry | HttpClient.HttpClient | ManagedRelay.ManagedRelayClient
+  EnvironmentRegistry.EnvironmentRegistry | HttpClient.HttpClient | ManagedRelay.ManagedRelayClient
 > {
   return Effect.gen(function* () {
     const configuredRelayUrl = relayUrl();

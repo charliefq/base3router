@@ -6,19 +6,17 @@ import {
   type DeviceSummary,
   DeviceToolUnavailableError,
   LOCAL_DEVICE_HOST_ID,
-  McpActionGateBlockedError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
-import * as Schema from "effect/Schema";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
-import { ServerConfig } from "../../../config.ts";
+import * as ServerConfig from "../../../config.ts";
 import { ensureAgentDeviceShim } from "../../../device/AgentDeviceShim.ts";
 import { nodeRuntimeUnavailableMessage } from "@t3tools/shared/nodeRuntime";
 
 import * as DeviceService from "../../../device/DeviceService.ts";
-import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { withAllowedMcpTool } from "../../McpActionAuthorization.ts";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { DeviceScreenshotToolkit, DeviceStandardToolkit, DeviceToolkit } from "./tools.ts";
 
 /** The flags that pin every agent-device command to one device. */
@@ -62,7 +60,7 @@ export function agentDeviceQuickStart(
     `  ${executable} screenshot /tmp/shot.png ${target}        # or call device_screenshot`,
     `  ${executable} install <app> <path-to-.app-or-.apk> ${target}`,
     `Prefer snapshot refs over coordinates. Run ${executable} help for workflow guides and ${executable} <command> --help for flags.`,
-    "Do not call simctl, adb, xcrun, or serve-sim directly while these tools are attached; use agent-device.",
+    "Prefer agent-device for driving this device. simctl, adb, and xcrun remain available for anything it does not cover.",
     "For remote hosts, arrange builds, app installation, and any Metro reverse forwarding yourself. T3 provides discovery, streaming, and control only.",
     "Keep the returned --config and --session flags on every command. Other hosts can be used concurrently; opening one does not switch these commands.",
     platformNotes,
@@ -77,26 +75,6 @@ const requireDeviceAccess = McpInvocationContext.requireMcpCapability("device").
       }),
   ),
 );
-
-const isMcpActionGateBlockedError = Schema.is(McpActionGateBlockedError);
-
-const requireDeviceTool = <A, E, R>(
-  toolName: string,
-  args: unknown,
-  run: (scope: McpInvocationContext.McpInvocationScope) => Effect.Effect<A, E, R>,
-) =>
-  Effect.gen(function* () {
-    const scope = yield* requireDeviceAccess;
-    return yield* withAllowedMcpTool(toolName, args, run(scope)).pipe(
-      Effect.mapError((error) =>
-        isMcpActionGateBlockedError(error)
-          ? new DeviceToolUnavailableError({
-              reason: error.detail,
-            })
-          : error,
-      ),
-    );
-  });
 
 const pickDevice = (
   devices: ReadonlyArray<DeviceSummary>,
@@ -143,8 +121,11 @@ const toolError = (error: DeviceError | DeviceToolUnavailableError) => error;
 
 const handlers = {
   device_list: (input) =>
-    requireDeviceTool("device_list", input ?? {}, (scope) =>
+    withAllowedMcpTool(
+      "device_list",
+      input,
       Effect.gen(function* () {
+        const scope = yield* requireDeviceAccess;
         const devices = yield* DeviceService.DeviceService;
         const state = yield* devices.list;
         if (state.hostStatus === "disabled") {
@@ -167,11 +148,14 @@ const handlers = {
             : state.devices,
           open,
         };
-      }),
-    ).pipe(Effect.mapError(toolError)),
+      }).pipe(Effect.mapError(toolError)),
+    ),
   device_open: (input) =>
-    requireDeviceTool("device_open", input, (scope) =>
+    withAllowedMcpTool(
+      "device_open",
+      input,
       Effect.gen(function* () {
+        const scope = yield* requireDeviceAccess;
         const devices = yield* DeviceService.DeviceService;
         const state = yield* devices.list;
         if (state.hostStatus === "disabled") {
@@ -199,7 +183,7 @@ const handlers = {
             (candidate) => candidate.hostId === session.hostId && candidate.id === session.deviceId,
           ) ?? target;
         const targetArgs = [...agentDeviceTargetArgs(device), ...agentArgs];
-        const config = yield* ServerConfig;
+        const config = yield* ServerConfig.ServerConfig;
         const path = yield* Path.Path;
         const platform = yield* HostProcessPlatform;
         const shimDir = yield* ensureAgentDeviceShim({
@@ -226,11 +210,14 @@ const handlers = {
           agentDevice: { command, targetArgs },
           quickStart: agentDeviceQuickStart(device, targetArgs, command),
         };
-      }),
-    ).pipe(Effect.mapError(toolError)),
+      }).pipe(Effect.mapError(toolError)),
+    ),
   device_screenshot: (input) =>
-    requireDeviceTool("device_screenshot", input, (scope) =>
+    withAllowedMcpTool(
+      "device_screenshot",
+      input,
       Effect.gen(function* () {
+        const scope = yield* requireDeviceAccess;
         const devices = yield* DeviceService.DeviceService;
         const sessions = yield* devices.sessionsForThread(scope.threadId);
         const target =
@@ -253,11 +240,14 @@ const handlers = {
             ...pngDimensions(shot.png),
           },
         };
-      }),
-    ).pipe(Effect.mapError(toolError)),
+      }).pipe(Effect.mapError(toolError)),
+    ),
   device_close: (input) =>
-    requireDeviceTool("device_close", input, (scope) =>
+    withAllowedMcpTool(
+      "device_close",
+      input,
       Effect.gen(function* () {
+        const scope = yield* requireDeviceAccess;
         const devices = yield* DeviceService.DeviceService;
         yield* devices.close({
           threadId: scope.threadId,
@@ -266,8 +256,8 @@ const handlers = {
           ...(input.shutdown === undefined ? {} : { shutdown: input.shutdown }),
         });
         return {};
-      }),
-    ).pipe(Effect.mapError(toolError)),
+      }).pipe(Effect.mapError(toolError)),
+    ),
 } satisfies Parameters<typeof DeviceToolkit.toLayer>[0];
 
 /** Width and height from the IHDR chunk; a PNG that lacks one reports 0×0. */

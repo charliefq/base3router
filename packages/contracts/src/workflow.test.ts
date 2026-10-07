@@ -9,7 +9,6 @@ import {
   WorkflowRun,
   WorkflowTemplate,
 } from "./workflow.ts";
-import { OrchestrationReadModel } from "./orchestration.ts";
 
 const at = "2026-09-28T00:00:00.000Z";
 const profile = {
@@ -169,15 +168,5 @@ describe("workflow contracts", () => {
     });
     expect(decoded.runnerKind).toBeUndefined();
     expect(decoded.cursorCloudTarget).toBeUndefined();
-  });
-
-  it("decodes a legacy read model with no workflow projection", () => {
-    const legacy = Schema.decodeUnknownSync(OrchestrationReadModel)({
-      snapshotSequence: 0,
-      projects: [],
-      threads: [],
-      updatedAt: at,
-    });
-    expect(legacy.workflow).toBeUndefined();
   });
 });

@@ -21,6 +21,14 @@ Android uses **Material You Layout** by default unless you have turned it off in
 It changes shapes, spacing, and controls independently
 of the selected theme.
 
+## Composer context
+
+Git-backed projects show branch and worktree controls below the composer while you create a thread.
+The controls retreat as the composer docks after you send the first message.
+
+Turn on **Composer context** to keep those controls visible after the thread starts. This preference
+applies to the web and desktop clients.
+
 ## Motion
 
 The main sidebar, right panel, and terminal drawer open and close immediately by default. Move the
@@ -30,7 +38,7 @@ without replaying its transitions.
 
 ## Custom themes
 
-On web and desktop, choose **Create theme** to adjust a palette, or import a Base3Router or VS Code
+On web and desktop, choose **Create theme** to adjust a palette, or import a T3 Code or VS Code
 theme. The theme editor's color picker lets you select an area of the app to find the color to
 change. Export your theme as JSON to share it.
 
@@ -41,7 +49,7 @@ main local environment. app.t3.codes and additional connections do not use them.
 
 Select a published theme in **Settings → Appearance** to follow its palette as the server updates
 it. **Duplicate** makes an independent copy you can edit. A saved custom theme with the same ID
-takes precedence. If the server stops publishing the selected theme, Base3Router falls back to its
+takes precedence. If the server stops publishing the selected theme, T3 Code falls back to its
 standard theme.
 
 Run this on the server to set a default and switch connected clients to it:
@@ -59,7 +67,7 @@ the default and published themes.
 
 ### Publish a theme
 
-Save a theme exported from Base3Router into `~/.t3/userdata/themes/` on the server, or the `themes`
+Save a theme exported from T3 Code into `~/.t3/userdata/themes/` on the server, or the `themes`
 directory under your custom state directory. The filename supplies the theme ID: `nightfall.json`
 can be selected with `t3 theme set nightfall`. Keep the filename stable when updating its colors.
 Do not use `system`, `light`, `dark`, or a built-in theme's ID.
@@ -79,7 +87,7 @@ For an integration that generates a palette, this shorter format also works:
 }
 ```
 
-Set `appearance` to `light` or `dark` and supply hex colors for `canvas` and `accent`. Base3Router
+Set `appearance` to `light` or `dark` and supply hex colors for `canvas` and `accent`. T3 Code
 generates the rest. The optional `colors` overrides use the names in the theme editor's advanced
 view.
 

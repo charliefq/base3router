@@ -43,7 +43,7 @@ function versionCore(version: string): string {
 }
 
 /**
- * The skew a user can act on: the connected server runs an older Base3Router than
+ * The skew a user can act on: the connected server runs an older T3 Code than
  * this client, so the server is the side that needs updating.
  *
  * Two nightly builds compare their full versions, including the date and run.
@@ -80,7 +80,7 @@ export function resolveVersionMismatch(
   return {
     clientVersion: normalizedClientVersion,
     serverVersion: normalizedServerVersion,
-    hint: "Version mismatch. Try syncing the client and server to the same Base3Router version.",
+    hint: "Version mismatch. Try syncing the client and server to the same T3 Code version.",
   };
 }
 
@@ -174,4 +174,18 @@ export function dismissVersionMismatch(dismissalKey: string | null | undefined):
   writeVersionMismatchDismissals({
     keys: [...document.keys, dismissalKey],
   });
+}
+
+export function appendVersionMismatchHint(
+  message: string | null | undefined,
+  mismatch: VersionMismatch | null | undefined,
+): string | null {
+  const normalizedMessage = normalizeVersion(message);
+  if (!normalizedMessage) {
+    return mismatch?.hint ?? null;
+  }
+  if (!mismatch) {
+    return normalizedMessage;
+  }
+  return `${normalizedMessage} Hint: ${mismatch.hint}`;
 }

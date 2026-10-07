@@ -15,7 +15,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 
-import { ServerConfig } from "../config.ts";
+import * as ServerConfig from "../config.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 
 /** Backstop for a desktop updater that hangs without ever reporting a
@@ -63,7 +63,7 @@ export class DesktopAppUpdate extends Context.Service<
 >()("t3/desktopUpdate/DesktopAppUpdate") {}
 
 export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* () {
-  const config = yield* ServerConfig;
+  const config = yield* ServerConfig.ServerConfig;
   const crypto = yield* Crypto.Crypto;
   const receiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
   const inFlight = yield* Ref.make(false);
@@ -106,7 +106,7 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
               ? emitStage(desktopUpdateProgressStage(report.state)).pipe(
                   Effect.as(Option.none<DesktopUpdateStatusReport>()),
                 )
-              : Effect.succeed(Option.some(report)),
+              : Effect.succeedSome(report),
         ),
         Stream.filterMap(
           Option.match({
@@ -135,7 +135,7 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
       }
       if (report.outcome === "up-to-date") {
         return yield* failWith(
-          `The Base3Router desktop app on this machine is already up to date on ${report.state.currentVersion}.`,
+          `The T3 Code desktop app on this machine is already up to date on ${report.state.currentVersion}.`,
         );
       }
       return yield* failWith(
@@ -147,7 +147,7 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
     function* (reportProgress) {
       if (!available) {
         return yield* failWith(
-          "This server was not started by the Base3Router desktop app, so it cannot drive a desktop update.",
+          "This server was not started by the T3 Code desktop app, so it cannot drive a desktop update.",
         );
       }
       if (yield* Ref.getAndSet(inFlight, true)) {
@@ -168,7 +168,7 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
             .requestDesktopUpdate(requestId)
             .pipe(
               Effect.mapError((error) =>
-                failWith("Could not reach the Base3Router desktop app on this machine.", error),
+                failWith("Could not reach the T3 Code desktop app on this machine.", error),
               ),
             );
           return yield* consumeReports(requestId, changes, reportProgress).pipe(
@@ -200,9 +200,7 @@ export const make = Effect.fn("desktopUpdate.desktopAppUpdate.make")(function* (
         });
         yield* Effect.uninterruptible(
           receiver.commitDesktopUpdate(requestId).pipe(
-            Effect.mapError((error) =>
-              failWith("Could not reach the Base3Router desktop app.", error),
-            ),
+            Effect.mapError((error) => failWith("Could not reach the T3 Code desktop app.", error)),
             Effect.tap(() => onHandoffAccepted()),
           ),
         );

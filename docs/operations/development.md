@@ -76,8 +76,7 @@ Put that value in the main checkout's gitignored `.env`:
 T3CODE_DEV_AUTH_TOKEN=<the value generated above>
 ```
 
-The `t3.json` Setup Worktree commands on Unix and Windows link that file to each worktree's
-`.env`. The dev runner reads repository env files at startup. `.env.local` and inherited process
+The `t3.json` Setup Worktree action links that file to each worktree's `.env`. The dev runner reads repository env files at startup. `.env.local` and inherited process
 environment values override `.env`, so no per-worktree export is needed after setup.
 
 For a manual worktree or launcher without that link, export the same fixed value instead:
@@ -96,25 +95,6 @@ commit, pull request, or public output. Every server still seeds its own auth da
 startup and keeps its own SQLite data, signing key, and revocation state. Desktop and non-dev
 servers ignore the value. See [environment authentication](../internals/environment-auth.md#reusable-dev-credential)
 for the security model.
-
-### Base3Router UI Lab
-
-Use this for Auto Route and Control Center UI work without a desktop DMG or live provider
-credentials. It is a Vite-only page (`apps/web/lab.html`) gated by `T3CODE_UI_LAB=1` and is
-not part of the production bundle or app navigation.
-
-```sh
-vp run ui-lab:accept
-```
-
-That command starts the lab Vite server, waits until `/lab.html` is ready, runs the Playwright
-acceptance suite, shuts the server down, and writes:
-
-- HTML report: `apps/web/playwright-report/index.html`
-- Screenshots: `apps/web/playwright-results/screenshots/`
-
-`vp run ui-lab` keeps the lab at `http://127.0.0.1:45733/lab.html` for interactive work. Open a
-scenario with `?scenario=failover-success` (see `apps/web/src/lab/scenarios.ts`).
 
 ## Checks
 

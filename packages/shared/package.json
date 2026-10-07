@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./orchestrationV2ThreadError": {
+      "types": "./src/orchestrationV2ThreadError.ts",
+      "import": "./src/orchestrationV2ThreadError.ts"
+    },
     "./legacyCliLauncher": {
       "types": "./src/legacyCliLauncher.ts",
       "import": "./src/legacyCliLauncher.ts"
@@ -39,6 +43,74 @@
       "types": "./src/modelRouterFailover.ts",
       "import": "./src/modelRouterFailover.ts"
     },
+    "./hybridRouter": {
+      "types": "./src/hybridRouter.ts",
+      "import": "./src/hybridRouter.ts"
+    },
+    "./actionCanonical": {
+      "types": "./src/actionCanonical.ts",
+      "import": "./src/actionCanonical.ts"
+    },
+    "./actionAudit": {
+      "types": "./src/actionAudit.ts",
+      "import": "./src/actionAudit.ts"
+    },
+    "./actionGate": {
+      "types": "./src/actionGate.ts",
+      "import": "./src/actionGate.ts"
+    },
+    "./executionPlan": {
+      "types": "./src/executionPlan.ts",
+      "import": "./src/executionPlan.ts"
+    },
+    "./skillCatalog": {
+      "types": "./src/skillCatalog.ts",
+      "import": "./src/skillCatalog.ts"
+    },
+    "./skillRouter": {
+      "types": "./src/skillRouter.ts",
+      "import": "./src/skillRouter.ts"
+    },
+    "./mcpCatalog": {
+      "types": "./src/mcpCatalog.ts",
+      "import": "./src/mcpCatalog.ts"
+    },
+    "./mcpRouter": {
+      "types": "./src/mcpRouter.ts",
+      "import": "./src/mcpRouter.ts"
+    },
+    "./mcpLifecycle": {
+      "types": "./src/mcpLifecycle.ts",
+      "import": "./src/mcpLifecycle.ts"
+    },
+    "./phase12Bind": {
+      "types": "./src/phase12Bind.ts",
+      "import": "./src/phase12Bind.ts"
+    },
+    "./dreamMemory": {
+      "types": "./src/dreamMemory.ts",
+      "import": "./src/dreamMemory.ts"
+    },
+    "./concurrencyBudget": {
+      "types": "./src/concurrencyBudget.ts",
+      "import": "./src/concurrencyBudget.ts"
+    },
+    "./routerEvaluation": {
+      "types": "./src/routerEvaluation.ts",
+      "import": "./src/routerEvaluation.ts"
+    },
+    "./routerEvaluation.fixture": {
+      "types": "./src/routerEvaluation.fixture.ts",
+      "import": "./src/routerEvaluation.fixture.ts"
+    },
+    "./routerPolicy": {
+      "types": "./src/routerPolicy.ts",
+      "import": "./src/routerPolicy.ts"
+    },
+    "./turnOutcome": {
+      "types": "./src/turnOutcome.ts",
+      "import": "./src/turnOutcome.ts"
+    },
     "./openRouterRedaction": {
       "types": "./src/openRouterRedaction.ts",
       "import": "./src/openRouterRedaction.ts"
@@ -74,74 +146,6 @@
     "./openRouterTeacherGate": {
       "types": "./src/openRouterTeacherGate.ts",
       "import": "./src/openRouterTeacherGate.ts"
-    },
-    "./hybridRouter": {
-      "types": "./src/hybridRouter.ts",
-      "import": "./src/hybridRouter.ts"
-    },
-    "./actionCanonical": {
-      "types": "./src/actionCanonical.ts",
-      "import": "./src/actionCanonical.ts"
-    },
-    "./skillCatalog": {
-      "types": "./src/skillCatalog.ts",
-      "import": "./src/skillCatalog.ts"
-    },
-    "./skillRouter": {
-      "types": "./src/skillRouter.ts",
-      "import": "./src/skillRouter.ts"
-    },
-    "./mcpCatalog": {
-      "types": "./src/mcpCatalog.ts",
-      "import": "./src/mcpCatalog.ts"
-    },
-    "./mcpRouter": {
-      "types": "./src/mcpRouter.ts",
-      "import": "./src/mcpRouter.ts"
-    },
-    "./actionGate": {
-      "types": "./src/actionGate.ts",
-      "import": "./src/actionGate.ts"
-    },
-    "./executionPlan": {
-      "types": "./src/executionPlan.ts",
-      "import": "./src/executionPlan.ts"
-    },
-    "./mcpLifecycle": {
-      "types": "./src/mcpLifecycle.ts",
-      "import": "./src/mcpLifecycle.ts"
-    },
-    "./phase12Bind": {
-      "types": "./src/phase12Bind.ts",
-      "import": "./src/phase12Bind.ts"
-    },
-    "./actionAudit": {
-      "types": "./src/actionAudit.ts",
-      "import": "./src/actionAudit.ts"
-    },
-    "./dreamMemory": {
-      "types": "./src/dreamMemory.ts",
-      "import": "./src/dreamMemory.ts"
-    },
-    "./concurrencyBudget": {
-      "types": "./src/concurrencyBudget.ts",
-      "import": "./src/concurrencyBudget.ts"
-    },
-    "./routerEvaluation": {
-      "types": "./src/routerEvaluation.ts",
-      "import": "./src/routerEvaluation.ts"
-    },
-    "./routerEvaluation.fixture": {
-      "types": "./src/routerEvaluation.fixture.ts",
-      "import": "./src/routerEvaluation.fixture.ts"
-    },
-    "./routerPolicy": {
-      "types": "./src/routerPolicy.ts",
-      "import": "./src/routerPolicy.ts"
-    },
-    "./turnOutcome": {
-      "types": "./src/turnOutcome.ts",
-      "import": "./src/turnOutcome.ts"
     },
     "./advertisedEndpoint": {
       "types": "./src/advertisedEndpoint.ts",
@@ -214,6 +218,10 @@
     "./toolActivity": {
       "types": "./src/toolActivity.ts",
       "import": "./src/toolActivity.ts"
+    },
+    "./toolOutput": {
+      "types": "./src/toolOutput.ts",
+      "import": "./src/toolOutput.ts"
     },
     "./favicon": {
       "types": "./src/favicon.ts",
@@ -443,6 +451,22 @@
       "types": "./src/nodeSqliteClient.ts",
       "import": "./src/nodeSqliteClient.ts"
     },
+    "./orchestrationV2Timeline": {
+      "types": "./src/orchestrationV2Timeline.ts",
+      "import": "./src/orchestrationV2Timeline.ts"
+    },
+    "./t3McpToolPresentation": {
+      "types": "./src/t3McpToolPresentation.ts",
+      "import": "./src/t3McpToolPresentation.ts"
+    },
+    "./Array": {
+      "types": "./src/Array.ts",
+      "import": "./src/Array.ts"
+    },
+    "./orchestrationV2PendingBackgroundWork": {
+      "types": "./src/orchestrationV2PendingBackgroundWork.ts",
+      "import": "./src/orchestrationV2PendingBackgroundWork.ts"
+    },
     "./hostClassification": {
       "types": "./src/hostClassification.ts",
       "import": "./src/hostClassification.ts"
@@ -458,11 +482,23 @@
     "./gitPatchPath": {
       "types": "./src/gitPatchPath.ts",
       "import": "./src/gitPatchPath.ts"
+    },
+    "./providerAuthReturnUrl": {
+      "types": "./src/providerAuthReturnUrl.ts",
+      "import": "./src/providerAuthReturnUrl.ts"
+    },
+    "./codexAuthCallback": {
+      "types": "./src/codexAuthCallback.ts",
+      "import": "./src/codexAuthCallback.ts"
+    },
+    "./codexAuthHandoff": {
+      "types": "./src/codexAuthHandoff.ts",
+      "import": "./src/codexAuthHandoff.ts"
     }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vp test run"
+    "test": "vp test run --config ../../vite.config.ts --dir ."
   },
   "dependencies": {
     "@noble/curves": "catalog:",

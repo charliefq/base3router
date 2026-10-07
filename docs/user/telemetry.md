@@ -1,6 +1,6 @@
 # Product usage data
 
-The Base3Router server sends product usage events to PostHog, associated with a hashed account or
+The T3 Code server sends product usage events to PostHog, associated with a hashed account or
 installation identifier. Events include the provider, model, reasoning effort, permission mode,
 turn result, duration, and main-agent token totals when available.
 

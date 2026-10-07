@@ -112,17 +112,10 @@ describe("phase 13 settings and RPC", () => {
     expect(DEFAULT_SERVER_SETTINGS.concurrencyBudget.policyVersion).toBe(
       CONCURRENCY_BUDGET_POLICY_VERSION,
     );
+    expect(DEFAULT_SERVER_SETTINGS.openRouter.guidanceMode).toBe("off");
   });
 
-  it("registers memory and concurrency RPCs", () => {
-    expect(WsRpcGroup.requests.has(WS_METHODS.memoryGetGovernance)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.memoryList)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.memorySave)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.memoryDecide)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.memoryCorrect)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.memoryDelete)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.memoryClearScope)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.memoryExport)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.concurrencyGetGovernance)).toBe(true);
+  it("registers the V2 governance snapshot instead of a second memory RPC engine", () => {
+    expect(WsRpcGroup.requests.has(WS_METHODS.governanceSnapshot)).toBe(true);
   });
 });

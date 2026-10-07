@@ -24,22 +24,6 @@ export const shellEnvironment = createShellEnvironmentAtoms(connectionAtomRuntim
 export const environmentShell = createEnvironmentShellAtoms(connectionAtomRuntime);
 export const environmentSnapshotAtom = createEnvironmentSnapshotAtom(environmentShell.stateAtom);
 
-export function createEnvironmentShellSnapshotReadyAtom(input: {
-  readonly environmentId: EnvironmentId;
-  readonly shellStateValueAtom: (environmentId: EnvironmentId) => Atom.Atom<EnvironmentShellState>;
-}) {
-  return Atom.make((get) =>
-    Option.isSome(get(input.shellStateValueAtom(input.environmentId)).snapshot),
-  ).pipe(Atom.withLabel(`web-environment-shell-snapshot-ready:${input.environmentId}`));
-}
-
-export const environmentShellSnapshotReadyAtom = Atom.family((environmentId: EnvironmentId) =>
-  createEnvironmentShellSnapshotReadyAtom({
-    environmentId,
-    shellStateValueAtom: environmentShell.stateValueAtom,
-  }),
-);
-
 export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
   const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
   if (Option.isNone(catalog)) {

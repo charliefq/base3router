@@ -3,16 +3,7 @@
   // Exported types are part of our contracts even before they have consumers.
   "rules": { "types": "off", "nsTypes": "off" },
   // These executables are supplied by the OS or installed separately from npm.
-  "ignoreBinaries": [
-    "eas",
-    "file",
-    "mkfifo",
-    "pkill",
-    "pkg-config",
-    "plutil",
-    "playwright",
-    "sips",
-  ],
+  "ignoreBinaries": ["eas", "file", "mkfifo", "pkill", "pkg-config", "plutil", "sips"],
   "workspaces": {
     ".": {
       // Keep vendored reference repositories outside the root project.
@@ -22,12 +13,18 @@
       "vitest": { "entry": [".github/**/*.test.cjs"] },
     },
     "scripts": {
-      // Knip loads its preprocessor through a CLI option; native verification runs directly.
+      // Knip loads its preprocessor through a CLI option; native verification and
+      // worktree setup (from t3.json) run directly. The V2 acceptance scripts are
+      // invoked by the acceptance runner, not imported. The fake Codex peer is
+      // copied and executed by internal-beta-production-browser.ts.
       "entry": [
         "knip-schemas.ts",
         "mobile-native-client.ts",
-        "base3router-ui-lab.ts",
-        "router-evaluate.ts",
+        "setup-worktree.ts",
+        "internal-beta-acceptance.ts",
+        "internal-beta-production-browser.ts",
+        "internal-beta-fake-codex.mjs",
+        "v2-governance-surfaces.ts",
       ],
     },
     "apps/server": {
@@ -38,6 +35,9 @@
         "scripts/cli.ts",
         "scripts/evaluate-thread-titles.ts",
         "scripts/measure-pr-preview.ts",
+        "scripts/probe-claude-fork-local-rollback-replay.ts",
+        "scripts/update-test-shard-weights.ts",
+        "scripts/verify-background-live.ts",
         "src/provider/testFixtures/*.mjs",
       ],
       // Keep the transitive Effect runtime pinned for standalone npm installs.
@@ -52,6 +52,8 @@
         "src/snapShot/GlobalShiftShortcutWorker.ts!",
         "src/snapShot/RegionSnapShotWorker.ts!",
         "src/snapShot/SnapShotAccessibilityWorker.ts!",
+        "src/boot.ts!",
+        "src/compileCache.ts!",
         "src/main.ts!",
         "src/preload.ts!",
         "src/preview-pick-preload.ts!",
@@ -64,22 +66,20 @@
       "ignoreDependencies": ["playwright-core", "electron-builder"],
     },
     "apps/web": {
-      // Worktree setup invokes this directly from t3.json.
-      "entry": [
-        "scripts/warm-dep-cache.ts",
-        "src/lab/main.tsx",
-        "playwright.config.ts",
-        "e2e/**/*.ts",
-      ],
+      // Vitest loads this through the per-file @vitest-environment directive.
+      "ignoreDependencies": ["jsdom"],
+      // Worktree setup (scripts/setup-worktree.ts) runs this directly.
+      "entry": ["scripts/warm-dep-cache.ts"],
       // UI component modules are copied and adapted as cohesive sets. Keep their
       // named subcomponents even before they have callers; the file audit still
       // reports an entire component module when nothing imports it.
       "ignoreIssues": { "src/components/ui/*.tsx": ["exports", "nsExports", "duplicates"] },
     },
     "apps/mobile": {
-      // Expo loads plugins by string; Metro embeds the browser entry in the native WebView.
+      // Expo loads plugins and the fingerprint config by string; Metro embeds the browser entry in the native WebView.
       "entry": [
         "index.ts!",
+        "fingerprint.config.js",
         "plugins/*.cjs",
         "scripts/generate-device-stream.mts",
         "src/features/devices/device-stream.browser.ts!",
@@ -101,6 +101,28 @@
     "packages/*": {
       // These workspace packages are private to this monorepo.
       "includeEntryExports": true,
+    },
+    "packages/contracts": {
+      "includeEntryExports": true,
+      // OpenRouter has no V2 provider driver. These constants stay with the
+      // guidance schema until a driver exists.
+      "ignoreIssues": {
+        "src/dreamMemory.ts": ["exports"],
+        "src/openRouter.ts": ["exports"],
+        "src/routerEvaluation.ts": ["exports"],
+      },
+    },
+    "packages/shared": {
+      "includeEntryExports": true,
+      "ignoreIssues": {
+        "src/modelRouter.ts": ["exports"],
+        "src/modelRouterFailover.ts": ["exports"],
+        "src/openRouterGuidance.ts": ["exports"],
+        "src/openRouterMetadata.ts": ["exports"],
+        "src/openRouterPrivacy.ts": ["exports"],
+        "src/routerEvaluation.fixture.ts": ["exports"],
+        "src/routerEvaluation.ts": ["exports"],
+      },
     },
     "packages/effect-acp": {
       "includeEntryExports": true,

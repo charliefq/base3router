@@ -1,9 +1,5 @@
 const NIGHTLY_SERVER_VERSION_PATTERN = /^[^-+]+-(?:nightly|preview)\.\d{8}\.\d+$/;
 
-export function visibleAppStageLabel(stageLabel: string): string {
-  return stageLabel === "Alpha" ? "Internal Alpha" : stageLabel;
-}
-
 export function formatAppDisplayName(input: {
   readonly baseName: string;
   readonly stageLabel: string;

@@ -10,7 +10,6 @@ import { NoProjectsHero } from "../components/NoProjectsHero";
 import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
-import { WorkspaceWithInspector } from "../components/controlPlane/WorkspaceWithInspector";
 import { SidebarInset } from "../components/ui/sidebar";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
@@ -91,7 +90,8 @@ function IndexDraftLanding() {
 
 function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
   return (
-    <WorkspaceWithInspector>
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
+      {isElectron ? <WorkspacePageHeader electron /> : null}
       <Empty className="flex-1">
         <EmptyHeader className="max-w-md">
           <EmptyTitle>Couldn’t start a new thread</EmptyTitle>
@@ -106,7 +106,7 @@ function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
           </div>
         </EmptyHeader>
       </Empty>
-    </WorkspaceWithInspector>
+    </SidebarInset>
   );
 }
 
@@ -140,10 +140,10 @@ function HostedStaticOnboardingState() {
               <div className="mx-auto mb-5 flex size-11 items-center justify-center rounded-xl border border-border/70 bg-background/70 text-muted-foreground">
                 <LinkIcon className="size-5" />
               </div>
-              <EmptyTitle>Connect to a computer running Base3Router</EmptyTitle>
+              <EmptyTitle>Connect to a computer running T3 Code</EmptyTitle>
               <EmptyDescription>
-                This app connects to Base3Router running on your computer or a server. Start the
-                Base3Router desktop app or command-line server on that machine and keep it running.
+                This app connects to T3 Code running on your computer or a server. Start the T3 Code
+                desktop app or command-line server on that machine and keep it running.
               </EmptyDescription>
               <EmptyDescription>{description}</EmptyDescription>
               <div className="mt-6 flex justify-center">

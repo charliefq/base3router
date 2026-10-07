@@ -2,11 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 
-import { WS_METHODS, WsRpcGroup, WsSubscribeServerConfigRpc } from "./rpc.ts";
-
-const decodeSubscribeServerConfigPayload = Schema.decodeUnknownSync(
-  WsSubscribeServerConfigRpc.payloadSchema,
-);
+import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
+import { WsRpcGroup, WsSubscribeServerConfigRpc } from "./rpc.ts";
 
 /**
  * The client always sends `environmentThemes`, including to servers built
@@ -17,50 +14,65 @@ const decodeSubscribeServerConfigPayload = Schema.decodeUnknownSync(
 describe("subscribeServerConfig payload compatibility", () => {
   it("is accepted by a server whose schema predates the field", () => {
     const oldServerPayload = Schema.Struct({});
-    const decoded = Schema.decodeUnknownExit(oldServerPayload)({ environmentThemes: true });
+    const decoded = Schema.decodeExit(oldServerPayload)({ environmentThemes: true });
     expect(Exit.isSuccess(decoded)).toBe(true);
   });
 
   it("is carried by a server that declares it", () => {
-    const decoded = decodeSubscribeServerConfigPayload({
+    const decoded = Schema.decodeSync(WsSubscribeServerConfigRpc.payloadSchema)({
       environmentThemes: true,
     });
     expect(decoded).toEqual({ environmentThemes: true });
   });
 
   it("stays optional, so a client that never sends it still subscribes", () => {
-    const decoded = decodeSubscribeServerConfigPayload({});
+    const decoded = Schema.decodeSync(WsSubscribeServerConfigRpc.payloadSchema)({});
     expect(decoded).toEqual({});
   });
 });
 
-describe("router evaluation RPC", () => {
-  it("registers insights, export, delete, feedback, and policy lifecycle", () => {
-    expect(WsRpcGroup.requests.has(WS_METHODS.routerGetInsights)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.routerExportObservations)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.routerDeleteObservations)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.routerSubmitFeedback)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.routerListPolicies)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.routerInspectPolicy)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.routerActivatePolicy)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.routerShadowPolicy)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.routerRollbackPolicy)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.actionGateGetGovernance)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.actionGateRespondApproval)).toBe(true);
-  });
-});
+describe("WebSocket RPC contracts", () => {
+  it("exposes only the V2 orchestration transport surface", () => {
+    const methods = [...WsRpcGroup.requests.keys()];
 
-describe("dispatcher route preview RPC", () => {
-  it("is registered as a bounded unary request", () => {
-    expect(WsRpcGroup.requests.has(WS_METHODS.dispatcherRoutePreview)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.dispatcherHandoffPreview)).toBe(true);
+    expect(methods).toEqual(expect.arrayContaining(Object.values(ORCHESTRATION_V2_WS_METHODS)));
+    expect(methods.filter((method) => method.startsWith("orchestrationV1."))).toEqual([]);
   });
-});
 
-describe("cursor-cloud workflow RPC", () => {
-  it("registers follow-up, cancel, and refresh as bounded unary requests", () => {
-    expect(WsRpcGroup.requests.has(WS_METHODS.workflowCursorCloudFollowUp)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.workflowCursorCloudCancel)).toBe(true);
-    expect(WsRpcGroup.requests.has(WS_METHODS.workflowCursorCloudRefresh)).toBe(true);
+  it("registers production ActionGate and Dream Memory operate methods", () => {
+    expect(WsRpcGroup.requests.has("actionGate.authorizeTool")).toBe(true);
+    expect(WsRpcGroup.requests.has("actionGate.respondApproval")).toBe(true);
+    expect(WsRpcGroup.requests.has("memory.save")).toBe(true);
+    expect(WsRpcGroup.requests.has("memory.delete")).toBe(true);
+    expect(WsRpcGroup.requests.has("memory.enqueueEligible")).toBe(true);
+  });
+
+  it("rejects server-internal commands sent to dispatchCommand", () => {
+    const dispatchCommand = WsRpcGroup.requests.get(ORCHESTRATION_V2_WS_METHODS.dispatchCommand);
+    if (dispatchCommand === undefined) throw new Error("dispatchCommand is not registered");
+    const decode = Schema.decodeUnknownExit(dispatchCommand.payloadSchema);
+
+    expect(
+      Exit.isFailure(
+        decode({
+          type: "checkpoint.rollback.fail",
+          commandId: "forged-rollback-failure",
+          threadId: "thread-1",
+          requestId: "rollback-1",
+          message: "Forged failure.",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      Exit.isSuccess(
+        decode({
+          type: "checkpoint.rollback",
+          commandId: "rollback-1",
+          threadId: "thread-1",
+          scopeId: "scope-1",
+          checkpointId: "checkpoint-1",
+        }),
+      ),
+    ).toBe(true);
   });
 });

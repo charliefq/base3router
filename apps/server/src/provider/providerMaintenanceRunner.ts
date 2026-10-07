@@ -23,7 +23,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import * as ModelManifest from "./ModelManifest.ts";
 import { resolveProviderCompatibility } from "./providerCompatibility.ts";
-import { ProviderRegistry } from "./Services/ProviderRegistry.ts";
+import * as ProviderRegistry from "./Services/ProviderRegistry.ts";
 import { makeProviderMaintenanceCommandCoordinator } from "./providerMaintenanceCommandCoordinator.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
@@ -218,7 +218,7 @@ function makeUpdateState(input: {
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
-  const providerRegistry = yield* ProviderRegistry;
+  const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const manifestService = yield* ModelManifest.ModelManifest;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
@@ -416,7 +416,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
                   message:
                     targetVersion !== undefined
                       ? "This version is no longer recommended or this installer cannot install a specific version. Refresh provider settings."
-                      : "The latest provider version is incompatible with this Base3Router release. Review provider settings.",
+                      : "The latest provider version is incompatible with this T3 Code release. Review provider settings.",
                 }),
               );
             }
@@ -466,9 +466,9 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
                 startedAt,
                 finishedAt,
                 message: couldNotVerify
-                  ? "Update command completed, but Base3Router could not verify the provider version."
+                  ? "Update command completed, but T3 Code could not verify the provider version."
                   : stillOutdated
-                    ? "Update command completed, but Base3Router still detects an outdated provider version."
+                    ? "Update command completed, but T3 Code still detects an outdated provider version."
                     : "Provider updated.",
                 output: commandOutput(result),
               }),

@@ -44,8 +44,7 @@ export function getProviderSummary(provider: ServerProvider | undefined) {
     return {
       headline: "Disabled",
       detail:
-        provider.message ??
-        "This provider is installed but disabled for new sessions in Base3Router.",
+        provider.message ?? "This provider is installed but disabled for new sessions in T3 Code.",
     };
   }
   if (!provider.installed) {
@@ -55,8 +54,9 @@ export function getProviderSummary(provider: ServerProvider | undefined) {
     };
   }
   if (provider.auth.status === "unauthenticated") {
+    const authLabel = provider.auth.label ?? provider.auth.type;
     return {
-      headline: "Not authenticated",
+      headline: authLabel ? `Not authenticated · ${authLabel}` : "Not authenticated",
       detail: provider.message ?? null,
     };
   }

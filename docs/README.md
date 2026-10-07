@@ -1,10 +1,9 @@
-# Base3Router docs
+# T3 Code docs
 
-## Using Base3Router
+## Using T3 Code
 
-- [Install Base3Router](./user/install.md)
+- [Install T3 Code](./user/install.md)
 - [Messages and context](./user/composer.md)
-- [Dream Memory](./user/dream-memory.md)
 - [Working with threads](./user/thread-sidebar.md)
 - [Permission modes](./user/permission-modes.md)
 - [Terminal history](./user/terminal.md)
@@ -19,8 +18,8 @@
 - [Product usage data](./user/telemetry.md)
 - [Remote access](./user/remote-access.md)
 - [Running in the background](./user/background-service.md)
-- [Updating Base3Router](./user/updating.md)
-- Provider guides: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md) · [Antigravity](./user/providers-antigravity.md)
+- [Updating T3 Code](./user/updating.md)
+- Provider guides: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md) · [Antigravity](./user/providers-antigravity.md) · [Pi](./user/providers-pi.md)
 
 ---
 
@@ -34,13 +33,6 @@ source alone does not explain. Most code changes do not need an internal documen
 [documentation rules](../AGENTS.md#documentation) before adding one.
 
 - [Architecture overview](./internals/overview.md)
-- [Base3Router Internal Alpha](./architecture/base3router-alpha.md)
-- [Base3Router Phase 8 Auto Model Router](./architecture/base3router-phase-8.md)
-- [Base3Router Phase 9 product rebrand](./architecture/base3router-phase-9.md)
-- [Base3Router Phase 10 OpenRouter Teacher/Shadow](./architecture/base3router-phase-10.md)
-- [Base3Router Phase 11 evaluation and Hybrid Router V1](./architecture/base3router-phase-11.md)
-- [Base3Router Phase 12 Skill Router, MCP Router, and Independent ActionGate](./architecture/base3router-phase-12.md)
-- [Base3Router Phase 13 Dream Memory and concurrency budgets](./architecture/base3router-phase-13.md)
 - [Glossary](./internals/glossary.md)
 - [Connection runtime](./internals/connection-runtime.md)
 - [Providers](./internals/providers.md)
@@ -58,6 +50,7 @@ source alone does not explain. Most code changes do not need an internal documen
 - [Terminal runtime](./internals/terminal-runtime.md)
 - [Devices](./internals/devices.md)
 - [Voice input](./internals/voice-input.md)
+- [V2 policy integration ancestry](./internals/v2-policy-integration.md)
 
 ### Runbooks
 

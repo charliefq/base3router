@@ -1,11 +1,17 @@
 import {
   EnvironmentId,
+  EventId,
   MessageId,
   ObservationId,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  RunId,
   TURN_OUTCOME_OBSERVATION_VERSION,
   UNKNOWN_TASK_PROFILE,
   emptyOutcomeEvidence,
   type DispatcherTaskRouteBinding,
+  type OrchestrationV2ProviderTurn,
   type ProviderRuntimeEvent,
   type ReworkSignalV0,
   type TurnOutcomeObservationV0,
@@ -28,7 +34,11 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+
 import * as Dispatcher from "../dispatcher/Dispatcher.ts";
+import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
+import type { ProjectionStoreV2Error } from "../orchestration-v2/ProjectionStore.ts";
 import { RouterEvaluationService } from "./RouterEvaluationService.ts";
 import { TurnTiming, type TurnTimingSnapshot } from "./TurnTiming.ts";
 import { DreamMemoryService, viewerFromSubject } from "../dreamMemory/DreamMemoryService.ts";
@@ -219,13 +229,14 @@ export const detectReworkProxy = (input: {
   return undefined;
 };
 
-export const persistTurnOutcomeFromRuntimeEvent = Effect.fn("persistTurnOutcomeFromRuntimeEvent")(
+const persistTurnOutcomeFromRuntimeEvent = Effect.fn("persistTurnOutcomeFromRuntimeEvent")(
   function* (input: {
     readonly environmentId: EnvironmentId;
     readonly threadId: ThreadId;
     readonly messageId: MessageId;
     readonly event: ProviderRuntimeEvent;
     readonly measurementEnabled: boolean;
+    readonly projectId?: ProjectId;
     readonly timing?: TurnTimingSnapshot;
   }) {
     if (!input.measurementEnabled) return;
@@ -273,7 +284,7 @@ export const persistTurnOutcomeFromRuntimeEvent = Effect.fn("persistTurnOutcomeF
         : { dreamMemory: DEFAULT_DREAM_MEMORY_SETTINGS };
       const budget = yield* Effect.serviceOption(ConcurrencyBudgetService);
       const enqueue = dream.value.enqueueEligibleTurn({
-        viewer: viewerFromSubject(input.environmentId, undefined),
+        viewer: viewerFromSubject(input.environmentId, undefined, input.projectId),
         settings: settings.dreamMemory,
         turnSucceeded: true,
         turnText: `completed turn ${input.messageId}`,
@@ -313,3 +324,74 @@ export const persistTurnOutcomeFromRuntimeEvent = Effect.fn("persistTurnOutcomeF
     }
   },
 );
+
+const isV2TerminalTurnStatus = (
+  status: OrchestrationV2ProviderTurn["status"],
+): status is "completed" | "failed" | "interrupted" | "cancelled" =>
+  status === "completed" ||
+  status === "failed" ||
+  status === "interrupted" ||
+  status === "cancelled";
+
+/** Map a V2 provider turn into the observation runtime event. Cost stays unknown. */
+export const runtimeEventFromV2ProviderTurn = (input: {
+  readonly threadId: ThreadId;
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly driver: ProviderDriverKind;
+  readonly providerTurn: OrchestrationV2ProviderTurn;
+}): ProviderRuntimeEvent | undefined => {
+  const status = input.providerTurn.status;
+  if (!isV2TerminalTurnStatus(status)) return undefined;
+  const at = input.providerTurn.completedAt ?? input.providerTurn.startedAt;
+  const createdAt = at !== null ? DateTime.formatIso(at) : "1970-01-01T00:00:00.000Z";
+  const tokenUsage = input.providerTurn.turnTokenUsage;
+  return {
+    type: "turn.completed",
+    eventId: EventId.make(`turn-outcome:${input.providerTurn.id}`),
+    provider: input.driver,
+    providerInstanceId: input.providerInstanceId,
+    threadId: input.threadId,
+    createdAt,
+    payload: {
+      state: status,
+      ...(tokenUsage === undefined ? {} : { tokenUsage }),
+    },
+  } as ProviderRuntimeEvent;
+};
+
+/**
+ * Persist one V2 terminal provider turn into the router observation store.
+ * Skips when identity, measurement, or the dispatcher binding is missing.
+ * Duplicate observation ids merge; unknown cost is not fabricated.
+ */
+export const persistTurnOutcomeFromV2ProviderTurn = Effect.fn(
+  "persistTurnOutcomeFromV2ProviderTurn",
+)(function* (input: {
+  readonly threadId: ThreadId;
+  readonly runId?: RunId;
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly driver: ProviderDriverKind;
+  readonly providerTurn: OrchestrationV2ProviderTurn;
+  readonly getRunMessage: (
+    threadId: ThreadId,
+    runId: RunId,
+  ) => Effect.Effect<{ readonly id: MessageId } | undefined, ProjectionStoreV2Error>;
+}) {
+  const event = runtimeEventFromV2ProviderTurn(input);
+  if (event === undefined) return;
+  if (input.runId === undefined) return;
+  const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+  if (Option.isNone(sql)) return;
+  const environment = yield* Effect.serviceOption(ServerEnvironment);
+  if (Option.isNone(environment)) return;
+  const message = yield* input.getRunMessage(input.threadId, input.runId);
+  if (message === undefined) return;
+  const environmentId = yield* environment.value.getEnvironmentId;
+  yield* persistTurnOutcomeFromRuntimeEvent({
+    environmentId,
+    threadId: input.threadId,
+    messageId: message.id,
+    event,
+    measurementEnabled: true,
+  }).pipe(Effect.provideService(SqlClient.SqlClient, sql.value));
+});

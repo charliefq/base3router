@@ -2,17 +2,21 @@ import {
   AgentProfile,
   AgentProfileDraft,
   CommandId,
+  MessageId,
   ProjectId,
+  ThreadId,
   TurnId,
   WorkflowArtifact,
   WorkflowOperationError,
   WorkflowMutation,
   WorkflowTemplateDraft,
-  type OrchestrationCommand,
   type ServerProvider,
   type WorkflowActionInput,
   type WorkflowCatalog,
+  WorkflowDispatchStageInput,
+  WorkflowDispatchStageResult,
   type WorkflowProposeArtifactInput,
+  type WorkflowStage,
   type WorkflowStagePreviewInput,
   type WorkflowTemplate,
 } from "@t3tools/contracts";
@@ -21,20 +25,53 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { cursorCloudDispatchPreview } from "../cursorCloud/CursorCloudWorkflow.ts";
 import * as Dispatcher from "../dispatcher/Dispatcher.ts";
 import { projectedSummarySection } from "../dispatcher/Handoff.ts";
 import { BUILTIN_AGENT_PROFILES, BUILTIN_WORKFLOW_TEMPLATES } from "./Builtins.ts";
-import {
-  availableProfiles,
-  availableTemplates,
-  initialWorkflowRun,
-  profileVersion,
-  templateVersion,
-} from "./Policy.ts";
-import { readWorkflowCatalog } from "./Projection.ts";
+import { initialWorkflowRun, profileVersion, templateVersion } from "./Policy.ts";
+import { projectWorkflowEvent, readWorkflowCatalog } from "./Projection.ts";
+
+export interface WorkflowRecordCommand {
+  readonly type: "workflow.record";
+  readonly commandId: CommandId;
+  readonly projectId: ProjectId;
+  readonly mutation: WorkflowMutation;
+  readonly createdAt: string;
+}
+
+/** Cursor Cloud REST is not a second engine. Preview stays fail-closed. */
+const cursorCloudDispatchPreview = (_input: {
+  readonly available: boolean;
+  readonly configured: boolean;
+  readonly gate: { readonly decision: string };
+  readonly provider: string | null;
+  readonly model: string | null;
+  readonly target: unknown;
+}) => ({
+  available: false as const,
+  payload: null,
+  reason: "cursor-cloud-fail-closed" as const,
+});
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
+/** A stage may run only on the route recorded when it was dispatched. */
+export function stageRouteAllows(
+  bound: {
+    readonly target: { readonly instanceId: string; readonly model: string };
+    readonly driver: string;
+  },
+  requested: {
+    readonly target: { readonly instanceId: string; readonly model: string };
+    readonly driver: string;
+  },
+): boolean {
+  return (
+    bound.target.instanceId === requested.target.instanceId &&
+    bound.target.model === requested.target.model &&
+    bound.driver === requested.driver
+  );
+}
 const fail = (message: string): never => {
   throw new WorkflowOperationError({ message });
 };
@@ -137,7 +174,7 @@ const matchesExistingAction = (input: WorkflowActionInput, mutation: WorkflowMut
   }
 };
 
-export const requireWorkflowProject = Effect.fn("Workflow.requireProject")(function* (
+const requireWorkflowProject = Effect.fn("Workflow.requireProject")(function* (
   projectId: ProjectId,
 ) {
   const sql = yield* SqlClient.SqlClient;
@@ -263,18 +300,60 @@ export const makeWorkflowActionMutation = (
   }
 };
 
+const persistWorkflowMutation = Effect.fn("Workflow.persistMutation")(function* (
+  command: WorkflowRecordCommand,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const sequenceRows = yield* sql<{ readonly nextSequence: number }>`
+    SELECT COALESCE(MAX(last_sequence), 0) + 1 AS "nextSequence"
+    FROM projection_workflow_cursors
+    WHERE project_id = ${command.projectId}
+  `;
+  const sequence = sequenceRows[0]?.nextSequence ?? 1;
+  yield* projectWorkflowEvent({
+    type: "workflow.recorded",
+    sequence,
+    commandId: command.commandId,
+    payload: { projectId: command.projectId, mutation: command.mutation },
+  });
+  yield* sql`
+    INSERT INTO base3_workflow_commands (command_id, project_id, mutation_json, recorded_at)
+    VALUES (${command.commandId}, ${command.projectId}, ${
+      // The workflow command ledger stores the mutation the action already validated.
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      JSON.stringify({ projectId: command.projectId, mutation: command.mutation })
+    }, ${command.createdAt})
+  `;
+  return sequence;
+});
+
 export const performWorkflowAction = Effect.fn("Workflow.action")(function* (
   input: WorkflowActionInput,
-  dispatch: (command: OrchestrationCommand) => Effect.Effect<{ readonly sequence: number }, Error>,
+  dispatch: (command: WorkflowRecordCommand) => Effect.Effect<{ readonly sequence: number }, Error>,
 ) {
   yield* requireWorkflowProject(input.projectId);
   const sql = yield* SqlClient.SqlClient;
-  const priorRaw =
-    yield* sql`SELECT event_type AS "eventType", payload_json AS "payload" FROM orchestration_events WHERE command_id = ${input.commandId} LIMIT 1`;
-  const prior = (yield* Schema.decodeUnknownEffect(ExistingActionRows)(priorRaw))[0];
+  const priorRaw = yield* sql`
+    SELECT mutation_json AS "payload"
+    FROM base3_workflow_commands
+    WHERE command_id = ${input.commandId}
+    LIMIT 1
+  `;
+  const priorRows = yield* Schema.decodeUnknownEffect(
+    Schema.Array(
+      Schema.Struct({
+        payload: Schema.fromJsonString(
+          Schema.Struct({
+            projectId: ProjectId,
+            mutation: WorkflowMutation,
+          }),
+        ),
+      }),
+    ),
+  )(priorRaw);
+  const prior = priorRows[0];
   if (prior) {
     if (
-      prior.eventType !== "workflow.recorded" ||
       prior.payload.projectId !== input.projectId ||
       !matchesExistingAction(input, prior.payload.mutation)
     )
@@ -303,29 +382,19 @@ export const performWorkflowAction = Effect.fn("Workflow.action")(function* (
   }
   const at = yield* nowIso;
   const mutation = makeWorkflowActionMutation(input, stored, at);
-  yield* dispatch({
+  const command: WorkflowRecordCommand = {
     type: "workflow.record",
     commandId: CommandId.make(input.commandId),
     projectId: input.projectId,
     mutation,
     createdAt: at,
-  }).pipe(
+  };
+  yield* persistWorkflowMutation(command);
+  yield* dispatch(command).pipe(
     Effect.mapError(
       () => new WorkflowOperationError({ message: "Workflow action was rejected or is stale." }),
     ),
   );
-  const committedRaw =
-    yield* sql`SELECT event_type AS "eventType", payload_json AS "payload" FROM orchestration_events WHERE command_id = ${input.commandId} LIMIT 1`;
-  const committed = (yield* Schema.decodeUnknownEffect(ExistingActionRows)(committedRaw))[0];
-  if (
-    !committed ||
-    committed.eventType !== "workflow.recorded" ||
-    committed.payload.projectId !== input.projectId ||
-    !matchesExistingAction(input, committed.payload.mutation)
-  )
-    return yield* new WorkflowOperationError({
-      message: "Workflow command ID conflicts with an existing action.",
-    });
   return yield* workflowCatalogForProject(input.projectId);
 });
 
@@ -346,11 +415,7 @@ const stageContext = (catalog: WorkflowCatalog, projectId: ProjectId, runId: str
   return { run, template, stage, attempt };
 };
 
-export const buildWorkflowTaskPacket = (
-  catalog: WorkflowCatalog,
-  projectId: ProjectId,
-  runId: string,
-) => {
+const buildWorkflowTaskPacket = (catalog: WorkflowCatalog, projectId: ProjectId, runId: string) => {
   const { run, stage, attempt } = stageContext(catalog, projectId, runId);
   const profileId = stage.profileId;
   const profileVersionNumber = stage.profileVersion;
@@ -448,7 +513,7 @@ export const previewWorkflowStage = Effect.fn("Workflow.previewStage")(function*
 
 export const proposeWorkflowArtifact = Effect.fn("Workflow.proposeArtifact")(function* (
   input: typeof WorkflowProposeArtifactInput.Type,
-  dispatch: (command: OrchestrationCommand) => Effect.Effect<{ readonly sequence: number }, Error>,
+  dispatch: (command: WorkflowRecordCommand) => Effect.Effect<{ readonly sequence: number }, Error>,
 ) {
   yield* requireWorkflowProject(input.projectId);
   const stored = yield* readWorkflowCatalog(input.projectId);
@@ -474,17 +539,33 @@ export const proposeWorkflowArtifact = Effect.fn("Workflow.proposeArtifact")(fun
       message: "The provider stage has not been dispatched.",
     });
   const sql = yield* SqlClient.SqlClient;
+  // The stage turn is the V2 run started by the destination message.
+  // A failed run is settled, matching the former V1 error state.
   const raw = yield* sql`
-    SELECT t.turn_id AS "turnId", t.state AS "state", am.text AS "assistantText",
-      s.status AS "sessionStatus",
-      p.workspace_root AS "workspaceRoot", th.worktree_path AS "worktreePath"
-    FROM projection_turns t
-    JOIN projection_threads th ON th.thread_id = t.thread_id
+    SELECT t.run_id AS "turnId",
+      CASE t.status WHEN 'failed' THEN 'error' ELSE t.status END AS "state",
+      json_extract(am.payload_json, '$.text') AS "assistantText",
+      (
+        SELECT s.status
+        FROM orchestration_v2_projection_provider_sessions s
+        WHERE s.thread_id = t.thread_id AND s.status IN ('starting', 'running')
+        LIMIT 1
+      ) AS "sessionStatus",
+      p.workspace_root AS "workspaceRoot",
+      json_extract(th.payload_json, '$.worktreePath') AS "worktreePath"
+    FROM orchestration_v2_projection_runs t
+    JOIN orchestration_v2_projection_threads th ON th.thread_id = t.thread_id
     JOIN projection_projects p ON p.project_id = th.project_id
-    LEFT JOIN projection_thread_messages am ON am.message_id = t.assistant_message_id
-    LEFT JOIN projection_thread_sessions s ON s.thread_id = t.thread_id
+    LEFT JOIN orchestration_v2_projection_messages am
+      ON am.message_id = (
+        SELECT message_id
+        FROM orchestration_v2_projection_messages
+        WHERE thread_id = t.thread_id AND run_id = t.run_id AND role = 'assistant'
+        ORDER BY created_at DESC, message_id DESC
+        LIMIT 1
+      )
     WHERE t.thread_id = ${attempt.destinationThreadId}
-      AND t.pending_message_id = ${attempt.destinationMessageId}
+      AND json_extract(t.payload_json, '$.userMessageId') = ${attempt.destinationMessageId}
       AND th.project_id = ${input.projectId}
     LIMIT 1
   `;
@@ -525,16 +606,150 @@ export const proposeWorkflowArtifact = Effect.fn("Workflow.proposeArtifact")(fun
     createdAt: at,
     acceptedAt: null,
   };
-  yield* dispatch({
+  const command: WorkflowRecordCommand = {
     type: "workflow.record",
     commandId: CommandId.make(input.commandId),
     projectId: input.projectId,
     mutation: { type: "artifact.propose", artifact },
     createdAt: at,
-  }).pipe(
+  };
+  yield* persistWorkflowMutation(command);
+  yield* dispatch(command).pipe(
     Effect.mapError(
       () => new WorkflowOperationError({ message: "Artifact proposal was rejected or is stale." }),
     ),
   );
   return artifact;
+});
+
+export interface WorkflowStageLaunch {
+  readonly threadId: ThreadId;
+  readonly messageId: MessageId;
+  readonly prompt: string;
+  readonly stage: WorkflowStage;
+}
+
+export const dispatchWorkflowStage = Effect.fn("Workflow.dispatchStage")(function* (
+  input: typeof WorkflowDispatchStageInput.Type,
+  dependencies: {
+    readonly environmentId: typeof input.environmentId;
+    readonly providers: ReadonlyArray<ServerProvider>;
+    readonly environmentDefaultModelSelection: Parameters<
+      typeof Dispatcher.resolveDispatcherRoute
+    >[0]["environmentDefaultModelSelection"];
+    readonly launch: (
+      payload: WorkflowStageLaunch,
+    ) => Effect.Effect<{ readonly sequence: number }, Error>;
+  },
+) {
+  if (input.runnerKind === "cursor-cloud") {
+    return yield* new WorkflowOperationError({
+      message: "Cursor Cloud REST is not a second engine.",
+    });
+  }
+  yield* requireWorkflowProject(input.projectId);
+  const threadId = ThreadId.make(`workflow-${input.dispatchId}`);
+  const messageId = MessageId.make(`workflow-message-${input.dispatchId}`);
+  const existing = yield* workflowCatalogForProject(input.projectId);
+  const existingRun = existing.runs.find((run) => run.id === input.runId);
+  const existingAttempt = existingRun?.attempts.find(
+    (attempt) => attempt.stageId === input.stageId && attempt.attempt === input.attempt,
+  );
+  if (
+    existingAttempt?.destinationThreadId !== null &&
+    existingAttempt?.destinationThreadId !== undefined
+  ) {
+    if (
+      existingAttempt.destinationThreadId !== threadId ||
+      existingAttempt.destinationMessageId !== messageId ||
+      existingAttempt.routeBinding?.target.instanceId !== input.target.instanceId ||
+      existingAttempt.routeBinding?.target.model !== input.target.model
+    ) {
+      return yield* new WorkflowOperationError({
+        message: "Stage was already dispatched with another route.",
+      });
+    }
+    if (existingRun === undefined) {
+      return yield* new WorkflowOperationError({ message: "Workflow run was not found." });
+    }
+    return {
+      run: existingRun,
+      threadId,
+      messageId,
+    } satisfies typeof WorkflowDispatchStageResult.Type;
+  }
+  const packet = buildWorkflowTaskPacket(existing, input.projectId, input.runId);
+  if (packet.stage.id !== input.stageId || packet.attempt.attempt !== input.attempt) {
+    return yield* new WorkflowOperationError({ message: "Stage preview is stale." });
+  }
+  const projected = yield* Dispatcher.readDispatcherProjectedState({});
+  const route = Dispatcher.resolveDispatcherRoute({
+    environmentId: dependencies.environmentId,
+    request: {
+      environmentId: input.environmentId,
+      projectId: input.projectId,
+      preferredRoute: input.target,
+      actionKind: "workspace-write",
+    },
+    projected,
+    message: null,
+    providers: dependencies.providers,
+    environmentDefaultModelSelection: dependencies.environmentDefaultModelSelection,
+    candidateMode: "explicit-only",
+  });
+  const routeBinding = Dispatcher.taskRouteBindingFromDecision(route);
+  if (
+    routeBinding === null ||
+    routeBinding.target.instanceId !== input.target.instanceId ||
+    routeBinding.target.model !== input.target.model
+  ) {
+    return yield* new WorkflowOperationError({
+      message: "The selected provider runner is unavailable.",
+    });
+  }
+  const at = yield* nowIso;
+  const prompt = `${packet.packetText}\n\n## User instruction\n${input.additionalInstruction || "Continue with the bounded stage task."}`;
+  yield* dependencies
+    .launch({
+      threadId,
+      messageId,
+      prompt,
+      stage: packet.stage,
+    })
+    .pipe(
+      Effect.mapError(
+        () => new WorkflowOperationError({ message: "Workflow dispatch failed or is stale." }),
+      ),
+    );
+  yield* persistWorkflowMutation({
+    type: "workflow.record",
+    commandId: CommandId.make(`workflow-dispatch-${input.dispatchId}`),
+    projectId: input.projectId,
+    mutation: {
+      type: "stage.dispatch",
+      runId: packet.run.id,
+      stageId: packet.stage.id,
+      attempt: packet.attempt.attempt,
+      threadId,
+      messageId,
+      routeBinding,
+      at,
+    },
+    createdAt: at,
+  });
+  const latest = yield* workflowCatalogForProject(input.projectId);
+  const persisted = latest.runs.find((candidate) => candidate.id === packet.run.id);
+  if (
+    persisted === undefined ||
+    !persisted.attempts.some(
+      (candidate) =>
+        candidate.stageId === packet.stage.id &&
+        candidate.attempt === packet.attempt.attempt &&
+        candidate.destinationThreadId === threadId &&
+        candidate.destinationMessageId === messageId,
+    )
+  ) {
+    return yield* new WorkflowOperationError({ message: "Stage binding was not persisted." });
+  }
+  return { run: persisted, threadId, messageId } satisfies typeof WorkflowDispatchStageResult.Type;
 });

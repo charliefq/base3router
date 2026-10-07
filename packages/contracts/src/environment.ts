@@ -8,11 +8,12 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { OpenRouterCapabilitySnapshot } from "./openRouter.ts";
 
 /** Wire version for orchestration snapshots, streams, commands, and RPC payloads. */
-export const ORCHESTRATION_PROTOCOL_VERSION = 1;
+export const ORCHESTRATION_PROTOCOL_VERSION = 2;
+export const ORCHESTRATION_PROTOCOL_VERSION_TEXT = "2";
 export const ORCHESTRATION_PROTOCOL_QUERY_PARAM = "orchestrationProtocol";
+export const ORCHESTRATION_PROTOCOL_HEADER = "x-t3-orchestration-protocol";
 
 export const ExecutionEnvironmentPlatformOs = Schema.Literals([
   "darwin",
@@ -103,6 +104,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server exposes the pull-request list, detail, activity, diff, and mutation APIs. Absent on
       servers from before the pull-request workspace shipped, so clients must not probe them. */
   pullRequests: Schema.optionalKey(Schema.Boolean),
+  pullRequestChecks: Schema.optionalKey(Schema.Boolean),
   /** Server understands canonical inline context links plus their message context records.
       Absent on servers from before inline context shipped, which drop the records and forward
       the links as literal text -- so a client must serialize context the legacy way for them. */
@@ -134,17 +136,6 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   usageLimitSources: Schema.optionalKey(Schema.Boolean),
   /** Server persists custom model rates and applies them to usage summaries. */
   usagePriceOverrides: Schema.optionalKey(Schema.Boolean),
-  /** Server exposes deterministic, read-only dispatcher route previews. */
-  dispatcherRoutePreview: Schema.optionalKey(Schema.Boolean),
-  /** Server supports explicit, user-approved task handoff to another provider. */
-  dispatcherTaskHandoff: Schema.optionalKey(Schema.Boolean),
-  /** Server owns versioned agent profiles, workflow state, and confirmed stage dispatch. */
-  workflowOs: Schema.optionalKey(Schema.Boolean),
-  /**
-   * Server can dispatch, monitor, continue, and cancel Cursor Cloud Agents.
-   * Absent or false preserves Phase 1–5 local-provider workflow behavior.
-   */
-  cursorCloudRunner: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.pin / thread.unpin commands. Same
       version-skew contract as threadSettlement. */
   threadPinning: Schema.optionalKey(Schema.Boolean),
@@ -153,15 +144,23 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadPinReorder: Schema.optionalKey(Schema.Boolean),
   /** Server persists manual Active order through thread.active.reorder. */
   threadActiveReorder: Schema.optionalKey(Schema.Boolean),
+  /** Server understands thread.auto-settle.set (per-thread auto-settle off).
+      Same version-skew contract as threadSettlement. */
+  threadAutoSettleOptOut: Schema.optionalKey(Schema.Boolean),
   /** Server understands regenerateTitle on thread.meta.update. Absent on
       older servers, so clients hide the action instead of sending it. */
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),
-  /** Server supports legacy linkedPullRequest updates through thread.meta.update.
-      Independent of threadPullRequests; servers supporting both advertise both. */
+  /** Server understands thread.visit / thread.mark-unread commands and
+      projects lastVisitedAt on thread shells. Same version-skew contract as
+      threadSettlement: clients keep their local visited state against
+      servers that lack this. */
+  threadVisitedTracking: Schema.optionalKey(Schema.Boolean),
+  /** Server persists a pull request reference on thread.meta.update. */
   threadPullRequestLinking: Schema.optionalKey(Schema.Boolean),
-  /** Server understands thread.pull-request.link / .unlink, exposes `pullRequests` on
-      threads, and routes PullRequestRef.host across projects on the same host. Same
-      version-skew contract as threadSettlement. */
+  /** Server resolves message delivery and model-selection context and validates
+      identified rollback readiness. Clients retain projection-based command
+      shaping and validation when this is absent. */
+  serverResolvedCommandContext: Schema.optionalKey(Schema.Boolean),
   threadPullRequests: Schema.optionalKey(Schema.Boolean),
   pullRequestStackActions: Schema.optionalKey(Schema.Boolean),
   /** The update path clients should offer for this server. Absent on
@@ -194,42 +193,6 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       desktop servers whose app predates the remote trigger, where clients
       must keep telling the user to update the app on that machine. */
   desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
-  /**
-   * Server can run OpenRouter guidance (Off / Shadow / Teacher). Absent on
-   * pre-Phase-10 servers, so clients hide the guidance surface.
-   */
-  openRouterGuidance: Schema.optionalKey(OpenRouterCapabilitySnapshot),
-  /**
-   * Server can persist local routing observations and Hybrid policy state.
-   * Absent on pre-Phase-11 servers, so clients hide evaluation controls.
-   */
-  routerEvaluation: Schema.optionalKey(
-    Schema.Struct({
-      available: Schema.Boolean,
-      measurementEnabled: Schema.Boolean,
-      retentionDays: Schema.Int,
-      challengerShadowEnabled: Schema.Boolean,
-      activePolicyVersion: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
-      observationCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-    }),
-  ),
-  /**
-   * Server can persist Dream Memory and enforce concurrency budgets.
-   * Absent on pre-Phase-13 servers, so clients hide memory controls.
-   */
-  dreamMemory: Schema.optionalKey(
-    Schema.Struct({
-      available: Schema.Boolean,
-      enabled: Schema.Boolean,
-      captureMode: TrimmedNonEmptyString.check(Schema.isMaxLength(32)),
-    }),
-  ),
-  concurrencyBudget: Schema.optionalKey(
-    Schema.Struct({
-      available: Schema.Boolean,
-      topology: TrimmedNonEmptyString.check(Schema.isMaxLength(32)),
-    }),
-  ),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
@@ -238,7 +201,7 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   label: TrimmedNonEmptyString,
   platform: ExecutionEnvironmentPlatform,
   serverVersion: TrimmedNonEmptyString,
-  /** Missing metadata denotes protocol 1. Bump this for breaking wire changes. */
+  /** Absent on hosts from before explicit orchestration protocol negotiation. */
   orchestrationProtocolVersion: Schema.optionalKey(Schema.Int),
   capabilities: ExecutionEnvironmentCapabilities,
 });

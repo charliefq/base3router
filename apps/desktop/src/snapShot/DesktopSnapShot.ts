@@ -100,11 +100,11 @@ const FLASH_FRAME_INTERVAL_MS = 16;
 const FLASH_PEAK_OPACITY = 0.08;
 const MAC_SCREEN_CAPTURE_SETTINGS_URL = MAC_PERMISSION_SETTINGS_URLS["screen-recording"];
 const MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE =
-  "Allow Screen Recording in System Settings, then restart Base3Router.";
+  "Allow Screen Recording in System Settings, then restart T3 Code.";
 const MAC_ACCESSIBILITY_PERMISSION_MESSAGE =
-  "Allow Accessibility in System Settings, then restart Base3Router.";
+  "Allow Accessibility in System Settings, then restart T3 Code.";
 const MAC_BOTH_PERMISSIONS_MESSAGE =
-  "Allow Accessibility and Screen Recording in System Settings, then restart Base3Router.";
+  "Allow Accessibility and Screen Recording in System Settings, then restart T3 Code.";
 const MAC_PERMISSION_MESSAGES = new Set([
   MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE,
   MAC_ACCESSIBILITY_PERMISSION_MESSAGE,
@@ -186,7 +186,7 @@ export class DesktopSnapShot extends Context.Service<
       shortcut: SnapShotShortcut,
     ) => Effect.Effect<DesktopSnapShotShortcutAvailability>;
     readonly setShortcutSuppressed: (suppressed: boolean) => Effect.Effect<void>;
-    /** Capture the foreground window in place, including Base3Router itself. */
+    /** Capture the foreground window in place, including T3 Code itself. */
     readonly capture: Effect.Effect<void, DesktopSnapShotError>;
     readonly listPending: Effect.Effect<
       ReadonlyArray<DesktopPendingSnapShot>,
@@ -820,7 +820,7 @@ export const make = Effect.gen(function* () {
   };
 
   const emit = (event: DesktopSnapShotEvent) =>
-    desktopWindow.dispatchSnapShotEvent(event).pipe(Effect.catchCause(() => Effect.void));
+    desktopWindow.dispatchSnapShotEvent(event).pipe(Effect.ignoreCause);
   const setFailure = (message: string, captureId?: string) =>
     Ref.update(stateRef, (state) => ({ ...state, message })).pipe(
       Effect.andThen(
@@ -846,10 +846,9 @@ export const make = Effect.gen(function* () {
   const discardCapture = Effect.fn("desktop.snapShot.discardCapture")(function* (id: string) {
     closeLinuxFeedback(id);
     transition.dismiss(id);
-    yield* Effect.all(
-      [`${id}.png`, `${id}.tmp.png`, `${id}.json`, `${id}.json.tmp`].map((name) =>
-        fileSystem.remove(path.join(captureDirectory, name), { force: true }),
-      ),
+    yield* Effect.forEach(
+      [`${id}.png`, `${id}.tmp.png`, `${id}.json`, `${id}.json.tmp`],
+      (name) => fileSystem.remove(path.join(captureDirectory, name), { force: true }),
       { concurrency: "unbounded", discard: true },
     ).pipe(Effect.ignore);
   });
@@ -897,14 +896,14 @@ export const make = Effect.gen(function* () {
       const capturedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
       if (snapshot.linuxActivationFailure) {
         yield* Effect.logWarning(
-          "The compositor could not activate Base3Router after the snapshot",
+          "The compositor could not activate T3 Code after the snapshot",
           snapshot.linuxActivationFailure.cause,
         );
       }
       if (snapshot.animationStarted) {
         yield* emit({ type: "started", id: id as DesktopSnapShotId });
       } else {
-        yield* desktopWindow.activate.pipe(Effect.catchCause(() => Effect.void));
+        yield* desktopWindow.activate.pipe(Effect.ignoreCause);
       }
       return { id, capturedAt, ...snapshot };
     }).pipe(Effect.mapError((cause) => captureFailure(cause, id)));
@@ -1017,7 +1016,7 @@ export const make = Effect.gen(function* () {
     if (mode === "portal" && niriSocketPath()) {
       return {
         available: false,
-        message: "Configure the capture shortcut in your Niri config, not in Base3Router.",
+        message: "Configure the capture shortcut in your Niri config, not in T3 Code.",
       };
     }
     if (mode === "portal" && isHyprlandCaptureSession()) {
@@ -1167,7 +1166,7 @@ export const make = Effect.gen(function* () {
         const { startNiriCaptureShortcut } = await import("./NiriCaptureShortcut.ts");
         return startNiriCaptureShortcut(linuxAppId, onCurrentShortcut, () => {
           void runPromise(
-            setShortcutFailure("The Niri capture endpoint disconnected. Restart Base3Router."),
+            setShortcutFailure("The Niri capture endpoint disconnected. Restart T3 Code."),
           ).catch(() => undefined);
         });
       }).pipe(
@@ -1189,7 +1188,7 @@ export const make = Effect.gen(function* () {
         shortcutActionRegistered: registered,
         shortcutMessage: registered
           ? "Set up the shortcut to add it to your Niri config."
-          : "Could not start the Niri capture endpoint. Another Base3Router instance may be using it.",
+          : "Could not start the Niri capture endpoint. Another T3 Code instance may be using it.",
         message: null,
       });
       return;
@@ -1511,7 +1510,7 @@ export const make = Effect.gen(function* () {
             null,
           ),
         ),
-        Effect.catch(() => Effect.void),
+        Effect.ignore,
       ),
     ),
     configure,

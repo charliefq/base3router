@@ -112,12 +112,6 @@ describe("DesktopEnvironment", () => {
       );
 
       assert.equal(environment.isDevelopment, false);
-      assert.equal(environment.branding.baseName, "Base3Router");
-      assert.equal(environment.branding.stageLabel, "Alpha");
-      assert.equal(environment.displayName, "Base3Router (Internal Alpha)");
-      assert.equal(environment.userDataDirName, "t3code");
-      assert.equal(environment.legacyUserDataDirName, "T3 Code (Alpha)");
-      assert.equal(environment.appUserModelId, "com.t3tools.t3code");
       assert.equal(environment.stateDir, "/tmp/t3/userdata");
       assert.equal(environment.logDir, "/tmp/t3/userdata/logs");
       assert.equal(environment.browserArtifactsDir, "/tmp/t3/userdata/browser-artifacts");

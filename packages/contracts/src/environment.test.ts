@@ -28,16 +28,6 @@ describe("ExecutionEnvironmentDescriptor", () => {
     expect(decodeDescriptor(descriptor).capabilities.pullRequests).toBeUndefined();
   });
 
-  it("treats a missing cursor-cloud runner capability as unsupported", () => {
-    expect(decodeDescriptor(descriptor).capabilities.cursorCloudRunner).toBeUndefined();
-    expect(
-      decodeDescriptor({
-        ...descriptor,
-        capabilities: { ...descriptor.capabilities, cursorCloudRunner: true },
-      }).capabilities.cursorCloudRunner,
-    ).toBe(true);
-  });
-
   it("preserves an advertised pull-request capability", () => {
     expect(
       decodeDescriptor({
@@ -70,5 +60,21 @@ describe("ExecutionEnvironmentDescriptor", () => {
         },
       }).capabilities.fileAttachments,
     ).toEqual({ maxUploadBytes: 50 * 1024 * 1024 });
+  });
+
+  it("treats missing server-resolved command context as unsupported", () => {
+    expect(decodeDescriptor(descriptor).capabilities.serverResolvedCommandContext).toBeUndefined();
+  });
+
+  it("preserves advertised server-resolved command context", () => {
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: {
+          ...descriptor.capabilities,
+          serverResolvedCommandContext: true,
+        },
+      }).capabilities.serverResolvedCommandContext,
+    ).toBe(true);
   });
 });

@@ -9,6 +9,7 @@ vi.mock("./branding", () => branding);
 
 import { APP_VERSION } from "./branding";
 import {
+  appendVersionMismatchHint,
   buildVersionMismatchDismissalKey,
   dismissServerUpdateFailure,
   dismissVersionMismatch,
@@ -22,7 +23,7 @@ import {
 } from "./versionSkew";
 
 const MISMATCH_HINT =
-  "Version mismatch. Try syncing the client and server to the same Base3Router version.";
+  "Version mismatch. Try syncing the client and server to the same T3 Code version.";
 
 describe("versionSkew", () => {
   beforeEach(() => {
@@ -173,6 +174,14 @@ describe("versionSkew", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  it("appends a hint to connection errors when the server is behind", () => {
+    const mismatch = resolveVersionMismatch("0.0.33");
+
+    expect(appendVersionMismatchHint("Socket closed.", mismatch)).toBe(
+      `Socket closed. Hint: ${MISMATCH_HINT}`,
+    );
   });
 
   it("reads desktop-managed update capabilities from config descriptors", () => {

@@ -1,4 +1,4 @@
-import { ProviderInteractionMode, RuntimeMode, type ModelRouterMode } from "@t3tools/contracts";
+import { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import { memo, type ReactNode } from "react";
 import { EllipsisIcon } from "lucide-react";
 import {
@@ -15,8 +15,12 @@ import { useComposerMenuState } from "./useComposerMenuState";
 
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
   interactionMode: ProviderInteractionMode;
+  routingMode: "auto" | "manual";
   runtimeMode: RuntimeMode;
-  routingMode: ModelRouterMode;
+  runtimeModeOptions: ReadonlyArray<{
+    readonly mode: RuntimeMode;
+    readonly label: string;
+  }>;
   showInteractionModeToggle: boolean;
   traitsMenuContent?: ReactNode;
   size?: "sm" | "xs";
@@ -27,8 +31,8 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
    */
   hidden?: boolean;
   onToggleInteractionMode: () => void;
+  onRoutingModeChange: (mode: "auto" | "manual") => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
-  onRoutingModeChange: (mode: ModelRouterMode) => void;
 }) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const size = props.size ?? "sm";
@@ -51,17 +55,6 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         <ComposerControlIcon icon={EllipsisIcon} size={size} />
       </MenuTrigger>
       <MenuPopup align="start" {...composerFloatingLayerProps}>
-        <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Model</div>
-        <MenuRadioGroup
-          value={props.routingMode}
-          onValueChange={(value) => {
-            if (value === "auto" || value === "manual") props.onRoutingModeChange(value);
-          }}
-        >
-          <MenuRadioItem value="auto">Auto Route</MenuRadioItem>
-          <MenuRadioItem value="manual">Manual</MenuRadioItem>
-        </MenuRadioGroup>
-        <MenuDivider />
         {props.traitsMenuContent ? (
           <>
             {props.traitsMenuContent}
@@ -84,6 +77,18 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             <MenuDivider />
           </>
         ) : null}
+        <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Route</div>
+        <MenuRadioGroup
+          value={props.routingMode}
+          onValueChange={(value) => {
+            if (value !== "auto" && value !== "manual") return;
+            props.onRoutingModeChange(value);
+          }}
+        >
+          <MenuRadioItem value="manual">Manual</MenuRadioItem>
+          <MenuRadioItem value="auto">Auto</MenuRadioItem>
+        </MenuRadioGroup>
+        <MenuDivider />
         <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Access</div>
         <MenuRadioGroup
           value={props.runtimeMode}
@@ -92,10 +97,11 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             props.onRuntimeModeChange(value as RuntimeMode);
           }}
         >
-          <MenuRadioItem value="approval-required">Supervised</MenuRadioItem>
-          <MenuRadioItem value="auto-accept-edits">Auto-accept edits</MenuRadioItem>
-          <MenuRadioItem value="auto">Access Auto</MenuRadioItem>
-          <MenuRadioItem value="full-access">Full access</MenuRadioItem>
+          {props.runtimeModeOptions.map((option) => (
+            <MenuRadioItem key={option.mode} value={option.mode}>
+              {option.label}
+            </MenuRadioItem>
+          ))}
         </MenuRadioGroup>
       </MenuPopup>
     </Menu>

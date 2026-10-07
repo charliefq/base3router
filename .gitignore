@@ -19,7 +19,6 @@ release-mock/
 .idea/
 apps/web/.playwright
 apps/web/playwright-report
-apps/web/playwright-results
 apps/web/src/components/__screenshots__
 .vitest-*
 __screenshots__/
@@ -28,6 +27,7 @@ squashfs-root/
 .vercel
 .gstack/
 .plans/
+/audits/
 dist-electron/
 .electron-runtime/
 .showcase/

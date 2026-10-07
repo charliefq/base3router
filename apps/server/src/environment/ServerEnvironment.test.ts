@@ -6,7 +6,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 
@@ -35,7 +34,7 @@ const makeServerEnvironmentLayer = (baseDir: string) =>
 const emptySecretStoreLayer = Layer.succeed(
   ServerSecretStore.ServerSecretStore,
   ServerSecretStore.ServerSecretStore.of({
-    get: () => Effect.succeed(Option.none()),
+    get: () => Effect.succeedNone,
     set: () => Effect.void,
     create: () => Effect.void,
     getOrCreateRandom: () => Effect.succeed(new Uint8Array()),
@@ -60,7 +59,6 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
     otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
     otlpLogsExport: DEFAULT_SIGNAL_EXPORT,
-    otlpServiceName: "t3-server",
     otelEnvironment: OtelEnvironment.none,
     cwd: process.cwd(),
     baseDir,
@@ -177,16 +175,12 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.pullRequests).toBe(true);
       expect(second.capabilities.requiredWorktreeBootstrap).toBe(true);
       expect(second.capabilities.usagePriceOverrides).toBe(true);
-      expect(second.capabilities.dispatcherRoutePreview).toBe(false);
-      expect(second.capabilities.dispatcherTaskHandoff).toBe(false);
       expect(second.capabilities.threadActiveReorder).toBe(true);
       expect(second.capabilities.threadTitleRegeneration).toBe(true);
       expect(second.capabilities.threadPullRequests).toBe(true);
       expect(second.capabilities.threadPullRequestLinking).toBe(true);
+      expect(second.capabilities.serverResolvedCommandContext).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);
-      expect(second.capabilities.openRouterGuidance?.configuredGuidanceMode).toBe("off");
-      expect(second.capabilities.openRouterGuidance?.credentialStatus).toBe("missing");
-      expect(second.capabilities.openRouterGuidance?.marketPriorFreshness).toBe("unknown");
     }),
   );
 
@@ -262,14 +256,9 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(withFd.capabilities.serverSelfUpdate).toBe("desktop-managed");
       expect(withFd.capabilities.desktopAppUpdate).toBe(true);
       expect(withFd.capabilities.serverSelfUpdateProgress).toBe(true);
-
-      const dispatcherEnabled = yield* describeWith({ dispatcherEnabled: true });
-      expect(dispatcherEnabled.capabilities.dispatcherRoutePreview).toBe(true);
-      expect(dispatcherEnabled.capabilities.dispatcherTaskHandoff).toBe(true);
-      expect(dispatcherEnabled.capabilities.workflowOs).toBe(true);
-      expect(dispatcherEnabled.capabilities.cursorCloudRunner).toBe(false);
-      expect(withFd.capabilities.workflowOs).toBe(false);
-      expect(withFd.capabilities.serverUpdateThreadContinuation).toBe(true);
+      // v2 recovery terminalizes running runs on restart, so continuation
+      // stays unadvertised until the v2 runtime carries the markers.
+      expect(withFd.capabilities.serverUpdateThreadContinuation).toBeUndefined();
 
       const withoutFd = yield* describeWith({ mode: "desktop" });
       expect(withoutFd.capabilities.serverSelfUpdate).toBe("desktop-managed");

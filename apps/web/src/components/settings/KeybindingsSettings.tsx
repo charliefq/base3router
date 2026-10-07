@@ -283,7 +283,7 @@ function UnknownWhenVariableWarning({
 
   return (
     <WarningTooltipIcon label={label} focusable={focusable} className="size-4.5">
-      Base3Router does not recognize this condition yet. It can still be saved, but it may not match
+      T3 Code does not recognize this condition yet. It can still be saved, but it may not match
       unless the runtime provides it.
     </WarningTooltipIcon>
   );
@@ -768,7 +768,8 @@ function useKeybindingRowEditor({
   };
 
   const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Tab") return;
+    // Tab is recorded like any key while recording; after that it moves focus on.
+    if (event.key === "Tab" && !isRecording) return;
     event.preventDefault();
     if (event.key === "Escape") {
       setDraft({ keyDraft: row.key, isRecording: false });
@@ -1083,7 +1084,8 @@ function useNewKeybindingDraft({
   };
 
   const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Tab") return;
+    // Tab is recorded like any key while recording; after that it moves focus on.
+    if (event.key === "Tab" && !isRecording) return;
     event.preventDefault();
     if (event.key === "Escape") {
       setDraft({ keyDraft: "", isRecording: false });
@@ -1315,8 +1317,8 @@ function BrowserKeybindingNotice() {
     <div className="flex items-center gap-2 px-3 py-2.5 text-xs leading-normal text-muted-foreground sm:px-4">
       <TriangleAlertIcon className="size-3.5 shrink-0 text-warning" aria-hidden />
       <span>
-        Some shortcuts may be claimed by the browser before Base3Router sees them. Use the desktop
-        app for better keybinding support.
+        Some shortcuts may be claimed by the browser before T3 Code sees them. Use the desktop app
+        for better keybinding support.
       </span>
     </div>
   );
@@ -1325,7 +1327,7 @@ function BrowserKeybindingNotice() {
 export function KeybindingsSettingsPanel() {
   // The representative environment supplies the displayed bindings; edits
   // fan out to every connected environment in the selection, so one
-  // shortcut change reaches each machine the user runs Base3Router on.
+  // shortcut change reaches each machine the user runs T3 Code on.
   const { environment: primaryEnvironment, connectedEnvironments } = useSettingsScope();
   const serverKeybindings = primaryEnvironment?.serverConfig?.keybindings;
   const keybindings = useMemo(

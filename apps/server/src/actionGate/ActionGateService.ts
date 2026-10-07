@@ -1,3 +1,4 @@
+import * as NodeCrypto from "node:crypto";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -15,12 +16,11 @@ import {
   ActionGateDecision,
   ActionGateError,
   ActionGovernanceSnapshotV0,
-  ActionId,
+  ActionIdempotencyKey,
   MODEL_ROUTER_UNKNOWN_METRIC,
   ACTION_GATE_POLICY_VERSION,
   ProjectId,
   ThreadId,
-  TurnId,
   type ActionApprovalStatus,
   type ActionAuditEventV0,
   type ActionGateRespondApprovalRequest,
@@ -34,16 +34,8 @@ import {
   defaultDecisionForRisk,
   TERMINAL_APPROVAL_STATUSES,
 } from "@t3tools/shared/actionGate";
-import { buildExecutionPlan } from "@t3tools/shared/executionPlan";
-import {
-  FIRST_PARTY_DEVICE_TOOLS,
-  FIRST_PARTY_PREVIEW_TOOLS,
-  FIRST_PARTY_PULL_REQUEST_TOOLS,
-  firstPartyMcpCatalog,
-} from "@t3tools/shared/mcpCatalog";
-import { routeMcp } from "@t3tools/shared/mcpRouter";
-import { routeSkills } from "@t3tools/shared/skillRouter";
 import { PersistenceDecodeError, PersistenceSqlError } from "../persistence/Errors.ts";
+import { planMcpToolAction } from "./mcpToolPlan.ts";
 
 const ApprovalRow = Schema.Struct({
   approvalId: Schema.String,
@@ -77,11 +69,26 @@ const uniqueConstraintConflict = (cause: unknown): boolean => {
   return /UNIQUE|unique constraint|SQLITE_CONSTRAINT/i.test(text);
 };
 
+const successorPending = (record: ActionApprovalRecord): ActionApprovalRecord => {
+  const retryId = NodeCrypto.randomUUID();
+  const { decidedAt: _decidedAt, consumedAt: _consumedAt, ...rest } = record;
+  return {
+    ...rest,
+    approvalId: ActionApprovalId.make(`apr-${retryId}`),
+    status: "pending",
+    reasonCodes: ["APPROVAL_REQUIRED"],
+    ...(record.idempotencyKey !== undefined
+      ? { idempotencyKey: ActionIdempotencyKey.make(`ask-retry:${retryId}`) }
+      : {}),
+  };
+};
+
 export class ActionGateService extends Context.Service<
   ActionGateService,
   {
     readonly putApproval: (
       record: ActionApprovalRecord,
+      options?: { readonly retry?: boolean },
     ) => Effect.Effect<
       ActionApprovalRecord,
       PersistenceSqlError | PersistenceDecodeError | ActionGateError
@@ -133,6 +140,7 @@ export class ActionGateService extends Context.Service<
       readonly args: unknown;
       readonly environmentId: EnvironmentId;
       readonly threadId: ThreadId;
+      readonly retry?: boolean;
     }) => Effect.Effect<
       ActionGateDecision,
       PersistenceSqlError | PersistenceDecodeError | ActionGateError
@@ -219,6 +227,23 @@ const make = Effect.gen(function* () {
       }),
     );
 
+  const loadConsumedByFingerprint = (environmentId: EnvironmentId, fingerprint: string) =>
+    sql<typeof ApprovalRow.Type>`
+      SELECT approval_id AS "approvalId", payload_json AS "payloadJson"
+      FROM action_gate_approvals
+      WHERE environment_id = ${environmentId}
+        AND fingerprint = ${fingerprint}
+        AND status = 'consumed'
+      ORDER BY created_at ASC, approval_id ASC
+      LIMIT 1
+    `.pipe(
+      Effect.flatMap((rows) => {
+        const row = rows[0];
+        if (row === undefined) return Effect.succeed(Option.none());
+        return decodeRow(row.payloadJson).pipe(Effect.map(Option.some));
+      }),
+    );
+
   const appendAudit: ActionGateService["Service"]["appendAudit"] = (event) =>
     sql`
       INSERT INTO action_gate_audit (event_id, environment_id, plan_id, recorded_at, payload_json)
@@ -251,7 +276,7 @@ const make = Effect.gen(function* () {
       });
     });
 
-  const putApproval: ActionGateService["Service"]["putApproval"] = (record) =>
+  const putApproval: ActionGateService["Service"]["putApproval"] = (record, options) =>
     sql
       .withTransaction(
         Effect.gen(function* () {
@@ -277,6 +302,47 @@ const make = Effect.gen(function* () {
             });
           }
           if (TERMINAL_APPROVAL_STATUSES.has(existing.status)) {
+            if (existing.status === "consumed" || options?.retry !== true) {
+              return yield* new ActionGateError({
+                reason: "conflict",
+                detail:
+                  existing.status === "consumed"
+                    ? `Approval cannot be resurrected from ${existing.status}.`
+                    : `Approval cannot be resurrected from ${existing.status} without an explicit retry.`,
+              });
+            }
+            const consumed = yield* loadConsumedByFingerprint(
+              record.environmentId,
+              record.fingerprint,
+            );
+            if (Option.isSome(consumed)) {
+              return yield* new ActionGateError({
+                reason: "conflict",
+                detail: "Approval cannot be resurrected from consumed.",
+              });
+            }
+            const successor = successorPending(record);
+            const successorJson = yield* encodeApproval(successor);
+            const retried = yield* sql<{ approvalId: string }>`
+              INSERT INTO action_gate_approvals (
+                approval_id, environment_id, fingerprint, status, idempotency_key,
+                created_at, expires_at, consumed_at, payload_json
+              ) VALUES (
+                ${successor.approvalId}, ${successor.environmentId}, ${successor.fingerprint},
+                ${successor.status}, ${successor.idempotencyKey ?? null}, ${successor.createdAt},
+                ${successor.expiresAt}, ${successor.consumedAt ?? null}, ${successorJson}
+              )
+              ON CONFLICT DO NOTHING
+              RETURNING approval_id AS "approvalId"
+            `;
+            if (retried[0] !== undefined) return successor;
+            const live = yield* loadLiveByFingerprint(
+              successor.environmentId,
+              successor.fingerprint,
+            );
+            if (Option.isSome(live) && live.value.fingerprint === successor.fingerprint) {
+              return live.value;
+            }
             return yield* new ActionGateError({
               reason: "conflict",
               detail: `Approval cannot be resurrected from ${existing.status}.`,
@@ -365,10 +431,7 @@ const make = Effect.gen(function* () {
               });
             }
             if (record.status === "expired") {
-              return yield* new ActionGateError({
-                reason: "expired",
-                detail: "Approval expired before a decision was recorded.",
-              });
+              return record;
             }
             return yield* new ActionGateError({
               reason: "conflict",
@@ -438,6 +501,12 @@ const make = Effect.gen(function* () {
         }),
       );
       yield* notifyWaiters(next.approvalId);
+      if (next.status === "expired") {
+        return yield* new ActionGateError({
+          reason: "expired",
+          detail: "Approval expired before a decision was recorded.",
+        });
+      }
       return next;
     }).pipe(Effect.mapError(toError("ActionGateService.respond")));
 
@@ -580,10 +649,20 @@ const make = Effect.gen(function* () {
             detail: "One-time approval already consumed.",
           });
         }
-        return yield* consume(approvalId, fingerprint, nowIso);
+        return yield* consume(approvalId, fingerprint, DateTime.formatIso(yield* DateTime.now));
       }
       return yield* failureFromStatus(settled);
-    }).pipe(Effect.mapError(toError("ActionGateService.waitForAuthorized")));
+    }).pipe(
+      Effect.mapError(toError("ActionGateService.waitForAuthorized")),
+      Effect.onInterrupt(() =>
+        Effect.gen(function* () {
+          if (remainingWaiters(approvalId) > 0) return;
+          const current = yield* getApproval(approvalId);
+          if (Option.isNone(current) || current.value.status !== "pending") return;
+          yield* respond({ approvalId, decision: "cancel" }, nowIso);
+        }).pipe(Effect.ignore),
+      ),
+    );
 
   const countStatus = (environmentId: EnvironmentId, status: string) =>
     sql<typeof CountRow.Type>`
@@ -650,53 +729,19 @@ const make = Effect.gen(function* () {
       } satisfies ActionGovernanceSnapshotV0;
     }).pipe(Effect.mapError(toPersistenceError("ActionGateService.governance")));
 
-  const FIRST_PARTY_TOOLS = [
-    ...FIRST_PARTY_PREVIEW_TOOLS,
-    ...FIRST_PARTY_DEVICE_TOOLS,
-    ...FIRST_PARTY_PULL_REQUEST_TOOLS,
-  ];
-
   const authorizeTool: ActionGateService["Service"]["authorizeTool"] = (input) =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;
       const nowIso = DateTime.formatIso(now);
       const expiresAt = DateTime.formatIso(DateTime.add(now, { minutes: 5 }));
-      const spec = FIRST_PARTY_TOOLS.find((tool) => tool.name === input.toolName);
-      const serverId =
-        spec?.capability === "device"
-          ? "t3-device"
-          : spec?.capability === "pull-requests"
-            ? "t3-pull-requests"
-            : "t3-preview";
-      const toolId = `${serverId}/${input.toolName}`;
-      const skillRoute = routeSkills({ mode: "auto", nowIso, catalog: [] });
-      const mcpRoute = routeMcp({
-        mode: "auto",
-        nowIso,
-        catalog: firstPartyMcpCatalog(nowIso),
-      });
-      const plan = buildExecutionPlan({
-        turnId: TurnId.make(input.threadId),
-        threadId: input.threadId,
-        projectId: ProjectId.make("unbound"),
+      const { spec, action, plan } = planMcpToolAction({
+        toolName: input.toolName,
+        args: input.args,
         environmentId: input.environmentId,
+        threadId: input.threadId,
         nowIso,
         expiresAt,
-        modelRoute: null,
-        skillRoute,
-        mcpRoute,
-        actions: [
-          {
-            serverId,
-            toolId,
-            arguments: input.args,
-            schemaDigest: spec?.name ?? "unknown",
-            riskClass: spec?.riskClass ?? "unclassified",
-            sideEffectClass: spec?.sideEffectClass ?? "unknown",
-          },
-        ],
       });
-      const action = plan.actions[0];
       if (action === undefined) {
         return yield* new ActionGateError({
           reason: "invalid",
@@ -768,6 +813,7 @@ const make = Effect.gen(function* () {
           argumentSummary: argumentSummary(input.args),
           askExplanation: "ActionGate requires a one-time exact-action approval before execution.",
         }),
+        { retry: input.retry === true },
       );
       yield* appendAudit(
         makeActionAuditEvent({
@@ -807,56 +853,3 @@ const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ActionGateService, make);
-
-const emptyGovernance = (environmentId: EnvironmentId): ActionGovernanceSnapshotV0 => ({
-  environmentId,
-  policyVersion: ACTION_GATE_POLICY_VERSION,
-  configuredSkillCount: 0,
-  enabledSkillCount: 0,
-  configuredMcpServerCount: 0,
-  enabledMcpServerCount: 0,
-  degradedMcpServerCount: 0,
-  pendingApprovalCount: 0,
-  deniedCount: 0,
-  expiredCount: 0,
-  recentOutcomes: [],
-  preventedUnsafeCount: 0,
-  knownCostUsd: MODEL_ROUTER_UNKNOWN_METRIC,
-  estimatedCostUsd: MODEL_ROUTER_UNKNOWN_METRIC,
-  compliance: "unknown",
-  pending: [],
-});
-
-export const layerTest = Layer.succeed(
-  ActionGateService,
-  ActionGateService.of({
-    putApproval: (record) => Effect.succeed(record),
-    getApproval: () => Effect.succeed(Option.none()),
-    respond: () =>
-      Effect.fail(
-        new ActionGateError({ reason: "not_found", detail: "Test ActionGate has no approvals." }),
-      ),
-    consume: () =>
-      Effect.fail(
-        new ActionGateError({ reason: "not_found", detail: "Test ActionGate has no approvals." }),
-      ),
-    waitForAuthorized: () =>
-      Effect.fail(
-        new ActionGateError({ reason: "not_found", detail: "Test ActionGate has no approvals." }),
-      ),
-    appendAudit: () => Effect.void,
-    governance: (environmentId) => Effect.succeed(emptyGovernance(environmentId)),
-    authorizeTool: () =>
-      Effect.succeed({
-        policyVersion: ACTION_GATE_POLICY_VERSION,
-        actionId: ActionId.make("action-test"),
-        decision: "ALLOW",
-        riskClass: "read-only-local",
-        sideEffectClass: "read",
-        fingerprint: ActionFingerprint.make("0".repeat(64)),
-        reasonCodes: ["ACTION_ALLOWED"],
-        explanation: "Test ActionGate allows tools.",
-        requiresApproval: false,
-      }),
-  }),
-);

@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./composerThreadItems": {
+      "types": "./src/composerThreadItems.ts",
+      "default": "./src/composerThreadItems.ts"
+    },
+    "./handoff": {
+      "types": "./src/handoff.ts",
+      "default": "./src/handoff.ts"
+    },
     "./device/stream": {
       "types": "./src/device/stream.ts",
       "default": "./src/device/stream.ts"
@@ -23,9 +31,9 @@
       "types": "./src/projectFaviconCache.ts",
       "default": "./src/projectFaviconCache.ts"
     },
-    "./pending-requests": {
-      "types": "./src/pendingRequests.ts",
-      "default": "./src/pendingRequests.ts"
+    "./user-message": {
+      "types": "./src/userMessage.ts",
+      "default": "./src/userMessage.ts"
     },
     "./connection": {
       "types": "./src/connection/index.ts",
@@ -87,18 +95,6 @@
       "types": "./src/operations/projects.ts",
       "default": "./src/operations/projects.ts"
     },
-    "./dispatcher": {
-      "types": "./src/dispatcher.ts",
-      "default": "./src/dispatcher.ts"
-    },
-    "./cursor-cloud": {
-      "types": "./src/cursorCloud.ts",
-      "default": "./src/cursorCloud.ts"
-    },
-    "./handoff": {
-      "types": "./src/handoff.ts",
-      "default": "./src/handoff.ts"
-    },
     "./platform": {
       "types": "./src/platform/index.ts",
       "default": "./src/platform/index.ts"
@@ -110,6 +106,10 @@
     "./voice-input": {
       "types": "./src/voice-input/index.ts",
       "default": "./src/voice-input/index.ts"
+    },
+    "./t3ToolSummary": {
+      "types": "./src/t3ToolSummary.ts",
+      "default": "./src/t3ToolSummary.ts"
     },
     "./relay": {
       "types": "./src/relay/index.ts",
@@ -131,6 +131,10 @@
       "types": "./src/textPaste.ts",
       "default": "./src/textPaste.ts"
     },
+    "./delayed-status": {
+      "types": "./src/delayedStatus.ts",
+      "default": "./src/delayedStatus.ts"
+    },
     "./state/connections": {
       "types": "./src/state/connections.ts",
       "default": "./src/state/connections.ts"
@@ -147,6 +151,18 @@
       "types": "./src/state/git.ts",
       "default": "./src/state/git.ts"
     },
+    "./state/governance": {
+      "types": "./src/state/governance.ts",
+      "default": "./src/state/governance.ts"
+    },
+    "./state/workflow": {
+      "types": "./src/state/workflow.ts",
+      "default": "./src/state/workflow.ts"
+    },
+    "./state/item-support": {
+      "types": "./src/state/itemSupport.ts",
+      "default": "./src/state/itemSupport.ts"
+    },
     "./state/models": {
       "types": "./src/state/models.ts",
       "default": "./src/state/models.ts"
@@ -155,6 +171,10 @@
       "types": "./src/state/orchestration.ts",
       "default": "./src/state/orchestration.ts"
     },
+    "./state/orchestration-v2-projection": {
+      "types": "./src/state/orchestrationV2Projection.ts",
+      "default": "./src/state/orchestrationV2Projection.ts"
+    },
     "./state/presentation": {
       "types": "./src/state/presentation.ts",
       "default": "./src/state/presentation.ts"
@@ -162,14 +182,6 @@
     "./state/device": {
       "types": "./src/state/device.ts",
       "default": "./src/state/device.ts"
-    },
-    "./state/dispatcher": {
-      "types": "./src/state/dispatcher.ts",
-      "default": "./src/state/dispatcher.ts"
-    },
-    "./state/workflow": {
-      "types": "./src/state/workflow.ts",
-      "default": "./src/state/workflow.ts"
     },
     "./state/deviceHubAccess": {
       "types": "./src/state/deviceHubAccess.ts",
@@ -239,6 +251,10 @@
       "types": "./src/state/threads.ts",
       "default": "./src/state/threads.ts"
     },
+    "./state/subagent-display": {
+      "types": "./src/state/subagentDisplay.ts",
+      "default": "./src/state/subagentDisplay.ts"
+    },
     "./state/subagentRuntime": {
       "types": "./src/state/subagentRuntime.ts",
       "default": "./src/state/subagentRuntime.ts"
@@ -247,6 +263,34 @@
       "types": "./src/state/threadSort.ts",
       "default": "./src/state/threadSort.ts"
     },
+    "./state/thread-relationships": {
+      "types": "./src/state/threadRelationships.ts",
+      "default": "./src/state/threadRelationships.ts"
+    },
+    "./state/thread-checkpoints": {
+      "types": "./src/state/threadCheckpoints.ts",
+      "default": "./src/state/threadCheckpoints.ts"
+    },
+    "./state/thread-execution": {
+      "types": "./src/state/threadExecution.ts",
+      "default": "./src/state/threadExecution.ts"
+    },
+    "./state/thread-requests": {
+      "types": "./src/state/threadRequests.ts",
+      "default": "./src/state/threadRequests.ts"
+    },
+    "./state/thread-workflows": {
+      "types": "./src/state/threadWorkflows.ts",
+      "default": "./src/state/threadWorkflows.ts"
+    },
+    "./state/composer-dispatch": {
+      "types": "./src/state/composerDispatch.ts",
+      "default": "./src/state/composerDispatch.ts"
+    },
+    "./state/thread-subagents": {
+      "types": "./src/state/threadSubagents.ts",
+      "default": "./src/state/threadSubagents.ts"
+    },
     "./state/thread-settled": {
       "types": "./src/state/threadSettled.ts",
       "default": "./src/state/threadSettled.ts"
@@ -254,6 +298,10 @@
     "./state/thread-search": {
       "types": "./src/state/threadSearch.ts",
       "default": "./src/state/threadSearch.ts"
+    },
+    "./state/turn-item-presentation": {
+      "types": "./src/state/turnItemPresentation.ts",
+      "default": "./src/state/turnItemPresentation.ts"
     },
     "./state/vcs": {
       "types": "./src/state/vcs.ts",
@@ -310,6 +358,14 @@
     "./device/model": {
       "types": "./src/device/model.ts",
       "default": "./src/device/model.ts"
+    },
+    "./device/duo-viewer": {
+      "types": "./src/device/duoViewer.ts",
+      "default": "./src/device/duoViewer.ts"
+    },
+    "./device/duo-control": {
+      "types": "./src/device/duoControl.ts",
+      "default": "./src/device/duoControl.ts"
     }
   },
   "scripts": {
