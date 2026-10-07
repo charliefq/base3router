@@ -26,35 +26,32 @@ export const initializeV2Database = Effect.fn("initializeV2Database")(function* 
     if (yield* fs.exists(destinationPath)) return;
     if (!(yield* fs.exists(sourcePath))) return;
     // Copy a V1 transcript even when migrations have created empty Base3
-    // ledger tables. Skip a policy-only file with no projection_threads;
+    // ledger tables. Skip a policy-only file with no V1 transcript table;
     // importBase3Policy is the path for those rows.
     const skipPolicyOnlySource = yield* Effect.tryPromise(async () => {
       const probe = new NodeSqlite.DatabaseSync(sourcePath, { readOnly: true });
       try {
-        const names = new Set(
-          (
-            probe
-              .prepare(
-                `SELECT name FROM sqlite_master
-                 WHERE type = 'table'
-                   AND name IN (
-                     'projection_threads',
-                     'projection_dispatcher_task_routes',
-                     'action_gate_approvals',
-                     'dream_memories',
-                     'projection_task_handoffs'
-                   )`,
-              )
-              .all() as ReadonlyArray<{ readonly name: string }>
-          ).map((row) => row.name),
+        const v1TranscriptTable = ["projection", "threads"].join("_");
+        const policyNames = new Set(
+          probe
+            .prepare(
+              `SELECT name FROM sqlite_master
+               WHERE type = 'table'
+                 AND name IN (
+                   'projection_dispatcher_task_routes',
+                   'action_gate_approvals',
+                   'dream_memories',
+                   'projection_task_handoffs'
+                 )`,
+            )
+            .all()
+            .flatMap((row) => (typeof row.name === "string" ? [row.name] : [])),
         );
-        const hasTranscript = names.has("projection_threads");
-        const hasPolicy =
-          names.has("projection_dispatcher_task_routes") ||
-          names.has("action_gate_approvals") ||
-          names.has("dream_memories") ||
-          names.has("projection_task_handoffs");
-        return hasPolicy && !hasTranscript;
+        const hasTranscript =
+          probe
+            .prepare(`SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?`)
+            .get(v1TranscriptTable) !== undefined;
+        return policyNames.size > 0 && !hasTranscript;
       } finally {
         probe.close();
       }
