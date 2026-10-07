@@ -7,7 +7,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeProcess from "node:process";
-import { DatabaseSync } from "node:sqlite";
+import * as NodeSqlite from "node:sqlite";
 
 const root = NodePath.resolve(import.meta.dirname, "..");
 const chrome = NodeProcess.env.CHROME_PATH ?? "/usr/local/bin/google-chrome";
@@ -117,7 +117,7 @@ function pinFakeDiscovery(
 }
 
 function latestBindings(homeDir: string) {
-  const db = new DatabaseSync(sqlitePath(homeDir));
+  const db = new NodeSqlite.DatabaseSync(sqlitePath(homeDir));
   try {
     return db
       .prepare(
@@ -131,7 +131,7 @@ function latestBindings(homeDir: string) {
 }
 
 function countAuditKind(homeDir: string, kind: string) {
-  const db = new DatabaseSync(sqlitePath(homeDir));
+  const db = new NodeSqlite.DatabaseSync(sqlitePath(homeDir));
   try {
     const rows = db.prepare(`SELECT payload_json AS payloadJson FROM action_gate_audit`).all() as {
       payloadJson: string;
@@ -149,7 +149,7 @@ function countAuditKind(homeDir: string, kind: string) {
 }
 
 function memoryRows(homeDir: string) {
-  const db = new DatabaseSync(sqlitePath(homeDir));
+  const db = new NodeSqlite.DatabaseSync(sqlitePath(homeDir));
   try {
     return db
       .prepare(
@@ -165,7 +165,7 @@ function memoryRows(homeDir: string) {
 // expires_at column alone. Patch both so Grant fails closed. This is not a
 // user-facing journey and must not be presented as one.
 function expirePendingApprovals(homeDir: string) {
-  const db = new DatabaseSync(sqlitePath(homeDir));
+  const db = new NodeSqlite.DatabaseSync(sqlitePath(homeDir));
   try {
     const expired = "2000-01-01T00:00:00.000Z";
     const rows = db

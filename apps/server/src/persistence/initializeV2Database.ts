@@ -25,12 +25,46 @@ export const initializeV2Database = Effect.fn("initializeV2Database")(function* 
   yield* Effect.gen(function* () {
     if (yield* fs.exists(destinationPath)) return;
     if (!(yield* fs.exists(sourcePath))) return;
-    // The Base3 ledger creates its tables on every migrated file, including a
-    // V1 database that has not stored policy rows. Table presence is not a
-    // reason to drop the transcript. This backup keeps the legacy tables the
-    // importer reads and any policy rows already in the file. importBase3Policy
-    // copies policy into an existing V2 file and refuses a live T3 home, so
-    // startup cannot use it in place of the snapshot.
+    // Copy a V1 transcript even when migrations have created empty Base3
+    // ledger tables. Skip a policy-only file with no projection_threads;
+    // importBase3Policy is the path for those rows.
+    const skipPolicyOnlySource = yield* Effect.tryPromise(async () => {
+      const probe = new NodeSqlite.DatabaseSync(sourcePath, { readOnly: true });
+      try {
+        const names = new Set(
+          (
+            probe
+              .prepare(
+                `SELECT name FROM sqlite_master
+                 WHERE type = 'table'
+                   AND name IN (
+                     'projection_threads',
+                     'projection_dispatcher_task_routes',
+                     'action_gate_approvals',
+                     'dream_memories',
+                     'projection_task_handoffs'
+                   )`,
+              )
+              .all() as ReadonlyArray<{ readonly name: string }>
+          ).map((row) => row.name),
+        );
+        const hasTranscript = names.has("projection_threads");
+        const hasPolicy =
+          names.has("projection_dispatcher_task_routes") ||
+          names.has("action_gate_approvals") ||
+          names.has("dream_memories") ||
+          names.has("projection_task_handoffs");
+        return hasPolicy && !hasTranscript;
+      } finally {
+        probe.close();
+      }
+    });
+    if (skipPolicyOnlySource) {
+      yield* Effect.logWarning(
+        "Skipped copying a Base3Router policy database into V2. Import policy rows with importBase3Policy instead of the startup snapshot.",
+      );
+      return;
+    }
     const temporaryDirectory = yield* fs.makeTempDirectoryScoped({
       directory,
       prefix: ".v2-import-",

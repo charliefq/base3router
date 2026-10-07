@@ -31,10 +31,7 @@ import { deleteTaskHandoffsByThread } from "../dispatcher/Handoff.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
-import {
-  PolicyExecutionContext,
-  type PolicyExecutionContext as PolicyContext,
-} from "./executionContext.ts";
+import { PolicyExecutionContext } from "./executionContext.ts";
 import { classifyCommand, commandNeedsCapacity, type OperationClass } from "./operationPolicy.ts";
 
 const TERMINAL_RUN_STATUSES = [
