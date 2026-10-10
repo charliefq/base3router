@@ -8,8 +8,8 @@
  * Usage, from a clean worktree, with Node 24 on PATH:
  *   node scripts/bind-task-usage-accounting-report.mjs
  */
-import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
 
 const artifactDir = "/opt/cursor/artifacts";
 const sourcePath = `${artifactDir}/synthetic-accounting-report.json`;
@@ -17,23 +17,25 @@ const bindingPath = `${artifactDir}/task-4a-binding-report.json`;
 const testArgs = ["test", "run", "apps/server/src/policy/TaskUsageAccounting.test.ts"];
 const command = `vp ${testArgs.join(" ")}`;
 
-const git = (args) => execFileSync("git", args, { encoding: "utf8" }).trim();
+const git = (args) => NodeChildProcess.execFileSync("git", args, { encoding: "utf8" }).trim();
 
 const root = git(["rev-parse", "--show-toplevel"]);
 process.chdir(root);
 const testedCommitSha = git(["rev-parse", "HEAD"]);
-const porcelain = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" });
+const porcelain = NodeChildProcess.execFileSync("git", ["status", "--porcelain"], {
+  encoding: "utf8",
+});
 if (porcelain.length > 0) {
   process.stderr.write(`Refusing to bind a dirty tree:\n${porcelain}`);
   process.exit(1);
 }
 
-mkdirSync(artifactDir, { recursive: true });
-rmSync(sourcePath, { force: true });
-rmSync(bindingPath, { force: true });
+NodeFS.mkdirSync(artifactDir, { recursive: true });
+NodeFS.rmSync(sourcePath, { force: true });
+NodeFS.rmSync(bindingPath, { force: true });
 
 const startedAt = new Date().toISOString();
-execFileSync("vp", testArgs, { stdio: "inherit" });
+NodeChildProcess.execFileSync("vp", testArgs, { stdio: "inherit" });
 const finishedAt = new Date().toISOString();
 
 const sortKeys = (value) => {
@@ -48,7 +50,7 @@ const sortKeys = (value) => {
   return value;
 };
 
-const source = JSON.parse(readFileSync(sourcePath, "utf8"));
+const source = JSON.parse(NodeFS.readFileSync(sourcePath, "utf8"));
 if (source.label !== "SYNTHETIC_ACCOUNTING_VERIFIED" || source.synthetic !== true) {
   throw new Error("Cohort artifact is not the synthetic accounting report.");
 }
@@ -112,5 +114,5 @@ const binding = {
   sourceReport: source,
 };
 
-writeFileSync(bindingPath, `${JSON.stringify(binding, null, 2)}\n`);
+NodeFS.writeFileSync(bindingPath, `${JSON.stringify(binding, null, 2)}\n`);
 process.stdout.write(`${bindingPath}\n${testedCommitSha}\n`);
