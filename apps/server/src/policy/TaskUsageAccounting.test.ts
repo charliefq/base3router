@@ -1,6 +1,5 @@
 // Disposable SQLite files live under the OS temp directory.
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off
-import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -806,16 +805,13 @@ it.effect("accounts a synthetic cohort through provider ingestion", () =>
     expect(missing.totals.outputTokens).toBe(null);
     expect(missing.totalsComplete).toBe(false);
 
-    const sha = NodeChildProcess.execSync("git rev-parse HEAD", { cwd: "/workspace" })
-      .toString()
-      .trim();
     const report = {
       label: "SYNTHETIC_ACCOUNTING_VERIFIED",
       synthetic: true,
       notModelPerformance: true,
       notAutoVsManualComparison: true,
       baselineSha: "55a1ea4f496eadea161c0e88822b375e42a0f127",
-      commitSha: sha,
+      commitSha: null,
       definitions: {
         attempt: "One provider turn on a governed task tree.",
         snapshot:
@@ -855,10 +851,12 @@ it.effect("accounts a synthetic cohort through provider ingestion", () =>
       },
     };
     expect(report.observed).toEqual(report.expected);
-    NodeFS.mkdirSync("/opt/cursor/artifacts", { recursive: true });
-    NodeFS.writeFileSync(
-      "/opt/cursor/artifacts/synthetic-accounting-report.json",
-      `${JSON.stringify(report, null, 2)}\n`,
-    );
+    const artifactDir = "/opt/cursor/artifacts";
+    if (NodeFS.existsSync(artifactDir)) {
+      NodeFS.writeFileSync(
+        `${artifactDir}/synthetic-accounting-report.json`,
+        `${JSON.stringify(report, null, 2)}\n`,
+      );
+    }
   }),
 );

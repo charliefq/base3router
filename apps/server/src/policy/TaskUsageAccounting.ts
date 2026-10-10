@@ -13,14 +13,12 @@ import {
   TaskUsageReadError,
   ThreadId,
   measureTaskCohort,
-  mergeTaskUsage,
   summarizeTaskUsage,
   type OrchestrationV2DomainEvent,
   type TaskUsageAttempt,
   type TaskUsageBasis,
   type TaskUsageCohort,
   type TaskUsageContribution,
-  type TaskUsageNumbers,
   type TaskUsageSummary,
   type TurnTokenUsage,
 } from "@t3tools/contracts";
@@ -30,8 +28,6 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { taskStateFromUnknown } from "./TaskContract.ts";
-
-const UNSCOPED_ENVIRONMENT = "unscoped";
 
 const isTaskUsageReadError = Schema.is(TaskUsageReadError);
 const isEnvironmentAuthorizationError = Schema.is(EnvironmentAuthorizationError);
@@ -129,17 +125,6 @@ interface AttemptRow {
   readonly reported_cost_usd: number | null;
 }
 
-function numbersFrom(merged: TaskUsageContribution): TaskUsageNumbers {
-  return {
-    inputTokens: merged.inputTokens,
-    cachedInputTokens: merged.cachedInputTokens,
-    cacheCreationTokens: merged.cacheCreationTokens,
-    outputTokens: merged.outputTokens,
-    reasoningTokens: merged.reasoningTokens,
-    reportedCostUsd: merged.reportedCostUsd,
-  };
-}
-
 function attemptFromRow(row: AttemptRow): TaskUsageAttempt {
   return {
     providerTurnId: row.provider_turn_id,
@@ -167,130 +152,199 @@ export const recordTaskUsage = Effect.fn("TaskUsageAccounting.recordTaskUsage")(
   event: ProviderTurnEvent,
 ) {
   const sql = yield* SqlClient.SqlClient;
-  const seen = yield* sql<{ readonly event_id: string }>`
-    SELECT event_id FROM task_usage_events
-    WHERE environment_id = ${environmentId} AND event_id = ${event.id}
-    LIMIT 1
-  `;
-  if (seen.length > 0) return;
-
-  const threadRows = yield* sql<{ readonly payload_json: string }>`
-    SELECT payload_json FROM orchestration_v2_projection_threads
-    WHERE thread_id = ${event.threadId}
-    LIMIT 1
-  `;
-  const threadRow = threadRows[0];
-  if (threadRow === undefined) return;
-  const payload = yield* Effect.try({
-    try: () => JSON.parse(threadRow.payload_json) as unknown,
-    catch: () => threadRow.payload_json,
-  });
-  if (typeof payload === "string") return;
-  const state = taskStateFromUnknown(event.threadId, payload);
-  if (state.governance !== "required" || state.contract === null) return;
-
-  const runId = event.runId ?? null;
-  const messageRows =
-    runId === null
-      ? []
-      : yield* sql<{ readonly message_id: string }>`
-          SELECT message_id FROM orchestration_v2_projection_messages
-          WHERE thread_id = ${event.threadId} AND run_id = ${runId} AND role = 'user'
-          LIMIT 1
-        `;
-  const messageId = messageRows[0]?.message_id ?? null;
-  const providerInstanceId = event.providerInstanceId ?? null;
-  const existing = yield* sql<AttemptRow>`
-    SELECT * FROM task_usage_attempts
-    WHERE environment_id = ${environmentId} AND provider_turn_id = ${event.payload.id}
-    LIMIT 1
-  `;
-  const current = existing[0];
-  const siblings = yield* sql<{ readonly provider_instance_id: string | null }>`
-    SELECT provider_instance_id FROM task_usage_attempts
-    WHERE environment_id = ${environmentId}
-      AND root_thread_id = ${state.rootThreadId}
-      AND provider_turn_id <> ${event.payload.id}
-      AND (
-        (${messageId} IS NOT NULL AND message_id = ${messageId})
-        OR (
-          ${messageId} IS NULL
-          AND thread_id = ${event.threadId}
-          AND run_id IS NOT DISTINCT FROM ${runId}
-        )
-      )
-  `;
-  const role =
-    current?.attempt_role ??
-    (siblings.length === 0
-      ? "primary"
-      : siblings.some(
-            (row) =>
-              row.provider_instance_id !== null && row.provider_instance_id !== providerInstanceId,
-          )
-        ? "failover"
-        : "retry");
-  const previous =
-    current === undefined
-      ? null
-      : {
-          inputTokens: current.input_tokens,
-          cachedInputTokens: current.cached_input_tokens,
-          cacheCreationTokens: current.cache_creation_tokens,
-          outputTokens: current.output_tokens,
-          reasoningTokens: current.reasoning_tokens,
-          reportedCostUsd: current.reported_cost_usd,
-          usageStatus: current.usage_status,
-        };
+  const next = contributionFromTurn(event.payload);
   const basis = event.payload.usageAccounting ?? "snapshot";
-  const updatedAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
-  const merged = mergeTaskUsage(previous, contributionFromTurn(event.payload), basis);
-  const stored = numbersFrom(merged);
+  const runId = event.runId ?? null;
+  const providerInstanceId = event.providerInstanceId ?? null;
+  const updatedAt = DateTime.formatIso(event.occurredAt);
+  // One statement. A second yield inside the projection transaction lets a
+  // concurrent approval response store the request before its turn item exists.
+  const messageId = sql`
+    (
+      SELECT message_id FROM orchestration_v2_projection_messages
+      WHERE thread_id = ${event.threadId}
+        AND run_id = ${runId}
+        AND role = 'user'
+        AND ${runId} IS NOT NULL
+      LIMIT 1
+    )
+  `;
   yield* sql`
     INSERT INTO task_usage_attempts (
-      environment_id, provider_turn_id, root_thread_id, thread_id, run_id, message_id,
-      contract_revision, provider_instance_id, status, attempt_role, usage_status, basis,
-      input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_tokens,
-      reported_cost_usd, updated_at
-    ) VALUES (
-      ${environmentId},
-      ${event.payload.id},
-      ${state.rootThreadId},
-      ${event.threadId},
-      ${runId},
-      ${messageId},
-      ${state.contract.revision},
-      ${providerInstanceId},
-      ${event.payload.status},
-      ${role},
-      ${merged.usageStatus},
-      ${basis},
-      ${stored.inputTokens},
-      ${stored.cachedInputTokens},
-      ${stored.cacheCreationTokens},
-      ${stored.outputTokens},
-      ${stored.reasoningTokens},
-      ${stored.reportedCostUsd},
-      ${updatedAt}
-    )
-    ON CONFLICT(environment_id, provider_turn_id) DO UPDATE SET
-      contract_revision = excluded.contract_revision,
-      status = excluded.status,
-      usage_status = excluded.usage_status,
-      basis = excluded.basis,
-      input_tokens = excluded.input_tokens,
-      cached_input_tokens = excluded.cached_input_tokens,
-      cache_creation_tokens = excluded.cache_creation_tokens,
-      output_tokens = excluded.output_tokens,
-      reasoning_tokens = excluded.reasoning_tokens,
-      reported_cost_usd = excluded.reported_cost_usd,
-      message_id = COALESCE(task_usage_attempts.message_id, excluded.message_id),
-      run_id = COALESCE(task_usage_attempts.run_id, excluded.run_id),
-      updated_at = excluded.updated_at
-  `;
-  yield* sql`
-    INSERT INTO task_usage_events (environment_id, event_id, provider_turn_id)
-    VALUES (${environmentId}, ${event.id}, ${event.payload.id})
+        environment_id, provider_turn_id, root_thread_id, thread_id, run_id, message_id,
+        contract_revision, provider_instance_id, status, attempt_role, usage_status, basis,
+        input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_tokens,
+        reported_cost_usd, source_event_id, updated_at
+      )
+      SELECT
+        ${environmentId},
+        ${event.payload.id},
+        COALESCE(json_extract(thread.payload_json, '$.lineage.rootThreadId'), ${event.threadId}),
+        ${event.threadId},
+        ${runId},
+        ${messageId},
+        json_extract(thread.payload_json, '$.taskContract.revision'),
+        ${providerInstanceId},
+        ${event.payload.status},
+        CASE
+          WHEN NOT EXISTS (
+            SELECT 1 FROM task_usage_attempts AS sibling
+            WHERE sibling.environment_id = ${environmentId}
+              AND sibling.root_thread_id = COALESCE(
+                json_extract(thread.payload_json, '$.lineage.rootThreadId'),
+                ${event.threadId}
+              )
+              AND sibling.provider_turn_id <> ${event.payload.id}
+              AND (
+                (${messageId} IS NOT NULL AND sibling.message_id = ${messageId})
+                OR (
+                  ${messageId} IS NULL
+                  AND sibling.thread_id = ${event.threadId}
+                  AND sibling.run_id IS NOT DISTINCT FROM ${runId}
+                )
+              )
+          ) THEN 'primary'
+          WHEN EXISTS (
+            SELECT 1 FROM task_usage_attempts AS sibling
+            WHERE sibling.environment_id = ${environmentId}
+              AND sibling.root_thread_id = COALESCE(
+                json_extract(thread.payload_json, '$.lineage.rootThreadId'),
+                ${event.threadId}
+              )
+              AND sibling.provider_turn_id <> ${event.payload.id}
+              AND sibling.provider_instance_id IS NOT NULL
+              AND (
+                ${providerInstanceId} IS NULL
+                OR sibling.provider_instance_id <> ${providerInstanceId}
+              )
+              AND (
+                (${messageId} IS NOT NULL AND sibling.message_id = ${messageId})
+                OR (
+                  ${messageId} IS NULL
+                  AND sibling.thread_id = ${event.threadId}
+                  AND sibling.run_id IS NOT DISTINCT FROM ${runId}
+                )
+              )
+          ) THEN 'failover'
+          ELSE 'retry'
+        END,
+        CASE
+          WHEN ${next.usageStatus} = 'unavailable' AND previous.provider_turn_id IS NOT NULL
+            THEN previous.usage_status
+          WHEN ${next.usageStatus} = 'unavailable' THEN 'unavailable'
+          WHEN ${basis} = 'snapshot'
+            OR previous.provider_turn_id IS NULL
+            OR previous.usage_status = 'unavailable'
+            THEN ${next.usageStatus}
+          WHEN previous.usage_status = 'complete' AND ${next.usageStatus} = 'complete'
+            THEN 'complete'
+          ELSE 'partial'
+        END,
+        ${basis},
+        CASE
+          WHEN ${next.usageStatus} = 'unavailable' AND previous.provider_turn_id IS NOT NULL
+            THEN previous.input_tokens
+          WHEN ${basis} = 'snapshot'
+            OR previous.provider_turn_id IS NULL
+            OR previous.usage_status = 'unavailable'
+            OR ${next.usageStatus} = 'unavailable'
+            THEN ${next.inputTokens}
+          WHEN previous.input_tokens IS NULL THEN ${next.inputTokens}
+          WHEN ${next.inputTokens} IS NULL THEN NULL
+          ELSE previous.input_tokens + ${next.inputTokens}
+        END,
+        CASE
+          WHEN ${next.usageStatus} = 'unavailable' AND previous.provider_turn_id IS NOT NULL
+            THEN previous.cached_input_tokens
+          WHEN ${basis} = 'snapshot'
+            OR previous.provider_turn_id IS NULL
+            OR previous.usage_status = 'unavailable'
+            OR ${next.usageStatus} = 'unavailable'
+            THEN ${next.cachedInputTokens}
+          WHEN previous.cached_input_tokens IS NULL THEN ${next.cachedInputTokens}
+          WHEN ${next.cachedInputTokens} IS NULL THEN NULL
+          ELSE previous.cached_input_tokens + ${next.cachedInputTokens}
+        END,
+        CASE
+          WHEN ${next.usageStatus} = 'unavailable' AND previous.provider_turn_id IS NOT NULL
+            THEN previous.cache_creation_tokens
+          WHEN ${basis} = 'snapshot'
+            OR previous.provider_turn_id IS NULL
+            OR previous.usage_status = 'unavailable'
+            OR ${next.usageStatus} = 'unavailable'
+            THEN ${next.cacheCreationTokens}
+          WHEN previous.cache_creation_tokens IS NULL THEN ${next.cacheCreationTokens}
+          WHEN ${next.cacheCreationTokens} IS NULL THEN NULL
+          ELSE previous.cache_creation_tokens + ${next.cacheCreationTokens}
+        END,
+        CASE
+          WHEN ${next.usageStatus} = 'unavailable' AND previous.provider_turn_id IS NOT NULL
+            THEN previous.output_tokens
+          WHEN ${basis} = 'snapshot'
+            OR previous.provider_turn_id IS NULL
+            OR previous.usage_status = 'unavailable'
+            OR ${next.usageStatus} = 'unavailable'
+            THEN ${next.outputTokens}
+          WHEN previous.output_tokens IS NULL THEN ${next.outputTokens}
+          WHEN ${next.outputTokens} IS NULL THEN NULL
+          ELSE previous.output_tokens + ${next.outputTokens}
+        END,
+        CASE
+          WHEN ${next.usageStatus} = 'unavailable' AND previous.provider_turn_id IS NOT NULL
+            THEN previous.reasoning_tokens
+          WHEN ${basis} = 'snapshot'
+            OR previous.provider_turn_id IS NULL
+            OR previous.usage_status = 'unavailable'
+            OR ${next.usageStatus} = 'unavailable'
+            THEN ${next.reasoningTokens}
+          WHEN previous.reasoning_tokens IS NULL THEN ${next.reasoningTokens}
+          WHEN ${next.reasoningTokens} IS NULL THEN NULL
+          ELSE previous.reasoning_tokens + ${next.reasoningTokens}
+        END,
+        CASE
+          WHEN ${next.usageStatus} = 'unavailable' AND previous.provider_turn_id IS NOT NULL
+            THEN previous.reported_cost_usd
+          WHEN ${basis} = 'snapshot'
+            OR previous.provider_turn_id IS NULL
+            OR previous.usage_status = 'unavailable'
+            OR ${next.usageStatus} = 'unavailable'
+            THEN ${next.reportedCostUsd}
+          WHEN previous.reported_cost_usd IS NULL THEN ${next.reportedCostUsd}
+          WHEN ${next.reportedCostUsd} IS NULL THEN NULL
+          ELSE previous.reported_cost_usd + ${next.reportedCostUsd}
+        END,
+        ${event.id},
+        ${updatedAt}
+      FROM (
+        SELECT payload_json FROM orchestration_v2_projection_threads
+        WHERE thread_id = ${event.threadId}
+        LIMIT 1
+      ) AS thread
+      LEFT JOIN task_usage_attempts AS previous
+        ON previous.environment_id = ${environmentId}
+        AND previous.provider_turn_id = ${event.payload.id}
+      WHERE NOT EXISTS (
+          SELECT 1 FROM task_usage_events
+          WHERE environment_id = ${environmentId} AND event_id = ${event.id}
+        )
+        AND json_extract(thread.payload_json, '$.taskGovernance') = 'required'
+        AND json_type(thread.payload_json, '$.taskContract') = 'object'
+        AND typeof(json_extract(thread.payload_json, '$.taskContract.revision')) = 'integer'
+      ON CONFLICT(environment_id, provider_turn_id) DO UPDATE SET
+        contract_revision = excluded.contract_revision,
+        status = excluded.status,
+        usage_status = excluded.usage_status,
+        basis = excluded.basis,
+        input_tokens = excluded.input_tokens,
+        cached_input_tokens = excluded.cached_input_tokens,
+        cache_creation_tokens = excluded.cache_creation_tokens,
+        output_tokens = excluded.output_tokens,
+        reasoning_tokens = excluded.reasoning_tokens,
+        reported_cost_usd = excluded.reported_cost_usd,
+        source_event_id = excluded.source_event_id,
+        message_id = COALESCE(task_usage_attempts.message_id, excluded.message_id),
+        run_id = COALESCE(task_usage_attempts.run_id, excluded.run_id),
+        updated_at = excluded.updated_at
   `;
 });
 
@@ -361,7 +415,5 @@ export const readTaskUsageCohort = Effect.fn("TaskUsageAccounting.readTaskUsageC
   }
   return measureTaskCohort(tasks);
 });
-
-export const taskUsageEnvironmentId = UNSCOPED_ENVIRONMENT;
 
 export type { TaskUsageCohort, TaskUsageSummary };

@@ -212,7 +212,7 @@ function coverageOf(complete: boolean): TaskUsageCoverage {
   return complete ? "complete" : "partial";
 }
 
-export function acceptanceOf(input: {
+function acceptanceOf(input: {
   readonly contractRevision: number | null;
   readonly acceptedRevision: number | null;
   readonly phase: string;
