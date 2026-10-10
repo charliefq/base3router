@@ -89,6 +89,7 @@ export function classifyCommand(type: string): OperationClass {
     case "thread.task-contract.set":
     case "thread.task-contract.accept":
     case "thread.task-contract.redirect":
+    case "thread.task-contract.resume":
       return { kind: "task-decision" };
     default:
       return { kind: "ungoverned" };

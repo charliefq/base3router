@@ -1851,7 +1851,7 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
   taskDecisions: Schema.optional(
     Schema.Array(
       Schema.Struct({
-        kind: Schema.Literals(["set", "accept", "redirect"]),
+        kind: Schema.Literals(["set", "accept", "redirect", "resume"]),
         revision: PositiveInt,
         actorId: TrimmedNonEmptyString,
         at: Schema.DateTimeUtcFromString,
@@ -2844,6 +2844,12 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("thread.task-contract.redirect"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    revision: PositiveInt,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.task-contract.resume"),
     commandId: CommandId,
     threadId: ThreadId,
     revision: PositiveInt,

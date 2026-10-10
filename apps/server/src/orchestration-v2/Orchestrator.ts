@@ -120,6 +120,7 @@ import { authorizeDispatch } from "../policy/Base3PolicyGate.ts";
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import {
   nextTaskContractThread,
+  requestTaskCancellation,
   reserveGovernedStart,
   revokeTaskContractGrants,
   taskStateFromUnknown,
@@ -359,6 +360,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.task-contract.set":
     case "thread.task-contract.accept":
     case "thread.task-contract.redirect":
+    case "thread.task-contract.resume":
     case "provider-session.detach":
     case "message.dispatch":
     case "notification.delivery.accept":
@@ -4150,6 +4152,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           commandType: command.type,
           commandId: command.commandId,
           threadId: command.threadId,
+          messageId: command.messageId,
         }).pipe(mapDispatchError(command));
       }
       if (command.manualContinuationOfRunId !== undefined) {
@@ -9088,6 +9091,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         readonly type:
           | "thread.task-contract.set"
           | "thread.task-contract.redirect"
+          | "thread.task-contract.resume"
           | "thread.task-contract.accept";
       }
     >,
@@ -9135,11 +9139,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (command.type === "thread.task-contract.redirect") {
         const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
         if (Option.isSome(sqlOption)) {
-          yield* sqlOption.value`
-            UPDATE base3_capacity_leases
-            SET interrupt_requested = 1
-            WHERE released_at IS NULL AND thread_id = ${command.threadId}
-          `.pipe(mapDispatchError(command));
+          yield* requestTaskCancellation(sqlOption.value, next.rootThreadId, command.threadId).pipe(
+            mapDispatchError(command),
+          );
         }
       }
       yield* emit(
@@ -9279,6 +9281,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.task-contract.set":
       case "thread.task-contract.accept":
       case "thread.task-contract.redirect":
+      case "thread.task-contract.resume":
         yield* dispatchTaskContract(command, events);
         break;
       case "message.dispatch": {

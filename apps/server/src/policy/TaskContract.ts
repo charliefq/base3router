@@ -7,6 +7,9 @@
 import {
   childConstraintConflict,
   incompleteTaskContractMessage,
+  ProviderSessionId,
+  ProviderThreadId,
+  ProviderTurnId,
   TASK_CONTRACT_HUMAN_DECISION,
   type OrchestrationV2AppThread,
   type TaskContract,
@@ -18,6 +21,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { OrchestrationEffectRequestV2 } from "../orchestration-v2/EffectOutbox.ts";
 import { Base3PolicyDeniedError } from "./Base3PolicyDeniedError.ts";
 
 const StoredTaskPayload = Schema.Struct({
@@ -124,7 +128,8 @@ export function nextTaskContractThread(input: {
         readonly brake: TaskContractFields["brake"];
       }
     | { readonly type: "thread.task-contract.accept"; readonly revision: number }
-    | { readonly type: "thread.task-contract.redirect"; readonly revision: number };
+    | { readonly type: "thread.task-contract.redirect"; readonly revision: number }
+    | { readonly type: "thread.task-contract.resume"; readonly revision: number };
 }):
   | { readonly error: string }
   | { readonly thread: OrchestrationV2AppThread; readonly rootThreadId: string } {
@@ -186,6 +191,20 @@ export function nextTaskContractThread(input: {
       ),
     };
   }
+  if (input.command.type === "thread.task-contract.resume") {
+    if (input.thread.taskContractPhase !== "redirected") {
+      return {
+        error: `Contract revision ${current.revision} is not paused for redirect. Resume does not start a provider by itself.`,
+      };
+    }
+    return {
+      rootThreadId: input.thread.lineage.rootThreadId,
+      thread: withDecision(
+        { ...input.thread, taskContractPhase: "active" },
+        decision("resume", current.revision),
+      ),
+    };
+  }
   return {
     rootThreadId: input.thread.lineage.rootThreadId,
     thread: withDecision(
@@ -193,6 +212,60 @@ export function nextTaskContractThread(input: {
       decision("redirect", current.revision),
     ),
   };
+}
+
+/**
+ * A governed thread stays governed. Updates that omit the contract cannot turn
+ * it back into ordinary chat. An explicit required revision still replaces it.
+ */
+export function retainGovernedTask<T extends Record<string, unknown>>(
+  previous: unknown,
+  next: T,
+): T {
+  if (previous === null || previous === undefined || typeof previous !== "object") return next;
+  const stored = previous as {
+    readonly id?: unknown;
+    readonly taskGovernance?: unknown;
+    readonly taskContract?: unknown;
+    readonly taskContractPhase?: unknown;
+    readonly taskAcceptedRevision?: unknown;
+    readonly taskDecisions?: unknown;
+  };
+  if (stored.taskGovernance !== "required") return next;
+  if (stored.id !== undefined && next.id !== undefined && stored.id !== next.id) return next;
+  if (next.taskGovernance === "required") return next;
+  return {
+    ...next,
+    taskGovernance: "required",
+    taskContract: stored.taskContract,
+    taskContractPhase: stored.taskContractPhase,
+    taskAcceptedRevision: stored.taskAcceptedRevision,
+    taskDecisions: stored.taskDecisions,
+  };
+}
+
+export function retainGovernedJson<T extends Record<string, unknown>>(
+  previousJson: string | null,
+  next: T,
+): T {
+  if (previousJson === null) return next;
+  try {
+    return retainGovernedTask(JSON.parse(previousJson) as unknown, next);
+  } catch {
+    return next;
+  }
+}
+
+export function taskBlocksStart(state: PersistedTaskState): string | null {
+  if (state.governance !== "required") return null;
+  if (state.contract === null) return incompleteTaskContractMessage();
+  if (state.phase === "redirected") {
+    return `Execution is paused for revised instructions at contract revision ${state.contract.revision}. Resume that revision with thread.task-contract.resume before more work starts. ${TASK_CONTRACT_HUMAN_DECISION}`;
+  }
+  if (state.acceptedRevision === state.contract.revision) {
+    return `Contract revision ${state.contract.revision} is already accepted. Provider completion is not acceptance, and a new revision is required before more work starts.`;
+  }
+  return null;
 }
 
 const deny = (commandType: string, detail: string) =>
@@ -218,23 +291,83 @@ const asPolicyDenial =
       ),
     );
 
-const requestTreeCancellation = (
+const encodeInterrupt = Schema.encodeSync(Schema.fromJsonString(OrchestrationEffectRequestV2));
+
+/**
+ * Ask the V2 outbox to interrupt running provider turns on this task tree.
+ * The lease flag is the same signal `noteInterrupt` records. The outbox row
+ * is what EffectWorker delivers to the provider. Neither releases a lease.
+ */
+export const requestTaskCancellation = (
   sql: SqlClient.SqlClient,
   rootThreadId: string,
   threadId: string,
 ) =>
-  sql`
-    UPDATE base3_capacity_leases
-    SET interrupt_requested = 1
-    WHERE released_at IS NULL
-      AND (
-        thread_id = ${rootThreadId}
-        OR thread_id = ${threadId}
-        OR thread_id IN (
-          SELECT thread_id FROM task_contract_members WHERE root_thread_id = ${rootThreadId}
+  Effect.gen(function* () {
+    yield* sql`
+      UPDATE base3_capacity_leases
+      SET interrupt_requested = 1
+      WHERE released_at IS NULL
+        AND (
+          thread_id = ${rootThreadId}
+          OR thread_id = ${threadId}
+          OR thread_id IN (
+            SELECT thread_id FROM task_contract_members WHERE root_thread_id = ${rootThreadId}
+          )
         )
-      )
-  `;
+    `;
+    const turns = yield* sql<{
+      readonly provider_turn_id: string;
+      readonly provider_thread_id: string;
+      readonly thread_id: string;
+      readonly provider_session_id: string;
+    }>`
+      SELECT
+        turn.provider_turn_id,
+        turn.provider_thread_id,
+        turn.thread_id,
+        thread.provider_session_id
+      FROM orchestration_v2_projection_provider_turns AS turn
+      JOIN orchestration_v2_projection_provider_threads AS thread
+        ON thread.provider_thread_id = turn.provider_thread_id
+      WHERE turn.status = 'running'
+        AND thread.provider_session_id IS NOT NULL
+        AND (
+          turn.thread_id = ${rootThreadId}
+          OR turn.thread_id = ${threadId}
+          OR turn.thread_id IN (
+            SELECT thread_id FROM task_contract_members WHERE root_thread_id = ${rootThreadId}
+          )
+        )
+    `;
+    const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
+    for (const turn of turns) {
+      const request = {
+        type: "provider-turn.interrupt" as const,
+        providerSessionId: ProviderSessionId.make(turn.provider_session_id),
+        providerThreadId: ProviderThreadId.make(turn.provider_thread_id),
+        providerTurnId: ProviderTurnId.make(turn.provider_turn_id),
+      };
+      yield* sql`
+        INSERT INTO orchestration_v2_effect_outbox (
+          effect_id, command_id, thread_id, effect_type, payload_json, status,
+          attempt_count, available_at, created_at, updated_at
+        ) VALUES (
+          ${`effect:task-contract-cancel:${turn.provider_turn_id}`},
+          ${`task-contract-cancel:${turn.provider_turn_id}`},
+          ${turn.thread_id},
+          'provider-turn.interrupt',
+          ${encodeInterrupt(request)},
+          'pending',
+          0,
+          ${now},
+          ${now},
+          ${now}
+        )
+        ON CONFLICT(effect_id) DO NOTHING
+      `;
+    }
+  });
 
 export const countTaskAdmissions = (sql: SqlClient.SqlClient, rootThreadId: string) =>
   sql<{ readonly count: number }>`
@@ -269,6 +402,7 @@ export const reserveGovernedStart = (input: {
   readonly commandType: string;
   readonly commandId: string;
   readonly threadId: string;
+  readonly messageId?: string | null;
   readonly proposed?: TaskContractFields | null;
 }) =>
   Effect.gen(function* () {
@@ -291,18 +425,12 @@ export const reserveGovernedStart = (input: {
         return yield* deny(input.commandType, `${conflict} No provider was started.`);
       }
     }
-    if (input.state.phase === "redirected") {
-      yield* requestTreeCancellation(input.sql, input.state.rootThreadId, input.threadId);
-      return yield* deny(
-        input.commandType,
-        `Execution is paused for revised instructions at contract revision ${contract.revision}. ${TASK_CONTRACT_HUMAN_DECISION}`,
-      );
-    }
-    if (input.state.acceptedRevision === contract.revision) {
-      return yield* deny(
-        input.commandType,
-        `Contract revision ${contract.revision} is already accepted. Provider completion is not acceptance, and a new revision is required before more work starts.`,
-      );
+    const blocked = taskBlocksStart(input.state);
+    if (blocked !== null) {
+      if (input.state.phase === "redirected") {
+        yield* requestTaskCancellation(input.sql, input.state.rootThreadId, input.threadId);
+      }
+      return yield* deny(input.commandType, blocked);
     }
     const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
     yield* input.sql`
@@ -311,13 +439,14 @@ export const reserveGovernedStart = (input: {
     `;
     yield* input.sql`
       INSERT INTO task_contract_admissions (
-        root_thread_id, command_id, thread_id, contract_revision, created_at
+        root_thread_id, command_id, thread_id, contract_revision, message_id, created_at
       )
       SELECT
         ${input.state.rootThreadId},
         ${input.commandId},
         ${input.threadId},
         ${contract.revision},
+        ${input.messageId ?? null},
         ${now}
       WHERE NOT EXISTS (
         SELECT 1 FROM task_contract_admissions
@@ -337,7 +466,7 @@ export const reserveGovernedStart = (input: {
     `;
     const reserved = rows[0];
     if (reserved === undefined) {
-      yield* requestTreeCancellation(input.sql, input.state.rootThreadId, input.threadId);
+      yield* requestTaskCancellation(input.sql, input.state.rootThreadId, input.threadId);
       return yield* deny(
         input.commandType,
         `Brake exhausted: ${contract.brake.maxProviderStarts} provider starts are already reserved on this task. Active work was asked to cancel and stays leased until the provider turn is confirmed terminal.`,
@@ -350,3 +479,90 @@ export const reserveGovernedStart = (input: {
       );
     }
   }).pipe(asPolicyDenial(input.commandType));
+
+/**
+ * Count a provider handoff against the same tree budget.
+ * The first `provider-turn.start` for an admitted command or message reuses
+ * that reservation. A later claim of the same effect is a retry. Restart and
+ * runtime continuation are failover handoffs and each take another slot.
+ * Editing the contract does not delete earlier rows.
+ */
+export const reserveProviderHandoff = (input: {
+  readonly sql: SqlClient.SqlClient;
+  readonly state: PersistedTaskState;
+  readonly commandId: string;
+  readonly threadId: string;
+  readonly messageId?: string | null;
+  readonly effectType: string;
+  readonly attemptCount: number;
+}) =>
+  Effect.gen(function* () {
+    if (input.state.governance !== "required") return;
+    const blocked = taskBlocksStart(input.state);
+    if (blocked !== null) {
+      yield* requestTaskCancellation(input.sql, input.state.rootThreadId, input.threadId);
+      return yield* deny(input.effectType, blocked);
+    }
+    const contract = input.state.contract;
+    if (contract === null) return yield* deny(input.effectType, incompleteTaskContractMessage());
+    const covered =
+      input.effectType === "provider-turn.start" && input.attemptCount <= 1
+        ? yield* input.sql<{ readonly contract_revision: number }>`
+            SELECT contract_revision FROM task_contract_admissions
+            WHERE root_thread_id = ${input.state.rootThreadId}
+              AND command_id NOT LIKE 'handoff:%'
+              AND (
+                command_id = ${input.commandId}
+                OR message_id = ${input.messageId ?? null}
+              )
+            LIMIT 1
+          `
+        : [];
+    const reservation = covered[0];
+    if (reservation !== undefined) {
+      if (reservation.contract_revision !== contract.revision) {
+        yield* requestTaskCancellation(input.sql, input.state.rootThreadId, input.threadId);
+        return yield* deny(
+          input.effectType,
+          `This queued start was reserved for contract revision ${reservation.contract_revision} and was not reused for revision ${contract.revision}.`,
+        );
+      }
+      return;
+    }
+    const key = `handoff:${input.effectType}:${input.messageId ?? input.commandId}:${input.attemptCount}`;
+    const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
+    yield* input.sql`
+      INSERT INTO task_contract_admissions (
+        root_thread_id, command_id, thread_id, contract_revision, message_id, created_at
+      )
+      SELECT
+        ${input.state.rootThreadId},
+        ${key},
+        ${input.threadId},
+        ${contract.revision},
+        ${input.messageId ?? null},
+        ${now}
+      WHERE NOT EXISTS (
+        SELECT 1 FROM task_contract_admissions
+        WHERE root_thread_id = ${input.state.rootThreadId}
+          AND command_id = ${key}
+      )
+      AND (
+        SELECT COUNT(*) FROM task_contract_admissions
+        WHERE root_thread_id = ${input.state.rootThreadId}
+      ) < ${contract.brake.maxProviderStarts}
+    `;
+    const rows = yield* input.sql<{ readonly command_id: string }>`
+      SELECT command_id FROM task_contract_admissions
+      WHERE root_thread_id = ${input.state.rootThreadId}
+        AND command_id = ${key}
+      LIMIT 1
+    `;
+    if (rows[0] === undefined) {
+      yield* requestTaskCancellation(input.sql, input.state.rootThreadId, input.threadId);
+      return yield* deny(
+        input.effectType,
+        `Brake exhausted: ${contract.brake.maxProviderStarts} provider starts are already reserved on this task. A retry or failover was not given another start. Active work was asked to cancel and stays leased until the provider turn is confirmed terminal.`,
+      );
+    }
+  }).pipe(asPolicyDenial(input.effectType));

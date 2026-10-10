@@ -269,6 +269,22 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                       }
                     : undefined
                 }
+                onResume={
+                  thread.taskContract
+                    ? () => {
+                        const revision = thread.taskContract?.revision;
+                        if (revision === undefined) return;
+                        void decideTaskContract({
+                          environmentId: props.environmentId,
+                          input: {
+                            threadId: props.threadId,
+                            action: "resume",
+                            revision,
+                          },
+                        });
+                      }
+                    : undefined
+                }
               />
             </ThreadDetailsSection>
           ) : null}

@@ -161,6 +161,7 @@ function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<Thread
     case "thread.task-contract.set":
     case "thread.task-contract.accept":
     case "thread.task-contract.redirect":
+    case "thread.task-contract.resume":
     case "provider-session.detach":
     case "message.dispatch":
     case "notification.delivery.accept":

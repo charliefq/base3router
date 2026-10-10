@@ -10,7 +10,12 @@ import {
   OrchestrationV2AppThread,
   ProviderDriverKind,
   ProviderInstanceId,
+  CommandId,
+  ProviderSessionId,
+  ProviderThreadId,
+  ProviderTurnId,
   TaskContractFields,
+  ThreadId,
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -18,6 +23,8 @@ import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -27,11 +34,29 @@ import {
   makeSqlitePersistenceLive,
 } from "../persistence/Layers/Sqlite.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
-import { authorizeDispatch, confirmProviderTermination, countOccupied } from "./Base3PolicyGate.ts";
+import * as CheckpointRollbackService from "../orchestration-v2/CheckpointRollbackService.ts";
+import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
+import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
+import * as ProviderTurnControlService from "../orchestration-v2/ProviderTurnControlService.ts";
+import * as ProviderTurnStartService from "../orchestration-v2/ProviderTurnStartService.ts";
+import * as RunFinalizationService from "../orchestration-v2/RunFinalizationService.ts";
+import * as RuntimeRequestService from "../orchestration-v2/RuntimeRequestService.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as ThreadTitleRegenerationService from "../orchestration-v2/ThreadTitleRegenerationService.ts";
+import { makeSubagentChildThread } from "../orchestration-v2/SubagentProjection.ts";
+import {
+  authorizeDispatch,
+  confirmProviderTermination,
+  countOccupied,
+  revalidateOutboxEffect,
+} from "./Base3PolicyGate.ts";
 import { PolicyExecutionContext } from "./executionContext.ts";
 import {
   nextTaskContractThread,
   reserveGovernedStart,
+  reserveProviderHandoff,
+  retainGovernedTask,
   revokeTaskContractGrants,
   taskStateFromUnknown,
 } from "./TaskContract.ts";
@@ -507,4 +532,433 @@ it.effect(
       );
       expect(blocked.message).toContain("already accepted");
     }).pipe(Effect.provide(gateLayer)),
+);
+
+it("keeps governed threads from becoming ordinary chat", () => {
+  const governed = {
+    id: "thread-root",
+    taskGovernance: "required",
+    taskContract: contract,
+    taskContractPhase: "active",
+    taskAcceptedRevision: null,
+    lineage: { rootThreadId: "thread-root" },
+  };
+  const demoted = retainGovernedTask(governed, {
+    ...governed,
+    taskGovernance: "chat",
+    taskContract: null,
+  });
+  expect(demoted.taskGovernance).toBe("required");
+  expect(demoted.taskContract).toEqual(contract);
+  const revised = retainGovernedTask(governed, {
+    ...governed,
+    taskGovernance: "required" as const,
+    taskContract: { ...contract, revision: 2 },
+  });
+  expect(revised.taskContract.revision).toBe(2);
+  const now = DateTime.makeUnsafe(Date.parse("2026-10-10T00:00:00.000Z"));
+  const parent = Schema.decodeUnknownOption(OrchestrationV2AppThread)({
+    createdBy: "user",
+    creationSource: "web",
+    id: "thread-root",
+    projectId: "project-1",
+    title: "Parent",
+    providerInstanceId: "codex-work",
+    modelSelection: { instanceId: "codex-work", model: "gpt-5.4" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    activeProviderThreadId: null,
+    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: "thread-root" },
+    forkedFrom: null,
+    createdAt: now,
+    updatedAt: now,
+    archivedAt: null,
+    deletedAt: null,
+    taskGovernance: "required",
+    taskContract: contract,
+    taskContractPhase: "active",
+    taskAcceptedRevision: null,
+  });
+  expect(parent._tag).toBe("Some");
+  if (parent._tag === "None") return;
+  const child = makeSubagentChildThread({
+    parentThread: parent.value,
+    childThreadId: ThreadId.make("thread-child"),
+    parentNodeId: "node-child" as never,
+    activeProviderThreadId: null,
+    providerInstanceId: ProviderInstanceId.make("codex-work"),
+    modelSelection: { instanceId: ProviderInstanceId.make("codex-work"), model: "gpt-5.4" },
+    title: "Child",
+    now,
+    createdBy: "user",
+    creationSource: "web",
+  });
+  expect(child.taskGovernance).toBe("required");
+  expect(child.taskContract?.revision).toBe(1);
+  expect(child.lineage.rootThreadId).toBe("thread-root");
+  expect(taskStateFromUnknown(child.id, { ...child, taskGovernance: undefined }).governance).toBe(
+    "chat",
+  );
+  expect(
+    taskStateFromUnknown(child.id, retainGovernedTask(child, { id: child.id })).governance,
+  ).toBe("required");
+});
+
+it.effect(
+  "accept and redirect block later starts, and resume keeps the same revision and budget",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const limited = { ...contract, brake: { ...contract.brake, maxProviderStarts: 2 } };
+      yield* insertThread(
+        sql,
+        "thread-human",
+        payloadFor("thread-human", { taskContract: limited }),
+      );
+      yield* dispatchMessage("thread-human", "human-1", "message-human");
+      yield* confirmProviderTermination({
+        threadId: "thread-human",
+        messageId: "message-human",
+      });
+      yield* sql`
+        UPDATE orchestration_v2_projection_threads
+        SET payload_json = ${payloadFor("thread-human", {
+          taskContract: limited,
+          taskAcceptedRevision: 1,
+        })}
+        WHERE thread_id = 'thread-human'
+      `;
+      const accepted = yield* Effect.flip(
+        dispatchMessage("thread-human", "human-2", "message-human-2"),
+      );
+      expect(accepted.reason).toBe("task-contract");
+      expect(accepted.message).toContain("already accepted");
+      yield* sql`
+        UPDATE orchestration_v2_projection_threads
+        SET payload_json = ${payloadFor("thread-human", {
+          taskContract: limited,
+          taskContractPhase: "redirected",
+          taskAcceptedRevision: null,
+        })}
+        WHERE thread_id = 'thread-human'
+      `;
+      const redirected = yield* Effect.flip(
+        dispatchMessage("thread-human", "human-3", "message-human-3"),
+      );
+      expect(redirected.message).toContain("thread.task-contract.resume");
+      const resumed = nextTaskContractThread({
+        thread: {
+          ...(yield* Effect.sync(() => {
+            const decoded = Schema.decodeUnknownOption(OrchestrationV2AppThread)({
+              createdBy: "user",
+              creationSource: "web",
+              id: "thread-human",
+              projectId: "project-1",
+              title: "Task",
+              providerInstanceId: "codex-work",
+              modelSelection: { instanceId: "codex-work", model: "gpt-5.4" },
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: null,
+              activeProviderThreadId: null,
+              lineage: {
+                parentThreadId: null,
+                relationshipToParent: null,
+                rootThreadId: "thread-human",
+              },
+              forkedFrom: null,
+              createdAt: DateTime.makeUnsafe(Date.parse("2026-10-10T00:00:00.000Z")),
+              updatedAt: DateTime.makeUnsafe(Date.parse("2026-10-10T00:00:00.000Z")),
+              archivedAt: null,
+              deletedAt: null,
+              taskGovernance: "required",
+              taskContract: limited,
+              taskContractPhase: "redirected",
+              taskAcceptedRevision: null,
+            });
+            if (decoded._tag === "None") throw new Error("thread did not decode");
+            return decoded.value;
+          })),
+        },
+        actorId: "user-1",
+        now: yield* DateTime.now,
+        command: { type: "thread.task-contract.resume", revision: 1 },
+      });
+      expect("thread" in resumed).toBe(true);
+      if (!("thread" in resumed)) return;
+      expect(resumed.thread.taskContract?.revision).toBe(1);
+      expect(resumed.thread.taskContractPhase).toBe("active");
+      yield* sql`
+        UPDATE orchestration_v2_projection_threads
+        SET payload_json = ${payloadFor("thread-human", {
+          taskContract: limited,
+          taskContractPhase: "active",
+          taskAcceptedRevision: null,
+        })}
+        WHERE thread_id = 'thread-human'
+      `;
+      yield* dispatchMessage("thread-human", "human-4", "message-human-4");
+      expect(yield* countTable(sql, "admissions")).toBe(2);
+      const exhausted = yield* Effect.flip(
+        dispatchMessage("thread-human", "human-5", "message-human-5"),
+      );
+      expect(exhausted.message).toContain("Brake exhausted");
+    }).pipe(Effect.provide(gateLayer)),
+);
+
+it.effect("a contract edit keeps prior reservations and stale queued starts fail closed", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* insertThread(
+      sql,
+      "thread-budget",
+      payloadFor("thread-budget", {
+        taskContract: { ...contract, brake: { ...contract.brake, maxProviderStarts: 1 } },
+      }),
+    );
+    yield* dispatchMessage("thread-budget", "budget-1", "message-budget");
+    yield* confirmProviderTermination({
+      threadId: "thread-budget",
+      messageId: "message-budget",
+    });
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_runs (
+        run_id, thread_id, ordinal, provider, status, requested_at, payload_json
+      ) VALUES (
+        'run-budget', 'thread-budget', 1, 'codex', 'running', '2026-10-10T00:00:00.000Z',
+        '{"userMessageId":"message-budget"}'
+      )
+    `;
+    const context = Effect.provideService(PolicyExecutionContext, session);
+    yield* revalidateOutboxEffect({
+      threadId: "thread-budget",
+      commandId: "budget-1",
+      attemptCount: 1,
+      request: { type: "provider-turn.start", runId: "run-budget", messageId: "message-budget" },
+    }).pipe(context);
+    expect(yield* countTable(sql, "admissions")).toBe(1);
+    const retry = yield* Effect.flip(
+      revalidateOutboxEffect({
+        threadId: "thread-budget",
+        commandId: "budget-1",
+        attemptCount: 2,
+        request: { type: "provider-turn.start", runId: "run-budget", messageId: "message-budget" },
+      }).pipe(context),
+    );
+    expect(retry.reason).toBe("task-contract");
+    expect(retry.message).toContain("retry or failover");
+    const failover = yield* Effect.flip(
+      reserveProviderHandoff({
+        sql,
+        state: {
+          governance: "required",
+          contract: { ...contract, brake: { ...contract.brake, maxProviderStarts: 1 } },
+          phase: "active",
+          acceptedRevision: null,
+          rootThreadId: "thread-budget",
+        },
+        commandId: "budget-restart",
+        threadId: "thread-budget",
+        messageId: "message-budget",
+        effectType: "provider-turn.restart",
+        attemptCount: 1,
+      }),
+    );
+    expect(failover.message).toContain("retry or failover");
+    yield* sql`
+      UPDATE orchestration_v2_projection_threads
+      SET payload_json = ${payloadFor("thread-budget", {
+        taskContract: {
+          ...contract,
+          revision: 2,
+          brake: { ...contract.brake, maxProviderStarts: 4 },
+        },
+      })}
+      WHERE thread_id = 'thread-budget'
+    `;
+    expect(yield* countTable(sql, "admissions")).toBe(1);
+    const queued = yield* Effect.flip(
+      revalidateOutboxEffect({
+        threadId: "thread-budget",
+        commandId: "budget-1",
+        attemptCount: 1,
+        request: { type: "provider-turn.start", runId: "run-budget", messageId: "message-budget" },
+      }).pipe(context),
+    );
+    expect(queued.reason).toBe("task-contract");
+    expect(queued.message).toContain("revision 1");
+    yield* revokeTaskContractGrants(sql, "thread-budget");
+    const revoked = yield* Effect.flip(
+      revalidateOutboxEffect({
+        threadId: "thread-budget",
+        commandId: "budget-1",
+        attemptCount: 1,
+        request: { type: "provider-turn.start", runId: "run-budget", messageId: "message-budget" },
+      }).pipe(context),
+    );
+    expect(revoked.reason).toBe("grant-missing");
+    yield* dispatchMessage("thread-budget", "budget-2", "message-budget-2");
+    expect(yield* countTable(sql, "admissions")).toBe(2);
+  }).pipe(Effect.provide(gateLayer)),
+);
+
+it.effect("brake exhaustion delivers a provider interrupt and keeps the lease", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* insertThread(
+      sql,
+      "thread-cancel",
+      payloadFor("thread-cancel", {
+        taskContract: { ...contract, brake: { ...contract.brake, maxProviderStarts: 1 } },
+      }),
+    );
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_provider_threads (
+        provider_thread_id, thread_id, provider, driver, provider_instance_id,
+        provider_session_id, status, updated_at, payload_json
+      ) VALUES (
+        'pthread-cancel', 'thread-cancel', 'codex', 'codex', 'codex-work',
+        'session-cancel', 'running', '2026-10-10T00:00:00.000Z', '{}'
+      )
+    `;
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_provider_turns (
+        provider_turn_id, thread_id, provider_thread_id, node_id, ordinal, status, payload_json
+      ) VALUES (
+        'pturn-cancel', 'thread-cancel', 'pthread-cancel', 'node-cancel', 1, 'running', '{}'
+      )
+    `;
+    yield* dispatchMessage("thread-cancel", "cancel-1", "message-cancel");
+    const denied = yield* Effect.flip(
+      dispatchMessage("thread-cancel", "cancel-2", "message-cancel-2"),
+    );
+    expect(denied.message).toContain("asked to cancel");
+    const effects = yield* sql<{
+      readonly effect_type: string;
+      readonly payload_json: string;
+      readonly thread_id: string;
+    }>`
+      SELECT effect_type, payload_json, thread_id
+      FROM orchestration_v2_effect_outbox
+      WHERE effect_id = 'effect:task-contract-cancel:pturn-cancel'
+    `;
+    expect(effects[0]?.effect_type).toBe("provider-turn.interrupt");
+    const request = JSON.parse(effects[0]?.payload_json ?? "{}") as {
+      type?: string;
+      providerSessionId?: string;
+      providerThreadId?: string;
+      providerTurnId?: string;
+    };
+    expect(request.type).toBe("provider-turn.interrupt");
+    const interrupted = yield* Ref.make<string | null>(null);
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const executorLayer = EffectWorker.executorLayer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(
+            ProviderTurnControlService.ProviderTurnControlServiceV2,
+            ProviderTurnControlService.ProviderTurnControlServiceV2.of({
+              interrupt: (input) =>
+                Ref.set(interrupted, `${input.providerSessionId}:${input.providerTurnId}`),
+              steer: () => Effect.void,
+              interruptAndAwaitTerminal: () => Effect.void,
+            }),
+          ),
+          Layer.succeed(
+            ProviderSessionManager.ProviderSessionManagerV2,
+            ProviderSessionManager.ProviderSessionManagerV2.of({
+              shutdown: Effect.void,
+              open: () => Effect.die("unused"),
+              get: () => Effect.succeed(Option.none()),
+              close: () => Effect.void,
+              closeInstance: () => Effect.void,
+              release: () => Effect.void,
+              detach: () => Effect.void,
+            }),
+          ),
+          Layer.succeed(
+            ProviderTurnStartService.ProviderTurnStartServiceV2,
+            ProviderTurnStartService.ProviderTurnStartServiceV2.of({
+              start: () => Effect.void,
+            }),
+          ),
+          Layer.succeed(
+            RunFinalizationService.RunFinalizationService,
+            RunFinalizationService.RunFinalizationService.of({ finalize: () => Effect.void }),
+          ),
+          Layer.succeed(
+            CheckpointRollbackService.CheckpointRollbackServiceV2,
+            CheckpointRollbackService.CheckpointRollbackServiceV2.of({
+              execute: () => Effect.void,
+            }),
+          ),
+          Layer.succeed(
+            RuntimeRequestService.RuntimeRequestServiceV2,
+            RuntimeRequestService.RuntimeRequestServiceV2.of({ respond: () => Effect.void }),
+          ),
+          Layer.succeed(
+            ThreadTitleRegenerationService.ThreadTitleRegenerationService,
+            ThreadTitleRegenerationService.ThreadTitleRegenerationService.of({
+              execute: () => Effect.void,
+            }),
+          ),
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            dispatch: () => Effect.succeed({ sequence: 1, storedEvents: [] }),
+          }),
+          ServerSettings.layerTest(),
+        ),
+      ),
+    );
+    const executor = yield* EffectWorker.OrchestrationEffectExecutorV2.pipe(
+      Effect.provide(executorLayer),
+    );
+    yield* executor
+      .execute({
+        id: "effect:task-contract-cancel:pturn-cancel",
+        commandId: CommandId.make("task-contract-cancel:pturn-cancel"),
+        threadId: ThreadId.make("thread-cancel"),
+        request: {
+          type: "provider-turn.interrupt",
+          providerSessionId: ProviderSessionId.make(request.providerSessionId ?? ""),
+          providerThreadId: ProviderThreadId.make(request.providerThreadId ?? ""),
+          providerTurnId: ProviderTurnId.make(request.providerTurnId ?? ""),
+        },
+        status: "running",
+        attemptCount: 1,
+        availableAt: now,
+        leaseOwner: "worker",
+        leaseExpiresAt: now,
+        createdAt: now,
+        updatedAt: now,
+        completedAt: null,
+        lastError: null,
+      })
+      .pipe(
+        Effect.provide(executorLayer),
+        Effect.provideService(PolicyExecutionContext, {
+          kind: "kernel-test",
+          actorId: "kernel-test",
+          scopes: [AuthOrchestrationOperateScope],
+        }),
+      );
+    expect(yield* Ref.get(interrupted)).toBe("session-cancel:pturn-cancel");
+    expect(
+      yield* countOccupied({
+        sql,
+        environmentId: EnvironmentId.make("local"),
+        threadId: "thread-cancel",
+      }),
+    ).toBe(1);
+    yield* confirmProviderTermination({ threadId: "thread-cancel", messageId: "message-cancel" });
+    expect(
+      yield* countOccupied({
+        sql,
+        environmentId: EnvironmentId.make("local"),
+        threadId: "thread-cancel",
+      }),
+    ).toBe(0);
+  }).pipe(Effect.provide(gateLayer)),
 );

@@ -612,7 +612,7 @@ export const setThreadRuntimeMode = Effect.fn("EnvironmentCommands.setThreadRunt
 
 export interface DecideTaskContractInput extends CommandMetadata {
   readonly threadId: ThreadId;
-  readonly action: "set" | "accept" | "redirect";
+  readonly action: "set" | "accept" | "redirect" | "resume";
   readonly revision?: number;
   readonly goal?: string;
   readonly redirect?: string;
@@ -641,7 +641,11 @@ export const decideTaskContract = Effect.fn("EnvironmentCommands.decideTaskContr
   }
   return yield* dispatch({
     type:
-      input.action === "accept" ? "thread.task-contract.accept" : "thread.task-contract.redirect",
+      input.action === "accept"
+        ? "thread.task-contract.accept"
+        : input.action === "resume"
+          ? "thread.task-contract.resume"
+          : "thread.task-contract.redirect",
     commandId,
     threadId: input.threadId,
     revision: input.revision ?? 0,

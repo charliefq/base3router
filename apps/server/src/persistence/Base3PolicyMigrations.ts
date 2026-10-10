@@ -139,6 +139,13 @@ const taskContractTables = Effect.gen(function* () {
   `;
 });
 
+const taskContractAdmissionMessage = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    ALTER TABLE task_contract_admissions ADD COLUMN message_id TEXT
+  `;
+});
+
 const steps: ReadonlyArray<
   readonly [string, string, Effect.Effect<void, SqlError, SqlClient.SqlClient>]
 > = [
@@ -156,6 +163,7 @@ const steps: ReadonlyArray<
   ["b3-065", "ConcurrencyBudgetAudit", migration065],
   ["b3-066", "PolicyIntegrationTables", integrationTables],
   ["b3-067", "TaskContractAdmissions", taskContractTables],
+  ["b3-068", "TaskContractAdmissionMessage", taskContractAdmissionMessage],
 ];
 
 export const runBase3PolicyMigrations = Effect.gen(function* () {

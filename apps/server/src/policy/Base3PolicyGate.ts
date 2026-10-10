@@ -35,7 +35,13 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import { PolicyExecutionContext } from "./executionContext.ts";
 import { Base3PolicyDeniedError } from "./Base3PolicyDeniedError.ts";
 import { classifyCommand, commandNeedsCapacity, type OperationClass } from "./operationPolicy.ts";
-import { loadTaskState, reserveGovernedStart } from "./TaskContract.ts";
+import {
+  loadTaskState,
+  requestTaskCancellation,
+  reserveGovernedStart,
+  reserveProviderHandoff,
+  taskBlocksStart,
+} from "./TaskContract.ts";
 
 const TERMINAL_RUN_STATUSES = [
   "completed",
@@ -658,6 +664,7 @@ export const authorizeDispatch = (
         commandType: command.type,
         commandId: command.commandId,
         threadId,
+        messageId: command.messageId ?? command.commandId,
         proposed: command.taskContract ?? null,
       });
       const approvalId = yield* requireAsk({
@@ -732,6 +739,7 @@ export const authorizeDispatch = (
         commandType: command.type,
         commandId: command.commandId,
         threadId: command.threadId ?? "",
+        messageId: command.messageId ?? null,
       });
       if (command.dispatchMode?.type !== "queue_after_active" && commandNeedsCapacity(operation)) {
         yield* admitLease({
@@ -819,6 +827,11 @@ const authorizeContinuation = (command: DispatchPolicyCommand, operation: Operat
     } else if (stored[0].revoked_at !== null) {
       return yield* deny(command.type, "grant-revoked");
     }
+    const blocked = taskBlocksStart(taskState);
+    if (blocked !== null) {
+      yield* requestTaskCancellation(sql, taskState.rootThreadId, command.threadId ?? "");
+      return yield* deny(command.type, "task-contract", blocked);
+    }
     if (command.type === "message.dispatch") {
       yield* reserveGovernedStart({
         sql,
@@ -826,6 +839,7 @@ const authorizeContinuation = (command: DispatchPolicyCommand, operation: Operat
         commandType: command.type,
         commandId: command.commandId,
         threadId: command.threadId ?? "",
+        messageId: command.messageId ?? null,
       });
     }
     if (operation.kind === "message" && command.dispatchMode?.type !== "queue_after_active") {
@@ -845,6 +859,8 @@ const authorizeContinuation = (command: DispatchPolicyCommand, operation: Operat
 
 export const revalidateOutboxEffect = (effect: {
   readonly threadId: string;
+  readonly commandId?: string | undefined;
+  readonly attemptCount?: number | undefined;
   readonly request: {
     readonly type: string;
     readonly runId?: string | undefined;
@@ -900,6 +916,28 @@ export const revalidateOutboxEffect = (effect: {
     const grant = (yield* loadGrant(sql, grantId))[0];
     if (grant === undefined || grant.revoked_at !== null) {
       return yield* deny(effect.request.type, "grant-missing");
+    }
+    const taskState = yield* loadTaskState(sql, effect.threadId, effect.request.type);
+    if (
+      effect.request.type === "provider-turn.start" ||
+      effect.request.type === "provider-turn.restart" ||
+      effect.request.type === "provider-runtime.continue"
+    ) {
+      yield* reserveProviderHandoff({
+        sql,
+        state: taskState,
+        commandId: effect.commandId ?? grantId,
+        threadId: effect.threadId,
+        messageId: messageId ?? null,
+        effectType: effect.request.type,
+        attemptCount: effect.attemptCount ?? 1,
+      });
+    } else {
+      const blocked = taskBlocksStart(taskState);
+      if (blocked !== null) {
+        yield* requestTaskCancellation(sql, taskState.rootThreadId, effect.threadId);
+        return yield* deny(effect.request.type, "task-contract", blocked);
+      }
     }
     if (runId !== undefined) {
       yield* sql`

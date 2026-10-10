@@ -112,6 +112,8 @@ export const executorLayer: Layer.Layer<
           case "provider-runtime.continue":
             return revalidateOutboxEffect({
               threadId: effect.threadId,
+              commandId: effect.commandId,
+              attemptCount: effect.attemptCount,
               request: { type: effect.request.type, runId: effect.request.sourceRunId },
             })
               .pipe(
@@ -157,6 +159,8 @@ export const executorLayer: Layer.Layer<
           case "provider-turn.start":
             return revalidateOutboxEffect({
               threadId: effect.threadId,
+              commandId: effect.commandId,
+              attemptCount: effect.attemptCount,
               request: { type: effect.request.type, runId: effect.request.runId },
             })
               .pipe(
@@ -336,6 +340,8 @@ export const executorLayer: Layer.Layer<
           case "provider-turn.restart":
             return revalidateOutboxEffect({
               threadId: effect.threadId,
+              commandId: effect.commandId,
+              attemptCount: effect.attemptCount,
               request: { type: effect.request.type, runId: effect.request.runId },
             }).pipe(
               Effect.mapError(

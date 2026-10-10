@@ -36,7 +36,7 @@ export const TaskContractPhase = Schema.Literals(["active", "redirected"]);
 export type TaskContractPhase = typeof TaskContractPhase.Type;
 
 export const TaskContractDecision = Schema.Struct({
-  kind: Schema.Literals(["set", "accept", "redirect"]),
+  kind: Schema.Literals(["set", "accept", "redirect", "resume"]),
   revision: PositiveInt,
   actorId: TrimmedNonEmptyString,
   at: Schema.DateTimeUtc,

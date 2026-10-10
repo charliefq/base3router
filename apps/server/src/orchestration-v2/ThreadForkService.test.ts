@@ -59,6 +59,16 @@ function makeSourceThread(): OrchestrationV2AppThread {
     snoozedUntil,
     snoozedAt,
     deletedAt: null,
+    taskGovernance: "required",
+    taskContract: {
+      revision: 1,
+      goal: "Keep the fork governed",
+      redirect: "Pause when the plan changes",
+      acceptance: "The fork stays required",
+      brake: { maxProviderStarts: 2, stopConditions: "Stop after the start budget" },
+    },
+    taskContractPhase: "active",
+    taskAcceptedRevision: null,
   };
 }
 
@@ -155,6 +165,9 @@ it.effect("keeps a fork awake when its source thread is snoozed", () =>
     assert.equal(result.targetThread.branch, sourceThread.branch);
     assert.equal(result.targetThread.worktreePath, sourceThread.worktreePath);
     assert.isNull(result.targetThread.activeProviderThreadId);
+    assert.equal(result.targetThread.taskGovernance, "required");
+    assert.equal(result.targetThread.taskContract?.revision, 1);
+    assert.equal(result.targetThread.lineage.rootThreadId, sourceThread.lineage.rootThreadId);
     assert.deepEqual(result.targetThread.lineage, {
       parentThreadId: sourceThreadId,
       relationshipToParent: "fork",

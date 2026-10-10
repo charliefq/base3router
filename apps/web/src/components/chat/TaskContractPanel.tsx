@@ -145,6 +145,7 @@ export function TaskContractReadout(props: {
   readonly acceptedRevision: number | null;
   readonly onAccept?: (() => void) | undefined;
   readonly onRedirect?: (() => void) | undefined;
+  readonly onResume?: (() => void) | undefined;
 }) {
   const [pending, setPending] = useState(false);
   const accepted = props.acceptedRevision !== null && props.acceptedRevision === props.revision;
@@ -213,6 +214,20 @@ export function TaskContractReadout(props: {
             onClick={() => run(props.onRedirect)}
           >
             Pause for redirect
+          </Button>
+        </div>
+      ) : null}
+      {props.phase === "redirected" && props.onResume !== undefined ? (
+        <div className="mt-2">
+          <Button
+            size="sm"
+            variant="outline"
+            type="button"
+            data-task-contract-resume=""
+            disabled={pending}
+            onClick={() => run(props.onResume)}
+          >
+            Resume under this contract
           </Button>
         </div>
       ) : null}

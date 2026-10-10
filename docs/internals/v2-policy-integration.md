@@ -141,15 +141,25 @@ starts are rejected before a provider starts. Completing it is
 `thread.task-contract.set`. Continuation does not replace the contract. It
 uses the persisted revision and still counts toward the brake.
 
-`maxProviderStarts` is reserved atomically in `task_contract_admissions` across
-the task tree. Exhaustion blocks new starts and sets `interrupt_requested` on
-open leases. It does not confirm termination or release a lease. Redirect and
-acceptance sentences are human decisions recorded by
-`thread.task-contract.redirect` and `thread.task-contract.accept` on a session
-with `orchestration:operate`. Provider completion does not accept the task. A
-child `delegated_task.request` inherits the parent contract and cannot replace
-it. Changing the contract bumps the revision, clears acceptance, and revokes
-execution grants for the tree.
+`maxProviderStarts` counts reservations in `task_contract_admissions` across
+the task tree, including later handoffs. The first `provider-turn.start` for
+an admitted command reuses that reservation. A retry of the same effect, a
+`provider-turn.restart`, or a `provider-runtime.continue` takes another slot.
+A contract edit does not delete earlier rows, so the budget does not reset.
+Exhaustion blocks new starts and enqueues `provider-turn.interrupt` for running
+turns. The outbox worker delivers that request to the provider. The lease stays
+occupied until provider termination is confirmed.
+
+Redirect and acceptance sentences are human decisions on a session with
+`orchestration:operate`. Accepting the current revision blocks further starts.
+Redirect pauses governed work and asks active turns to cancel until
+`thread.task-contract.resume` clears that pause on the same revision. Provider
+completion does not accept the task. A child inherits the parent contract and
+cannot replace it. An existing governed thread cannot be written back to
+ordinary chat by metadata, continuation, delegation, or resume. Changing the
+contract bumps the revision, clears acceptance, and revokes execution grants
+for the tree. Queued provider starts are rechecked against that revision
+before they run.
 
 The draft composer has a compact governed-task form. Inspector reads the
 persisted thread. Ordinary chat leaves the form off.
