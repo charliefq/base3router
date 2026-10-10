@@ -26,7 +26,7 @@ type BrowserPage = {
 
 type JourneyStatus = "PASS" | "FAIL" | "BLOCKED";
 type JourneyResult = {
-  name: "manual" | "auto" | "ask" | "task-contract" | "memory";
+  name: "manual" | "auto" | "ask" | "task-contract" | "memory" | "task-usage";
   status: JourneyStatus;
   detail: string;
   assertions: Record<string, unknown>;
@@ -875,6 +875,83 @@ async function runTaskContract(
   }
 }
 
+async function runTaskUsage(
+  page: import("playwright-core").Page,
+  origin: string,
+  consoleLog: string[],
+): Promise<JourneyResult> {
+  const goal = "Measure accepted work";
+  const prompt = "task-usage-inspector-turn";
+  try {
+    await page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
+    await page.locator("[data-composer-routing]").first().waitFor({ timeout: 30_000 });
+    const toggle = page.locator("[data-task-contract-toggle]");
+    if ((await toggle.count()) === 0) {
+      await openDraftThread(page, origin);
+    }
+    await toggle.waitFor({ timeout: 30_000 });
+    await toggle.check();
+    await page.locator("[data-task-contract-goal]").fill(goal);
+    await page.locator("[data-task-contract-redirect]").fill("Pause when the plan changes");
+    await page.locator("[data-task-contract-acceptance]").fill("The focused tests pass");
+    await page.locator("[data-task-contract-max-starts]").fill("4");
+    await page.locator("[data-task-contract-stop]").fill("Stop after the start budget");
+    await sendComposerTurn(page, "manual", prompt);
+    await waitUntil(
+      () => fakeTurnPrompt(prompt),
+      "Fake Codex did not receive turn/start for the usage task.",
+    );
+    const details = page.locator("[data-thread-details-panel]");
+    if ((await details.count()) === 0) {
+      await page.getByRole("button", { name: "Toggle thread details panel" }).click();
+    }
+    await page.locator("[data-task-usage-summary]").waitFor({ timeout: 30_000 });
+    await waitUntil(async () => {
+      const acceptance = await page
+        .locator("[data-task-usage-acceptance]")
+        .getAttribute("data-task-usage-acceptance")
+        .catch(() => null);
+      const coverage = await page
+        .locator("[data-task-usage-coverage]")
+        .getAttribute("data-task-usage-coverage")
+        .catch(() => null);
+      const cost = await page
+        .locator("[data-task-usage-cost]")
+        .getAttribute("data-task-usage-cost")
+        .catch(() => null);
+      return acceptance === "unfinished" && coverage === "partial" && cost === "unknown";
+    }, "Inspector did not show unfinished partial task usage with unknown cost.");
+    const attempts = await page
+      .locator("[data-task-usage-attempts]")
+      .getAttribute("data-task-usage-attempts");
+    await page
+      .screenshot({
+        path: NodePath.join(artifactDir, "task-usage-inspector.png"),
+        fullPage: true,
+      })
+      .catch(() => undefined);
+    return {
+      name: "task-usage",
+      status: "PASS",
+      detail: "Inspector showed human acceptance separately from unknown provider usage.",
+      assertions: {
+        acceptance: "unfinished",
+        coverage: "partial",
+        cost: "unknown",
+        attempts,
+      },
+    };
+  } catch (error) {
+    await captureFailure(page, "task-usage", consoleLog, error);
+    return {
+      name: "task-usage",
+      status: "FAIL",
+      detail: error instanceof Error ? error.message : String(error),
+      assertions: {},
+    };
+  }
+}
+
 async function runMemory(
   page: import("playwright-core").Page,
   origin: string,
@@ -1014,6 +1091,9 @@ async function main() {
     if (selected("ask")) results.push(await runAsk(page, origin, consoleLog));
     if (selected("task-contract")) {
       results.push(await runTaskContract(page, origin, consoleLog, childRef));
+    }
+    if (selected("task-usage")) {
+      results.push(await runTaskUsage(page, origin, consoleLog));
     }
     if (selected("memory")) results.push(await runMemory(page, origin, consoleLog, childRef));
     NodeFS.writeFileSync(journeyLogPath, `${JSON.stringify({ origin, results }, null, 2)}\n`);

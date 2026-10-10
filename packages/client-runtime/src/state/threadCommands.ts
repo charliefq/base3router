@@ -79,6 +79,7 @@ import {
   settleThread,
   snoozeThread,
   decideTaskContract,
+  readTaskUsage,
   startThreadTurn,
   stopThreadSession,
   unarchiveThread,
@@ -274,6 +275,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     decideTaskContract: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:decide-task-contract",
       execute: (input: DecideTaskContractInput) => decideTaskContract(input),
+      scheduler,
+      concurrency,
+    }),
+    readTaskUsage: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:read-task-usage",
+      execute: (input: { readonly threadId: ThreadId }) => readTaskUsage(input),
       scheduler,
       concurrency,
     }),

@@ -2,6 +2,7 @@ import {
   TASK_CONTRACT_HUMAN_DECISION,
   taskContractFieldErrors,
   type TaskContractFields,
+  type TaskUsageSummary,
 } from "@t3tools/contracts";
 import { useState } from "react";
 
@@ -231,6 +232,88 @@ export function TaskContractReadout(props: {
           </Button>
         </div>
       ) : null}
+    </article>
+  );
+}
+
+function showUsage(value: number | null): string {
+  return value === null ? "unknown" : String(value);
+}
+
+export function TaskUsageReadout(props: {
+  readonly summary: TaskUsageSummary | null;
+  readonly unavailable: boolean;
+}) {
+  if (props.summary === null) {
+    return (
+      <p
+        className="text-xs text-muted-foreground"
+        data-task-usage-summary={props.unavailable ? "unavailable" : "loading"}
+      >
+        {props.unavailable ? "Task usage is unknown." : "Reading task usage."}
+      </p>
+    );
+  }
+  const summary = props.summary;
+  return (
+    <article
+      className="rounded-md border border-border/60 p-3 text-xs"
+      data-task-usage-summary="ready"
+    >
+      <h3 className="font-medium">Task usage</h3>
+      <p className="mt-1 text-muted-foreground">
+        Provider completion is not acceptance. Missing usage and cost stay unknown.
+      </p>
+      <dl className="mt-2 space-y-1">
+        <div>
+          <dt className="text-muted-foreground">Acceptance</dt>
+          <dd data-task-usage-acceptance={summary.acceptance}>
+            {summary.acceptance} · revision {summary.contractRevision ?? "missing"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">Attempts</dt>
+          <dd
+            data-task-usage-attempts={summary.attempts}
+            data-task-usage-children={summary.childCount}
+            data-task-usage-retries={summary.retryAttempts}
+            data-task-usage-failovers={summary.failoverAttempts}
+          >
+            {summary.attempts} provider attempts · {summary.childCount} children ·{" "}
+            {summary.retryAttempts} retries · {summary.failoverAttempts} failovers
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">Tokens</dt>
+          <dd
+            data-task-usage-input={showUsage(summary.reported.inputTokens)}
+            data-task-usage-output={showUsage(summary.reported.outputTokens)}
+          >
+            input {showUsage(summary.reported.inputTokens)} · output{" "}
+            {showUsage(summary.reported.outputTokens)} · cache read{" "}
+            {showUsage(summary.reported.cachedInputTokens)} · cache write{" "}
+            {showUsage(summary.reported.cacheCreationTokens)} · reasoning{" "}
+            {showUsage(summary.reported.reasoningTokens)}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">Reported cost</dt>
+          <dd data-task-usage-cost={showUsage(summary.reported.reportedCostUsd)}>
+            {showUsage(summary.reported.reportedCostUsd)}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">Coverage</dt>
+          <dd
+            data-task-usage-coverage={summary.totalsComplete ? "complete" : "partial"}
+            data-task-usage-missing-usage={summary.missingUsageAttempts}
+            data-task-usage-missing-cost={summary.missingCostAttempts}
+          >
+            {summary.totalsComplete ? "complete" : "partial"} · missing usage{" "}
+            {summary.missingUsageAttempts} · missing cost {summary.missingCostAttempts}
+          </dd>
+        </div>
+      </dl>
     </article>
   );
 }

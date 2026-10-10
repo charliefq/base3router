@@ -146,6 +146,64 @@ const taskContractAdmissionMessage = Effect.gen(function* () {
   `;
 });
 
+const taskUsageTables = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS task_usage_attempts (
+      environment_id TEXT NOT NULL,
+      provider_turn_id TEXT NOT NULL,
+      root_thread_id TEXT NOT NULL,
+      thread_id TEXT NOT NULL,
+      run_id TEXT,
+      message_id TEXT,
+      contract_revision INTEGER,
+      provider_instance_id TEXT,
+      status TEXT NOT NULL,
+      attempt_role TEXT NOT NULL,
+      usage_status TEXT NOT NULL,
+      basis TEXT NOT NULL,
+      input_tokens INTEGER,
+      cached_input_tokens INTEGER,
+      cache_creation_tokens INTEGER,
+      output_tokens INTEGER,
+      reasoning_tokens INTEGER,
+      reported_cost_usd REAL,
+      source_event_id TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (environment_id, provider_turn_id)
+    )
+  `;
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS task_usage_events (
+      environment_id TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      provider_turn_id TEXT NOT NULL,
+      PRIMARY KEY (environment_id, event_id)
+    )
+  `;
+  // The attempt write records its event id in the same statement. A second
+  // client statement yields inside the projection transaction.
+  yield* sql`
+    CREATE TRIGGER IF NOT EXISTS task_usage_attempts_record_event
+    AFTER INSERT ON task_usage_attempts
+    WHEN NEW.source_event_id IS NOT NULL
+    BEGIN
+      INSERT INTO task_usage_events (environment_id, event_id, provider_turn_id)
+      VALUES (NEW.environment_id, NEW.source_event_id, NEW.provider_turn_id);
+    END
+  `;
+  yield* sql`
+    CREATE TRIGGER IF NOT EXISTS task_usage_attempts_record_event_update
+    AFTER UPDATE ON task_usage_attempts
+    WHEN NEW.source_event_id IS NOT NULL
+      AND NEW.source_event_id IS NOT OLD.source_event_id
+    BEGIN
+      INSERT INTO task_usage_events (environment_id, event_id, provider_turn_id)
+      VALUES (NEW.environment_id, NEW.source_event_id, NEW.provider_turn_id);
+    END
+  `;
+});
+
 const steps: ReadonlyArray<
   readonly [string, string, Effect.Effect<void, SqlError, SqlClient.SqlClient>]
 > = [
@@ -164,6 +222,7 @@ const steps: ReadonlyArray<
   ["b3-066", "PolicyIntegrationTables", integrationTables],
   ["b3-067", "TaskContractAdmissions", taskContractTables],
   ["b3-068", "TaskContractAdmissionMessage", taskContractAdmissionMessage],
+  ["b3-069", "TaskUsageAttempts", taskUsageTables],
 ];
 
 export const runBase3PolicyMigrations = Effect.gen(function* () {
