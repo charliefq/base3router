@@ -35,6 +35,7 @@ export * from "./pullRequest.ts";
 export * from "./orchestrationDispatch.ts";
 export * from "./orchestrationProject.ts";
 export * from "./taskContract.ts";
+export * from "./taskUsage.ts";
 export * from "./orchestrationV2.ts";
 export * from "./applicationEvent.ts";
 export * from "./orchestratorMcp.ts";

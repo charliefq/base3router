@@ -224,6 +224,7 @@ import {
   OrchestrationV2RpcSchemas,
   OrchestrationV2ThreadLaunchError,
 } from "./orchestrationV2.ts";
+import { TaskUsageReadError } from "./taskUsage.ts";
 import {
   ProjectCreateNewInput,
   ProjectCreateNewResult,
@@ -1649,6 +1650,21 @@ const WsOrchestrationV2GetThreadProjectionRpc = Rpc.make(
   },
 );
 
+const WsOrchestrationV2GetTaskUsageRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.getTaskUsage, {
+  payload: OrchestrationV2RpcSchemas.getTaskUsage.input,
+  success: OrchestrationV2RpcSchemas.getTaskUsage.output,
+  error: Schema.Union([TaskUsageReadError, EnvironmentAuthorizationError]),
+});
+
+const WsOrchestrationV2GetTaskUsageCohortRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.getTaskUsageCohort,
+  {
+    payload: OrchestrationV2RpcSchemas.getTaskUsageCohort.input,
+    success: OrchestrationV2RpcSchemas.getTaskUsageCohort.output,
+    error: Schema.Union([TaskUsageReadError, EnvironmentAuthorizationError]),
+  },
+);
+
 const WsOrchestrationV2GetWorkflowScriptRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.getWorkflowScript,
   {
@@ -1974,6 +1990,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SearchThreadsRpc,
   WsOrchestrationV2GetArchivedShellSnapshotRpc,
   WsOrchestrationV2GetThreadProjectionRpc,
+  WsOrchestrationV2GetTaskUsageRpc,
+  WsOrchestrationV2GetTaskUsageCohortRpc,
   WsOrchestrationV2LaunchThreadRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,

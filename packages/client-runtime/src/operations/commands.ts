@@ -652,6 +652,12 @@ export const decideTaskContract = Effect.fn("EnvironmentCommands.decideTaskContr
   });
 });
 
+export const readTaskUsage = Effect.fn("EnvironmentCommands.readTaskUsage")(function* (input: {
+  readonly threadId: ThreadId;
+}) {
+  return yield* request(ORCHESTRATION_V2_WS_METHODS.getTaskUsage, input);
+});
+
 export const setThreadInteractionMode = Effect.fn("EnvironmentCommands.setThreadInteractionMode")(
   function* (input: SetThreadInteractionModeInput) {
     return yield* dispatch({

@@ -1,4 +1,6 @@
 import { retainGovernedJson, retainGovernedTask } from "../policy/TaskContract.ts";
+import { recordTaskUsage } from "../policy/TaskUsageAccounting.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import {
   latestRootProviderFailure,
   latestUnheldRun,
@@ -64,6 +66,7 @@ import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2Pend
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -2163,6 +2166,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 completed_at = excluded.completed_at,
                 payload_json = excluded.payload_json
             `;
+            const environment = yield* Effect.serviceOption(ServerEnvironment.ServerEnvironment);
+            const environmentId = Option.isSome(environment)
+              ? yield* environment.value.getEnvironmentId
+              : "unscoped";
+            yield* recordTaskUsage(environmentId, event).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+            );
             break;
           }
           case "runtime-request.updated": {

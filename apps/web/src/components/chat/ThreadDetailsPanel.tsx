@@ -3,6 +3,7 @@ import type {
   EnvironmentId,
   ProjectScript,
   ResolvedKeybindingsConfig,
+  TaskUsageSummary,
   ThreadId,
 } from "@t3tools/contracts";
 import { AlertTriangleIcon, XIcon } from "lucide-react";
@@ -12,7 +13,7 @@ import { useThreadProjection } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
-import { TaskContractReadout } from "./TaskContractPanel";
+import { TaskContractReadout, TaskUsageReadout } from "./TaskContractPanel";
 import type { EnvMode, EnvironmentOption } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
 import { BranchToolbarEnvironmentSelector } from "../BranchToolbarEnvironmentSelector";
@@ -22,7 +23,7 @@ import ProjectScriptsControl, {
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
 import { Button } from "../ui/button";
-import type { ComponentProps } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
@@ -75,6 +76,32 @@ export interface ThreadDetailsPanelProps extends Pick<
     input: NewProjectScriptInput,
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
+}
+
+function TaskUsageSection(props: { environmentId: EnvironmentId; threadId: ThreadId }) {
+  const readTaskUsage = useAtomCommand(threadEnvironment.readTaskUsage, {
+    reportFailure: false,
+  });
+  const [summary, setSummary] = useState<TaskUsageSummary | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void readTaskUsage({
+      environmentId: props.environmentId,
+      input: { threadId: props.threadId },
+    }).then((result) => {
+      if (cancelled) return;
+      if (result._tag === "Success") {
+        setSummary(result.value);
+        return;
+      }
+      setUnavailable(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [props.environmentId, props.threadId, readTaskUsage]);
+  return <TaskUsageReadout summary={summary} unavailable={unavailable} />;
 }
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
@@ -285,6 +312,11 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                       }
                     : undefined
                 }
+              />
+              <TaskUsageSection
+                key={props.threadId}
+                environmentId={props.environmentId}
+                threadId={props.threadId}
               />
             </ThreadDetailsSection>
           ) : null}

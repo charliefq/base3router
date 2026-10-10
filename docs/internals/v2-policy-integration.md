@@ -164,6 +164,16 @@ before they run.
 The draft composer has a compact governed-task form. Inspector reads the
 persisted thread. Ordinary chat leaves the form off.
 
+Task usage is the provider-turn totals that produced a governed task, including
+children, retries, failover, and rejected work. `turnTokenUsage` is one turn's
+snapshot: input already includes cache, and output already includes reasoning,
+so those splits are shown and not added again. A later snapshot for the same
+turn replaces it. An incremental report adds. The context-window `usedTokens`
+meter is not task usage. A replayed event id is ignored. Missing tokens or
+cost stay unknown. Cost is the provider-reported figure only. Human acceptance
+is a separate decision from provider completion. A cohort with no accepted
+task has an undefined consumption ratio. Incomplete coverage is partial.
+
 ## Later upstream commits
 
 None. The pin remains `8ed276c246b624631e7d39241ebfd22d8314cb68`.

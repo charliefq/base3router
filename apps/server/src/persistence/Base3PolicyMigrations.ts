@@ -146,6 +146,42 @@ const taskContractAdmissionMessage = Effect.gen(function* () {
   `;
 });
 
+const taskUsageTables = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS task_usage_attempts (
+      environment_id TEXT NOT NULL,
+      provider_turn_id TEXT NOT NULL,
+      root_thread_id TEXT NOT NULL,
+      thread_id TEXT NOT NULL,
+      run_id TEXT,
+      message_id TEXT,
+      contract_revision INTEGER,
+      provider_instance_id TEXT,
+      status TEXT NOT NULL,
+      attempt_role TEXT NOT NULL,
+      usage_status TEXT NOT NULL,
+      basis TEXT NOT NULL,
+      input_tokens INTEGER,
+      cached_input_tokens INTEGER,
+      cache_creation_tokens INTEGER,
+      output_tokens INTEGER,
+      reasoning_tokens INTEGER,
+      reported_cost_usd REAL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (environment_id, provider_turn_id)
+    )
+  `;
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS task_usage_events (
+      environment_id TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      provider_turn_id TEXT NOT NULL,
+      PRIMARY KEY (environment_id, event_id)
+    )
+  `;
+});
+
 const steps: ReadonlyArray<
   readonly [string, string, Effect.Effect<void, SqlError, SqlClient.SqlClient>]
 > = [
@@ -164,6 +200,7 @@ const steps: ReadonlyArray<
   ["b3-066", "PolicyIntegrationTables", integrationTables],
   ["b3-067", "TaskContractAdmissions", taskContractTables],
   ["b3-068", "TaskContractAdmissionMessage", taskContractAdmissionMessage],
+  ["b3-069", "TaskUsageAttempts", taskUsageTables],
 ];
 
 export const runBase3PolicyMigrations = Effect.gen(function* () {

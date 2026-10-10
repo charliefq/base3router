@@ -38,6 +38,7 @@ import {
   TaskContractFields,
   TaskContractPhase,
 } from "./taskContract.ts";
+import { TaskUsageCohort, TaskUsageSummary } from "./taskUsage.ts";
 import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
@@ -931,6 +932,17 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
   tokenUsage: Schema.optional(OrchestrationV2ProviderTurnTokenUsage),
   turnTokenUsage: Schema.optional(TurnTokenUsage),
+  /**
+   * Provider-reported cost for this turn. Absent means unknown.
+   * Task accounting must not invent a price for an omitted cost.
+   */
+  reportedCostUsd: Schema.optional(Schema.Number.check(Schema.isFinite())),
+  /**
+   * How `turnTokenUsage` should be combined with an earlier report for this
+   * same turn. Snapshot replaces. Incremental adds. Omitted means snapshot,
+   * matching the normalized per-turn totals adapters already emit.
+   */
+  usageAccounting: Schema.optional(Schema.Literals(["snapshot", "incremental"])),
 });
 export type OrchestrationV2ProviderTurn = typeof OrchestrationV2ProviderTurn.Type;
 
@@ -2932,6 +2944,8 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   searchThreads: "orchestration.searchThreads",
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   getThreadProjection: "orchestration.getThreadProjection",
+  getTaskUsage: "orchestration.getTaskUsage",
+  getTaskUsageCohort: "orchestration.getTaskUsageCohort",
   getWorkflowScript: "orchestration.getWorkflowScript",
   launchThread: "orchestration.launchThread",
   subscribeArchivedShell: "orchestration.subscribeArchivedShell",
@@ -3295,6 +3309,16 @@ export const OrchestrationV2RpcSchemas = {
   getThreadProjection: {
     input: OrchestrationV2GetThreadProjectionInput,
     output: OrchestrationV2ThreadProjection,
+  },
+  getTaskUsage: {
+    input: Schema.Struct({ threadId: ThreadId }),
+    output: TaskUsageSummary,
+  },
+  getTaskUsageCohort: {
+    input: Schema.Struct({
+      rootThreadIds: Schema.Array(ThreadId).check(Schema.isMaxLength(32)),
+    }),
+    output: TaskUsageCohort,
   },
   getWorkflowScript: {
     input: OrchestrationV2GetWorkflowScriptInput,

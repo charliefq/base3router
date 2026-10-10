@@ -133,6 +133,12 @@ import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import {
+  asTaskUsageReadError,
+  assertCanReadTaskUsage,
+  readTaskUsage,
+  readTaskUsageCohort,
+} from "./policy/TaskUsageAccounting.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
@@ -1904,6 +1910,29 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "orchestrationV2",
               "orchestration_v2.thread_id": input.threadId,
             },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.getTaskUsage]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.getTaskUsage,
+            Effect.gen(function* () {
+              yield* assertCanReadTaskUsage(currentSession.scopes);
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              return yield* readTaskUsage(environmentId, input.threadId);
+            }).pipe(Effect.mapError(asTaskUsageReadError)),
+            {
+              "rpc.aggregate": "orchestrationV2",
+              "orchestration_v2.thread_id": input.threadId,
+            },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.getTaskUsageCohort]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.getTaskUsageCohort,
+            Effect.gen(function* () {
+              yield* assertCanReadTaskUsage(currentSession.scopes);
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              return yield* readTaskUsageCohort(environmentId, input.rootThreadIds);
+            }).pipe(Effect.mapError(asTaskUsageReadError)),
+            { "rpc.aggregate": "orchestrationV2" },
           ),
         [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>
           observeRpcEffect(
