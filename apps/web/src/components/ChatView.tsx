@@ -1545,6 +1545,9 @@ export default function ChatView(props: ChatViewProps) {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const decideTaskContract = useAtomCommand(threadEnvironment.decideTaskContract, {
+    reportFailure: false,
+  });
   const resumeThreadQueue = useAtomCommand(threadEnvironment.resumeThreadQueue, {
     reportFailure: false,
   });
@@ -9188,52 +9191,72 @@ export default function ChatView(props: ChatViewProps) {
           ? scopeThreadRef(environmentId, threadIdForSend)
           : null;
       if (backgroundThreadRef) beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
-      const startPromise = startThreadTurn({
-        environmentId,
-        input: {
-          threadId: threadIdForSend,
-          message: {
-            messageId: messageIdForSend,
-            role: "user",
-            text: outgoingMessageText,
-            attachments: turnAttachmentsResult.value,
-            ...(() => {
-              const context = buildOutgoingMessageContext(
-                turnAttachmentsResult.value.map((attachment, index) =>
-                  "id" in attachment && attachment.id !== undefined
-                    ? attachment.id
-                    : composerAttachmentsSnapshot[index]!.id,
-                ),
-              );
-              if (context === undefined) return {};
-              // Read the capability at dispatch time: the upload and persistence
-              // awaits above can span a server reconnect that changes it. Servers
-              // from before inline context drop the records and forward the links
-              // as literal text, so their turns carry the payload the legacy way.
-              const supportsInlineMessageContext =
-                appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
-                  .capabilities.inlineMessageContext === true;
-              if (!supportsInlineMessageContext) {
-                return {
-                  text: serializeLegacyContextMessage({
-                    text: outgoingMessageText,
-                    records: context.records,
-                  }),
-                };
-              }
-              return { context };
-            })(),
+      if (isServerThread && sendCtx.taskContract) {
+        const contractResult = await decideTaskContract({
+          environmentId,
+          input: {
+            threadId: threadIdForSend,
+            action: "set",
+            goal: sendCtx.taskContract.goal,
+            redirect: sendCtx.taskContract.redirect,
+            acceptance: sendCtx.taskContract.acceptance,
+            maxProviderStarts: sendCtx.taskContract.brake.maxProviderStarts,
+            stopConditions: sendCtx.taskContract.brake.stopConditions,
           },
-          modelSelection: ctxSelectedModelSelection,
-          titleSeed: title,
-          runtimeMode,
-          interactionMode: sendInteractionMode,
-          routingMode: sendRoutingMode,
-          dispatchMode,
-          ...(bootstrap ? { bootstrap } : {}),
-          createdAt: messageCreatedAt,
-        },
-      });
+        });
+        if (contractResult._tag === "Failure") {
+          failure = contractResult;
+        }
+      }
+      const startPromise =
+        failure !== null
+          ? Promise.resolve(failure)
+          : startThreadTurn({
+              environmentId,
+              input: {
+                threadId: threadIdForSend,
+                message: {
+                  messageId: messageIdForSend,
+                  role: "user",
+                  text: outgoingMessageText,
+                  attachments: turnAttachmentsResult.value,
+                  ...(() => {
+                    const context = buildOutgoingMessageContext(
+                      turnAttachmentsResult.value.map((attachment, index) =>
+                        "id" in attachment && attachment.id !== undefined
+                          ? attachment.id
+                          : composerAttachmentsSnapshot[index]!.id,
+                      ),
+                    );
+                    if (context === undefined) return {};
+                    // Read the capability at dispatch time: the upload and persistence
+                    // awaits above can span a server reconnect that changes it. Servers
+                    // from before inline context drop the records and forward the links
+                    // as literal text, so their turns carry the payload the legacy way.
+                    const supportsInlineMessageContext =
+                      appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)
+                        ?.environment.capabilities.inlineMessageContext === true;
+                    if (!supportsInlineMessageContext) {
+                      return {
+                        text: serializeLegacyContextMessage({
+                          text: outgoingMessageText,
+                          records: context.records,
+                        }),
+                      };
+                    }
+                    return { context };
+                  })(),
+                },
+                modelSelection: ctxSelectedModelSelection,
+                titleSeed: title,
+                runtimeMode,
+                interactionMode: sendInteractionMode,
+                routingMode: sendRoutingMode,
+                dispatchMode,
+                ...(bootstrap ? { bootstrap } : {}),
+                createdAt: messageCreatedAt,
+              },
+            });
       if (backgroundThreadRef) {
         markPromotedDraftThreadByRef(backgroundThreadRef);
         try {
@@ -10838,6 +10861,9 @@ export default function ChatView(props: ChatViewProps) {
                               supportsQuestionAttachments={supportsQuestionAttachments}
                               maxFileAttachmentBytes={maxFileAttachmentBytes}
                               routeKind={routeKind}
+                              showTaskContractForm={
+                                isLocalDraftThread || timelineEntries.length === 0
+                              }
                               routeThreadRef={routeThreadRef}
                               draftId={draftId}
                               activeThreadId={activeThreadId}

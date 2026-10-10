@@ -1551,6 +1551,8 @@ export interface ChatComposerProps {
   supportsQuestionAttachments: boolean;
   maxFileAttachmentBytes: number | null;
   routeKind: "server" | "draft";
+  /** Drafts and threads that have not started can still name a task contract. */
+  showTaskContractForm?: boolean;
   routeThreadRef: ScopedThreadRef;
   draftId: DraftId | null;
   multipleModelSelections: ReadonlyArray<ModelSelection> | null;
@@ -1736,6 +1738,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     supportsQuestionAttachments,
     maxFileAttachmentBytes,
     routeKind,
+    showTaskContractForm = false,
     routeThreadRef,
     draftId,
     multipleModelSelections,
@@ -2407,9 +2410,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [taskContractDraft, setTaskContractDraft] = useState(EMPTY_TASK_CONTRACT_DRAFT);
   const taskContractDraftRef = useRef(taskContractDraft);
   taskContractDraftRef.current = taskContractDraft;
+  const showTaskContractFormRef = useRef(showTaskContractForm);
+  showTaskContractFormRef.current = showTaskContractForm || routeKind === "draft";
   useEffect(() => {
     setTaskContractDraft(EMPTY_TASK_CONTRACT_DRAFT);
-  }, [draftId, routeKind]);
+  }, [draftId, routeKind, activeThreadId]);
   const [routingMode, setRoutingMode] = useState<"auto" | "manual">("manual");
   const [stashPulse, setStashPulse] = useState<{ key: number; active: boolean }>({
     key: 0,
@@ -6472,7 +6477,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         interactionModeEnabled: planModeUiEnabled,
         routingMode,
         ...(() => {
-          if (routeKind !== "draft") return { taskContractError: null, taskContract: null };
+          if (!showTaskContractFormRef.current) {
+            return { taskContractError: null, taskContract: null };
+          }
           const drafted = taskContractFromDraft(taskContractDraftRef.current);
           return { taskContractError: drafted.error, taskContract: drafted.contract };
         })(),
@@ -6610,7 +6617,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       data-chat-composer-form="true"
       {...threadContextDropTargetProps()}
     >
-      {routeKind === "draft" ? (
+      {showTaskContractForm || routeKind === "draft" ? (
         <TaskContractForm draft={taskContractDraft} onChange={setTaskContractDraft} />
       ) : null}
       {composerControlsCollapsed && restingControlsHost
