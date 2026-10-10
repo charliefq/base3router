@@ -1,3 +1,4 @@
+import { retainGovernedJson, retainGovernedTask } from "../policy/TaskContract.ts";
 import {
   latestRootProviderFailure,
   latestUnheldRun,
@@ -658,7 +659,7 @@ export function applyToProjection(
     case "thread.provider-switched":
       return {
         ...base,
-        thread: event.payload,
+        thread: retainGovernedTask(projection.thread, event.payload),
       };
     // Visited tracking is read state, not activity: skip the updatedAt bump so
     // viewing a thread does not surface it as recently active.
@@ -666,7 +667,7 @@ export function applyToProjection(
     case "thread.marked-unread":
       return {
         ...projection,
-        thread: event.payload,
+        thread: retainGovernedTask(projection.thread, event.payload),
       };
     case "run.created":
     case "run.updated":
@@ -1682,7 +1683,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           case "thread.interaction-mode-updated":
           case "thread.model-selection-updated":
           case "thread.provider-switched": {
-            const payloadJson = yield* encodeThreadPayload(event.payload);
+            const existingRows = yield* sql<{ readonly payload_json: string }>`
+              SELECT payload_json FROM orchestration_v2_projection_threads
+              WHERE thread_id = ${event.payload.id}
+              LIMIT 1
+            `;
+            const threadPayload = retainGovernedJson(
+              existingRows[0]?.payload_json ?? null,
+              event.payload,
+            );
+            const payloadJson = yield* encodeThreadPayload(threadPayload);
             const payload = parseEncodedPayload(payloadJson);
             yield* sql`
               INSERT INTO orchestration_v2_projection_threads (

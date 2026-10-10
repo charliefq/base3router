@@ -26,7 +26,7 @@ type BrowserPage = {
 
 type JourneyStatus = "PASS" | "FAIL" | "BLOCKED";
 type JourneyResult = {
-  name: "manual" | "auto" | "ask" | "memory";
+  name: "manual" | "auto" | "ask" | "task-contract" | "memory";
   status: JourneyStatus;
   detail: string;
   assertions: Record<string, unknown>;
@@ -114,6 +114,18 @@ function pinFakeDiscovery(
       },
     },
   });
+}
+
+function threadPayloads(homeDir: string): Array<Record<string, unknown>> {
+  const db = new NodeSqlite.DatabaseSync(sqlitePath(homeDir), { readOnly: true });
+  try {
+    const rows = db
+      .prepare(`SELECT payload_json FROM orchestration_v2_projection_threads`)
+      .all() as Array<{ payload_json: string }>;
+    return rows.map((row) => JSON.parse(row.payload_json) as Record<string, unknown>);
+  } finally {
+    db.close();
+  }
 }
 
 function latestBindings(homeDir: string) {
@@ -375,6 +387,29 @@ async function dismissOverlays(page: import("playwright-core").Page) {
     await page.keyboard.press("Escape");
     await sleep(200);
   }
+}
+
+async function openDraftThread(page: import("playwright-core").Page, origin: string) {
+  await page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
+  await dismissOverlays(page);
+  if (!page.url().includes("/draft/")) {
+    const create = page.locator("[aria-label='New thread']").first();
+    await create.waitFor({ timeout: 20_000 });
+    await create.click();
+    const paletteChoice = page
+      .getByText("New thread without a project", { exact: true })
+      .or(page.getByText("No project", { exact: true }));
+    if (
+      await paletteChoice
+        .first()
+        .isVisible()
+        .catch(() => false)
+    ) {
+      await paletteChoice.first().click();
+    }
+  }
+  await waitUntil(() => page.url().includes("/draft/"), "A new draft thread did not open.");
+  await page.locator("[data-composer-routing]").first().waitFor({ timeout: 30_000 });
 }
 
 async function openFreshThread(page: import("playwright-core").Page, origin: string) {
@@ -701,6 +736,145 @@ async function runAsk(
   }
 }
 
+async function runTaskContract(
+  page: import("playwright-core").Page,
+  origin: string,
+  consoleLog: string[],
+  childRef: { child: NodeChildProcess.ChildProcess },
+): Promise<JourneyResult> {
+  const goal = "Ship the contract slice";
+  const prompt = "governed-task-proof-turn";
+  try {
+    await page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
+    await page.locator("[data-composer-routing]").first().waitFor({ timeout: 30_000 });
+    const toggle = page.locator("[data-task-contract-toggle]");
+    if ((await toggle.count()) === 0) {
+      await openDraftThread(page, origin);
+    }
+    await toggle.waitFor({ timeout: 30_000 });
+    await toggle.check();
+    await page.locator("[data-task-contract-goal]").fill(goal);
+    await page.locator("[data-task-contract-redirect]").fill("Pause when the plan changes");
+    await page.locator("[data-task-contract-acceptance]").fill("The focused tests pass");
+    await page.locator("[data-task-contract-max-starts]").fill("2");
+    await page.locator("[data-task-contract-stop]").fill("Stop after the start budget");
+    await page
+      .screenshot({
+        path: NodePath.join(artifactDir, "task-contract-form.png"),
+        fullPage: true,
+      })
+      .catch(() => undefined);
+    const turnsBefore = fakeMethodCount("turn/start");
+    await sendComposerTurn(page, "manual", prompt);
+    await waitUntil(
+      () => fakeTurnPrompt(prompt),
+      "Fake Codex did not receive turn/start for the governed task.",
+    );
+    await waitUntil(
+      () =>
+        threadPayloads(home).some((payload) => {
+          const contract = payload.taskContract as { goal?: string } | null | undefined;
+          return payload.taskGovernance === "required" && contract?.goal === goal;
+        }),
+      "Governed task contract was not persisted.",
+    );
+    const threadUrl = page.url();
+    await page.reload({ waitUntil: "domcontentloaded" });
+    const details = page.locator("[data-thread-details-panel]");
+    if ((await details.count()) === 0) {
+      await page.getByRole("button", { name: "Toggle thread details panel" }).click();
+    }
+    await waitUntil(async () => {
+      const text = await page
+        .locator("[data-task-contract-goal-text]")
+        .innerText()
+        .catch(() => "");
+      return text.includes(goal);
+    }, "Inspector did not show the persisted goal after refresh.");
+    await page
+      .screenshot({
+        path: NodePath.join(artifactDir, "task-contract-inspector.png"),
+        fullPage: true,
+      })
+      .catch(() => undefined);
+
+    stop(childRef.child, home);
+    await sleep(1_000);
+    const restarted = await startDev(home);
+    childRef.child = restarted.child;
+    if (restarted.pairingUrl.length === 0) {
+      throw new Error("Restarted server did not print a pairing URL.");
+    }
+    const stillThere = threadPayloads(home).some((payload) => {
+      const contract = payload.taskContract as { goal?: string } | null | undefined;
+      return contract?.goal === goal;
+    });
+    if (!stillThere) {
+      throw new Error("Task contract did not survive the file-backed restart.");
+    }
+    await page.goto(threadUrl, { waitUntil: "domcontentloaded" });
+    if (page.url().includes("/pair")) {
+      await page.goto(restarted.pairingUrl, { waitUntil: "domcontentloaded" });
+      await page.goto(threadUrl, { waitUntil: "domcontentloaded" });
+    }
+    if ((await page.locator("[data-thread-details-panel]").count()) === 0) {
+      await page.getByRole("button", { name: "Toggle thread details panel" }).click();
+    }
+    await waitUntil(async () => {
+      const text = await page
+        .locator("[data-task-contract-goal-text]")
+        .innerText()
+        .catch(() => "");
+      return text.includes(goal);
+    }, "Inspector did not show the goal after restart.");
+
+    await page.locator("[aria-label='New thread']").first().click();
+    const paletteChoice = page.getByText("No project", { exact: true });
+    if (
+      await paletteChoice
+        .first()
+        .isVisible()
+        .catch(() => false)
+    ) {
+      await paletteChoice.first().click();
+    }
+    await page.locator("[data-composer-routing]").first().waitFor({ timeout: 30_000 });
+    const ordinary = "ordinary-chat-proof-turn";
+    const ordinaryBefore = fakeMethodCount("turn/start");
+    await sendComposerTurn(page, "manual", ordinary);
+    await waitUntil(() => fakeTurnPrompt(ordinary), "Ordinary chat did not reach fake turn/start.");
+    if (fakeMethodCount("turn/start") <= ordinaryBefore) {
+      throw new Error("Ordinary chat did not increment turn/start.");
+    }
+    const governed = threadPayloads(home).filter(
+      (payload) => payload.taskGovernance === "required",
+    );
+    if (governed.length !== 1) {
+      throw new Error(
+        `Ordinary chat changed task governance: ${governed.length} required threads.`,
+      );
+    }
+    return {
+      name: "task-contract",
+      status: "PASS",
+      detail: "Governed launch, refresh, restart, and ordinary chat held.",
+      assertions: {
+        goal,
+        turnStart: fakeMethodCount("turn/start") > turnsBefore,
+        governedThreads: governed.length,
+      },
+    };
+  } catch (error) {
+    await captureFailure(page, "task-contract", consoleLog, error);
+    return {
+      name: "task-contract",
+      status: "FAIL",
+      detail: error instanceof Error ? error.message : String(error),
+      assertions: { payloads: threadPayloads(home).length },
+    };
+  }
+}
+
 async function runMemory(
   page: import("playwright-core").Page,
   origin: string,
@@ -833,10 +1007,15 @@ async function main() {
       consoleLog.push(`pageerror: ${error.message}`);
     });
     await pairAndOpenComposer(page, started.pairingUrl, origin);
-    results.push(await runManual(page, consoleLog));
-    results.push(await runAuto(page, origin, consoleLog));
-    results.push(await runAsk(page, origin, consoleLog));
-    results.push(await runMemory(page, origin, consoleLog, childRef));
+    const only = NodeProcess.env.T3_BROWSER_JOURNEY;
+    const selected = (name: JourneyResult["name"]) => only === undefined || only === name;
+    if (selected("manual")) results.push(await runManual(page, consoleLog));
+    if (selected("auto")) results.push(await runAuto(page, origin, consoleLog));
+    if (selected("ask")) results.push(await runAsk(page, origin, consoleLog));
+    if (selected("task-contract")) {
+      results.push(await runTaskContract(page, origin, consoleLog, childRef));
+    }
+    if (selected("memory")) results.push(await runMemory(page, origin, consoleLog, childRef));
     NodeFS.writeFileSync(journeyLogPath, `${JSON.stringify({ origin, results }, null, 2)}\n`);
     for (const result of results) {
       NodeProcess.stdout.write(

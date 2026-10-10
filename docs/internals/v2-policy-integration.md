@@ -131,6 +131,39 @@ action. Dream Memory save, capture-off, enqueue, and delete go through
 `memory.save`, settings `dreamMemory.captureMode`, `memory.enqueueEligible`,
 and `memory.delete`. Deleted rows stay deleted after reopen.
 
+## Task contract
+
+A new thread is ordinary chat unless `thread.create` sets `taskGovernance` to
+`required` or includes a contract. Historical threads omit that field and stay
+readable and launchable. A required task with a missing or blank goal,
+redirect, acceptance, or brake is paused: `message.dispatch` and delegated
+starts are rejected before a provider starts. Completing it is
+`thread.task-contract.set`. Continuation does not replace the contract. It
+uses the persisted revision and still counts toward the brake.
+
+`maxProviderStarts` counts reservations in `task_contract_admissions` across
+the task tree, including later handoffs. The first `provider-turn.start` for
+an admitted command reuses that reservation. A retry of the same effect, a
+`provider-turn.restart`, or a `provider-runtime.continue` takes another slot.
+A contract edit does not delete earlier rows, so the budget does not reset.
+Exhaustion blocks new starts and enqueues `provider-turn.interrupt` for running
+turns. The outbox worker delivers that request to the provider. The lease stays
+occupied until provider termination is confirmed.
+
+Redirect and acceptance sentences are human decisions on a session with
+`orchestration:operate`. Accepting the current revision blocks further starts.
+Redirect pauses governed work and asks active turns to cancel until
+`thread.task-contract.resume` clears that pause on the same revision. Provider
+completion does not accept the task. A child inherits the parent contract and
+cannot replace it. An existing governed thread cannot be written back to
+ordinary chat by metadata, continuation, delegation, or resume. Changing the
+contract bumps the revision, clears acceptance, and revokes execution grants
+for the tree. Queued provider starts are rechecked against that revision
+before they run.
+
+The draft composer has a compact governed-task form. Inspector reads the
+persisted thread. Ordinary chat leaves the form off.
+
 ## Later upstream commits
 
 None. The pin remains `8ed276c246b624631e7d39241ebfd22d8314cb68`.

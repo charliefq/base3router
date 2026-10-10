@@ -12,6 +12,7 @@ import type {
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { useEffect, useState } from "react";
 
+import { TaskContractReadout } from "../chat/TaskContractPanel";
 import { Button } from "../ui/button";
 import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { useProjects } from "../../state/entities";
@@ -359,6 +360,18 @@ function GovernanceProjectionView(props: {
               </ul>
             )}
           </article>
+          {snapshot.taskContract === undefined ? null : (
+            <TaskContractReadout
+              goal={snapshot.taskContract.goal}
+              redirect={snapshot.taskContract.redirect}
+              acceptance={snapshot.taskContract.acceptance}
+              maxProviderStarts={snapshot.taskContract.maxProviderStarts}
+              stopConditions={snapshot.taskContract.stopConditions}
+              revision={snapshot.taskContract.revision}
+              phase={snapshot.taskContract.phase}
+              acceptedRevision={snapshot.taskContract.acceptedRevision}
+            />
+          )}
           <article className="rounded-md border border-border/60 p-3" data-governance-memory="">
             <h3 className="text-xs font-medium">Memory</h3>
             <p className="mt-1 text-xs text-muted-foreground">

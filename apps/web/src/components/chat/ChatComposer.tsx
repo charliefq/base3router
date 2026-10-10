@@ -34,6 +34,7 @@ import type {
   RuntimeRequestId,
   ScopedThreadRef,
   ServerProvider,
+  TaskContractFields,
   ThreadId,
   SnapShotSource,
 } from "@t3tools/contracts";
@@ -124,6 +125,11 @@ import {
   usePromptStashStore,
   type PromptStashEntry,
 } from "../../promptStashStore";
+import {
+  EMPTY_TASK_CONTRACT_DRAFT,
+  TaskContractForm,
+  taskContractFromDraft,
+} from "./TaskContractPanel";
 import { ComposerStashBadge } from "./ComposerStashBadge";
 import { ComposerStashMenu } from "./ComposerStashMenu";
 import { useComposerMenuState } from "./useComposerMenuState";
@@ -1525,6 +1531,8 @@ export interface ChatComposerHandle {
     interactionMode: ProviderInteractionMode;
     interactionModeEnabled: boolean;
     routingMode: "auto" | "manual";
+    taskContractError: string | null;
+    taskContract: TaskContractFields | null;
   };
   /** Validate the fully composed text immediately before a provider turn starts. */
   validateProviderInput: (providerInput: string) => boolean;
@@ -1543,6 +1551,8 @@ export interface ChatComposerProps {
   supportsQuestionAttachments: boolean;
   maxFileAttachmentBytes: number | null;
   routeKind: "server" | "draft";
+  /** Drafts and threads that have not started can still name a task contract. */
+  showTaskContractForm?: boolean;
   routeThreadRef: ScopedThreadRef;
   draftId: DraftId | null;
   multipleModelSelections: ReadonlyArray<ModelSelection> | null;
@@ -1728,6 +1738,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     supportsQuestionAttachments,
     maxFileAttachmentBytes,
     routeKind,
+    showTaskContractForm = false,
     routeThreadRef,
     draftId,
     multipleModelSelections,
@@ -2396,6 +2407,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const hasMultilinePrompt = prompt.includes("\n") || hasWrappedPrompt;
   const [isStashMenuOpen, setIsStashMenuOpen] = useState(false);
   const [isTasksDrawerOpen, setIsTasksDrawerOpen] = useState(false);
+  const [taskContractDraft, setTaskContractDraft] = useState(EMPTY_TASK_CONTRACT_DRAFT);
+  const taskContractDraftRef = useRef(taskContractDraft);
+  taskContractDraftRef.current = taskContractDraft;
+  const showTaskContractFormRef = useRef(showTaskContractForm);
+  showTaskContractFormRef.current = showTaskContractForm || routeKind === "draft";
+  useEffect(() => {
+    setTaskContractDraft(EMPTY_TASK_CONTRACT_DRAFT);
+  }, [draftId, routeKind, activeThreadId]);
   const [routingMode, setRoutingMode] = useState<"auto" | "manual">("manual");
   const [stashPulse, setStashPulse] = useState<{ key: number; active: boolean }>({
     key: 0,
@@ -6457,6 +6476,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         interactionMode,
         interactionModeEnabled: planModeUiEnabled,
         routingMode,
+        ...(() => {
+          if (!showTaskContractFormRef.current) {
+            return { taskContractError: null, taskContract: null };
+          }
+          const drafted = taskContractFromDraft(taskContractDraftRef.current);
+          return { taskContractError: drafted.error, taskContract: drafted.contract };
+        })(),
       }),
       setMultipleModelSelections,
       validateProviderInput: (providerInput: string) => {
@@ -6591,6 +6617,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       data-chat-composer-form="true"
       {...threadContextDropTargetProps()}
     >
+      {showTaskContractForm || routeKind === "draft" ? (
+        <TaskContractForm draft={taskContractDraft} onChange={setTaskContractDraft} />
+      ) : null}
       {composerControlsCollapsed && restingControlsHost
         ? createPortal(
             <div

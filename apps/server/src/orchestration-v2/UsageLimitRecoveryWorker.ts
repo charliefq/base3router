@@ -1,9 +1,17 @@
-import { CommandId, MessageId, type OrchestrationV2Command } from "@t3tools/contracts";
+import {
+  CommandId,
+  contractGrantFields,
+  MessageId,
+  type OrchestrationV2Command,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { argumentHash, issueContinuationGrant } from "../policy/Base3PolicyGate.ts";
+import { loadTaskState } from "../policy/TaskContract.ts";
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -96,6 +104,8 @@ const makeSweep = Effect.gen(function* () {
       );
       if (command === null) continue;
       if (command.type === "message.dispatch") {
+        const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+        const taskState = Option.isSome(sql) ? yield* loadTaskState(sql.value, thread.id) : null;
         const granted = yield* issueContinuationGrant({
           grantId: `grant:usage-limit:${command.usageLimitContinuationOfRunId ?? thread.latestRunId}`,
           threadId: thread.id,
@@ -107,6 +117,9 @@ const makeSweep = Effect.gen(function* () {
             model: command.modelSelection?.model ?? null,
             instanceId: command.modelSelection?.instanceId ?? null,
             attachmentIds: [],
+            ...contractGrantFields(
+              taskState?.governance === "required" ? taskState.contract : null,
+            ),
           }),
         }).pipe(Effect.exit);
         if (Exit.isFailure(granted)) {

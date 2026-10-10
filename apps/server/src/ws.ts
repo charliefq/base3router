@@ -1926,6 +1926,10 @@ const makeWsRpcLayer = (
                   interactionMode: input.interactionMode,
                   workspaceStrategy: input.workspaceStrategy,
                   ...(input.routingMode === undefined ? {} : { routingMode: input.routingMode }),
+                  ...(input.taskGovernance === undefined
+                    ? {}
+                    : { taskGovernance: input.taskGovernance }),
+                  ...(input.taskContract === undefined ? {} : { taskContract: input.taskContract }),
                   ...(input.initialMessage === undefined
                     ? {}
                     : {

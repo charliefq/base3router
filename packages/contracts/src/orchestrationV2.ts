@@ -33,6 +33,12 @@ import {
 } from "./baseSchemas.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import {
+  TaskContract,
+  TaskContractDecision,
+  TaskContractFields,
+  TaskContractPhase,
+} from "./taskContract.ts";
+import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
   OrchestrationGetTurnDiffInput,
@@ -428,6 +434,15 @@ export const OrchestrationV2AppThread = Schema.Struct({
     ),
   ),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
+  /**
+   * Omitted on historical threads. Those stay ordinary chat: readable and
+   * launchable. "required" without a complete contract is a paused legacy task.
+   */
+  taskGovernance: Schema.optional(Schema.Literals(["chat", "required"])),
+  taskContract: Schema.optional(Schema.NullOr(TaskContract)),
+  taskContractPhase: Schema.optional(TaskContractPhase),
+  taskAcceptedRevision: Schema.optional(Schema.NullOr(PositiveInt)),
+  taskDecisions: Schema.optional(Schema.Array(TaskContractDecision)),
 });
 export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
 
@@ -1833,6 +1848,16 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
     ),
   ),
   deletedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  taskDecisions: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        kind: Schema.Literals(["set", "accept", "redirect", "resume"]),
+        revision: PositiveInt,
+        actorId: TrimmedNonEmptyString,
+        at: Schema.DateTimeUtcFromString,
+      }),
+    ),
+  ),
 }));
 export type OrchestrationV2AppThreadJson = typeof OrchestrationV2AppThreadJson.Type;
 
@@ -2435,6 +2460,8 @@ export const OrchestrationV2Command = Schema.Union([
         metadata: Schema.optional(OrchestrationV2ProviderThreadNativeMetadata),
       }),
     ),
+    taskGovernance: Schema.optional(Schema.Literals(["chat", "required"])),
+    taskContract: Schema.optional(TaskContractFields),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.archive"),
@@ -2797,6 +2824,35 @@ export const OrchestrationV2Command = Schema.Union([
     // run); producers that want fire-and-forget wakes must set "always".
     completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
     createdAt: Schema.optional(Schema.DateTimeUtc),
+    /** Present only when the child tries to name constraints. Omitted means inherit. */
+    taskContract: Schema.optional(TaskContractFields),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.task-contract.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    goal: TrimmedNonEmptyString,
+    redirect: TrimmedNonEmptyString,
+    acceptance: TrimmedNonEmptyString,
+    brake: TaskContractFields.fields.brake,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.task-contract.accept"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    revision: PositiveInt,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.task-contract.redirect"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    revision: PositiveInt,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.task-contract.resume"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    revision: PositiveInt,
   }),
   Schema.Struct({
     type: Schema.Literal("delegated_task.wake-policy"),
@@ -2943,6 +2999,8 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
   routingMode: Schema.optional(Schema.Literals(["auto", "manual"])),
+  taskGovernance: Schema.optional(Schema.Literals(["chat", "required"])),
+  taskContract: Schema.optional(TaskContractFields),
   initialMessage: Schema.optional(
     Schema.Struct({
       messageId: Schema.optional(MessageId),

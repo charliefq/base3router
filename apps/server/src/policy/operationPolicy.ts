@@ -61,6 +61,7 @@ export type OperationClass =
   | { readonly kind: "steer" }
   | { readonly kind: "release" }
   | { readonly kind: "rollback" }
+  | { readonly kind: "task-decision" }
   | { readonly kind: "ungoverned" };
 
 export function classifyCommand(type: string): OperationClass {
@@ -85,6 +86,11 @@ export function classifyCommand(type: string): OperationClass {
       return { kind: "release" };
     case "checkpoint.rollback":
       return { kind: "rollback" };
+    case "thread.task-contract.set":
+    case "thread.task-contract.accept":
+    case "thread.task-contract.redirect":
+    case "thread.task-contract.resume":
+      return { kind: "task-decision" };
     default:
       return { kind: "ungoverned" };
   }

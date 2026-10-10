@@ -39,6 +39,9 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
+  AuthOrchestrationOperateScope,
+  childConstraintConflict,
+  incompleteTaskContractMessage,
   ProviderInstanceId,
   type ProviderSessionId,
   RunId,
@@ -60,6 +63,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ProjectStore from "./ProjectStore.ts";
 import {
@@ -113,6 +117,14 @@ import {
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
 import { authorizeDispatch } from "../policy/Base3PolicyGate.ts";
+import { PolicyExecutionContext } from "../policy/executionContext.ts";
+import {
+  nextTaskContractThread,
+  requestTaskCancellation,
+  reserveGovernedStart,
+  revokeTaskContractGrants,
+  taskStateFromUnknown,
+} from "../policy/TaskContract.ts";
 
 export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDispatchError>()(
   "OrchestratorDispatchError",
@@ -345,6 +357,10 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.runtime-mode.set":
     case "thread.interaction-mode.set":
     case "thread.model-selection.set":
+    case "thread.task-contract.set":
+    case "thread.task-contract.accept":
+    case "thread.task-contract.redirect":
+    case "thread.task-contract.resume":
     case "provider-session.detach":
     case "message.dispatch":
     case "notification.delivery.accept":
@@ -2038,6 +2054,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
     const now = yield* DateTime.now;
     const emitEvent = emit(events, command);
+    if (command.taskGovernance === "chat" && command.taskContract !== undefined) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause:
+          "Ordinary chat cannot carry a task contract. Omit the contract, or mark the task required.",
+      });
+    }
+    const governed = command.taskContract !== undefined || command.taskGovernance === "required";
     const thread: OrchestrationV2AppThread = {
       createdBy: command.createdBy,
       creationSource: command.creationSource,
@@ -2066,6 +2091,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       snoozedAt: null,
       lastVisitedAt: null,
       deletedAt: null,
+      ...(governed
+        ? {
+            taskGovernance: "required" as const,
+            taskContract:
+              command.taskContract === undefined ? null : { revision: 1, ...command.taskContract },
+            taskContractPhase: "active" as const,
+            taskAcceptedRevision: null,
+          }
+        : {}),
     };
 
     yield* emitEvent({
@@ -4102,6 +4136,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   ) =>
     Effect.gen(function* () {
       let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      const startState = taskStateFromUnknown(command.threadId, projection.thread);
+      if (startState.governance === "required") {
+        const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
+        if (Option.isNone(sqlOption)) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Task contract enforcement needs the policy store. No provider was started.",
+          });
+        }
+        yield* reserveGovernedStart({
+          sql: sqlOption.value,
+          state: startState,
+          commandType: command.type,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          messageId: command.messageId,
+        }).pipe(mapDispatchError(command));
+      }
       if (command.manualContinuationOfRunId !== undefined) {
         const source = projection.runs.find((run) => run.id === command.manualContinuationOfRunId);
         const limited = latestRootProviderFailure(source ?? null, projection.turnItems);
@@ -6155,6 +6208,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       );
 
+      const parentTask = taskStateFromUnknown(command.parentThreadId, parentProjection.thread);
+      if (command.taskContract !== undefined) {
+        if (parentTask.governance !== "required" || parentTask.contract === null) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: incompleteTaskContractMessage(),
+          });
+        }
+        const conflict = childConstraintConflict(parentTask.contract, command.taskContract);
+        if (conflict !== null) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `${conflict} No provider was started.`,
+          });
+        }
+      }
+      if (parentTask.governance === "required" && parentTask.contract === null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: incompleteTaskContractMessage(),
+        });
+      }
       const now = command.createdAt ?? (yield* DateTime.now);
       const taskNodeId = idAllocator.derive.delegatedTaskNode({
         commandId: command.commandId,
@@ -9006,6 +9084,77 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }),
     );
 
+  const dispatchTaskContract = (
+    command: Extract<
+      OrchestrationV2ServerCommand,
+      {
+        readonly type:
+          | "thread.task-contract.set"
+          | "thread.task-contract.redirect"
+          | "thread.task-contract.resume"
+          | "thread.task-contract.accept";
+      }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) =>
+    Effect.gen(function* () {
+      const context = yield* PolicyExecutionContext;
+      if (context.kind !== "session" || !context.scopes.includes(AuthOrchestrationOperateScope)) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause:
+            "Accept, redirect, and contract completion require an authenticated session with orchestration:operate. Provider completion is not acceptance.",
+        });
+      }
+      const thread = yield* projectionStore
+        .getThread(command.threadId)
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      const now = yield* DateTime.now;
+      const next = nextTaskContractThread({
+        thread,
+        actorId: context.actorId,
+        now,
+        command,
+      });
+      if ("error" in next) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: next.error,
+        });
+      }
+      if (command.type === "thread.task-contract.set") {
+        const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
+        if (Option.isSome(sqlOption)) {
+          yield* revokeTaskContractGrants(sqlOption.value, next.rootThreadId).pipe(
+            mapDispatchError(command),
+          );
+        }
+      }
+      if (command.type === "thread.task-contract.redirect") {
+        const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
+        if (Option.isSome(sqlOption)) {
+          yield* requestTaskCancellation(sqlOption.value, next.rootThreadId, command.threadId).pipe(
+            mapDispatchError(command),
+          );
+        }
+      }
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.metadata-updated",
+        threadId: command.threadId,
+        occurredAt: now,
+        payload: next.thread,
+      });
+    });
+
   const dispatchOnce = Effect.fn("orchestrationV2.dispatch.once")(function* (
     command: OrchestrationV2ServerCommand,
   ): Effect.fn.Return<
@@ -9128,6 +9277,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "provider-session.detach":
         yield* dispatchProviderSessionDetach(command, events, effects);
+        break;
+      case "thread.task-contract.set":
+      case "thread.task-contract.accept":
+      case "thread.task-contract.redirect":
+      case "thread.task-contract.resume":
+        yield* dispatchTaskContract(command, events);
         break;
       case "message.dispatch": {
         // The provider owns a native subagent's conversation, so a sent

@@ -1,14 +1,19 @@
+// Thread payloads are stored as JSON text. A corrupt row is an empty snapshot, not a crash.
+// @effect-diagnostics preferSchemaOverJson:off tryCatchInEffectGen:off
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   GovernanceReadError,
   GovernanceSnapshot,
   ORCHESTRATION_PROTOCOL_VERSION,
+  TASK_CONTRACT_HUMAN_DECISION,
   type GovernanceApprovalProjection,
   type GovernanceLeaseProjection,
   type GovernanceMemoryProjection,
   type GovernanceRouteProjection,
+  type GovernanceTaskContractProjection,
 } from "@t3tools/contracts";
+import { countTaskAdmissions, taskStateFromUnknown } from "./TaskContract.ts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -57,6 +62,52 @@ const routeFields = (
  * terminalization does not free a slot without provider confirmation.
  */
 const isGovernanceReadError = Schema.is(GovernanceReadError);
+
+const governedTaskProjection = (sql: SqlClient.SqlClient, threadId: string | undefined) =>
+  Effect.gen(function* () {
+    if (threadId === undefined) return null;
+    const rows = yield* sql<{ readonly payload_json: string }>`
+      SELECT payload_json FROM orchestration_v2_projection_threads
+      WHERE thread_id = ${threadId}
+      LIMIT 1
+    `;
+    const row = rows[0];
+    if (row === undefined) return null;
+    let payload: unknown = {};
+    try {
+      payload = JSON.parse(row.payload_json);
+    } catch {
+      return null;
+    }
+    const state = taskStateFromUnknown(threadId, payload);
+    if (state.governance !== "required") return null;
+    const admissions = yield* countTaskAdmissions(sql, state.rootThreadId);
+    const contract = state.contract;
+    const accepted = contract !== null && state.acceptedRevision === contract.revision;
+    const braked = contract !== null && !accepted && admissions >= contract.brake.maxProviderStarts;
+    const phase =
+      contract === null
+        ? "awaiting_contract"
+        : accepted
+          ? "accepted"
+          : state.phase === "redirected"
+            ? "redirected"
+            : braked
+              ? "braked"
+              : "active";
+    return {
+      revision: contract?.revision ?? null,
+      goal: contract?.goal ?? null,
+      redirect: contract?.redirect ?? null,
+      acceptance: contract?.acceptance ?? null,
+      maxProviderStarts: contract?.brake.maxProviderStarts ?? null,
+      stopConditions: contract?.brake.stopConditions ?? null,
+      acceptedRevision: state.acceptedRevision,
+      phase,
+      admissions,
+      humanDecision: TASK_CONTRACT_HUMAN_DECISION,
+    } satisfies GovernanceTaskContractProjection;
+  });
 
 export const readGovernanceSnapshot = (input: { readonly threadId?: string | undefined }) =>
   Effect.gen(function* () {
@@ -184,6 +235,7 @@ export const readGovernanceSnapshot = (input: { readonly threadId?: string | und
     const deleted = yield* sql<{ readonly count: number }>`
       SELECT COUNT(*) AS count FROM dream_deleted_sources
     `;
+    const taskContract = yield* governedTaskProjection(sql, threadId);
     const routes: ReadonlyArray<GovernanceRouteProjection> = routeRows.map((row) => ({
       threadId: row.thread_id,
       messageId: row.message_id,
@@ -221,6 +273,7 @@ export const readGovernanceSnapshot = (input: { readonly threadId?: string | und
       approvals,
       memories,
       deletedSourceCount: deleted[0]?.count ?? 0,
+      ...(taskContract === null ? {} : { taskContract }),
     });
   }).pipe(
     Effect.mapError((error) =>
