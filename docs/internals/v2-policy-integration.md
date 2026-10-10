@@ -131,6 +131,29 @@ action. Dream Memory save, capture-off, enqueue, and delete go through
 `memory.save`, settings `dreamMemory.captureMode`, `memory.enqueueEligible`,
 and `memory.delete`. Deleted rows stay deleted after reopen.
 
+## Task contract
+
+A new thread is ordinary chat unless `thread.create` sets `taskGovernance` to
+`required` or includes a contract. Historical threads omit that field and stay
+readable and launchable. A required task with a missing or blank goal,
+redirect, acceptance, or brake is paused: `message.dispatch` and delegated
+starts are rejected before a provider starts. Completing it is
+`thread.task-contract.set`. Continuation does not replace the contract. It
+uses the persisted revision and still counts toward the brake.
+
+`maxProviderStarts` is reserved atomically in `task_contract_admissions` across
+the task tree. Exhaustion blocks new starts and sets `interrupt_requested` on
+open leases. It does not confirm termination or release a lease. Redirect and
+acceptance sentences are human decisions recorded by
+`thread.task-contract.redirect` and `thread.task-contract.accept` on a session
+with `orchestration:operate`. Provider completion does not accept the task. A
+child `delegated_task.request` inherits the parent contract and cannot replace
+it. Changing the contract bumps the revision, clears acceptance, and revokes
+execution grants for the tree.
+
+The draft composer has a compact governed-task form. Inspector reads the
+persisted thread. Ordinary chat leaves the form off.
+
 ## Later upstream commits
 
 None. The pin remains `8ed276c246b624631e7d39241ebfd22d8314cb68`.

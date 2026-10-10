@@ -78,6 +78,8 @@ export interface ThreadLaunchInput {
   readonly interactionMode: ProviderInteractionMode;
   readonly workspaceStrategy: ThreadLaunchWorkspaceStrategy;
   readonly routingMode?: "auto" | "manual";
+  readonly taskGovernance?: "chat" | "required";
+  readonly taskContract?: import("@t3tools/contracts").TaskContractFields;
   readonly initialMessage?: ThreadLaunchInitialMessage;
   readonly importedNativeThread?: {
     readonly ref: {
@@ -719,6 +721,10 @@ const make = Effect.gen(function* () {
                   : { importedNativeThread: input.importedNativeThread }),
                 createdBy: input.createdBy,
                 creationSource: input.creationSource,
+                ...(input.taskGovernance === undefined
+                  ? {}
+                  : { taskGovernance: input.taskGovernance }),
+                ...(input.taskContract === undefined ? {} : { taskContract: input.taskContract }),
               });
         const claimed = yield* claimDispatch.pipe(
           Effect.mapError(

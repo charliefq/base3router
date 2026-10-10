@@ -8137,6 +8137,10 @@ export default function ChatView(props: ChatViewProps) {
       notifyDirectAnnotationAttached();
       return;
     }
+    if (sendCtx.taskContractError) {
+      setThreadError(activeThread.id, sendCtx.taskContractError);
+      return;
+    }
     const multipleModelSelections = sendCtx.multipleModelSelections;
     if (
       multipleModelSelections !== null &&
@@ -9158,6 +9162,12 @@ export default function ChatView(props: ChatViewProps) {
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
+                      ...(sendCtx.taskContract
+                        ? {
+                            taskGovernance: "required" as const,
+                            taskContract: sendCtx.taskContract,
+                          }
+                        : {}),
                     },
                   }
                 : {}),

@@ -54,6 +54,20 @@ export const GovernanceMemoryProjection = Schema.Struct({
 });
 export type GovernanceMemoryProjection = typeof GovernanceMemoryProjection.Type;
 
+export const GovernanceTaskContractProjection = Schema.Struct({
+  revision: Schema.NullOr(Schema.Number),
+  goal: Schema.NullOr(Schema.String),
+  redirect: Schema.NullOr(Schema.String),
+  acceptance: Schema.NullOr(Schema.String),
+  maxProviderStarts: Schema.NullOr(Schema.Number),
+  stopConditions: Schema.NullOr(Schema.String),
+  acceptedRevision: Schema.NullOr(Schema.Number),
+  phase: Schema.Literals(["awaiting_contract", "active", "redirected", "braked", "accepted"]),
+  admissions: Schema.Number,
+  humanDecision: Schema.String,
+});
+export type GovernanceTaskContractProjection = typeof GovernanceTaskContractProjection.Type;
+
 export const GovernanceSnapshot = Schema.Struct({
   protocolVersion: Schema.Number,
   threadId: Schema.optional(Schema.String),
@@ -62,6 +76,8 @@ export const GovernanceSnapshot = Schema.Struct({
   approvals: Schema.Array(GovernanceApprovalProjection),
   memories: Schema.Array(GovernanceMemoryProjection),
   deletedSourceCount: Schema.Number,
+  /** Present when the requested thread is a governed task. */
+  taskContract: Schema.optional(GovernanceTaskContractProjection),
 });
 export type GovernanceSnapshot = typeof GovernanceSnapshot.Type;
 

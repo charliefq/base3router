@@ -150,6 +150,8 @@ interface StartThreadBootstrap {
     readonly branch: string | null;
     readonly worktreePath: string | null;
     readonly createdAt: string;
+    readonly taskGovernance?: "chat" | "required";
+    readonly taskContract?: import("@t3tools/contracts").TaskContractFields;
   };
   readonly prepareWorktree?: {
     /** V2 worktree launches always fail rather than falling back to the project checkout. */
@@ -608,6 +610,44 @@ export const setThreadRuntimeMode = Effect.fn("EnvironmentCommands.setThreadRunt
   },
 );
 
+export interface DecideTaskContractInput extends CommandMetadata {
+  readonly threadId: ThreadId;
+  readonly action: "set" | "accept" | "redirect";
+  readonly revision?: number;
+  readonly goal?: string;
+  readonly redirect?: string;
+  readonly acceptance?: string;
+  readonly maxProviderStarts?: number;
+  readonly stopConditions?: string;
+}
+
+export const decideTaskContract = Effect.fn("EnvironmentCommands.decideTaskContract")(function* (
+  input: DecideTaskContractInput,
+) {
+  const commandId = yield* allocateCommandId(input);
+  if (input.action === "set") {
+    return yield* dispatch({
+      type: "thread.task-contract.set",
+      commandId,
+      threadId: input.threadId,
+      goal: input.goal ?? "",
+      redirect: input.redirect ?? "",
+      acceptance: input.acceptance ?? "",
+      brake: {
+        maxProviderStarts: input.maxProviderStarts ?? 0,
+        stopConditions: input.stopConditions ?? "",
+      },
+    });
+  }
+  return yield* dispatch({
+    type:
+      input.action === "accept" ? "thread.task-contract.accept" : "thread.task-contract.redirect",
+    commandId,
+    threadId: input.threadId,
+    revision: input.revision ?? 0,
+  });
+});
+
 export const setThreadInteractionMode = Effect.fn("EnvironmentCommands.setThreadInteractionMode")(
   function* (input: SetThreadInteractionModeInput) {
     return yield* dispatch({
@@ -674,6 +714,10 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       interactionMode: input.interactionMode,
       workspaceStrategy,
       ...(input.routingMode === undefined ? {} : { routingMode: input.routingMode }),
+      ...(bootstrap?.taskGovernance === undefined
+        ? {}
+        : { taskGovernance: bootstrap.taskGovernance }),
+      ...(bootstrap?.taskContract === undefined ? {} : { taskContract: bootstrap.taskContract }),
       initialMessage: {
         messageId: input.message.messageId,
         text: input.message.text,

@@ -8,7 +8,11 @@ import type {
 import { AlertTriangleIcon, XIcon } from "lucide-react";
 
 import type { DraftId } from "../../composerDraftStore";
+import { useThreadProjection } from "../../state/entities";
+import { threadEnvironment } from "../../state/threads";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
+import { TaskContractReadout } from "./TaskContractPanel";
 import type { EnvMode, EnvironmentOption } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
 import { BranchToolbarEnvironmentSelector } from "../BranchToolbarEnvironmentSelector";
@@ -74,6 +78,13 @@ export interface ThreadDetailsPanelProps extends Pick<
 }
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
+  const thread = useThreadProjection({
+    environmentId: props.environmentId,
+    threadId: props.threadId,
+  })?.projection.thread;
+  const decideTaskContract = useAtomCommand(threadEnvironment.decideTaskContract, {
+    reportFailure: false,
+  });
   const fileScripts = useT3ProjectFileScripts(
     props.environmentId,
     props.activeProjectScripts ? props.gitCwd : null,
@@ -205,6 +216,60 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   />
                 ) : null}
               </div>
+            </ThreadDetailsSection>
+          ) : null}
+
+          {thread?.taskGovernance === "required" ? (
+            <ThreadDetailsSection
+              headingId="thread-details-task-contract-heading"
+              title="Task contract"
+              showHeading={density === "full"}
+              separated={density === "full"}
+            >
+              <TaskContractReadout
+                goal={thread.taskContract?.goal ?? null}
+                redirect={thread.taskContract?.redirect ?? null}
+                acceptance={thread.taskContract?.acceptance ?? null}
+                maxProviderStarts={thread.taskContract?.brake.maxProviderStarts ?? null}
+                stopConditions={thread.taskContract?.brake.stopConditions ?? null}
+                revision={thread.taskContract?.revision ?? null}
+                phase={
+                  thread.taskContractPhase ?? (thread.taskContract ? "active" : "awaiting_contract")
+                }
+                acceptedRevision={thread.taskAcceptedRevision ?? null}
+                onAccept={
+                  thread.taskContract
+                    ? () => {
+                        const revision = thread.taskContract?.revision;
+                        if (revision === undefined) return;
+                        void decideTaskContract({
+                          environmentId: props.environmentId,
+                          input: {
+                            threadId: props.threadId,
+                            action: "accept",
+                            revision,
+                          },
+                        });
+                      }
+                    : undefined
+                }
+                onRedirect={
+                  thread.taskContract
+                    ? () => {
+                        const revision = thread.taskContract?.revision;
+                        if (revision === undefined) return;
+                        void decideTaskContract({
+                          environmentId: props.environmentId,
+                          input: {
+                            threadId: props.threadId,
+                            action: "redirect",
+                            revision,
+                          },
+                        });
+                      }
+                    : undefined
+                }
+              />
             </ThreadDetailsSection>
           ) : null}
 

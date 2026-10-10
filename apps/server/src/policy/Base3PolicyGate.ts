@@ -12,11 +12,12 @@ import {
   ProviderInstanceId,
   type ServerProvider,
   ThreadId,
+  contractGrantFields,
+  type TaskContractFields,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ActionGateService } from "../actionGate/ActionGateService.ts";
@@ -32,7 +33,9 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { PolicyExecutionContext } from "./executionContext.ts";
+import { Base3PolicyDeniedError } from "./Base3PolicyDeniedError.ts";
 import { classifyCommand, commandNeedsCapacity, type OperationClass } from "./operationPolicy.ts";
+import { loadTaskState, reserveGovernedStart } from "./TaskContract.ts";
 
 const TERMINAL_RUN_STATUSES = [
   "completed",
@@ -42,18 +45,7 @@ const TERMINAL_RUN_STATUSES = [
   "rolled_back",
 ] as const;
 
-export class Base3PolicyDeniedError extends Schema.TaggedError<Base3PolicyDeniedError>()(
-  "Base3PolicyDeniedError",
-  {
-    reason: Schema.String,
-    commandType: Schema.String,
-    detail: Schema.optional(Schema.String),
-  },
-) {
-  override get message(): string {
-    return this.detail ?? `Base3 policy denied ${this.commandType} (${this.reason}).`;
-  }
-}
+export { Base3PolicyDeniedError } from "./Base3PolicyDeniedError.ts";
 
 export interface DispatchPolicyCommand {
   readonly type: string;
@@ -73,6 +65,7 @@ export interface DispatchPolicyCommand {
   readonly dispatchMode?: { readonly type: string };
   readonly attachments?: ReadonlyArray<{ readonly id?: string }>;
   readonly task?: string;
+  readonly taskContract?: TaskContractFields;
 }
 
 const deny = (commandType: string, reason: string, detail?: string) =>
@@ -584,6 +577,16 @@ export const authorizeDispatch = (
   return Effect.gen(function* () {
     const context = yield* PolicyExecutionContext;
     const operation = classifyCommand(command.type);
+    if (operation.kind === "task-decision") {
+      if (context.kind !== "session" || !hasOperate(context.scopes)) {
+        return yield* deny(
+          command.type,
+          context.kind === "session" ? "missing-operate-scope" : "unauthenticated",
+          "Accept, redirect, and contract completion require an authenticated session with orchestration:operate. Provider completion is not acceptance.",
+        );
+      }
+      return;
+    }
     if (context.kind === "kernel-test") {
       if (command.type === "run.interrupt") {
         yield* noteInterrupt({ threadId: command.threadId ?? "", runId: command.runId });
@@ -648,11 +651,26 @@ export const authorizeDispatch = (
     if (operation.kind === "delegation") {
       const threadId = command.parentThreadId ?? command.threadId;
       if (threadId === undefined) return yield* deny(command.type, "binding");
+      const parentState = yield* loadTaskState(sql, threadId);
+      yield* reserveGovernedStart({
+        sql,
+        state: parentState,
+        commandType: command.type,
+        commandId: command.commandId,
+        threadId,
+        proposed: command.taskContract ?? null,
+      });
       const approvalId = yield* requireAsk({
         sql,
         commandType: command.type,
         toolName: "delegate_task",
-        args: { task: command.task ?? "", model: command.modelSelection ?? null },
+        args: {
+          task: command.task ?? "",
+          model: command.modelSelection ?? null,
+          ...contractGrantFields(
+            parentState.governance === "required" ? parentState.contract : null,
+          ),
+        },
         environmentId: env,
         threadId,
       });
@@ -675,7 +693,13 @@ export const authorizeDispatch = (
         actorId: context.actorId,
         scopes: context.scopes,
         expiresAt: null,
-        hash: argumentHash({ task: command.task ?? "", model: command.modelSelection ?? null }),
+        hash: argumentHash({
+          task: command.task ?? "",
+          model: command.modelSelection ?? null,
+          ...contractGrantFields(
+            parentState.governance === "required" ? parentState.contract : null,
+          ),
+        }),
         approvalId,
       });
       yield* recordAttempt(sql, command, "delegation");
@@ -701,6 +725,14 @@ export const authorizeDispatch = (
     if (command.type === "message.dispatch") {
       const catalog = yield* providersForBind;
       yield* bindRoute({ sql, command, providers: catalog, environmentId: env });
+      const taskState = yield* loadTaskState(sql, command.threadId ?? "");
+      yield* reserveGovernedStart({
+        sql,
+        state: taskState,
+        commandType: command.type,
+        commandId: command.commandId,
+        threadId: command.threadId ?? "",
+      });
       if (command.dispatchMode?.type !== "queue_after_active" && commandNeedsCapacity(operation)) {
         yield* admitLease({
           sql,
@@ -712,7 +744,10 @@ export const authorizeDispatch = (
           nonBlocking: false,
         });
       }
-      const hash = argumentHash(messageArguments(command));
+      const hash = argumentHash({
+        ...messageArguments(command),
+        ...contractGrantFields(taskState.governance === "required" ? taskState.contract : null),
+      });
       yield* insertGrant({
         sql,
         grantId: `grant:message:${command.threadId}:${command.messageId}`,
@@ -766,10 +801,14 @@ const authorizeContinuation = (command: DispatchPolicyCommand, operation: Operat
         ? `grant:message:${command.threadId}:${command.messageId}`
         : null);
     if (grantId === null) return yield* deny(command.type, "grant-missing");
+    const taskState = yield* loadTaskState(sql, command.threadId ?? "");
+    const grantFields = contractGrantFields(
+      taskState.governance === "required" ? taskState.contract : null,
+    );
     const hash = argumentHash(
       command.type === "queued-run.edit" || command.type === "message.dispatch"
-        ? messageArguments(command)
-        : { commandId: command.commandId, type: command.type },
+        ? { ...messageArguments(command), ...grantFields }
+        : { commandId: command.commandId, type: command.type, ...grantFields },
     );
     const stored = yield* loadGrant(sql, grantId);
     const comparable = command.type === "message.dispatch" || command.type === "queued-run.edit";
@@ -779,6 +818,15 @@ const authorizeContinuation = (command: DispatchPolicyCommand, operation: Operat
       return yield* deny(command.type, "grant-missing");
     } else if (stored[0].revoked_at !== null) {
       return yield* deny(command.type, "grant-revoked");
+    }
+    if (command.type === "message.dispatch") {
+      yield* reserveGovernedStart({
+        sql,
+        state: taskState,
+        commandType: command.type,
+        commandId: command.commandId,
+        threadId: command.threadId ?? "",
+      });
     }
     if (operation.kind === "message" && command.dispatchMode?.type !== "queue_after_active") {
       const env = yield* environmentId;

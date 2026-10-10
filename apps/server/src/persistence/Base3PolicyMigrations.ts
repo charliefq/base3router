@@ -118,6 +118,27 @@ const integrationTables = Effect.gen(function* () {
   `;
 });
 
+const taskContractTables = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS task_contract_admissions (
+      root_thread_id TEXT NOT NULL,
+      command_id TEXT NOT NULL,
+      thread_id TEXT NOT NULL,
+      contract_revision INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (root_thread_id, command_id)
+    )
+  `;
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS task_contract_members (
+      thread_id TEXT PRIMARY KEY,
+      root_thread_id TEXT NOT NULL,
+      revision INTEGER NOT NULL
+    )
+  `;
+});
+
 const steps: ReadonlyArray<
   readonly [string, string, Effect.Effect<void, SqlError, SqlClient.SqlClient>]
 > = [
@@ -134,6 +155,7 @@ const steps: ReadonlyArray<
   ["b3-064", "DreamMemory", migration064],
   ["b3-065", "ConcurrencyBudgetAudit", migration065],
   ["b3-066", "PolicyIntegrationTables", integrationTables],
+  ["b3-067", "TaskContractAdmissions", taskContractTables],
 ];
 
 export const runBase3PolicyMigrations = Effect.gen(function* () {

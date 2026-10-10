@@ -43,6 +43,7 @@ import {
   type SetThreadAutoSettleInput,
   type SettleThreadInput,
   type SnoozeThreadInput,
+  type DecideTaskContractInput,
   type StartThreadTurnInput,
   type StopThreadSessionInput,
   type UnarchiveThreadInput,
@@ -77,6 +78,7 @@ import {
   setThreadAutoSettle,
   settleThread,
   snoozeThread,
+  decideTaskContract,
   startThreadTurn,
   stopThreadSession,
   unarchiveThread,
@@ -266,6 +268,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     startTurn: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:start-turn",
       execute: (input: StartThreadTurnInput) => startThreadTurn(input),
+      scheduler,
+      concurrency,
+    }),
+    decideTaskContract: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:decide-task-contract",
+      execute: (input: DecideTaskContractInput) => decideTaskContract(input),
       scheduler,
       concurrency,
     }),
