@@ -36,11 +36,23 @@ const startedAt = new Date().toISOString();
 execFileSync("vp", testArgs, { stdio: "inherit" });
 const finishedAt = new Date().toISOString();
 
+const sortKeys = (value) => {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, sortKeys(value[key])]),
+    );
+  }
+  return value;
+};
+
 const source = JSON.parse(readFileSync(sourcePath, "utf8"));
 if (source.label !== "SYNTHETIC_ACCOUNTING_VERIFIED" || source.synthetic !== true) {
   throw new Error("Cohort artifact is not the synthetic accounting report.");
 }
-if (JSON.stringify(source.observed) !== JSON.stringify(source.expected)) {
+if (JSON.stringify(sortKeys(source.observed)) !== JSON.stringify(sortKeys(source.expected))) {
   throw new Error("Cohort artifact observed totals do not match its expected totals.");
 }
 if (source.commitSha !== null && source.commitSha !== testedCommitSha) {
