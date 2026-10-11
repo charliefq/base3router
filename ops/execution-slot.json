@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "state": "DISPATCHED",
-  "generation": 32,
+  "state": "TERMINAL",
+  "generation": 33,
   "taskId": "base3-mobile-highlighter-repair-20261011-06",
   "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
   "dispatchId": "base3-mobile-highlighter-repair-20261011-06",
@@ -27,7 +27,14 @@
       "dispatchId": "base3-mobile-highlighter-repair-20261011-06"
     }
   },
-  "termination": null,
+  "termination": {
+    "established": true,
+    "workerState": "COMPLETED",
+    "evidence": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106636499",
+    "commentId": 6106636499,
+    "finalSha": "975af300b65c66ea427cd79bc81a994ea53582d7",
+    "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5"
+  },
   "priorResultCommentId": 6106462863,
   "reviewOutcome": "CHANGES_REQUIRED",
   "ci": {
@@ -359,9 +366,9 @@
       "worker": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
       "branch": "fresh branch from b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
       "base": "cursor/offline-pilot-brakes-abd5",
-      "pr": null,
+      "pr": 29,
       "startSha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
-      "resultSha": null,
+      "resultSha": "975af300b65c66ea427cd79bc81a994ea53582d7",
       "successor": null
     }
   ],
@@ -470,26 +477,21 @@
     1
   ],
   "lastReview": {
-    "time": "2026-10-11T07:06:39.058Z",
-    "automaticEvent": true,
-    "source": "event review; initial STATUS_ONLY issue_comment wakeup; published PR28.opened also observed in same invocation",
-    "deliveryId": "2e6e4240-c541-11f1-9cc9-baa878635312",
-    "publicationDeliveryId": "55114fa0-c541-11f1-8b41-246fcf591bd4",
-    "resultKey": "base3-offline-pilot-brakes-20261011-05:b61d636411b774c7e6eea0dfe38a80f6ebb4cb76:6106462863",
-    "pr": 28,
-    "head": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
-    "resultCommentId": 6106462863,
-    "outcome": "CHANGES_REQUIRED",
-    "ciRun": 38119865290,
-    "checkId": 114413096689,
-    "check": "failure",
-    "actualCheckoutSha": "eadf4c605e53f3a70ae1233b2fa8e5bc5946422f",
+    "time": "2026-10-11T07:32:00.899Z",
+    "automaticEvent": false,
+    "source": "interactive recovery after PR29 event run left no review checkpoint",
+    "resultKey": "base3-mobile-highlighter-repair-20261011-06:975af300b65c66ea427cd79bc81a994ea53582d7:6106636499",
+    "pr": 29,
+    "head": "975af300b65c66ea427cd79bc81a994ea53582d7",
+    "outcome": "ACCEPTED_BOUNDED_HIGHLIGHTER_FIX",
+    "ciRun": 38121186501,
+    "checkId": 114416912510,
+    "check": "success",
+    "actualCheckoutSha": "aadc9bd885d114e7b8236655ac1c1da37bcee6da",
     "findings": [
-      "Mobile cold-start highlighter test line68 numeric token color undefined; tracked focused repair 2 selected.",
-      "Active budget/deadline exhaustion only requests cancellation upon subsequent admission; usage writer has no reaction.",
-      "Restart test uses one in-memory SQLite service, no close/reopen.",
-      "Omitting optional brakes bypasses frozen deadline via pilotActive=false; persisted bounds must remain enforced.",
-      "Cumulative thresholds do not promise no in-turn overshoot; retain explicit limitations."
+      "Cold cutoff cause reproduced in worker evidence; exact numeric token assertion retained; source/snippet correction and full CI pass.",
+      "Unlimited tokenize limit removes CPU time cutoff; line length fallback retained for source, incremental session worst-case performance requires separate follow-up.",
+      "Active budget interruption, immutable bounds and real SQLite reopen remain required before offline brake acceptance."
     ]
   },
   "independentPreparation": {
@@ -681,6 +683,42 @@
         "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
         "dispatchId": "base3-mobile-highlighter-repair-20261011-06"
       }
+    },
+    {
+      "taskId": "base3-mobile-highlighter-repair-20261011-06",
+      "resultKey": "base3-mobile-highlighter-repair-20261011-06:975af300b65c66ea427cd79bc81a994ea53582d7:6106636499",
+      "termination": {
+        "established": true,
+        "workerState": "COMPLETED",
+        "evidence": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106636499",
+        "commentId": 6106636499,
+        "finalSha": "975af300b65c66ea427cd79bc81a994ea53582d7",
+        "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5"
+      },
+      "review": {
+        "time": "2026-10-11T07:32:00.899Z",
+        "automaticEvent": false,
+        "source": "interactive recovery after PR29 event run left no review checkpoint",
+        "resultKey": "base3-mobile-highlighter-repair-20261011-06:975af300b65c66ea427cd79bc81a994ea53582d7:6106636499",
+        "pr": 29,
+        "head": "975af300b65c66ea427cd79bc81a994ea53582d7",
+        "outcome": "ACCEPTED_BOUNDED_HIGHLIGHTER_FIX",
+        "ciRun": 38121186501,
+        "checkId": 114416912510,
+        "check": "success",
+        "actualCheckoutSha": "aadc9bd885d114e7b8236655ac1c1da37bcee6da",
+        "findings": [
+          "Cold cutoff cause reproduced in worker evidence; exact numeric token assertion retained; source/snippet correction and full CI pass.",
+          "Unlimited tokenize limit removes CPU time cutoff; line length fallback retained for source, incremental session worst-case performance requires separate follow-up.",
+          "Active budget interruption, immutable bounds and real SQLite reopen remain required before offline brake acceptance."
+        ]
+      },
+      "worker": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+      "branch": "cursor/mobile-highlighter-repair-abd5",
+      "pr": 29,
+      "startSha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
+      "completedAt": "2026-10-11T07:22:36Z",
+      "successor": "base3-brakes-active-restart-20261011-07"
     }
   ],
   "dispatchTimestamps": {
