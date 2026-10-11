@@ -328,5 +328,70 @@
     "key": "base3-chat-integration-20261011-04:9dc41f4e168af5cdc233751ae23e3e9e5e17b29b:6106124642",
     "state": "REVIEWING",
     "claimedAt": "2026-10-11T06:37:59.989Z"
-  }
+  },
+  "readOnlyCheckpoints": [
+    {
+      "id": "hourly:20261011T063727:read-only",
+      "time": "2026-10-11T06:38:36Z",
+      "source": "hourly reconciliation",
+      "outcome": "OTHER_REVIEW_OWNER_ACTIVE_NO_DISPATCH",
+      "reviewOwner": {
+        "id": "event:35f2e0f0-c53e-11f1-8d2d-c8657370dc18",
+        "key": "base3-chat-integration-20261011-04:9dc41f4e168af5cdc233751ae23e3e9e5e17b29b:6106124642",
+        "state": "REVIEWING",
+        "claimedAt": "2026-10-11T06:37:59.989Z"
+      },
+      "discoveredPrs": [
+        27,
+        26,
+        25,
+        24,
+        23,
+        22,
+        21,
+        20,
+        19,
+        18,
+        17,
+        16,
+        15,
+        14,
+        13,
+        12,
+        11,
+        10,
+        9,
+        8,
+        7,
+        6,
+        5,
+        4,
+        3,
+        2,
+        1
+      ],
+      "taskId": "base3-chat-integration-20261011-04",
+      "resultCommentId": 6106124642,
+      "resultCreatedAt": "2026-10-11T06:11:07Z",
+      "publicationCommentId": 6106128131,
+      "publicationCreatedAt": "2026-10-11T06:11:36Z",
+      "finalSha": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b",
+      "ci": {
+        "run": 38117254970,
+        "checkJob": 114405447011,
+        "status": "success",
+        "actualCheckoutSha": "93e0beb10bcd2eef94e09efe3d494c52282690ad",
+        "kind": "test-merge",
+        "checkoutLogVerified": true
+      },
+      "findings": [
+        "Fresh event review ownership claimed at 06:37:59.989Z; preserve that owner and worker reservation. No replacement or duplicate dispatch.",
+        "PR27 has a partial thread/principal sealing slice; production execution remains DENY. Live provider/Grokbot and goal/tree budget integration remain explicit gaps.",
+        "Server facts currently enumerate project shells; that is environment-wide existence, not evidence of per-principal project access. Require project authorization verification before opening multi-principal/external ingress.",
+        "Provider identity is bound to one project/thread; selected-project and repeated-click behavior need bounded validation. These observations are advisory to the active owner, not an independent acceptance or successor selection."
+      ],
+      "newDispatchCount": 0,
+      "loopStatus": "UNVERIFIED"
+    }
+  ]
 }
