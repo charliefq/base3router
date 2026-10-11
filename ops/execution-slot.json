@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 28,
+  "generation": 29,
   "taskId": "base3-mobile-highlighter-repair-20261011-06",
   "workerId": "reserved-reviewer:event:2e6e4240-c541-11f1-9cc9-baa878635312",
   "dispatchId": "base3-mobile-highlighter-repair-20261011-06",
@@ -9,10 +9,12 @@
   "startingSha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
   "coordinationPr": 23,
   "ack": {
-    "delivery": "PENDING"
+    "delivery": "confirmed",
+    "commentId": 6106522915,
+    "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106522915"
   },
   "provider": {
-    "status": "AWAITING_DISPATCH",
+    "status": "AWAITING_EXPLICIT_CLAIM",
     "startMechanism": "PR23 comment"
   },
   "termination": null,
@@ -494,8 +496,8 @@
     "collaboration": "Internal agents and external contractors support bidirectional task-scoped conversation and delegation",
     "nextTask": "Minimal agent collaboration and chat-first UI; repair slot validation prerequisite"
   },
-  "commentUrl": null,
-  "commentDelivery": "started",
+  "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106522915",
+  "commentDelivery": "confirmed",
   "lastOwnerDirection": "Minimal T3 chat UI + Agents + Tasks; embedded/internal and external contractor agents converse and delegate bidirectionally.",
   "loopAcceptance": {
     "status": "UNVERIFIED",
@@ -661,12 +663,9 @@
     }
   ],
   "dispatchTimestamps": {
-    "claimedAt": "2026-10-11T06:40:14.224Z",
-    "timezone": "America/Los_Angeles",
-    "sentAt": "2026-10-11T06:40:32Z",
-    "acceptedAt": "2026-10-11T06:41:20Z",
-    "sentAtLocal": "2026-10-10 23:40:32 PDT",
-    "acceptedAtLocal": "2026-10-10 23:41:20 PDT"
+    "sentAt": "2026-10-11T07:07:39Z",
+    "sentAtLosAngeles": "2026-10-11 00:07:39",
+    "source": "GitHub created_at"
   },
   "eventCheckpoints": [
     {
@@ -838,10 +837,22 @@
         ]
       },
       "strictNoAdditionalUserMessageProof": "UNVERIFIED: initial wakeup was status-only human-authored comment, not publication; natural opened event observed while owner active",
-      "successor": "base3-mobile-highlighter-repair-20261011-06"
+      "successor": "base3-mobile-highlighter-repair-20261011-06",
+      "successorDispatch": {
+        "commentId": 6106522915,
+        "url": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106522915",
+        "sentAt": "2026-10-11T07:07:39Z",
+        "startSha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76"
+      }
     }
   ],
-  "followup": null,
+  "followup": {
+    "state": "CLAIM_WAIT",
+    "taskId": "base3-mobile-highlighter-repair-20261011-06",
+    "dispatchCommentId": 6106522915,
+    "startedAt": "2026-10-11T07:07:39Z",
+    "source": "hourly reconciliation"
+  },
   "predecessor": "base3-offline-pilot-brakes-20261011-05",
   "dependencies": [
     "base3-offline-pilot-brakes-20261011-05"
