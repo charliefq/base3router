@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 31,
+  "generation": 32,
   "taskId": "base3-mobile-highlighter-repair-20261011-06",
   "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
   "dispatchId": "base3-mobile-highlighter-repair-20261011-06",
@@ -728,7 +728,13 @@
       "time": "2026-10-11T07:07:49Z"
     }
   ],
-  "reviewOwnership": null,
+  "reviewOwnership": {
+    "id": "interactive-recovery-20261011-0732",
+    "key": "base3-mobile-highlighter-repair-20261011-06:975af300b65c66ea427cd79bc81a994ea53582d7:6106636499",
+    "state": "REVIEWING",
+    "claimedAt": "2026-10-11T07:31:23.688Z",
+    "source": "interactive recovery; not automatic proof"
+  },
   "readOnlyCheckpoints": [
     {
       "id": "hourly:20261011T063727:read-only",
