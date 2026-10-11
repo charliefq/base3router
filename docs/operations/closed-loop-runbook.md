@@ -234,3 +234,55 @@ review real read/receipt adapters and result normalization. Event and periodic
 entrypoints must share this same state machine and slot. Neither this offline
 PR nor green CI authorizes enabling those entrypoints or starting another
 worker. Publish real cycle evidence separately from fixture results.
+
+## B3R-05C read-only GitHub evidence collector
+
+`scripts/ops-github-evidence-collector.mjs` exports `collectGitHubEvidence`.
+It requires an injected `readTransport` and explicit repository name/ID, PR,
+expected head/base SHAs, workflow ID/name/path, run ID/attempt, required check
+ID/name/app ID/job ID, a separate actual test job ID, and comment ID/author ID/
+body SHA-256 bindings. Those bindings are trusted caller inputs, not a role
+authorization policy. There is no default transport, credential discovery, CLI,
+scheduler, provider invocation, reconciler integration, or write path.
+
+The transport receives `{ method: "GET", path, query, format }` and returns
+`{ status, headers, complete, data }`. Paths are constructed within the supplied
+repository. `format` is `json` or `text`; `complete: true` is the transport's
+explicit assertion that the entire response was delivered, not a native GitHub
+API field. A transport must not assert completeness for capped or partial tool
+output. Redirects and partial responses are unusable; the collector never
+follows a returned external URL. Its tests inject synthetic REST envelopes and
+sanitized checkout logs, not a production authenticated transport.
+
+Evidence separates PR metadata, raw comment envelopes, workflow run, aggregate
+required check, actual test job, checkout, publication observation, and closing
+stability reads. Each part is `verified`, `unknown`, or `blocked` with a reason;
+an overall verified result means only that these observations match the supplied
+bindings. It is not an acceptance, review, dispatch, or execution permission.
+Comment envelopes preserve numeric author IDs, created/updated timestamps, raw
+bodies, and body digests. Bound edited comments fail closed even when their
+current digest matches; comment creation time is never a body-version proof.
+
+The required aggregate check does not establish checkout. The separate test job
+must match the run attempt and check suite and have a successful Checkout step.
+Its complete log must contain one checkout group/command, one short-SHA HEAD
+marker, one full-SHA `git log -1 --format=%H` result, and a following step boundary.
+The full SHA must be the expected head or the PR test-merge with exactly the
+expected head/base parents. These job-log observations are not cryptographic
+attestations and still depend on the reviewed workflow and transport. Missing,
+ambiguous or truncated logs, stale attempts, mismatched identities, failed
+pagination and inaccessible resources leave evidence blocked or unknown.
+
+Closing reads compare metadata and all comment pages with their initial
+snapshots. Two matching reads reduce unnoticed change but do not provide an
+atomic snapshot or prevent changes afterward. Publication records only that
+the expected SHA was observed published on the PR branch at the read time.
+There is no `firstPublishedAt`, and neither commit dates nor comment timestamps
+establish first publication. Existing live-holder, identity, provenance,
+receipt-store and executor decisions remain unresolved by this collector.
+
+Run the four related offline suites together:
+
+```sh
+node_modules/.bin/vp test run --config vite.config.ts --dir scripts scripts/ops-github-evidence-collector.test.mjs scripts/ops-evidence-adapters.test.mjs scripts/ops-reconciler.test.mjs scripts/ops-contents-slot.test.mjs
+```
