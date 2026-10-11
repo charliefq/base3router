@@ -1,6 +1,8 @@
 /**
  * Admission gate for a persisted task contract.
  * A brake reserves a start and requests cancellation. It does not release a lease.
+ * Token, dollar, and deadline checks share that reservation. Production usage
+ * rows stay unverified; only a synthetic fixture price can satisfy a dollar cap.
  */
 // Persisted thread payloads are already JSON text in SQLite.
 // @effect-diagnostics preferSchemaOverJson:off
@@ -10,6 +12,7 @@ import {
   ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
+  SYNTHETIC_FIXTURE_PRICE_LABEL,
   TASK_CONTRACT_HUMAN_DECISION,
   type OrchestrationV2AppThread,
   type TaskContract,
@@ -32,6 +35,7 @@ const StoredTaskPayload = Schema.Struct({
   lineage: Schema.optional(
     Schema.Struct({
       rootThreadId: Schema.optional(Schema.String),
+      parentThreadId: Schema.optional(Schema.NullOr(Schema.String)),
     }),
   ),
 });
@@ -42,6 +46,7 @@ export interface PersistedTaskState {
   readonly phase: "active" | "redirected";
   readonly acceptedRevision: number | null;
   readonly rootThreadId: string;
+  readonly parentThreadId?: string | null;
 }
 
 export function taskStateFromUnknown(threadId: string, payload: unknown): PersistedTaskState {
@@ -69,6 +74,9 @@ export function taskStateFromUnknown(threadId: string, payload: unknown): Persis
             brake: Schema.Struct({
               maxProviderStarts: Schema.Number,
               stopConditions: Schema.String,
+              maxTokens: Schema.optional(Schema.Number),
+              maxCostUsd: Schema.optional(Schema.Number),
+              deadlineAt: Schema.optional(Schema.String),
             }),
           }),
         )(value.taskContract);
@@ -83,6 +91,7 @@ export function taskStateFromUnknown(threadId: string, payload: unknown): Persis
     acceptedRevision:
       typeof value.taskAcceptedRevision === "number" ? value.taskAcceptedRevision : null,
     rootThreadId: value.lineage?.rootThreadId ?? threadId,
+    parentThreadId: value.lineage?.parentThreadId ?? null,
   };
 }
 
@@ -391,6 +400,264 @@ export const revokeTaskContractGrants = (sql: SqlClient.SqlClient, rootThreadId:
     `;
   });
 
+const PINNED_LEASE =
+  "Active work was asked to cancel and stays leased until the provider turn is confirmed terminal.";
+
+function canonicalDeadline(value: string | undefined): string | null {
+  if (value === undefined || value.trim().length === 0) return null;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return null;
+  return DateTime.formatIso(DateTime.makeUnsafe(parsed));
+}
+
+function pilotActive(brake: TaskContract["brake"]): boolean {
+  return (
+    brake.maxTokens !== undefined ||
+    brake.maxCostUsd !== undefined ||
+    brake.deadlineAt !== undefined
+  );
+}
+
+const countRows = (rows: ReadonlyArray<{ readonly count: number | null }>) =>
+  Number(rows[0]?.count ?? 0);
+
+/**
+ * Freeze the absolute deadline once, then insert one admission.
+ * The deadline row commits even when the admission is refused, so a restart
+ * cannot move it later. Failure of this effect is a policy denial after commit.
+ */
+const commitTaskAdmission = (input: {
+  readonly sql: SqlClient.SqlClient;
+  readonly state: PersistedTaskState;
+  readonly contract: TaskContract;
+  readonly commandId: string;
+  readonly threadId: string;
+  readonly messageId: string | null;
+}) =>
+  input.sql.withTransaction(
+    Effect.gen(function* () {
+      const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
+      const brake = input.contract.brake;
+      const active = pilotActive(brake);
+      const deadline = canonicalDeadline(brake.deadlineAt);
+      const maxTokens =
+        brake.maxTokens === undefined
+          ? null
+          : Number.isInteger(brake.maxTokens) && brake.maxTokens >= 1
+            ? brake.maxTokens
+            : "invalid";
+      const maxCostUsd =
+        brake.maxCostUsd === undefined
+          ? null
+          : Number.isFinite(brake.maxCostUsd) && brake.maxCostUsd > 0
+            ? brake.maxCostUsd
+            : "invalid";
+      yield* input.sql`
+        INSERT OR IGNORE INTO task_contract_members (
+          thread_id, root_thread_id, revision, parent_thread_id
+        ) VALUES (
+          ${input.threadId},
+          ${input.state.rootThreadId},
+          ${input.contract.revision},
+          ${input.state.parentThreadId ?? null}
+        )
+      `;
+      if (deadline !== null) {
+        yield* input.sql`
+          INSERT OR IGNORE INTO task_contract_deadlines (root_thread_id, deadline_at, frozen_at)
+          VALUES (${input.state.rootThreadId}, ${deadline}, ${now})
+        `;
+      }
+      const refuse = (detail: string) =>
+        Effect.gen(function* () {
+          yield* requestTaskCancellation(input.sql, input.state.rootThreadId, input.threadId);
+          return { _tag: "denied" as const, detail };
+        });
+      if (active && (maxTokens === "invalid" || maxCostUsd === "invalid" || deadline === null)) {
+        return yield* refuse(
+          "A budgeted start needs an explicit positive token cap, dollar cap, and absolute deadline when those brakes are set. No default was applied. No provider was started.",
+        );
+      }
+      const tokenCap = maxTokens === "invalid" ? null : maxTokens;
+      const dollarCap = maxCostUsd === "invalid" ? null : maxCostUsd;
+      const pilotAllows = active
+        ? input.sql`
+            (
+              (SELECT deadline_at FROM task_contract_deadlines
+                WHERE root_thread_id = ${input.state.rootThreadId}) > ${now}
+              AND NOT EXISTS (
+                SELECT 1 FROM task_usage_attempts
+                WHERE root_thread_id = ${input.state.rootThreadId}
+                  AND (
+                    input_tokens IS NULL
+                    OR output_tokens IS NULL
+                    OR usage_status <> 'complete'
+                    OR reported_cost_usd IS NULL
+                    OR price_verified <> 1
+                    OR price_label <> ${SYNTHETIC_FIXTURE_PRICE_LABEL}
+                  )
+              )
+              AND (
+                ${tokenCap} IS NULL
+                OR COALESCE((
+                  SELECT SUM(input_tokens + output_tokens) FROM task_usage_attempts
+                  WHERE root_thread_id = ${input.state.rootThreadId}
+                ), 0) < ${tokenCap}
+              )
+              AND (
+                ${dollarCap} IS NULL
+                OR COALESCE((
+                  SELECT SUM(reported_cost_usd) FROM task_usage_attempts
+                  WHERE root_thread_id = ${input.state.rootThreadId}
+                ), 0) < ${dollarCap}
+              )
+              AND (
+                SELECT COUNT(*) FROM task_contract_admissions
+                WHERE root_thread_id = ${input.state.rootThreadId}
+              ) = (
+                SELECT COUNT(*) FROM task_usage_attempts
+                WHERE root_thread_id = ${input.state.rootThreadId}
+                  AND usage_status = 'complete'
+                  AND input_tokens IS NOT NULL
+                  AND output_tokens IS NOT NULL
+                  AND reported_cost_usd IS NOT NULL
+                  AND price_verified = 1
+                  AND price_label = ${SYNTHETIC_FIXTURE_PRICE_LABEL}
+              )
+            )
+          `
+        : input.sql`1`;
+      yield* input.sql`
+        INSERT INTO task_contract_admissions (
+          root_thread_id, command_id, thread_id, contract_revision, message_id, created_at
+        )
+        SELECT
+          ${input.state.rootThreadId},
+          ${input.commandId},
+          ${input.threadId},
+          ${input.contract.revision},
+          ${input.messageId},
+          ${now}
+        WHERE NOT EXISTS (
+          SELECT 1 FROM task_contract_admissions
+          WHERE root_thread_id = ${input.state.rootThreadId}
+            AND command_id = ${input.commandId}
+        )
+        AND (
+          SELECT COUNT(*) FROM task_contract_admissions
+          WHERE root_thread_id = ${input.state.rootThreadId}
+        ) < ${brake.maxProviderStarts}
+        AND (${pilotAllows})
+      `;
+      const rows = yield* input.sql<{ readonly contract_revision: number }>`
+        SELECT contract_revision FROM task_contract_admissions
+        WHERE root_thread_id = ${input.state.rootThreadId}
+          AND command_id = ${input.commandId}
+        LIMIT 1
+      `;
+      const reserved = rows[0];
+      if (reserved === undefined) {
+        yield* requestTaskCancellation(input.sql, input.state.rootThreadId, input.threadId);
+        return { _tag: "denied" as const, detail: null };
+      }
+      if (reserved.contract_revision !== input.contract.revision) {
+        return {
+          _tag: "revision" as const,
+          reservedRevision: reserved.contract_revision,
+        };
+      }
+      return { _tag: "reserved" as const };
+    }),
+  );
+
+const classifyPilotDenial = (input: {
+  readonly sql: SqlClient.SqlClient;
+  readonly rootThreadId: string;
+  readonly contract: TaskContract;
+}) =>
+  Effect.gen(function* () {
+    if (!pilotActive(input.contract.brake)) return null;
+    const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
+    const deadlineRows = yield* input.sql<{ readonly deadline_at: string }>`
+      SELECT deadline_at FROM task_contract_deadlines
+      WHERE root_thread_id = ${input.rootThreadId}
+      LIMIT 1
+    `;
+    const deadline = deadlineRows[0]?.deadline_at;
+    if (deadline === undefined) {
+      return `An absolute deadline must be persisted before a budgeted start. No default deadline was applied. No provider was started.`;
+    }
+    if (deadline <= now) {
+      return `Absolute deadline ${deadline} is already past. Restart does not extend it. ${PINNED_LEASE}`;
+    }
+    const unknownRows = yield* input.sql<{ readonly count: number }>`
+      SELECT COUNT(*) AS count FROM task_usage_attempts
+      WHERE root_thread_id = ${input.rootThreadId}
+        AND (
+          input_tokens IS NULL
+          OR output_tokens IS NULL
+          OR usage_status <> 'complete'
+        )
+    `;
+    if (countRows(unknownRows) > 0) {
+      return `Unknown usage denies a new start on this task tree. ${PINNED_LEASE}`;
+    }
+    const unverifiedRows = yield* input.sql<{ readonly count: number }>`
+      SELECT COUNT(*) AS count FROM task_usage_attempts
+      WHERE root_thread_id = ${input.rootThreadId}
+        AND (
+          reported_cost_usd IS NULL
+          OR price_verified <> 1
+          OR price_label IS NULL
+          OR price_label <> ${SYNTHETIC_FIXTURE_PRICE_LABEL}
+        )
+    `;
+    const unverified = countRows(unverifiedRows);
+    if (unverified > 0) {
+      return `Unknown or unverified pricing denies a new start. A reported cost is not a verified price, and a synthetic price is not a production default. ${PINNED_LEASE}`;
+    }
+    const sums = yield* input.sql<{
+      readonly tokens: number | null;
+      readonly cost: number | null;
+    }>`
+      SELECT
+        COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens,
+        COALESCE(SUM(reported_cost_usd), 0) AS cost
+      FROM task_usage_attempts
+      WHERE root_thread_id = ${input.rootThreadId}
+    `;
+    const tokens = Number(sums[0]?.tokens ?? 0);
+    const cost = Number(sums[0]?.cost ?? 0);
+    const maxTokens = input.contract.brake.maxTokens;
+    if (maxTokens !== undefined && tokens >= maxTokens) {
+      return `Token budget exhausted: ${tokens} tokens are already accounted on this task tree, and the cap is ${maxTokens}. A child, retry, or handoff does not reset that total. ${PINNED_LEASE}`;
+    }
+    const maxCostUsd = input.contract.brake.maxCostUsd;
+    if (maxCostUsd !== undefined && cost >= maxCostUsd) {
+      return `Dollar budget exhausted: ${cost} USD is already accounted on this task tree, and the cap is ${maxCostUsd}. A child, retry, or handoff does not reset that total. ${PINNED_LEASE}`;
+    }
+    const admissionRows = yield* input.sql<{ readonly count: number }>`
+      SELECT COUNT(*) AS count FROM task_contract_admissions
+      WHERE root_thread_id = ${input.rootThreadId}
+    `;
+    const settledRows = yield* input.sql<{ readonly count: number }>`
+      SELECT COUNT(*) AS count FROM task_usage_attempts
+      WHERE root_thread_id = ${input.rootThreadId}
+        AND usage_status = 'complete'
+        AND input_tokens IS NOT NULL
+        AND output_tokens IS NOT NULL
+        AND reported_cost_usd IS NOT NULL
+        AND price_verified = 1
+        AND price_label = ${SYNTHETIC_FIXTURE_PRICE_LABEL}
+    `;
+    const admissions = countRows(admissionRows);
+    const settled = countRows(settledRows);
+    if (admissions !== settled) {
+      return `An unsettled reservation already holds this task tree. A concurrent start was not given another reservation. ${PINNED_LEASE}`;
+    }
+    return null;
+  });
+
 /**
  * Block a provider start that the persisted contract does not allow.
  * Chat returns without touching grants or leases. A successful governed start
@@ -432,50 +699,30 @@ export const reserveGovernedStart = (input: {
       }
       return yield* deny(input.commandType, blocked);
     }
-    const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
-    yield* input.sql`
-      INSERT OR IGNORE INTO task_contract_members (thread_id, root_thread_id, revision)
-      VALUES (${input.threadId}, ${input.state.rootThreadId}, ${contract.revision})
-    `;
-    yield* input.sql`
-      INSERT INTO task_contract_admissions (
-        root_thread_id, command_id, thread_id, contract_revision, message_id, created_at
-      )
-      SELECT
-        ${input.state.rootThreadId},
-        ${input.commandId},
-        ${input.threadId},
-        ${contract.revision},
-        ${input.messageId ?? null},
-        ${now}
-      WHERE NOT EXISTS (
-        SELECT 1 FROM task_contract_admissions
-        WHERE root_thread_id = ${input.state.rootThreadId}
-          AND command_id = ${input.commandId}
-      )
-      AND (
-        SELECT COUNT(*) FROM task_contract_admissions
-        WHERE root_thread_id = ${input.state.rootThreadId}
-      ) < ${contract.brake.maxProviderStarts}
-    `;
-    const rows = yield* input.sql<{ readonly contract_revision: number }>`
-      SELECT contract_revision FROM task_contract_admissions
-      WHERE root_thread_id = ${input.state.rootThreadId}
-        AND command_id = ${input.commandId}
-      LIMIT 1
-    `;
-    const reserved = rows[0];
-    if (reserved === undefined) {
-      yield* requestTaskCancellation(input.sql, input.state.rootThreadId, input.threadId);
+    const reserved = yield* commitTaskAdmission({
+      sql: input.sql,
+      state: input.state,
+      contract,
+      commandId: input.commandId,
+      threadId: input.threadId,
+      messageId: input.messageId ?? null,
+    });
+    if (reserved._tag === "revision") {
       return yield* deny(
         input.commandType,
-        `Brake exhausted: ${contract.brake.maxProviderStarts} provider starts are already reserved on this task. Active work was asked to cancel and stays leased until the provider turn is confirmed terminal.`,
+        `This dispatch was reserved for contract revision ${reserved.reservedRevision} and cannot reuse that grant for revision ${contract.revision}.`,
       );
     }
-    if (reserved.contract_revision !== contract.revision) {
+    if (reserved._tag === "denied") {
       return yield* deny(
         input.commandType,
-        `This dispatch was reserved for contract revision ${reserved.contract_revision} and cannot reuse that grant for revision ${contract.revision}.`,
+        reserved.detail ??
+          (yield* classifyPilotDenial({
+            sql: input.sql,
+            rootThreadId: input.state.rootThreadId,
+            contract,
+          })) ??
+          `Brake exhausted: ${contract.brake.maxProviderStarts} provider starts are already reserved on this task. ${PINNED_LEASE}`,
       );
     }
   }).pipe(asPolicyDenial(input.commandType));
@@ -530,39 +777,31 @@ export const reserveProviderHandoff = (input: {
       return;
     }
     const key = `handoff:${input.effectType}:${input.messageId ?? input.commandId}:${input.attemptCount}`;
-    const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
-    yield* input.sql`
-      INSERT INTO task_contract_admissions (
-        root_thread_id, command_id, thread_id, contract_revision, message_id, created_at
-      )
-      SELECT
-        ${input.state.rootThreadId},
-        ${key},
-        ${input.threadId},
-        ${contract.revision},
-        ${input.messageId ?? null},
-        ${now}
-      WHERE NOT EXISTS (
-        SELECT 1 FROM task_contract_admissions
-        WHERE root_thread_id = ${input.state.rootThreadId}
-          AND command_id = ${key}
-      )
-      AND (
-        SELECT COUNT(*) FROM task_contract_admissions
-        WHERE root_thread_id = ${input.state.rootThreadId}
-      ) < ${contract.brake.maxProviderStarts}
-    `;
-    const rows = yield* input.sql<{ readonly command_id: string }>`
-      SELECT command_id FROM task_contract_admissions
-      WHERE root_thread_id = ${input.state.rootThreadId}
-        AND command_id = ${key}
-      LIMIT 1
-    `;
-    if (rows[0] === undefined) {
+    const reserved = yield* commitTaskAdmission({
+      sql: input.sql,
+      state: input.state,
+      contract,
+      commandId: key,
+      threadId: input.threadId,
+      messageId: input.messageId ?? null,
+    });
+    if (reserved._tag === "revision") {
       yield* requestTaskCancellation(input.sql, input.state.rootThreadId, input.threadId);
       return yield* deny(
         input.effectType,
-        `Brake exhausted: ${contract.brake.maxProviderStarts} provider starts are already reserved on this task. A retry or failover was not given another start. Active work was asked to cancel and stays leased until the provider turn is confirmed terminal.`,
+        `This queued start was reserved for contract revision ${reserved.reservedRevision} and was not reused for revision ${contract.revision}.`,
+      );
+    }
+    if (reserved._tag === "denied") {
+      return yield* deny(
+        input.effectType,
+        reserved.detail ??
+          (yield* classifyPilotDenial({
+            sql: input.sql,
+            rootThreadId: input.state.rootThreadId,
+            contract,
+          })) ??
+          `Brake exhausted: ${contract.brake.maxProviderStarts} provider starts are already reserved on this task. A retry or failover was not given another start. ${PINNED_LEASE}`,
       );
     }
   }).pipe(asPolicyDenial(input.effectType));

@@ -157,6 +157,9 @@ export const recordTaskUsage = Effect.fn("TaskUsageAccounting.recordTaskUsage")(
   const runId = event.runId ?? null;
   const providerInstanceId = event.providerInstanceId ?? null;
   const updatedAt = DateTime.formatIso(event.occurredAt);
+  // price_verified stays at its column default of 0. This writer does not
+  // invent a price or mark reportedCostUsd as verified. The only verified
+  // price is a synthetic fixture row labeled synthetic-fixture.
   // One statement. A second yield inside the projection transaction lets a
   // concurrent approval response store the request before its turn item exists.
   const messageId = sql`

@@ -38,16 +38,36 @@ command id does not create a second message.
 rejected and are not stored. Deterministic cases live in the collaboration
 tests.
 
+## Offline pilot brakes
+
+A governed contract can name `maxTokens`, `maxCostUsd`, and an absolute
+`deadlineAt`. Those values are explicit. Omitting them leaves the start-count
+brake in place and does not mean the budget is unlimited. The deadline is
+frozen before the first budgeted start and a later contract revision does not
+move it forward. Token and dollar totals include the root, children, retries,
+and handoffs.
+
+Unknown usage, or a price that is missing or unverified, denies the next
+start. Production usage rows stay unverified. The only verified price is a
+fixture row labeled `synthetic-fixture`. Exhaustion or a passed deadline
+refuses a new admission and asks active work to stop. The lease stays until
+an explicit completed or aborted confirmation. An interrupt request is not
+that confirmation. Collaboration execution stays `DENY`, and Grokbot stays
+`NOT_CONNECTED`.
+
 ## Queued
 
+- A live provider composer. This sandbox has no executable provider, so Agents
+  did not open a new thread.
 - A live Grokbot connection. It needs an API base URL, an owner-held
   credential that is not written into this repository, and a capability
   advertisement that names the target agent.
+- Provider ids are interim. They are not an independent named employee identity.
+- Per-principal project authorization, before any external or multi-principal
+  ingress.
+- Repeated clicks and project selection for thread binding.
 - An ActionGate tool plan for executable delegation. Until that exists, the
   chat gate stays `DENY`.
-- Goal, redirect, acceptance, and brake linked to the V2 task contract.
-- Tree usage identities beyond the thread, project, and principal already
-  stored on the task.
 - Mobile navigation, the command palette, and keybinding aliases.
-- Enforced token, dollar, and clock pilot brakes. The real pilot stays
-  prohibited.
+- A real paid pilot. Token, dollar, and clock sentences are enforced only for
+  an explicit offline contract. Spend remains unknown.
