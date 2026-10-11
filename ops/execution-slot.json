@@ -1,11 +1,11 @@
 {
   "schema": 1,
-  "state": "CLAIMED",
-  "generation": 8,
+  "state": "DISPATCHED",
+  "generation": 9,
   "taskId": "base3-chat-agents-20261011-03",
   "workerId": "event-review:base3-chat-agents-20261011-03",
-  "dispatchId": null,
-  "dispatchCount": 0,
+  "dispatchId": "event-review:base3-chat-agents-20261011-03:base3-chat-agents-20261011-03:1",
+  "dispatchCount": 1,
   "startingSha": "a4541db95049ec595570afaa6a9f17aed9702310",
   "coordinationPr": 23,
   "ack": null,
@@ -110,7 +110,7 @@
       "state": "PLANNED"
     }
   ],
-  "nonce": "owner-chat-agents-claim-20261011-0505",
+  "nonce": "owner-chat-agents-reserve-20261011-0505",
   "discoveredPrs": [
     25,
     23,
@@ -189,5 +189,5 @@
     "nextTask": "Minimal agent collaboration and chat-first UI; repair slot validation prerequisite"
   },
   "commentUrl": null,
-  "commentDelivery": null
+  "commentDelivery": "started"
 }
