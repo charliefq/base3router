@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 37,
+  "generation": 38,
   "taskId": "base3-brakes-active-restart-20261011-07",
   "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
   "dispatchId": "base3-brakes-active-restart-20261011-07",
@@ -14,7 +14,7 @@
     "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106710477"
   },
   "provider": {
-    "status": "RUNNING",
+    "status": "COMPLETED_REPORTED",
     "startMechanism": "PR23 comment",
     "acceptance": {
       "commentId": 6106715715,
@@ -513,7 +513,7 @@
       "acceptanceCommentId": 6106715715
     }
   ],
-  "nonce": "reconcile:2026-10-11T07:42:30Z:metadata",
+  "nonce": "event:ef1e0d30:2026-10-11T07:47:51.040Z",
   "discoveredPrs": [
     23,
     29,
@@ -840,7 +840,15 @@
       "time": "2026-10-11T07:07:49Z"
     }
   ],
-  "reviewOwnership": null,
+  "reviewOwnership": {
+    "id": "event:ef1e0d30-c547-11f1-860a-00fcf96f54da",
+    "key": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
+    "state": "REVIEWING",
+    "claimedAt": "2026-10-11T07:47:51.040Z",
+    "source": "pull_request.opened",
+    "pr": 30,
+    "resultCommentId": 6106817145
+  },
   "readOnlyCheckpoints": [
     {
       "id": "hourly:20261011T063727:read-only",
@@ -1089,5 +1097,21 @@
     "product": "T3 chat UI; named internal/external agents; Agents/Tasks; V2/ActionGate; routing evaluation; reliable handoffs"
   },
   "dispatchStartedAt": "2026-10-11T07:32:21.594Z",
-  "acceptedAt": "2026-10-11T07:33:18Z"
+  "acceptedAt": "2026-10-11T07:33:18Z",
+  "resultCheckpoint": {
+    "taskId": "base3-brakes-active-restart-20261011-07",
+    "resultKey": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
+    "resultCommentId": 6106817145,
+    "resultUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106817145",
+    "workerState": "COMPLETED",
+    "finalSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+    "branch": "cursor/brakes-active-restart-abd5",
+    "base": "cursor/mobile-highlighter-repair-abd5",
+    "pr": 30,
+    "resultAt": "2026-10-11T07:46:41Z",
+    "publicationCommentId": 6106820627,
+    "publicationAt": "2026-10-11T07:47:08Z",
+    "published": true,
+    "ciState": "PENDING"
+  }
 }
