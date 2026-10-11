@@ -8,13 +8,18 @@
   "dispatchCount": 1,
   "startingSha": "00c007a12564f0a7945aec111dde027b7e60015a",
   "coordinationPr": 23,
-  "ack": null,
+  "ack": {
+    "delivery": "confirmed",
+    "commentId": 6105963077,
+    "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6105963077"
+  },
   "provider": {
-    "status": "start reserved; comment not yet posted"
+    "status": "awaiting explicit matching acceptance",
+    "startMechanism": "PR23 comment"
   },
   "termination": null,
   "priorResultCommentId": 6105911508,
-  "reviewOutcome": "SUCCESSOR_RESERVED",
+  "reviewOutcome": "SUCCESSOR_DISPATCHED",
   "ci": {
     "run": 38115005811,
     "check": "success",
@@ -224,8 +229,8 @@
     "collaboration": "Internal agents and external contractors support bidirectional task-scoped conversation and delegation",
     "nextTask": "Minimal agent collaboration and chat-first UI; repair slot validation prerequisite"
   },
-  "commentUrl": null,
-  "commentDelivery": "started",
+  "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6105963077",
+  "commentDelivery": "confirmed",
   "lastOwnerDirection": "Minimal T3 chat UI + Agents + Tasks; embedded/internal and external contractor agents converse and delegate bidirectionally.",
   "loopAcceptance": {
     "status": "UNVERIFIED",
@@ -289,7 +294,8 @@
   "dispatchTimestamps": {
     "claimedAt": "2026-10-11T05:46:36.500Z",
     "timezone": "America/Los_Angeles",
-    "sentAt": null,
-    "acceptedAt": null
+    "sentAt": "2026-10-11T05:47:22Z",
+    "acceptedAt": null,
+    "sentAtLocal": "2026-10-10 22:47:22 PDT"
   }
 }
