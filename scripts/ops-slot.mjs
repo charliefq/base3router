@@ -9,6 +9,10 @@
  * The script never deletes the ref, never expires a claim, and never sends
  * twice. Tests pass a local bare repo and a fake sender. They do not call
  * GitHub or a provider, and they are not an operational claim.
+ *
+ * The GitHub @cursor handoff does not use this lease. It updates
+ * ops/execution-slot.json through the Contents API. That path is
+ * scripts/ops-contents-slot.mjs.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";

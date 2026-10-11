@@ -58,13 +58,14 @@ describe("highlightSourceFile", () => {
       theme: "dark",
     });
 
-    expect(
-      highlighted
-        .flat()
-        .map((token) => token.content)
-        .join(""),
-    ).toBe(source);
-    expect(highlighted.flat().some((token) => token.color !== null)).toBe(true);
+    const sourceTokens = highlighted.flat();
+    expect(sourceTokens.map((token) => token.content).join("")).toBe(source);
+    expect(sourceTokens.some((token) => token.color !== null)).toBe(true);
+    // CI run 38110398025 saw source collapse "= 42;" into one red token while
+    // the snippet split the operator, spaces, number, and semicolon. Equality
+    // stays, and the number has to be its own colored token.
+    expect(sourceTokens.some((token) => token.content === "= 42;")).toBe(false);
+    expect(sourceTokens.find((token) => token.content === "42")?.color).toBeTruthy();
     expect(
       await highlighter.highlightCodeSnippet({ code: source, language: "ts", theme: "dark" }),
     ).toEqual(highlighted);
