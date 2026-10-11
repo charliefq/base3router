@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 21,
+  "generation": 22,
   "taskId": "base3-offline-pilot-brakes-20261011-05",
-  "workerId": "reserved-reviewer:event:35f2e0f0-c53e-11f1-8d2d-c8657370dc18",
+  "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
   "dispatchId": "base3-offline-pilot-brakes-20261011-05",
   "dispatchCount": 1,
   "startingSha": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b",
@@ -14,10 +14,18 @@
     "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106330787"
   },
   "provider": {
-    "status": "generic acknowledgment; matching CLAIMED/RUNNING pending",
+    "status": "RUNNING",
     "startMechanism": "PR23 comment",
     "acknowledgmentCommentId": 6106331703,
-    "acknowledgmentWorkerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5"
+    "acknowledgmentWorkerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+    "acceptance": {
+      "commentId": 6106336353,
+      "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106336353",
+      "githubCreatedAt": "2026-10-11T06:41:20Z",
+      "reportedAcceptedAt": "2026-10-11T06:41:13Z",
+      "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+      "dispatchId": "base3-offline-pilot-brakes-20261011-05"
+    }
   },
   "termination": null,
   "priorResultCommentId": 6105911508,
@@ -332,7 +340,7 @@
     },
     {
       "id": "OFFLINE-PILOT-BRAKES",
-      "state": "DISPATCHED"
+      "state": "RUNNING"
     },
     {
       "id": "CHAT-COLLABORATION-INTEGRATION-REPAIR",
@@ -342,7 +350,7 @@
       "scope": "actual T3 threads and project/capability context, V2/ActionGate/contracts, authenticated sender binding, multi-cycle reply integrity; no paid/live external calls"
     }
   ],
-  "nonce": "base3-chat-integration-20261011-04-2026-10-11T05:46:36.500Z",
+  "nonce": "base3-offline-pilot-brakes-20261011-05-22",
   "discoveredPrs": [
     27,
     26,
@@ -511,15 +519,24 @@
       "pr": 27,
       "startSha": "00c007a12564f0a7945aec111dde027b7e60015a",
       "completedAt": "2026-10-11T06:11:07Z",
-      "successor": "base3-offline-pilot-brakes-20261011-05"
+      "successor": "base3-offline-pilot-brakes-20261011-05",
+      "successorAcceptance": {
+        "commentId": 6106336353,
+        "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106336353",
+        "githubCreatedAt": "2026-10-11T06:41:20Z",
+        "reportedAcceptedAt": "2026-10-11T06:41:13Z",
+        "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+        "dispatchId": "base3-offline-pilot-brakes-20261011-05"
+      }
     }
   ],
   "dispatchTimestamps": {
     "claimedAt": "2026-10-11T06:40:14.224Z",
     "timezone": "America/Los_Angeles",
     "sentAt": "2026-10-11T06:40:32Z",
-    "acceptedAt": null,
-    "sentAtLocal": "2026-10-10 23:40:32 PDT"
+    "acceptedAt": "2026-10-11T06:41:20Z",
+    "sentAtLocal": "2026-10-10 23:40:32 PDT",
+    "acceptedAtLocal": "2026-10-10 23:41:20 PDT"
   },
   "eventCheckpoints": [
     {
@@ -544,12 +561,7 @@
       "loop": "UNVERIFIED; predecessor result followed publication; interactive successor cannot establish required automatic cycle."
     }
   ],
-  "reviewOwnership": {
-    "id": "event:35f2e0f0-c53e-11f1-8d2d-c8657370dc18",
-    "key": "base3-chat-integration-20261011-04:9dc41f4e168af5cdc233751ae23e3e9e5e17b29b:6106124642",
-    "state": "REVIEWING",
-    "claimedAt": "2026-10-11T06:37:59.989Z"
-  },
+  "reviewOwnership": null,
   "readOnlyCheckpoints": [
     {
       "id": "hourly:20261011T063727:read-only",
@@ -618,7 +630,7 @@
   "cycles": [
     {
       "resultKey": "base3-chat-integration-20261011-04:9dc41f4e168af5cdc233751ae23e3e9e5e17b29b:6106124642",
-      "status": "HUMAN_WAKEUP_RECOVERY_EXCLUDED_FROM_PROOF",
+      "status": "RECOVERY_SUCCESSOR_RUNNING_NOT_AUTOMATIC_PROOF",
       "resultAt": "2026-10-11T06:11:07Z",
       "publicationAt": "2026-10-11T06:11:29Z",
       "sha": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b",
@@ -643,10 +655,22 @@
         ]
       },
       "strictNoAdditionalUserMessageProof": false,
-      "successor": "base3-offline-pilot-brakes-20261011-05"
+      "successor": "base3-offline-pilot-brakes-20261011-05",
+      "successorClaim": {
+        "taskId": "base3-offline-pilot-brakes-20261011-05",
+        "commentId": 6106336353,
+        "time": "2026-10-11T06:41:20Z",
+        "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+        "startSha": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b"
+      }
     }
   ],
-  "followup": null,
+  "followup": {
+    "dispatchId": "base3-offline-pilot-brakes-20261011-05",
+    "source": "repository events and enabled hourly reconciliation",
+    "state": "AWAIT_RESULT",
+    "repeatability": "UNVERIFIED"
+  },
   "predecessor": {
     "taskId": "base3-chat-integration-20261011-04",
     "resultKey": "base3-chat-integration-20261011-04:9dc41f4e168af5cdc233751ae23e3e9e5e17b29b:6106124642",
