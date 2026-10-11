@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { applyCollaboration, foldCollaboration, initialCollaboration } from "./decide.ts";
+import { applyCollaboration, foldCollaboration, foldCollaborationState } from "./decide.ts";
 
 const CommandJson = Schema.fromJsonString(CollaborationCommand);
 const decodeCommand = Schema.decodeUnknownEffect(CommandJson);
@@ -44,27 +44,7 @@ export const submitCollaborationCommand = (
           snapshot,
         };
       }
-      let state = initialCollaboration();
-      for (const existing of commands) {
-        const prior = applyCollaboration(state, existing);
-        if (prior.outcome !== "applied") continue;
-        state = {
-          agents: prior.snapshot.agents.map((agent) => ({
-            id: agent.id,
-            displayName: agent.displayName,
-            origin: agent.origin,
-            role: agent.role,
-            capabilities: [...agent.capabilities],
-            connection: agent.connection,
-            projectId: agent.projectId,
-          })),
-          tasks: prior.snapshot.tasks,
-          messages: prior.snapshot.messages,
-          appliedCommandIds: state.appliedCommandIds.includes(existing.commandId)
-            ? state.appliedCommandIds
-            : [...state.appliedCommandIds, existing.commandId],
-        };
-      }
+      const state = foldCollaborationState(commands);
       const result = applyCollaboration(state, command);
       if (result.outcome === "rejected") return result;
       const sequenceRows = yield* sql<{ readonly next: number | string }>`

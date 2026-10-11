@@ -1,13 +1,53 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import type { CollaborationCommand } from "@t3tools/contracts";
+
 import {
   applyCollaboration,
   foldCollaboration,
+  foldCollaborationState,
   initialCollaboration,
   projectCollaboration,
 } from "./decide.ts";
 
 const projectId = "project-a";
+const owner = "principal-owner";
+const providerId = "provider-codex";
+
+const seal = (command: CollaborationCommand, admittedBy = owner): CollaborationCommand => ({
+  ...command,
+  admissionSource: "server",
+  admittedBy,
+});
+
+const bind = seal({
+  type: "thread.bind",
+  commandId: "bind-codex",
+  agentId: providerId,
+  displayName: "Codex",
+  origin: "internal",
+  role: "provider",
+  capabilities: ["gpt"],
+  projectId,
+  threadId: "thread-1",
+  title: "Chat with Codex",
+  gateDecision: "DENY",
+});
+
+const delegate = (gate: "ALLOW" | "DENY", commandId = "send-1"): CollaborationCommand =>
+  seal({
+    type: "delegate",
+    commandId,
+    correlationId: "build-x",
+    projectId,
+    toAgentId: providerId,
+    title: "Build X",
+    body: "Build X on this thread.",
+    acceptance: "X exists.",
+    gateDecision: gate,
+    actor: "owner",
+    fromAgentId: "spoofed-agent",
+  });
 
 describe("collaboration", () => {
   it("keeps real Grokbot disconnected and does not invent an internal employee", () => {
@@ -18,229 +58,398 @@ describe("collaboration", () => {
       origin: "external",
       connection: "NOT_CONNECTED",
       availability: "offline",
+      threadId: null,
     });
-    expect(snapshot.grokbotIntegration.length).toBeGreaterThan(0);
   });
 
-  it("rehearses an inbound delegation with clarification, reply, and result", () => {
-    const snapshot = foldCollaboration([
-      {
-        type: "scenario.rehearse",
-        commandId: "rehearse-a",
-        scenario: "A",
-        projectId,
-      },
-    ]);
-    const task = snapshot.tasks.find((item) => item.title === "Build X");
-    expect(task).toMatchObject({
-      state: "completed",
-      ownerAgentId: "grokbot",
-      assigneeAgentId: "b3r-engineering",
+  it("links a provider to a persisted thread without granting execution", () => {
+    const snapshot = foldCollaboration([bind]);
+    expect(snapshot.agents.find((agent) => agent.id === providerId)).toMatchObject({
+      origin: "internal",
+      threadId: "thread-1",
       projectId,
+    });
+    expect(snapshot.tasks[0]).toMatchObject({
+      title: "Chat with Codex",
+      ownerAgentId: owner,
+      assigneeAgentId: providerId,
+      projectId,
+      threadId: "thread-1",
+      state: "blocked",
+      gateDecision: "DENY",
+      pendingClarificationId: null,
+    });
+    expect(snapshot.realGrokbot).toBe("NOT_CONNECTED");
+  });
+
+  it("does not let a client actor or fromAgentId admit a running task", () => {
+    const client = applyCollaboration(foldCollaborationState([bind]), {
+      type: "delegate",
+      commandId: "client-send",
+      actor: "owner",
+      fromAgentId: providerId,
+      toAgentId: providerId,
+      projectId,
+      correlationId: "client",
+      title: "Build X",
+      body: "Build X.",
+      acceptance: "X exists.",
       gateDecision: "ALLOW",
     });
-    expect(snapshot.messages.map((message) => message.kind)).toEqual([
-      "delegation",
-      "clarification",
-      "reply",
-      "result",
-    ]);
-    expect(snapshot.messages.every((message) => message.grantsExecution === false)).toBe(true);
-    expect(snapshot.messages.every((message) => message.transport === "simulated")).toBe(true);
-    expect(snapshot.realGrokbot).toBe("NOT_CONNECTED");
-    expect(snapshot.agents.find((agent) => agent.id === "grokbot")?.connection).toBe("SIMULATED");
-    const reply = snapshot.messages.find((message) => message.kind === "reply");
-    expect(reply?.replyTo).toBe(
-      snapshot.messages.find((message) => message.kind === "clarification")?.id,
-    );
-    expect(snapshot.tasks).toHaveLength(1);
+    expect(client).toMatchObject({
+      outcome: "rejected",
+      code: "unauthorized",
+      gateDecision: "DENY",
+    });
+    expect(client.snapshot.tasks).toHaveLength(1);
+    expect(client.snapshot.tasks[0]?.state).toBe("blocked");
   });
 
-  it("rehearses an outbound request and returns the result to the original task", () => {
-    const snapshot = foldCollaboration([
-      {
-        type: "scenario.rehearse",
-        commandId: "rehearse-b",
-        scenario: "B",
-        projectId,
-      },
-    ]);
-    const task = snapshot.tasks.find((item) => item.title === "Do Y");
-    expect(task).toMatchObject({
-      state: "completed",
-      ownerAgentId: "b3r-engineering",
-      assigneeAgentId: "grokbot-research",
+  it("keeps a DENY gate blocked and refuses to clarify it into running work", () => {
+    const snapshot = foldCollaboration([bind, delegate("DENY")]);
+    expect(snapshot.tasks.find((task) => task.title === "Build X")).toMatchObject({
+      state: "blocked",
+      gateDecision: "DENY",
+      ownerAgentId: owner,
+      threadId: "thread-1",
     });
-    const result = snapshot.messages.find((message) => message.kind === "result");
-    expect(result).toMatchObject({
-      senderId: "grokbot-research",
-      recipientId: "b3r-engineering",
-      taskId: task?.id,
-      transport: "simulated",
+    expect(snapshot.messages[0]).toMatchObject({
+      kind: "delegation",
+      senderId: owner,
+      grantsExecution: false,
+      transport: "internal",
+    });
+    const task = snapshot.tasks.find((item) => item.title === "Build X");
+    const clarified = applyCollaboration(
+      foldCollaborationState([bind, delegate("DENY")]),
+      seal(
+        { type: "clarify", commandId: "clarify-denied", taskId: task?.id ?? "", body: "Which X?" },
+        providerId,
+      ),
+    );
+    expect(clarified).toMatchObject({ outcome: "rejected", code: "not-ready" });
+    expect(clarified.snapshot.tasks.find((item) => item.id === task?.id)?.state).toBe("blocked");
+  });
+
+  it("answers two clarification rounds and rejects a stale, spoofed, or repeated reply", () => {
+    const opened = foldCollaborationState([bind, delegate("ALLOW")]);
+    const taskId = projectCollaboration(opened).tasks.find((task) => task.title === "Build X")?.id;
+    expect(taskId).toBeTruthy();
+    const clarify = (commandId: string, body: string) =>
+      seal({ type: "clarify", commandId, taskId: taskId ?? "", body }, providerId);
+
+    const firstQuestion = applyCollaboration(opened, clarify("clarify-1", "Which X?"));
+    expect(firstQuestion.outcome).toBe("applied");
+    const firstId = firstQuestion.snapshot.messages.find(
+      (message) => message.kind === "clarification",
+    )?.id;
+    const blocked = firstQuestion.snapshot.tasks.find((task) => task.id === taskId);
+    expect(firstId).toBe(`${taskId}:clarify:clarify-1`);
+    expect(blocked).toMatchObject({
+      state: "blocked",
+      pendingClarificationId: firstId,
+      revision: 2,
+    });
+
+    const afterFirst = foldCollaborationState([
+      bind,
+      delegate("ALLOW"),
+      clarify("clarify-1", "Which X?"),
+    ]);
+    const delegationId = projectCollaboration(afterFirst).messages.find(
+      (message) => message.kind === "delegation",
+    )?.id;
+    const staleTarget = applyCollaboration(
+      afterFirst,
+      seal({
+        type: "reply",
+        commandId: "reply-delegation",
+        taskId: taskId ?? "",
+        replyTo: delegationId ?? "",
+        revision: blocked?.revision ?? 0,
+        body: "The delegation itself.",
+      }),
+    );
+    expect(staleTarget).toMatchObject({ outcome: "rejected", code: "not-ready" });
+    expect(
+      staleTarget.snapshot.tasks.find((task) => task.id === taskId)?.pendingClarificationId,
+    ).toBe(firstId);
+
+    const spoofed = applyCollaboration(
+      afterFirst,
+      seal(
+        {
+          type: "reply",
+          commandId: "reply-spoof",
+          taskId: taskId ?? "",
+          replyTo: firstId ?? "",
+          revision: blocked?.revision ?? 0,
+          body: "I pretend to be the owner.",
+          fromAgentId: owner,
+        },
+        "someone-else",
+      ),
+    );
+    expect(spoofed).toMatchObject({ outcome: "rejected", code: "unauthorized" });
+    expect(spoofed.snapshot.messages.filter((message) => message.kind === "reply")).toHaveLength(0);
+
+    const answer = seal({
+      type: "reply",
+      commandId: "reply-1",
+      taskId: taskId ?? "",
+      replyTo: firstId ?? "",
+      revision: blocked?.revision ?? 0,
+      body: "The X in the title.",
+      fromAgentId: "not-the-owner",
+    });
+    const answered = applyCollaboration(afterFirst, answer);
+    expect(answered.outcome).toBe("applied");
+    expect(answered.snapshot.tasks.find((task) => task.id === taskId)).toMatchObject({
+      state: "running",
+      pendingClarificationId: null,
+    });
+    expect(answered.snapshot.messages.find((message) => message.kind === "reply")?.senderId).toBe(
+      owner,
+    );
+
+    const second = clarify("clarify-2", "Which file?");
+    const askedAgain = applyCollaboration(
+      foldCollaborationState([bind, delegate("ALLOW"), clarify("clarify-1", "Which X?"), answer]),
+      second,
+    );
+    const questions = askedAgain.snapshot.messages.filter(
+      (message) => message.kind === "clarification",
+    );
+    expect(questions.map((message) => message.id)).toEqual([
+      `${taskId}:clarify:clarify-1`,
+      `${taskId}:clarify:clarify-2`,
+    ]);
+    const current = askedAgain.snapshot.tasks.find((task) => task.id === taskId);
+    expect(current?.pendingClarificationId).toBe(`${taskId}:clarify:clarify-2`);
+
+    const oldQuestion = applyCollaboration(
+      foldCollaborationState([
+        bind,
+        delegate("ALLOW"),
+        clarify("clarify-1", "Which X?"),
+        answer,
+        second,
+      ]),
+      seal({
+        type: "reply",
+        commandId: "reply-old",
+        taskId: taskId ?? "",
+        replyTo: firstId ?? "",
+        revision: current?.revision ?? 0,
+        body: "Answer to the first question.",
+      }),
+    );
+    expect(oldQuestion).toMatchObject({ outcome: "rejected", code: "not-ready" });
+    expect(
+      oldQuestion.snapshot.tasks.find((task) => task.id === taskId)?.pendingClarificationId,
+    ).toBe(`${taskId}:clarify:clarify-2`);
+
+    const oldRevision = applyCollaboration(
+      foldCollaborationState([
+        bind,
+        delegate("ALLOW"),
+        clarify("clarify-1", "Which X?"),
+        answer,
+        second,
+      ]),
+      seal({
+        type: "reply",
+        commandId: "reply-old-revision",
+        taskId: taskId ?? "",
+        replyTo: `${taskId}:clarify:clarify-2`,
+        revision: blocked?.revision ?? 0,
+        body: "A revision from the first round.",
+      }),
+    );
+    expect(oldRevision).toMatchObject({ outcome: "rejected", code: "not-ready" });
+    expect(
+      oldRevision.snapshot.messages.filter((message) => message.kind === "reply"),
+    ).toHaveLength(1);
+
+    const secondAnswer = seal({
+      type: "reply",
+      commandId: "reply-2",
+      taskId: taskId ?? "",
+      replyTo: `${taskId}:clarify:clarify-2`,
+      revision: current?.revision ?? 0,
+      body: "The file named X.",
+    });
+    const resumed = applyCollaboration(
+      foldCollaborationState([
+        bind,
+        delegate("ALLOW"),
+        clarify("clarify-1", "Which X?"),
+        answer,
+        second,
+      ]),
+      secondAnswer,
+    );
+    expect(resumed.snapshot.tasks.find((task) => task.id === taskId)?.state).toBe("running");
+
+    const returned = applyCollaboration(
+      foldCollaborationState([
+        bind,
+        delegate("ALLOW"),
+        clarify("clarify-1", "Which X?"),
+        answer,
+        second,
+        secondAnswer,
+      ]),
+      seal(
+        { type: "result", commandId: "result-1", taskId: taskId ?? "", body: "X is built." },
+        providerId,
+      ),
+    );
+    expect(returned.snapshot.tasks.find((task) => task.id === taskId)).toMatchObject({
+      state: "review-ready",
+    });
+    expect(returned.snapshot.messages.find((message) => message.kind === "result")).toMatchObject({
+      senderId: providerId,
+      recipientId: owner,
       grantsExecution: false,
     });
-    expect(snapshot.realGrokbot).toBe("NOT_CONNECTED");
+    const accepted = applyCollaboration(
+      foldCollaborationState([
+        bind,
+        delegate("ALLOW"),
+        clarify("clarify-1", "Which X?"),
+        answer,
+        second,
+        secondAnswer,
+        seal(
+          { type: "result", commandId: "result-1", taskId: taskId ?? "", body: "X is built." },
+          providerId,
+        ),
+      ]),
+      seal({
+        type: "accept",
+        commandId: "accept-1",
+        taskId: taskId ?? "",
+        acceptance: "X is built.",
+      }),
+    );
+    expect(accepted.snapshot.tasks.find((task) => task.id === taskId)?.state).toBe("completed");
+
+    const replayed = applyCollaboration(
+      foldCollaborationState([
+        bind,
+        delegate("ALLOW"),
+        clarify("clarify-1", "Which X?"),
+        answer,
+        second,
+        secondAnswer,
+      ]),
+      clarify("clarify-1", "Which X?"),
+    );
+    expect(replayed.idempotent).toBe(true);
+    expect(
+      replayed.snapshot.messages.filter((message) => message.kind === "clarification"),
+    ).toHaveLength(2);
   });
 
-  it("does not send twice after a restart or a repeated correlation", () => {
-    const delegate = {
-      type: "agent.register" as const,
-      commandId: "register-eng",
-      agentId: "b3r-engineering",
-      displayName: "B3R engineering",
-      origin: "internal" as const,
-      role: "engineering",
-      capabilities: ["build"],
-      projectId,
-    };
-    const send = {
-      type: "delegate" as const,
-      commandId: "send-1",
-      correlationId: "build-x",
-      projectId,
-      fromAgentId: "b3r-engineering",
-      toAgentId: "b3r-engineering",
-      title: "Build X",
-      body: "Build X locally.",
-      acceptance: "X exists.",
-      actor: "owner" as const,
-    };
-    const once = foldCollaboration([delegate, send, send, { ...send, commandId: "send-2" }]);
-    expect(once.tasks).toHaveLength(1);
+  it("does not create a second task for the same correlation or a repeated command", () => {
+    const once = foldCollaboration([bind, delegate("ALLOW"), delegate("ALLOW", "send-2")]);
+    expect(once.tasks.filter((task) => task.correlationId === "build-x")).toHaveLength(1);
     expect(once.messages).toHaveLength(1);
     const restarted = applyCollaboration(
-      {
-        agents: once.agents.map((agent) => ({
-          id: agent.id,
-          displayName: agent.displayName,
-          origin: agent.origin,
-          role: agent.role,
-          capabilities: agent.capabilities,
-          connection: agent.connection,
-          projectId: agent.projectId,
-        })),
-        tasks: once.tasks,
-        messages: once.messages,
-        appliedCommandIds: ["register-eng", "send-1", "send-2"],
-      },
-      send,
+      foldCollaborationState([bind, delegate("ALLOW"), delegate("ALLOW", "send-2")]),
+      delegate("ALLOW"),
     );
     expect(restarted.idempotent).toBe(true);
     expect(restarted.snapshot.messages).toHaveLength(1);
   });
 
-  it("refuses a disconnected contractor, an ambiguous name, and a cross-project target", () => {
-    let state = initialCollaboration();
-    const disconnected = applyCollaboration(state, {
-      type: "delegate",
-      commandId: "to-grokbot",
-      correlationId: "ask-grokbot",
-      projectId,
-      fromAgentId: "grokbot",
-      toAgentId: "grokbot",
-      title: "Ask",
-      body: "Do it.",
-      acceptance: "Done.",
-      actor: "owner",
-    });
-    expect(disconnected).toMatchObject({
-      outcome: "rejected",
-      code: "not-connected",
-      gateDecision: "DENY",
-    });
+  it("refuses Grokbot, an ambiguous name, a cross-project target, and a rehearsal", () => {
+    const disconnected = applyCollaboration(
+      initialCollaboration(),
+      seal({
+        type: "delegate",
+        commandId: "to-grokbot",
+        correlationId: "ask-grokbot",
+        projectId,
+        toAgentId: "grokbot",
+        title: "Ask",
+        body: "Do it.",
+        acceptance: "Done.",
+        gateDecision: "ALLOW",
+      }),
+    );
+    expect(disconnected).toMatchObject({ outcome: "rejected", code: "not-connected" });
     expect(disconnected.snapshot.tasks).toHaveLength(0);
+    expect(disconnected.snapshot.realGrokbot).toBe("NOT_CONNECTED");
 
-    const registered = applyCollaboration(state, {
-      type: "agent.register",
-      commandId: "research-a",
-      agentId: "research-a",
-      displayName: "Research",
-      origin: "internal",
-      role: "research",
-      capabilities: ["research"],
-      projectId,
-    });
-    expect(registered.outcome).toBe("applied");
-    state = {
-      agents: registered.snapshot.agents.map((agent) => ({
-        id: agent.id,
-        displayName: agent.displayName,
-        origin: agent.origin,
-        role: agent.role,
-        capabilities: agent.capabilities,
-        connection: agent.connection,
-        projectId: agent.projectId,
-      })),
-      tasks: [],
-      messages: [],
-      appliedCommandIds: ["research-a"],
-    };
-    const second = applyCollaboration(state, {
-      type: "agent.register",
-      commandId: "research-b",
-      agentId: "research-b",
-      displayName: "Research",
-      origin: "external",
-      role: "research",
-      capabilities: ["research"],
-      projectId: "project-b",
-    });
-    expect(second.outcome).toBe("applied");
-    state = {
-      agents: second.snapshot.agents.map((agent) => ({
-        id: agent.id,
-        displayName: agent.displayName,
-        origin: agent.origin,
-        role: agent.role,
-        capabilities: agent.capabilities,
-        connection: agent.connection,
-        projectId: agent.projectId,
-      })),
-      tasks: [],
-      messages: [],
-      appliedCommandIds: ["research-a", "research-b"],
-    };
-    const ambiguous = applyCollaboration(state, {
-      type: "resolve",
-      commandId: "resolve-research",
-      correlationId: "which-research",
-      projectId,
-      fromAgentId: "grokbot",
-      name: "Research",
-      title: "Do Y",
-      body: "Do Y.",
-      acceptance: "Y is done.",
-      actor: "owner",
-    });
+    const directory = foldCollaborationState([
+      bind,
+      seal({
+        type: "thread.bind",
+        commandId: "bind-research-a",
+        agentId: "research-a",
+        displayName: "Research",
+        origin: "internal",
+        role: "provider",
+        capabilities: ["search"],
+        projectId,
+        threadId: "thread-a",
+        gateDecision: "DENY",
+      }),
+      seal({
+        type: "thread.bind",
+        commandId: "bind-research-b",
+        agentId: "research-b",
+        displayName: "Research",
+        origin: "internal",
+        role: "provider",
+        capabilities: ["search"],
+        projectId: "project-b",
+        threadId: "thread-b",
+        gateDecision: "DENY",
+      }),
+    ]);
+    const ambiguous = applyCollaboration(
+      directory,
+      seal({
+        type: "resolve",
+        commandId: "resolve-research",
+        name: "Research",
+        projectId,
+        correlationId: "which-research",
+        title: "Do Y",
+        body: "Do Y.",
+        acceptance: "Y is done.",
+        gateDecision: "ALLOW",
+      }),
+    );
     expect(ambiguous).toMatchObject({ outcome: "rejected", code: "ambiguous-target" });
-    expect(ambiguous.snapshot.tasks).toHaveLength(0);
 
-    const crossed = applyCollaboration(state, {
-      type: "delegate",
-      commandId: "cross",
-      correlationId: "cross-project",
-      projectId,
-      fromAgentId: "research-a",
-      toAgentId: "research-b",
-      title: "Do Y",
-      body: "Do Y in the other project.",
-      acceptance: "Y is done.",
-      actor: "owner",
-    });
-    expect(crossed).toMatchObject({
-      outcome: "rejected",
-      code: "cross-project",
-      gateDecision: "DENY",
-    });
-    expect(crossed.snapshot.tasks).toHaveLength(0);
-  });
+    const crossed = applyCollaboration(
+      directory,
+      seal({
+        type: "delegate",
+        commandId: "cross",
+        toAgentId: "research-b",
+        projectId,
+        correlationId: "cross-project",
+        title: "Do Y",
+        body: "Do Y in the other project.",
+        acceptance: "Y is done.",
+        gateDecision: "ALLOW",
+      }),
+    );
+    expect(crossed).toMatchObject({ outcome: "rejected", code: "cross-project" });
+    expect(crossed.snapshot.tasks.some((task) => task.correlationId === "cross-project")).toBe(
+      false,
+    );
 
-  it("rejects a command that omits the fields its type needs", () => {
-    const result = applyCollaboration(initialCollaboration(), {
-      type: "agent.register",
-      commandId: "incomplete",
-    });
-    expect(result).toMatchObject({ outcome: "rejected", code: "not-ready", gateDecision: null });
-    expect(result.snapshot.agents.map((agent) => agent.id)).toEqual(["grokbot"]);
+    const rehearsal = applyCollaboration(
+      initialCollaboration(),
+      seal({ type: "scenario.rehearse", commandId: "rehearse", scenario: "A", projectId }),
+    );
+    expect(rehearsal).toMatchObject({ outcome: "rejected", code: "unauthorized" });
+    expect(rehearsal.snapshot.agents.map((agent) => agent.id)).toEqual(["grokbot"]);
   });
 });
