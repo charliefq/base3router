@@ -3,6 +3,10 @@
  * A brake reserves a start and requests cancellation. It does not release a lease.
  * Token, dollar, and deadline checks share that reservation. Production usage
  * rows stay unverified; only a synthetic fixture price can satisfy a dollar cap.
+ * Frozen tree bounds stay in force when a later payload omits them. A usage
+ * update or database startup asks active work to stop once those bounds are
+ * spent. This process does not send the provider a remaining-token ceiling, so
+ * one turn can report more than the budget that remained when it started.
  */
 // Persisted thread payloads are already JSON text in SQLite.
 // @effect-diagnostics preferSchemaOverJson:off
@@ -378,6 +382,53 @@ export const requestTaskCancellation = (
     }
   });
 
+/**
+ * Interrupt occupied leases whose frozen deadline has passed or whose tree
+ * usage has reached a frozen cap. Idempotent. Does not release a lease and
+ * does not admit a start. Database startup runs this for every root.
+ */
+export const evaluatePersistedBrakes = (sql: SqlClient.SqlClient, rootThreadId?: string | null) =>
+  Effect.gen(function* () {
+    const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
+    const scope = rootThreadId ?? null;
+    const rows = yield* sql<{ readonly root_thread_id: string }>`
+      SELECT bounds.root_thread_id
+      FROM task_contract_deadlines AS bounds
+      WHERE (${scope} IS NULL OR bounds.root_thread_id = ${scope})
+        AND EXISTS (
+          SELECT 1 FROM base3_capacity_leases AS lease
+          WHERE lease.released_at IS NULL
+            AND (
+              lease.thread_id = bounds.root_thread_id
+              OR lease.thread_id IN (
+                SELECT thread_id FROM task_contract_members
+                WHERE root_thread_id = bounds.root_thread_id
+              )
+            )
+        )
+        AND (
+          bounds.deadline_at <= ${now}
+          OR (
+            bounds.max_tokens IS NOT NULL
+            AND COALESCE((
+              SELECT SUM(input_tokens + output_tokens) FROM task_usage_attempts
+              WHERE root_thread_id = bounds.root_thread_id
+            ), 0) >= bounds.max_tokens
+          )
+          OR (
+            bounds.max_cost_usd IS NOT NULL
+            AND COALESCE((
+              SELECT SUM(reported_cost_usd) FROM task_usage_attempts
+              WHERE root_thread_id = bounds.root_thread_id
+            ), 0) >= bounds.max_cost_usd
+          )
+        )
+    `;
+    for (const row of rows) {
+      yield* requestTaskCancellation(sql, row.root_thread_id, row.root_thread_id);
+    }
+  });
+
 export const countTaskAdmissions = (sql: SqlClient.SqlClient, rootThreadId: string) =>
   sql<{ readonly count: number }>`
     SELECT COUNT(*) AS count FROM task_contract_admissions
@@ -462,25 +513,73 @@ const commitTaskAdmission = (input: {
           ${input.state.parentThreadId ?? null}
         )
       `;
-      if (deadline !== null) {
-        yield* input.sql`
-          INSERT OR IGNORE INTO task_contract_deadlines (root_thread_id, deadline_at, frozen_at)
-          VALUES (${input.state.rootThreadId}, ${deadline}, ${now})
-        `;
-      }
       const refuse = (detail: string) =>
         Effect.gen(function* () {
           yield* requestTaskCancellation(input.sql, input.state.rootThreadId, input.threadId);
           return { _tag: "denied" as const, detail };
         });
-      if (active && (maxTokens === "invalid" || maxCostUsd === "invalid" || deadline === null)) {
+      if (maxTokens === "invalid" || maxCostUsd === "invalid") {
         return yield* refuse(
           "A budgeted start needs an explicit positive token cap, dollar cap, and absolute deadline when those brakes are set. No default was applied. No provider was started.",
         );
       }
-      const tokenCap = maxTokens === "invalid" ? null : maxTokens;
-      const dollarCap = maxCostUsd === "invalid" ? null : maxCostUsd;
-      const pilotAllows = active
+      const tokenCap = maxTokens;
+      const dollarCap = maxCostUsd;
+      // The first deadline stays put. A later payload may only lower a cap.
+      // Omitting a cap does not clear one that was already frozen.
+      if (deadline !== null) {
+        yield* input.sql`
+          INSERT INTO task_contract_deadlines (
+            root_thread_id, deadline_at, frozen_at, max_tokens, max_cost_usd
+          ) VALUES (
+            ${input.state.rootThreadId}, ${deadline}, ${now}, ${tokenCap}, ${dollarCap}
+          )
+          ON CONFLICT(root_thread_id) DO UPDATE SET
+            max_tokens = CASE
+              WHEN excluded.max_tokens IS NULL THEN task_contract_deadlines.max_tokens
+              WHEN task_contract_deadlines.max_tokens IS NULL THEN excluded.max_tokens
+              WHEN excluded.max_tokens < task_contract_deadlines.max_tokens
+                THEN excluded.max_tokens
+              ELSE task_contract_deadlines.max_tokens
+            END,
+            max_cost_usd = CASE
+              WHEN excluded.max_cost_usd IS NULL THEN task_contract_deadlines.max_cost_usd
+              WHEN task_contract_deadlines.max_cost_usd IS NULL THEN excluded.max_cost_usd
+              WHEN excluded.max_cost_usd < task_contract_deadlines.max_cost_usd
+                THEN excluded.max_cost_usd
+              ELSE task_contract_deadlines.max_cost_usd
+            END
+        `;
+      } else if (tokenCap !== null || dollarCap !== null) {
+        yield* input.sql`
+          UPDATE task_contract_deadlines SET
+            max_tokens = CASE
+              WHEN ${tokenCap} IS NULL THEN max_tokens
+              WHEN max_tokens IS NULL THEN ${tokenCap}
+              WHEN ${tokenCap} < max_tokens THEN ${tokenCap}
+              ELSE max_tokens
+            END,
+            max_cost_usd = CASE
+              WHEN ${dollarCap} IS NULL THEN max_cost_usd
+              WHEN max_cost_usd IS NULL THEN ${dollarCap}
+              WHEN ${dollarCap} < max_cost_usd THEN ${dollarCap}
+              ELSE max_cost_usd
+            END
+          WHERE root_thread_id = ${input.state.rootThreadId}
+        `;
+      }
+      const bounds = yield* input.sql<{ readonly root_thread_id: string }>`
+        SELECT root_thread_id FROM task_contract_deadlines
+        WHERE root_thread_id = ${input.state.rootThreadId}
+        LIMIT 1
+      `;
+      if (active && deadline === null && bounds.length === 0) {
+        return yield* refuse(
+          "A budgeted start needs an explicit positive token cap, dollar cap, and absolute deadline when those brakes are set. No default was applied. No provider was started.",
+        );
+      }
+      const enforced = bounds.length > 0;
+      const pilotAllows = enforced
         ? input.sql`
             (
               (SELECT deadline_at FROM task_contract_deadlines
@@ -498,18 +597,26 @@ const commitTaskAdmission = (input: {
                   )
               )
               AND (
-                ${tokenCap} IS NULL
+                (SELECT max_tokens FROM task_contract_deadlines
+                  WHERE root_thread_id = ${input.state.rootThreadId}) IS NULL
                 OR COALESCE((
                   SELECT SUM(input_tokens + output_tokens) FROM task_usage_attempts
                   WHERE root_thread_id = ${input.state.rootThreadId}
-                ), 0) < ${tokenCap}
+                ), 0) < (
+                  SELECT max_tokens FROM task_contract_deadlines
+                  WHERE root_thread_id = ${input.state.rootThreadId}
+                )
               )
               AND (
-                ${dollarCap} IS NULL
+                (SELECT max_cost_usd FROM task_contract_deadlines
+                  WHERE root_thread_id = ${input.state.rootThreadId}) IS NULL
                 OR COALESCE((
                   SELECT SUM(reported_cost_usd) FROM task_usage_attempts
                   WHERE root_thread_id = ${input.state.rootThreadId}
-                ), 0) < ${dollarCap}
+                ), 0) < (
+                  SELECT max_cost_usd FROM task_contract_deadlines
+                  WHERE root_thread_id = ${input.state.rootThreadId}
+                )
               )
               AND (
                 SELECT COUNT(*) FROM task_contract_admissions
@@ -576,14 +683,19 @@ const classifyPilotDenial = (input: {
   readonly contract: TaskContract;
 }) =>
   Effect.gen(function* () {
-    if (!pilotActive(input.contract.brake)) return null;
     const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
-    const deadlineRows = yield* input.sql<{ readonly deadline_at: string }>`
-      SELECT deadline_at FROM task_contract_deadlines
+    const deadlineRows = yield* input.sql<{
+      readonly deadline_at: string;
+      readonly max_tokens: number | null;
+      readonly max_cost_usd: number | null;
+    }>`
+      SELECT deadline_at, max_tokens, max_cost_usd FROM task_contract_deadlines
       WHERE root_thread_id = ${input.rootThreadId}
       LIMIT 1
     `;
-    const deadline = deadlineRows[0]?.deadline_at;
+    const bound = deadlineRows[0];
+    if (bound === undefined && !pilotActive(input.contract.brake)) return null;
+    const deadline = bound?.deadline_at;
     if (deadline === undefined) {
       return `An absolute deadline must be persisted before a budgeted start. No default deadline was applied. No provider was started.`;
     }
@@ -628,12 +740,12 @@ const classifyPilotDenial = (input: {
     `;
     const tokens = Number(sums[0]?.tokens ?? 0);
     const cost = Number(sums[0]?.cost ?? 0);
-    const maxTokens = input.contract.brake.maxTokens;
-    if (maxTokens !== undefined && tokens >= maxTokens) {
+    const maxTokens = bound?.max_tokens ?? input.contract.brake.maxTokens ?? null;
+    if (maxTokens !== null && tokens >= Number(maxTokens)) {
       return `Token budget exhausted: ${tokens} tokens are already accounted on this task tree, and the cap is ${maxTokens}. A child, retry, or handoff does not reset that total. ${PINNED_LEASE}`;
     }
-    const maxCostUsd = input.contract.brake.maxCostUsd;
-    if (maxCostUsd !== undefined && cost >= maxCostUsd) {
+    const maxCostUsd = bound?.max_cost_usd ?? input.contract.brake.maxCostUsd ?? null;
+    if (maxCostUsd !== null && cost >= Number(maxCostUsd)) {
       return `Dollar budget exhausted: ${cost} USD is already accounted on this task tree, and the cap is ${maxCostUsd}. A child, retry, or handoff does not reset that total. ${PINNED_LEASE}`;
     }
     const admissionRows = yield* input.sql<{ readonly count: number }>`

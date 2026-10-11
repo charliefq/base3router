@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 import { runBase3PolicyMigrations } from "./Base3PolicyMigrations.ts";
+import { evaluatePersistedBrakes } from "../policy/TaskContract.ts";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -215,5 +216,8 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     ).pipe(Effect.annotateLogs({ divergent }));
   }
   yield* runBase3PolicyMigrations;
+  // Opening the database is the startup recovery for governed leases. It does
+  // not admit a start and does not release a lease.
+  yield* evaluatePersistedBrakes(sql);
   return executedMigrations;
 });

@@ -4,7 +4,10 @@ Status: **PREPARED**. The GitHub handoff updates `ops/execution-slot.json` on
 branch `ops/base3-execution-slot` with the file's current blob SHA. Event
 review holds that ledger for `base3-repair-20261011-02`. This Cursor run does
 not read it, write it, release it, or recreate it. Mock tests are not that
-ledger. Recurring Cursor automation stays **DISABLED**. Paid provider pilots
+ledger. Product recurring execution stays disabled by owner instruction.
+Hosted ChatGPT reconciliation is the enabled review path named by the owner.
+This run did not read either setting, so neither state is verified from
+configuration. Paid provider pilots
 stay **BLOCKED**. The end-to-end loop stays **UNVERIFIED** until a successor
 is accepted and its reviewed delivery is observed.
 
@@ -19,8 +22,10 @@ The product does not grow a second scheduler for this.
 ## Owner
 
 The connected GitHub account on `charliefq/base3router` is the owner surface.
-ChatGPT event review is the dispatcher. Hourly supervision is recovery only
-and does not dispatch. Standing authorization covers routine engineering.
+ChatGPT event review is the dispatcher. Hosted reconciliation is described as
+enabled, and product recurring execution is described as disabled. This file
+does not verify those settings. Hourly supervision is recovery only and does
+not dispatch. Standing authorization covers routine engineering.
 Merges, releases, paid-provider pilots, and account settings stay excluded.
 This run does not enable a Cursor automation.
 
@@ -89,16 +94,17 @@ move for this repair.
 
 ## Dispatches
 
-| Dispatch                                      | State                                                                                                                                            | Agent                                                               |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
-| `base3-unattended-20261010-01`                | Earlier packet. Agent IDLE.                                                                                                                      | <https://cursor.com/agents/bc-0b48c998-6c41-4ef0-bbff-a5ce12a0d2e4> |
-| `base3-unattended-20261010-02`                | **REVIEW_READY** in PR #22 comment 6104214316. Agent IDLE. Not overlapped.                                                                       | <https://cursor.com/agents/bc-b428813a-b3b5-45dd-ba61-1d5591398ee5> |
-| `base3-closed-loop-20261011-01`               | **COMPLETED** in PR #23 comment 6105316354. PR #24 head `08e36ac02d78f3f9d18ad29bcc68652c4ce95232`. Required Check failed.                       | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
-| `base3-repair-20261011-02`                    | **COMPLETED** in PR #23 comment 6105520995. PR #25 head `a4541db95049ec595570afaa6a9f17aed9702310`.                                              | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
-| `base3-chat-agents-20261011-03`               | **COMPLETED** in PR #23. PR #26 head `00c007a12564f0a7945aec111dde027b7e60015a`. Ledger stays with event review.                                 | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
-| `base3-chat-integration-20261011-04`          | **COMPLETED**. PR #27 head `9dc41f4e168af5cdc233751ae23e3e9e5e17b29b`. Ledger stays with event review.                                           | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
-| `base3-offline-pilot-brakes-20261011-05`      | **COMPLETED**. PR #28 head `b61d636411b774c7e6eea0dfe38a80f6ebb4cb76`. Required Check failed on the highlighter. Ledger stays with event review. | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
-| `base3-mobile-highlighter-repair-20261011-06` | This slice. Cold highlighter tokenization finishes. Ledger stays with event review.                                                              | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| Dispatch                                      | State                                                                                                                                                                    | Agent                                                               |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| `base3-unattended-20261010-01`                | Earlier packet. Agent IDLE.                                                                                                                                              | <https://cursor.com/agents/bc-0b48c998-6c41-4ef0-bbff-a5ce12a0d2e4> |
+| `base3-unattended-20261010-02`                | **REVIEW_READY** in PR #22 comment 6104214316. Agent IDLE. Not overlapped.                                                                                               | <https://cursor.com/agents/bc-b428813a-b3b5-45dd-ba61-1d5591398ee5> |
+| `base3-closed-loop-20261011-01`               | **COMPLETED** in PR #23 comment 6105316354. PR #24 head `08e36ac02d78f3f9d18ad29bcc68652c4ce95232`. Required Check failed.                                               | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| `base3-repair-20261011-02`                    | **COMPLETED** in PR #23 comment 6105520995. PR #25 head `a4541db95049ec595570afaa6a9f17aed9702310`.                                                                      | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| `base3-chat-agents-20261011-03`               | **COMPLETED** in PR #23. PR #26 head `00c007a12564f0a7945aec111dde027b7e60015a`. Ledger stays with event review.                                                         | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| `base3-chat-integration-20261011-04`          | **COMPLETED**. PR #27 head `9dc41f4e168af5cdc233751ae23e3e9e5e17b29b`. Ledger stays with event review.                                                                   | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| `base3-offline-pilot-brakes-20261011-05`      | **COMPLETED**. PR #28 head `b61d636411b774c7e6eea0dfe38a80f6ebb4cb76`. Required Check failed on the highlighter. Ledger stays with event review.                         | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| `base3-mobile-highlighter-repair-20261011-06` | **COMPLETED**. PR #29 head `975af300b65c66ea427cd79bc81a994ea53582d7`. Check 114416912510 succeeded. Test checkout was merge `aadc9bd885d114e7b8236655ac1c1da37bcee6da`. | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| `base3-brakes-active-restart-20261011-07`     | This slice. Active leases stop when a frozen bound is spent, including after a real database reopen. Ledger stays with event review.                                     | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
 
 ## Checkpoints
 
@@ -130,7 +136,9 @@ move for this repair.
 - Paid Auto/Manual pilots stay blocked. Token, dollar, and clock sentences
   are not enforced. The next offline item prepares those brakes. It does not
   run a pilot.
-- Recurring Cursor automation stays off.
+- Product recurring execution is disabled by owner instruction. Hosted
+  ChatGPT reconciliation is the enabled review path named by the owner.
+  Neither was read from configuration.
 - The end-to-end loop is **UNVERIFIED**. A result comment is not a passed
   loop.
 
@@ -363,13 +371,14 @@ stacked PR on PR #23 as soon as it exists.
 
 ## Next task
 
-`base3-mobile-highlighter-repair-20261011-06` is the current slice. Offline
-pilot brakes from dispatch 05 stay in place. Chat execution stays deny, and
-Grokbot stays not connected. Remaining product gaps are in
-[the chat-agents note](../internals/chat-agents.md). Budget interruption of
-active work, immutable tree bounds, and SQLite reopen tests stay queued.
-`OPS-CLOSED-LOOP-RECONCILER` follows those bounded repairs. This worker does
-not dispatch the next item.
+`base3-brakes-active-restart-20261011-07` is the current slice. Frozen tree
+bounds survive omission and a reopened database. A usage update or startup
+recovery can interrupt an occupied lease without another admission. Chat
+execution stays deny, and Grokbot stays not connected. Remaining product gaps
+are in [the chat-agents note](../internals/chat-agents.md). The provider still
+has no remaining-budget ceiling, so one turn can report past the cap.
+`OPS-CLOSED-LOOP-RECONCILER` is next and is not started here. This worker does
+not dispatch it.
 
 ChatGPT finishes the current ledger only after the terminal result, then
 acquires a new hold before any later send. A missing or unreadable slot file

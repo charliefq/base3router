@@ -224,6 +224,16 @@ const pilotBrakeColumns = Effect.gen(function* () {
   `;
 });
 
+const frozenTreeBounds = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    ALTER TABLE task_contract_deadlines ADD COLUMN max_tokens INTEGER
+  `;
+  yield* sql`
+    ALTER TABLE task_contract_deadlines ADD COLUMN max_cost_usd REAL
+  `;
+});
+
 const collaborationTables = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`
@@ -257,6 +267,7 @@ const steps: ReadonlyArray<
   ["b3-069", "TaskUsageAttempts", taskUsageTables],
   ["b3-070", "CollaborationCommands", collaborationTables],
   ["b3-071", "PilotBrakeColumns", pilotBrakeColumns],
+  ["b3-072", "FrozenTreeBounds", frozenTreeBounds],
 ];
 
 export const runBase3PolicyMigrations = Effect.gen(function* () {

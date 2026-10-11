@@ -27,7 +27,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { taskStateFromUnknown } from "./TaskContract.ts";
+import { evaluatePersistedBrakes, taskStateFromUnknown } from "./TaskContract.ts";
 
 const isTaskUsageReadError = Schema.is(TaskUsageReadError);
 const isEnvironmentAuthorizationError = Schema.is(EnvironmentAuthorizationError);
@@ -349,6 +349,16 @@ export const recordTaskUsage = Effect.fn("TaskUsageAccounting.recordTaskUsage")(
         run_id = COALESCE(task_usage_attempts.run_id, excluded.run_id),
         updated_at = excluded.updated_at
   `;
+  const roots = yield* sql<{ readonly root_thread_id: string }>`
+    SELECT root_thread_id FROM task_usage_attempts
+    WHERE environment_id = ${environmentId}
+      AND provider_turn_id = ${event.payload.id}
+    LIMIT 1
+  `;
+  const rootThreadId = roots[0]?.root_thread_id;
+  if (rootThreadId !== undefined) {
+    yield* evaluatePersistedBrakes(sql, rootThreadId);
+  }
 });
 
 export const readTaskUsage = Effect.fn("TaskUsageAccounting.readTaskUsage")(function* (
