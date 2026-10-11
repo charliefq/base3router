@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 30,
+  "generation": 31,
   "taskId": "base3-mobile-highlighter-repair-20261011-06",
   "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
   "dispatchId": "base3-mobile-highlighter-repair-20261011-06",
@@ -395,9 +395,11 @@
       "state": "READY_AFTER_DEPENDENCY",
       "predecessor": "base3-offline-pilot-brakes-20261011-05",
       "dependencies": [
-        "base3-offline-pilot-brakes-20261011-05"
+        "base3-offline-pilot-brakes-20261011-05",
+        "base3-mobile-highlighter-repair-20261011-06",
+        "OFFLINE-BRAKES-ACTIVE-RESTART-REPAIR"
       ],
-      "priority": "after current bounded brakes result review",
+      "priority": "After demonstrated highlighter/active-brake/restart defects receive technical acceptance; do not treat terminal -05 as accepted",
       "goal": "Codify the verified delivery/review/dispatch protocol as a testable durable transition engine, used by both event and periodic entrypoints.",
       "scope": [
         "Extend scripts/ops-contents-slot.mjs or focused adjacent module, preserving existing recordValid and live ledger schema",
