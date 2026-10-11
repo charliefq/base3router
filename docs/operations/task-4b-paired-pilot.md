@@ -1,7 +1,15 @@
 # Task 4B paired Auto/Manual pilot
 
 Status: **PREPARED**. Live execution is **BLOCKED**. This document freezes the
-pilot. It does not start a provider, spend money, or change routing.
+same-model workflow control. It does not start a provider, spend money, or
+change routing.
+
+Both arms use the same Codex model. A difference between them is workflow
+noise, not a route choice. The separate route-selection comparison, with a
+multi-model catalog and a fixed Manual baseline, is
+[task-4b-route-selection.md](task-4b-route-selection.md). That comparison is
+also prepared and blocked. Neither one has been started. Running both is not
+authorized.
 
 Six coding tasks are each run twice, once in Auto and once in Manual, on
 isolated checkouts of the same commit. That is twelve arms. No arm has been
