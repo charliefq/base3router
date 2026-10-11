@@ -58,7 +58,7 @@ replacement. A refused release leaves the holder in place. After a real
 release, a later claim starts at `CLAIMED` with `dispatchCount` 0. That later
 claim is a new decision. It is not an automatic redispatch.
 
-The tests are `node --test scripts/ops-claim.test.mjs`.
+The tests are `vp test run --config vite.config.ts --dir scripts scripts/ops-claim.test.mjs`.
 
 ## Account blocker
 

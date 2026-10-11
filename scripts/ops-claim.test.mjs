@@ -3,8 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
-import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { assert, describe, it } from "vite-plus/test";
 
 import { claimTask, dispatchTask, initClaimRepo, releaseTask } from "./ops-claim.mjs";
 
