@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 23,
+  "generation": 24,
   "taskId": "base3-offline-pilot-brakes-20261011-05",
   "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
   "dispatchId": "base3-offline-pilot-brakes-20261011-05",
@@ -590,7 +590,12 @@
       "loop": "UNVERIFIED; predecessor result followed publication; interactive successor cannot establish required automatic cycle."
     }
   ],
-  "reviewOwnership": null,
+  "reviewOwnership": {
+    "id": "event:2e6e4240-c541-11f1-9cc9-baa878635312",
+    "key": "base3-offline-pilot-brakes-20261011-05:b61d636411b774c7e6eea0dfe38a80f6ebb4cb76:6106462863",
+    "state": "REVIEWING",
+    "claimedAt": "2026-10-11T07:00:09Z"
+  },
   "readOnlyCheckpoints": [
     {
       "id": "hourly:20261011T063727:read-only",
