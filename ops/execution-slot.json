@@ -16,9 +16,21 @@
     "githubCreatedAt": "2026-10-11T07:55:54Z"
   },
   "provider": {
-    "status": "CLAIM_WAIT",
+    "status": "RUNNING",
     "startMechanism": "PR23 comment",
-    "acceptance": null
+    "acceptance": {
+      "dispatchId": "base3-replay-fixture-ci-repair-20261011-08",
+      "commentId": 6106892146,
+      "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106892146",
+      "githubCreatedAt": "2026-10-11T07:56:37Z",
+      "reportedAcceptedAt": "2026-10-11T07:56:30Z",
+      "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+      "agentUrl": "https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+      "startSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+      "state": "CLAIMED",
+      "workerState": "RUNNING"
+    },
+    "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5"
   },
   "termination": null,
   "priorResultCommentId": 6106817145,
@@ -41,7 +53,7 @@
     "merges/signing/publication prohibited",
     "Live Grokbot NOT_CONNECTED; provider browser creation unverified; named agents/executable collaboration and project authorization need validation"
   ],
-  "loopStatus": "UNVERIFIED",
+  "loopStatus": "STRICT_AUTOMATIC_CYCLE_1_CONFIRMED_REPEATABILITY_PENDING",
   "claimEvidence": {
     "acceptedCommit": "6d842b9d2dda17b604e81fa6e273e7d8af9c90a3",
     "staleBlobShaRejected": "9e49026fa755574f10b2ec2e434768b941aba899",
@@ -475,10 +487,13 @@
       "startSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
       "resultSha": null,
       "successor": null,
-      "state": "DISPATCHED",
+      "state": "RUNNING",
       "dispatchCommentId": 6106886673,
       "dispatchCommentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106886673",
-      "dispatchedAt": "2026-10-11T07:55:54Z"
+      "dispatchedAt": "2026-10-11T07:55:54Z",
+      "claimCommentId": 6106892146,
+      "claimCommentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106892146",
+      "claimedAt": "2026-10-11T07:56:37Z"
     }
   ],
   "nextTasks": [
@@ -569,7 +584,7 @@
     },
     {
       "id": "DETERMINISTIC-REPLAY-CI-REPAIR",
-      "state": "DISPATCHED",
+      "state": "RUNNING",
       "attempt": 1,
       "dependencies": [
         "base3-brakes-active-restart-20261011-07"
@@ -582,7 +597,9 @@
       "next": "OPS-CLOSED-LOOP-RECONCILER",
       "dispatchId": "base3-replay-fixture-ci-repair-20261011-08",
       "startSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
-      "worker": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5"
+      "worker": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+      "acceptanceCommentId": 6106892146,
+      "acceptedAt": "2026-10-11T07:56:37Z"
     }
   ],
   "nonce": "dispatch:base3-replay-fixture-ci-repair-20261011-08:2026-10-11T07:55:01.236Z",
@@ -659,7 +676,7 @@
   "commentDelivery": "confirmed",
   "lastOwnerDirection": "Minimal T3 chat UI + Agents + Tasks; embedded/internal and external contractor agents converse and delegate bidirectionally.",
   "loopAcceptance": {
-    "status": "UNVERIFIED",
+    "status": "STRICT_CYCLE_1_CONFIRMED_REPEATABILITY_PENDING",
     "requiredOrder": [
       "implementation result with local final SHA",
       "substantive push matches SHA",
@@ -668,7 +685,7 @@
       "successor acknowledgment"
     ],
     "deliveryAmendmentCommentId": 6105752499,
-    "currentDispatch": "base3-chat-agents-20261011-03",
+    "currentDispatch": "base3-replay-fixture-ci-repair-20261011-08",
     "longTerm": "OBSERVING",
     "publicationObserved": {
       "pr": 26,
@@ -706,7 +723,16 @@
         "resultCommentId": null
       }
     ],
-    "protocolFinding": "Current cycle cannot prove report-before-push because no terminal result preceded either published head. Do not manufacture another push; a future substantive delivery must follow the order."
+    "protocolFinding": "Current cycle cannot prove report-before-push because no terminal result preceded either published head. Do not manufacture another push; a future substantive delivery must follow the order.",
+    "lastStrictCycle": {
+      "resultKey": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
+      "resultAt": "2026-10-11T07:46:41Z",
+      "publicationAt": "2026-10-11T07:47:08Z",
+      "reviewAt": "2026-10-11T07:54:26.180Z",
+      "successorDispatchAt": "2026-10-11T07:55:54Z",
+      "successorClaimAt": "2026-10-11T07:56:37Z",
+      "successor": "base3-replay-fixture-ci-repair-20261011-08"
+    }
   },
   "history": [
     {
@@ -912,7 +938,19 @@
       "pr": 30,
       "startSha": "975af300b65c66ea427cd79bc81a994ea53582d7",
       "completedAt": "2026-10-11T07:46:41Z",
-      "successor": "base3-replay-fixture-ci-repair-20261011-08"
+      "successor": "base3-replay-fixture-ci-repair-20261011-08",
+      "successorAcceptance": {
+        "dispatchId": "base3-replay-fixture-ci-repair-20261011-08",
+        "commentId": 6106892146,
+        "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106892146",
+        "githubCreatedAt": "2026-10-11T07:56:37Z",
+        "reportedAcceptedAt": "2026-10-11T07:56:30Z",
+        "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+        "agentUrl": "https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+        "startSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+        "state": "CLAIMED",
+        "workerState": "RUNNING"
+      }
     }
   ],
   "dispatchTimestamps": {
@@ -979,20 +1017,22 @@
       "finding": "own successor dispatch receipt confirmed; generic provider acknowledgment 6106888586 is not an explicit task-matching CLAIMED/RUNNING acceptance",
       "taskId": "base3-replay-fixture-ci-repair-20261011-08",
       "newDispatchCount": 0
+    },
+    {
+      "deliveryId": "300a9380-c549-11f1-8f2b-dd0ad25b94a4",
+      "event": "issue_comment.created",
+      "pr": 23,
+      "time": "2026-10-11T07:56:37Z",
+      "outcome": "OWN_DISPATCH_EVENT_RECONCILED_MATCHING_SUCCESSOR_CLAIM_BOUND",
+      "taskId": "base3-replay-fixture-ci-repair-20261011-08",
+      "dispatchCommentId": 6106886673,
+      "claimCommentId": 6106892146,
+      "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+      "newDispatchCount": 0,
+      "reviewOwnershipReleased": true
     }
   ],
-  "reviewOwnership": {
-    "id": "event:ef1e0d30-c547-11f1-860a-00fcf96f54da",
-    "key": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
-    "state": "DISPATCHING",
-    "claimedAt": "2026-10-11T07:47:51.040Z",
-    "source": "pull_request.opened",
-    "pr": 30,
-    "resultCommentId": 6106817145,
-    "ciRun": 38122531716,
-    "updatedAt": "2026-10-11T07:55:54Z",
-    "successorTaskId": "base3-replay-fixture-ci-repair-20261011-08"
-  },
+  "reviewOwnership": null,
   "readOnlyCheckpoints": [
     {
       "id": "hourly:20261011T063727:read-only",
@@ -1190,7 +1230,7 @@
     },
     {
       "resultKey": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
-      "status": "AUTOMATIC_REVIEW_SUCCESSOR_PENDING",
+      "status": "AUTOMATIC_REVIEW_SUCCESSOR_RUNNING_STRICT_PROOF_1",
       "resultAt": "2026-10-11T07:46:41Z",
       "resultUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106817145",
       "publicationAt": "2026-10-11T07:47:08Z",
@@ -1224,6 +1264,18 @@
         "url": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106886673",
         "sentAt": "2026-10-11T07:55:54Z",
         "startSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431"
+      },
+      "successorClaim": {
+        "dispatchId": "base3-replay-fixture-ci-repair-20261011-08",
+        "commentId": 6106892146,
+        "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106892146",
+        "githubCreatedAt": "2026-10-11T07:56:37Z",
+        "reportedAcceptedAt": "2026-10-11T07:56:30Z",
+        "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+        "agentUrl": "https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+        "startSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+        "state": "CLAIMED",
+        "workerState": "RUNNING"
       }
     }
   ],
@@ -1279,6 +1331,6 @@
     "product": "T3 chat UI; named internal/external agents; Agents/Tasks; V2/ActionGate; routing evaluation; reliable handoffs"
   },
   "dispatchStartedAt": "2026-10-11T07:55:01.236Z",
-  "acceptedAt": null,
+  "acceptedAt": "2026-10-11T07:56:37Z",
   "resultCheckpoint": null
 }
