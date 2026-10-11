@@ -1,14 +1,74 @@
 {
   "schema": 1,
-  "state": "TERMINAL",
-  "generation": 1,
-  "taskId": "bootstrap",
-  "workerId": "event-review",
+  "state": "CLAIMED",
+  "generation": 2,
+  "taskId": "base3-repair-20261011-02",
+  "workerId": "event-review:base3-repair-20261011-02",
+  "dispatchId": "base3-repair-20261011-02",
   "dispatchCount": 0,
-  "termination": {
-    "workerState": "STOPPED",
-    "established": true,
-    "evidence": "No worker launched; initialization only"
+  "startingSha": "08e36ac02d78f3f9d18ad29bcc68652c4ce95232",
+  "coordinationPr": 23,
+  "ack": null,
+  "provider": null,
+  "termination": null,
+  "priorResultCommentId": 6105316354,
+  "reviewOutcome": "CHANGES_REQUIRED",
+  "ci": {
+    "run": 38110398025,
+    "check": "failure",
+    "actualCheckoutSha": "10cfbd78858acde5b56ad87ced8464da14ef6a0b"
   },
-  "verification": "blob-sha guard probe; no sender"
+  "attempts": {
+    "highlighterRepair": 1,
+    "coordinationRepair": 1
+  },
+  "blockers": [
+    "real paid-provider pilot prohibited",
+    "spending UNKNOWN",
+    "merges/signing/publication prohibited"
+  ],
+  "loopStatus": "UNVERIFIED",
+  "claimEvidence": {
+    "acceptedCommit": "6d842b9d2dda17b604e81fa6e273e7d8af9c90a3",
+    "staleBlobShaRejected": "9e49026fa755574f10b2ec2e434768b941aba899",
+    "httpStatus": 409
+  },
+  "taskGraph": [
+    {
+      "pr": 18,
+      "head": null,
+      "base": null,
+      "verification": "transport error; last-known 2a07e9e10a3aeeb95ce09dcdb7c8b234cc34afdf"
+    },
+    {
+      "pr": 20,
+      "head": "55a1ea4f496eadea161c0e88822b375e42a0f127",
+      "base": "2a07e9e10a3aeeb95ce09dcdb7c8b234cc34afdf",
+      "verification": "fresh"
+    },
+    {
+      "pr": 21,
+      "head": "b52026eab554ee4a5f4f4b20cac990c4355310fd",
+      "base": "55a1ea4f496eadea161c0e88822b375e42a0f127",
+      "verification": "fresh"
+    },
+    {
+      "pr": 22,
+      "head": "ffd2203305b8b66cd8dfb2d982d7bd09c7f9ff8e",
+      "base": "b52026eab554ee4a5f4f4b20cac990c4355310fd",
+      "verification": "fresh"
+    },
+    {
+      "pr": 23,
+      "head": "f13055e307c28068cb4f21c87429bd27b0963215",
+      "base": "ffd2203305b8b66cd8dfb2d982d7bd09c7f9ff8e",
+      "verification": "fresh"
+    },
+    {
+      "pr": 24,
+      "head": "08e36ac02d78f3f9d18ad29bcc68652c4ce95232",
+      "base": "f13055e307c28068cb4f21c87429bd27b0963215",
+      "verification": "fresh"
+    }
+  ]
 }
