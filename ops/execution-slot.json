@@ -1,15 +1,21 @@
 {
   "schema": 1,
-  "state": "CLAIMED",
-  "generation": 2,
+  "state": "DISPATCHED",
+  "generation": 3,
   "taskId": "base3-repair-20261011-02",
   "workerId": "event-review:base3-repair-20261011-02",
   "dispatchId": "base3-repair-20261011-02",
-  "dispatchCount": 0,
+  "dispatchCount": 1,
   "startingSha": "08e36ac02d78f3f9d18ad29bcc68652c4ce95232",
   "coordinationPr": 23,
-  "ack": null,
-  "provider": null,
+  "ack": {
+    "delivery": "pending",
+    "commentId": null
+  },
+  "provider": {
+    "startMechanism": "PR23 @cursor comment; same side effect as dispatch",
+    "status": "unknown"
+  },
   "termination": null,
   "priorResultCommentId": 6105316354,
   "reviewOutcome": "CHANGES_REQUIRED",
