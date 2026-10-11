@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "state": "TERMINAL",
+  "generation": 0,
+  "taskId": "bootstrap",
+  "workerId": "event-review",
+  "dispatchCount": 0,
+  "termination": {
+    "workerState": "STOPPED",
+    "established": true,
+    "evidence": "No worker launched; initialization only"
+  }
+}
