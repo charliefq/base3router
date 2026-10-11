@@ -7,11 +7,14 @@
  *
  * Usage, from a clean worktree, with Node 24 on PATH:
  *   node scripts/bind-task-usage-accounting-report.mjs
+ *
+ * TASK_USAGE_ARTIFACT_DIR overrides the output directory. The default is
+ * /opt/cursor/artifacts. The cohort test reads the same variable.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 
-const artifactDir = "/opt/cursor/artifacts";
+const artifactDir = process.env.TASK_USAGE_ARTIFACT_DIR ?? "/opt/cursor/artifacts";
 const sourcePath = `${artifactDir}/synthetic-accounting-report.json`;
 const bindingPath = `${artifactDir}/task-4a-binding-report.json`;
 const testArgs = ["test", "run", "apps/server/src/policy/TaskUsageAccounting.test.ts"];
@@ -35,7 +38,10 @@ NodeFS.rmSync(sourcePath, { force: true });
 NodeFS.rmSync(bindingPath, { force: true });
 
 const startedAt = new Date().toISOString();
-NodeChildProcess.execFileSync("vp", testArgs, { stdio: "inherit" });
+NodeChildProcess.execFileSync("vp", testArgs, {
+  stdio: "inherit",
+  env: { ...process.env, TASK_USAGE_ARTIFACT_DIR: artifactDir },
+});
 const finishedAt = new Date().toISOString();
 
 const sortKeys = (value) => {
@@ -64,13 +70,13 @@ if (source.commitSha !== null && source.commitSha !== testedCommitSha) {
 const reported = source.observed.reported;
 const inputPlusOutput = reported.inputTokens + reported.outputTokens;
 const billable = source.observed.reportedBillableTokens;
-const excludedBecauseIncomplete = inputPlusOutput - billable;
+const excludedFromInternalCompletePairMetric = inputPlusOutput - billable;
 if (
   reported.inputTokens !== 269 ||
   reported.outputTokens !== 64 ||
   inputPlusOutput !== 333 ||
   billable !== 324 ||
-  excludedBecauseIncomplete !== 9 ||
+  excludedFromInternalCompletePairMetric !== 9 ||
   reported.reportedCostUsd !== 13
 ) {
   throw new Error(
@@ -80,7 +86,7 @@ if (
 
 const binding = {
   label: "SYNTHETIC_ACCOUNTING_VERIFIED",
-  dispatchId: "base3-unattended-20261010-01",
+  dispatchId: "base3-unattended-20261010-02",
   synthetic: true,
   notModelPerformance: true,
   notAutoVsManualComparison: true,
@@ -99,10 +105,11 @@ const binding = {
     reportedOutputTokens: reported.outputTokens,
     reportedInputPlusOutput: inputPlusOutput,
     reportedBillableTokens: billable,
-    excludedBecauseIncomplete,
+    excludedFromInternalCompletePairMetric,
     incompleteAttemptOutputTokens: 9,
+    vendorBillableDetermination: "unknown",
     explanation:
-      "269 + 64 = 333 sums every known input and output report, including the unfinished attempt that reported 9 output tokens and no input. reportedBillableTokens is 324 because it adds input and output only for attempts that reported both. 333 - 9 = 324. Cache and reasoning stay visible and are not added on top of that sum.",
+      "269 + 64 = 333 sums every known input and output report, including the unfinished attempt that reported 9 output tokens and no input. reportedBillableTokens is 324 because the internal complete-pair metric adds input and output only when an attempt reported both. 333 - 9 = 324. Those 9 tokens are excluded from that metric only. This run does not decide whether a vendor would bill them. The attempt reported no cost, so its provider-reported cost stays unknown. Cache and reasoning stay inside the reported input and output totals and are not added again.",
   },
   currency: {
     field: "reportedCostUsd",
