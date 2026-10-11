@@ -204,6 +204,18 @@ const taskUsageTables = Effect.gen(function* () {
   `;
 });
 
+const collaborationTables = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS collaboration_commands (
+      command_id TEXT PRIMARY KEY,
+      sequence INTEGER NOT NULL UNIQUE,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `;
+});
+
 const steps: ReadonlyArray<
   readonly [string, string, Effect.Effect<void, SqlError, SqlClient.SqlClient>]
 > = [
@@ -223,6 +235,7 @@ const steps: ReadonlyArray<
   ["b3-067", "TaskContractAdmissions", taskContractTables],
   ["b3-068", "TaskContractAdmissionMessage", taskContractAdmissionMessage],
   ["b3-069", "TaskUsageAttempts", taskUsageTables],
+  ["b3-070", "CollaborationCommands", collaborationTables],
 ];
 
 export const runBase3PolicyMigrations = Effect.gen(function* () {

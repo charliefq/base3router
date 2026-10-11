@@ -94,7 +94,8 @@ move for this repair.
 | `base3-unattended-20261010-01`  | Earlier packet. Agent IDLE.                                                                                                | <https://cursor.com/agents/bc-0b48c998-6c41-4ef0-bbff-a5ce12a0d2e4> |
 | `base3-unattended-20261010-02`  | **REVIEW_READY** in PR #22 comment 6104214316. Agent IDLE. Not overlapped.                                                 | <https://cursor.com/agents/bc-b428813a-b3b5-45dd-ba61-1d5591398ee5> |
 | `base3-closed-loop-20261011-01` | **COMPLETED** in PR #23 comment 6105316354. PR #24 head `08e36ac02d78f3f9d18ad29bcc68652c4ce95232`. Required Check failed. | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
-| `base3-repair-20261011-02`      | This repair. Sole successor. Live ledger already acquired by event review. Cursor does not finish it.                      | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| `base3-repair-20261011-02`      | **COMPLETED** in PR #23 comment 6105520995. PR #25 head `a4541db95049ec595570afaa6a9f17aed9702310`.                        | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| `base3-chat-agents-20261011-03` | This slice. Ledger stays with event review. Cursor does not read or release it.                                            | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
 
 ## Checkpoints
 
@@ -166,11 +167,13 @@ returns 409 when that SHA is stale. States are `CLAIMED`, `DISPATCHED`,
 `UNCERTAIN`, and `TERMINAL`. Every transition increments `generation` and
 sets a new `nonce`, so two equal JSON bodies are still different versions.
 
-An absent branch is free. An existing branch whose file is missing or does
-not parse is **blocked**. Check does not call that free, and acquire does not
-create the file in that case. `TERMINAL` is the free state on a branch that
-already has a readable file. Finish does not delete the branch and does not
-start the next task.
+An absent branch is free. An existing branch whose file is missing, does not
+parse, or is not a complete record is **blocked**. JSON `null`, a scalar, a
+malformed object, and a `TERMINAL` object without observed `COMPLETED` or
+`STOPPED` evidence are not free. Check does not call those free, and acquire
+does not overwrite them. A complete `TERMINAL` record is the free state on a
+branch that already has a valid file. Finish does not delete the branch and
+does not start the next task.
 
 `scripts/ops-contents-slot.mjs` is the injected transition helper. Tests pass
 `createMockContentsRemote`. They do not call GitHub, do not read credentials,
@@ -221,10 +224,11 @@ terminal result.
 1. Read `ops/execution-slot.json` on `ops/base3-execution-slot`. Keep the
    blob SHA.
 2. No branch: the slot is free.
-3. The branch exists and the file is missing, unreadable, or a read errors:
-   blocked. Stop. Do not create the file. Do not comment a new dispatch. Do
-   not delete the branch.
-4. `state` other than `TERMINAL`: occupied. Stop.
+3. The branch exists and the file is missing, unreadable, a read errors, or
+   the JSON is not a complete record: blocked. Stop. Do not create the file.
+   Do not overwrite it. Do not comment a new dispatch. Do not delete the
+   branch.
+4. A complete record whose `state` is other than `TERMINAL`: occupied. Stop.
 
 ### Acquire
 
@@ -355,17 +359,15 @@ stacked PR on PR #23 as soon as it exists.
 
 ## Next task
 
-Do not start this from the worker that lands the repair. ChatGPT reviews the
-delivery. It finishes the current ledger only after the terminal result, then
-acquires a new hold before any later send. If the file is missing or
-unreadable, it posts `STOPPED` and does not dispatch.
+`base3-chat-agents-20261011-03` is the current slice. Its direction and the
+remaining queue are in
+[the chat-agents note](../internals/chat-agents.md). This worker does not
+dispatch the next item.
 
-**Ready, not dispatched.** Prepare enforced token, dollar, and clock pilot
-brakes.
+Still queued, not started: enforced token, dollar, and clock pilot brakes.
+The real pilot stays prohibited. Those sentences are not enforced today.
 
-One offline documentation change. Describe the stop conditions a future paid
-pilot would have to enforce, and state that they are not enforced today. No
-provider call. No spend change. No merge. No rerun of Task 3A, 3B, or 4A. The
-real pilot stays prohibited. This worker does not launch it. The loop stays
-**UNVERIFIED** until that successor is accepted and its reviewed delivery is
-observed.
+ChatGPT finishes the current ledger only after the terminal result, then
+acquires a new hold before any later send. A missing or unreadable slot file
+stays blocked. The loop stays **UNVERIFIED** until a successor is accepted
+and its reviewed delivery is observed.
