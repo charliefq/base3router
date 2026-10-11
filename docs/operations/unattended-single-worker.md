@@ -12,7 +12,7 @@ this one. Prompt text is not a lock. This file is not a lock either.
 
 | Field             | Value                                                                                                                                                                                                      |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Queue             | `codex/unattended-work-queue-20261010` `docs/operations/unattended-work-queue.md`                                                                                                                          |
+| Queue             | `codex/unattended-work-queue-20261010`. The cited `docs/operations/unattended-work-queue.md` is not in this tree. The durable record is [the closed-loop runbook](closed-loop-runbook.md).                 |
 | Preserved heads   | PR #18 `2a07e9e10a3aeeb95ce09dcdb7c8b234cc34afdf`, PR #20 `55a1ea4f496eadea161c0e88822b375e42a0f127`, PR #21 `b52026eab554ee4a5f4f4b20cac990c4355310fd`, PR #22 `ffd2203305b8b66cd8dfb2d982d7bd09c7f9ff8e` |
 | Branch            | `cursor/v2-unattended-followup-02-8ee5`                                                                                                                                                                    |
 | Base              | `cursor/v2-unattended-q1-q4-d2e4`                                                                                                                                                                          |
@@ -59,6 +59,16 @@ release, a later claim starts at `CLAIMED` with `dispatchCount` 0. That later
 claim is a new decision. It is not an automatic redispatch.
 
 The tests are `vp test run --config vite.config.ts --dir scripts scripts/ops-claim.test.mjs`.
+
+## Not the repository slot
+
+Those refs live in the repository path passed to the script. Two working
+copies do not share them, and a fresh comment is not a claim either. The
+closed-loop slot is the single remote ref
+`refs/heads/ops/base3-execution-slot`, described in
+[the closed-loop runbook](closed-loop-runbook.md). `scripts/ops-claim.mjs`
+remains the local per-task rehearsal from dispatch
+`base3-unattended-20261010-02`. It is not the mandatory shared claim.
 
 ## Account blocker
 
