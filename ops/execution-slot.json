@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 5,
+  "generation": 6,
   "taskId": "base3-repair-20261011-02",
   "workerId": "event-review:base3-repair-20261011-02",
   "dispatchId": "base3-repair-20261011-02",
@@ -45,39 +45,59 @@
   "taskGraph": [
     {
       "pr": 18,
-      "head": null,
-      "base": null,
-      "verification": "transport error; last-known 2a07e9e10a3aeeb95ce09dcdb7c8b234cc34afdf"
+      "head": "2a07e9e10a3aeeb95ce09dcdb7c8b234cc34afdf",
+      "base": "bab26191075ec8806894478970e8d9954c357290",
+      "verification": "fresh",
+      "state": "open",
+      "merged": false
     },
     {
       "pr": 20,
       "head": "55a1ea4f496eadea161c0e88822b375e42a0f127",
       "base": "2a07e9e10a3aeeb95ce09dcdb7c8b234cc34afdf",
-      "verification": "fresh"
+      "verification": "fresh",
+      "state": "open",
+      "merged": false
     },
     {
       "pr": 21,
       "head": "b52026eab554ee4a5f4f4b20cac990c4355310fd",
       "base": "55a1ea4f496eadea161c0e88822b375e42a0f127",
-      "verification": "fresh"
+      "verification": "fresh",
+      "state": "open",
+      "merged": false
     },
     {
       "pr": 22,
       "head": "ffd2203305b8b66cd8dfb2d982d7bd09c7f9ff8e",
       "base": "b52026eab554ee4a5f4f4b20cac990c4355310fd",
-      "verification": "fresh"
+      "verification": "fresh",
+      "state": "open",
+      "merged": false
     },
     {
       "pr": 23,
       "head": "f13055e307c28068cb4f21c87429bd27b0963215",
       "base": "ffd2203305b8b66cd8dfb2d982d7bd09c7f9ff8e",
-      "verification": "fresh"
+      "verification": "fresh",
+      "state": "open",
+      "merged": false
     },
     {
       "pr": 24,
       "head": "08e36ac02d78f3f9d18ad29bcc68652c4ce95232",
       "base": "f13055e307c28068cb4f21c87429bd27b0963215",
-      "verification": "fresh"
+      "verification": "fresh",
+      "state": "open",
+      "merged": false
+    },
+    {
+      "pr": 25,
+      "head": "a4541db95049ec595570afaa6a9f17aed9702310",
+      "base": "08e36ac02d78f3f9d18ad29bcc68652c4ce95232",
+      "verification": "fresh",
+      "state": "open",
+      "merged": false
     }
   ],
   "nextTasks": [
@@ -100,5 +120,77 @@
       ],
       "scope": "enforced token/dollar/clock stop preparation; no real pilot"
     }
-  ]
+  ],
+  "nonce": "review-d4622230-c52c-11f1-8ea2-c88554140c75",
+  "discoveredPrs": [
+    25,
+    23,
+    24,
+    22,
+    21,
+    20,
+    18,
+    19,
+    17,
+    16,
+    15,
+    14,
+    13,
+    12,
+    11,
+    10,
+    9,
+    8,
+    6,
+    5,
+    4,
+    3,
+    2,
+    1,
+    7
+  ],
+  "lastReview": {
+    "eventKey": "d4622230-c52c-11f1-8ea2-c88554140c75",
+    "pr": 25,
+    "head": "a4541db95049ec595570afaa6a9f17aed9702310",
+    "resultCommentId": null,
+    "latestLinkCommentId": 6105466145,
+    "outcome": "CI_WAIT_AND_TERMINAL_WAIT",
+    "ciRun": 38111935085,
+    "ciStatus": "in_progress",
+    "requiredCheck": "pending; not yet created in inspected jobs",
+    "checkoutEvidence": {
+      "job": 114389121310,
+      "name": "Release Smoke",
+      "actualSha": "50f1a7e67e62fdc2cdf2d5ae91680179a9670023",
+      "source": "actual completed job log; candidate Check checkout still pending"
+    },
+    "findings": [
+      {
+        "file": "scripts/ops-contents-slot.mjs",
+        "severity": "coordination",
+        "status": "STATIC_REVIEW_CONFIRMED",
+        "detail": "JSON null is parseable and occupiedState(null) is false, so existing file containing null is reported free and acquire can overwrite it. Any object with state TERMINAL is reusable without schema/identity/generation/termination validation. Invalid existing records must fail closed.",
+        "repairAttempts": 0
+      },
+      {
+        "file": "apps/mobile/src/features/review/shikiReviewHighlighter.test.ts",
+        "status": "ROOT_CAUSE_UNRESOLVED",
+        "detail": "Patch only adds assertions; production highlighter unchanged because worker reports failure not reproduced. Do not label defect fixed before required candidate Check and explicit terminal evidence."
+      }
+    ],
+    "newDispatchCount": 0,
+    "reason": "Current dispatch has no observed COMPLETED/STOPPED; preserve occupied slot, no replacement."
+  },
+  "independentPreparation": {
+    "next": "OFFLINE-PILOT-BRAKES",
+    "outline": [
+      "tree-wide cumulative input/output token accounting; unknown usage denies new starts",
+      "dollar cap uses verified prices or provider billed usage; unknown cost cannot imply budget remaining",
+      "persist absolute deadline; restart never resets it",
+      "exhaustion denies new admissions and requests interrupt; lease stays pinned until confirmed terminal",
+      "disposable SQLite and fake providers only; no paid calls"
+    ],
+    "status": "PREPARED_NOT_DISPATCHED"
+  }
 }
