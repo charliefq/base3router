@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 35,
+  "generation": 36,
   "taskId": "base3-brakes-active-restart-20261011-07",
-  "workerId": "reserved-interactive-recovery-0732",
+  "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
   "dispatchId": "base3-brakes-active-restart-20261011-07",
   "dispatchCount": 1,
   "startingSha": "975af300b65c66ea427cd79bc81a994ea53582d7",
@@ -14,8 +14,16 @@
     "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106710477"
   },
   "provider": {
-    "status": "CLAIM_WAIT",
-    "startMechanism": "PR23 comment"
+    "status": "RUNNING",
+    "startMechanism": "PR23 comment",
+    "acceptance": {
+      "commentId": 6106715715,
+      "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106715715",
+      "githubCreatedAt": "2026-10-11T07:33:18Z",
+      "reportedAcceptedAt": "2026-10-11T07:33:11Z",
+      "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+      "dispatchId": "base3-brakes-active-restart-20261011-07"
+    }
   },
   "termination": null,
   "priorResultCommentId": 6106462863,
@@ -363,7 +371,9 @@
       "startSha": "975af300b65c66ea427cd79bc81a994ea53582d7",
       "base": "cursor/mobile-highlighter-repair-abd5",
       "pr": null,
-      "successor": null
+      "successor": null,
+      "worker": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+      "acceptedAt": "2026-10-11T07:33:18Z"
     }
   ],
   "nextTasks": [
@@ -712,7 +722,15 @@
       "pr": 29,
       "startSha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
       "completedAt": "2026-10-11T07:22:36Z",
-      "successor": "base3-brakes-active-restart-20261011-07"
+      "successor": "base3-brakes-active-restart-20261011-07",
+      "successorAcceptance": {
+        "commentId": 6106715715,
+        "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106715715",
+        "githubCreatedAt": "2026-10-11T07:33:18Z",
+        "reportedAcceptedAt": "2026-10-11T07:33:11Z",
+        "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+        "dispatchId": "base3-brakes-active-restart-20261011-07"
+      }
     }
   ],
   "dispatchTimestamps": {
@@ -757,13 +775,7 @@
       "time": "2026-10-11T07:07:49Z"
     }
   ],
-  "reviewOwnership": {
-    "id": "interactive-recovery-20261011-0732",
-    "key": "base3-mobile-highlighter-repair-20261011-06:975af300b65c66ea427cd79bc81a994ea53582d7:6106636499",
-    "state": "REVIEWING",
-    "claimedAt": "2026-10-11T07:31:23.688Z",
-    "source": "interactive recovery; not automatic proof"
-  },
+  "reviewOwnership": null,
   "readOnlyCheckpoints": [
     {
       "id": "hourly:20261011T063727:read-only",
@@ -939,6 +951,11 @@
         "finalSha": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b",
         "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5"
       }
+    },
+    {
+      "at": "2026-10-11T07:33:46.801Z",
+      "finding": "PR29 event last_run at 07:23:34Z but no durable reviewer/CI_WAIT/continuation observed by 07:32; interactive recovery excluded from cycle proof.",
+      "successor": "base3-brakes-active-restart-20261011-07"
     }
   ],
   "verifiedAutomationConfiguration": {
@@ -957,5 +974,5 @@
     "product": "T3 chat UI; named internal/external agents; Agents/Tasks; V2/ActionGate; routing evaluation; reliable handoffs"
   },
   "dispatchStartedAt": "2026-10-11T07:32:21.594Z",
-  "acceptedAt": null
+  "acceptedAt": "2026-10-11T07:33:18Z"
 }
