@@ -1,15 +1,22 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 9,
+  "generation": 10,
   "taskId": "base3-chat-agents-20261011-03",
   "workerId": "event-review:base3-chat-agents-20261011-03",
   "dispatchId": "event-review:base3-chat-agents-20261011-03:base3-chat-agents-20261011-03:1",
   "dispatchCount": 1,
   "startingSha": "a4541db95049ec595570afaa6a9f17aed9702310",
   "coordinationPr": 23,
-  "ack": null,
-  "provider": null,
+  "ack": {
+    "delivery": "confirmed",
+    "commentId": 6105691648,
+    "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6105691648"
+  },
+  "provider": {
+    "startMechanism": "PR23 dispatch comment",
+    "status": "sent; acknowledgment pending"
+  },
   "termination": null,
   "priorResultCommentId": 6105316354,
   "reviewOutcome": "DELIVERED_WITH_RECORDED_COORDINATION_DEFECT",
@@ -110,7 +117,7 @@
       "state": "PLANNED"
     }
   ],
-  "nonce": "owner-chat-agents-reserve-20261011-0505",
+  "nonce": "owner-chat-agents-confirmed-20261011-0505",
   "discoveredPrs": [
     25,
     23,
@@ -188,6 +195,7 @@
     "collaboration": "Internal agents and external contractors support bidirectional task-scoped conversation and delegation",
     "nextTask": "Minimal agent collaboration and chat-first UI; repair slot validation prerequisite"
   },
-  "commentUrl": null,
-  "commentDelivery": "started"
+  "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6105691648",
+  "commentDelivery": "confirmed",
+  "lastOwnerDirection": "Minimal T3 chat UI + Agents + Tasks; embedded/internal and external contractor agents converse and delegate bidirectionally."
 }
