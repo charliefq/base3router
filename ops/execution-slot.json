@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "state": "DISPATCHED",
-  "generation": 25,
+  "state": "TERMINAL",
+  "generation": 26,
   "taskId": "base3-offline-pilot-brakes-20261011-05",
   "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
   "dispatchId": "base3-offline-pilot-brakes-20261011-05",
@@ -14,7 +14,7 @@
     "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106330787"
   },
   "provider": {
-    "status": "RUNNING",
+    "status": "COMPLETED",
     "startMechanism": "PR23 comment",
     "acknowledgmentCommentId": 6106331703,
     "acknowledgmentWorkerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
@@ -27,14 +27,22 @@
       "dispatchId": "base3-offline-pilot-brakes-20261011-05"
     }
   },
-  "termination": null,
+  "termination": {
+    "established": true,
+    "workerState": "COMPLETED",
+    "evidence": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106462863",
+    "commentId": 6106462863,
+    "finalSha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
+    "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5"
+  },
   "priorResultCommentId": 6105911508,
-  "reviewOutcome": "ACCEPTED_BOUNDED_SLICE_WITH_BLOCKERS",
+  "reviewOutcome": "CHANGES_REQUIRED",
   "ci": {
-    "run": 38117254970,
-    "check": "success",
-    "actualCheckoutSha": "93e0beb10bcd2eef94e09efe3d494c52282690ad",
-    "prHead": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b"
+    "run": 38119865290,
+    "check": "failure",
+    "checkId": 114413096689,
+    "actualCheckoutSha": "eadf4c605e53f3a70ae1233b2fa8e5bc5946422f",
+    "prHead": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76"
   },
   "attempts": {
     "highlighterRepair": 1,
@@ -366,7 +374,7 @@
     },
     {
       "id": "OFFLINE-PILOT-BRAKES",
-      "state": "RUNNING"
+      "state": "CHANGES_REQUIRED"
     },
     {
       "id": "CHAT-COLLABORATION-INTEGRATION-REPAIR",
@@ -403,6 +411,21 @@
       ],
       "brake": "Offline fake adapters/disposable stores only; no new scheduler/service/secrets, no live-slot mutations by worker, no merge/main/release/paid pilot",
       "evidence": "PLANNED; not implemented or verified"
+    },
+    {
+      "id": "OFFLINE-BRAKES-ACTIVE-RESTART-REPAIR",
+      "state": "READY_AFTER_DEPENDENCY",
+      "dependencies": [
+        "base3-mobile-highlighter-repair-20261011-06"
+      ],
+      "attempt": 1,
+      "scope": [
+        "Active budget/deadline exhaustion only requests cancellation upon subsequent admission; usage writer has no reaction.",
+        "Restart test uses one in-memory SQLite service, no close/reopen.",
+        "Omitting optional brakes bypasses frozen deadline via pilotActive=false; persisted bounds must remain enforced.",
+        "Cumulative thresholds do not promise no in-turn overshoot; retain explicit limitations."
+      ],
+      "plannedPrompt": "@cursor\ndispatch_id: base3-offline-brakes-repair-20261011-06\npredecessor: base3-offline-pilot-brakes-20261011-05\npredecessor_result: https://github.com/charliefq/base3router/pull/23#issuecomment-6106462863\nstarting_sha: b61d636411b774c7e6eea0dfe38a80f6ebb4cb76\nbase: cursor/offline-pilot-brakes-abd5\ntask: OFFLINE-BRAKES-ACTIVE-RESTART-REPAIR\nrepair_attempt: 1 of maximum 2 per demonstrated defect\n\nThe predecessor is explicitly COMPLETED and its exact reported substantive head is published as draft PR28. Technical review requires this bounded repair before OPS-CLOSED-LOOP-RECONCILER. The review result is recorded durably; this sole comment starts the successor, not a second dispatcher.\n\nFirst publish a NEW explicit CLAIMED/RUNNING comment on PR23 with this dispatch ID, actual worker ID/agent link, exact starting SHA and UTC/Los_Angeles timestamps. Same single worker only. Never self-dispatch or read/write/release/recreate the live ops ledger.\n\nCreate a FRESH branch from the exact starting SHA and a draft stacked PR targeting cursor/offline-pilot-brakes-abd5. Preserve all prior branch heads.\n\nDemonstrated defects:\n1. New TaskContract.commitTaskAdmission requests cancellation only when another governed start/handoff is attempted. TaskUsageAccounting.recordTaskUsage contains no exhaustion reaction; PR28 adds no active deadline enforcement. A running turn can cross its token/dollar cap or deadline with no subsequent start and never be interrupted. Existing pin test calls a second dispatch to trigger cancellation.\n2. TaskPilotBrakes.test.ts uses SqlitePersistenceMemory for the alleged restart test; rewriting payload on the same connection is not restart evidence.\n3. Frozen deadline is conditional on pilotActive(current brake). Removing optional brakes makes pilotAllows SQL 1, bypassing the existing persisted deadline. Tightening/redirect/restart must not accidentally disable a previously bound tree brake.\n\nBounded implementation:\n- Reuse existing V2 policy/runtime cancellation pathways. Add a durable, idempotent brake evaluation after usage updates AND deadline-driven evaluation of active governed leases, including startup recovery. Once cumulative tree usage reaches/exceeds cap or absolute deadline passes, request interrupt without needing another admission. Do not free the lease on request or unknown stream end; free exactly once only on explicit provider terminal evidence.\n- Persist the enforced tree bounds so omission, child, retry, handoff, revision or restart cannot silently reset/disable them. Unknown usage/price denies new starts. Keep synthetic pricing exclusively in explicitly injected offline fixtures, no production default price.\n- Preserve atomic admission and idempotency. Be precise: cumulative threshold checks do not guarantee zero overshoot within a provider turn; do not claim a hard no-overshoot cap without supported bounded reservation/provider enforcement. For the offline provider, demonstrate bounded starts/reservations against remaining budget; if provider limits cannot enforce that, fail closed and record that capability blocker.\n- Add REAL file-backed disposable SQLite restart tests: close/discard service/runtime A, construct B over the same temp database. Verify totals, frozen bounds/deadline, pending interrupt and occupied lease survive; recover already-expired active work without a new task start. Test streamed usage crossing cap with no subsequent dispatch, deadline crossing with no subsequent dispatch, duplicate/reordered observations, cancellation unconfirmed/terminal confirmed, and attempted brake omission. Use fake providers/controlled clock only. Retain meaningful lifecycle regressions.\n- Keep scope to policy/accounting/runtime brake integration, additive migrations and targeted tests/docs. T3 chat shell only Agents + Tasks; named internal employees and external contractor bidirectional direction preserved. Chat execution DENY, Grokbot NOT_CONNECTED.\n\nNo merge/main push, release/signing, paid/live provider calls, credential/spend changes or real user data. No new scheduler/service or provider connection. Record unavailable live provider/Grokbot/per-principal authorization as blockers and continue this offline work.\n\nDELIVERY: after local implementation/tests, publish a NEW complete PR23 result BEFORE final substantive push: task/dispatch ID, actual worker ID, implementation_state and worker_state COMPLETED or STOPPED, exact FINAL LOCAL SHA, branch/base, changes/files, meaningful tests/evidence, limitations/blockers, publication_pending=true, ci_status=PENDING. Then push THAT exact SHA and create the stacked draft PR, then publication note. Do not wait for CI before terminal implementation result. No fake commits. No-code terminal must name exact existing remote SHA and explicit no-code classification. You do not dispatch the next worker."
     }
   ],
   "nonce": "base3-offline-pilot-brakes-20261011-05:roadmap:2026-10-11T06:46:17.394Z",
@@ -437,23 +460,26 @@
     1
   ],
   "lastReview": {
-    "time": "2026-10-11T06:39:38.315Z",
-    "automaticEvent": false,
-    "source": "human-initiated REVIEW_REQUEST; excluded from automatic cycle proof",
-    "deliveryId": "35f2e0f0-c53e-11f1-8d2d-c8657370dc18",
-    "resultKey": "base3-chat-integration-20261011-04:9dc41f4e168af5cdc233751ae23e3e9e5e17b29b:6106124642",
-    "pr": 27,
-    "head": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b",
-    "resultCommentId": 6106124642,
-    "outcome": "ACCEPTED_BOUNDED_SLICE_WITH_BLOCKERS",
-    "ciRun": 38117254970,
-    "check": "success",
-    "actualCheckoutSha": "93e0beb10bcd2eef94e09efe3d494c52282690ad",
+    "time": "2026-10-11T07:06:39.058Z",
+    "automaticEvent": true,
+    "source": "event review; initial STATUS_ONLY issue_comment wakeup; published PR28.opened also observed in same invocation",
+    "deliveryId": "2e6e4240-c541-11f1-9cc9-baa878635312",
+    "publicationDeliveryId": "55114fa0-c541-11f1-8b41-246fcf591bd4",
+    "resultKey": "base3-offline-pilot-brakes-20261011-05:b61d636411b774c7e6eea0dfe38a80f6ebb4cb76:6106462863",
+    "pr": 28,
+    "head": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
+    "resultCommentId": 6106462863,
+    "outcome": "CHANGES_REQUIRED",
+    "ciRun": 38119865290,
+    "checkId": 114413096689,
+    "check": "failure",
+    "actualCheckoutSha": "eadf4c605e53f3a70ae1233b2fa8e5bc5946422f",
     "findings": [
-      "Server principal sealing, real thread binding and clarification ID/revision repairs verified in patch and green CI.",
-      "Production execution DENY; live provider composer unverified; named employees and bidirectional execution incomplete.",
-      "Environment project existence is not per-principal authorization; verify before multi-principal/external ingress.",
-      "Provider identity bound to single project; repeated click and project-selection tests queued."
+      "Mobile cold-start highlighter test line68 numeric token color undefined; tracked focused repair 2 selected.",
+      "Active budget/deadline exhaustion only requests cancellation upon subsequent admission; usage writer has no reaction.",
+      "Restart test uses one in-memory SQLite service, no close/reopen.",
+      "Omitting optional brakes bypasses frozen deadline via pilotActive=false; persisted bounds must remain enforced.",
+      "Cumulative thresholds do not promise no in-turn overshoot; retain explicit limitations."
     ]
   },
   "independentPreparation": {
@@ -584,6 +610,59 @@
         "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
         "dispatchId": "base3-offline-pilot-brakes-20261011-05"
       }
+    },
+    {
+      "taskId": "base3-offline-pilot-brakes-20261011-05",
+      "resultKey": "base3-offline-pilot-brakes-20261011-05:b61d636411b774c7e6eea0dfe38a80f6ebb4cb76:6106462863",
+      "termination": {
+        "established": true,
+        "workerState": "COMPLETED",
+        "evidence": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106462863",
+        "commentId": 6106462863,
+        "finalSha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
+        "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5"
+      },
+      "review": {
+        "time": "2026-10-11T07:06:39.058Z",
+        "automaticEvent": true,
+        "source": "event review; initial STATUS_ONLY issue_comment wakeup; published PR28.opened also observed in same invocation",
+        "deliveryId": "2e6e4240-c541-11f1-9cc9-baa878635312",
+        "publicationDeliveryId": "55114fa0-c541-11f1-8b41-246fcf591bd4",
+        "resultKey": "base3-offline-pilot-brakes-20261011-05:b61d636411b774c7e6eea0dfe38a80f6ebb4cb76:6106462863",
+        "pr": 28,
+        "head": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
+        "resultCommentId": 6106462863,
+        "outcome": "CHANGES_REQUIRED",
+        "ciRun": 38119865290,
+        "checkId": 114413096689,
+        "check": "failure",
+        "actualCheckoutSha": "eadf4c605e53f3a70ae1233b2fa8e5bc5946422f",
+        "findings": [
+          "Mobile cold-start highlighter test line68 numeric token color undefined; tracked focused repair 2 selected.",
+          "Active budget/deadline exhaustion only requests cancellation upon subsequent admission; usage writer has no reaction.",
+          "Restart test uses one in-memory SQLite service, no close/reopen.",
+          "Omitting optional brakes bypasses frozen deadline via pilotActive=false; persisted bounds must remain enforced.",
+          "Cumulative thresholds do not promise no in-turn overshoot; retain explicit limitations."
+        ]
+      },
+      "predecessor": {
+        "taskId": "base3-chat-integration-20261011-04",
+        "resultKey": "base3-chat-integration-20261011-04:9dc41f4e168af5cdc233751ae23e3e9e5e17b29b:6106124642",
+        "pr": 27
+      },
+      "dependencies": [
+        {
+          "pr": 27,
+          "sha": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b",
+          "state": "REVIEWED"
+        }
+      ],
+      "worker": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+      "branch": "cursor/offline-pilot-brakes-abd5",
+      "pr": 28,
+      "startSha": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b",
+      "completedAt": "2026-10-11T06:59:23Z",
+      "successor": "base3-mobile-highlighter-repair-20261011-06"
     }
   ],
   "dispatchTimestamps": {
@@ -731,27 +810,43 @@
         "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
         "startSha": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b"
       }
+    },
+    {
+      "resultKey": "base3-offline-pilot-brakes-20261011-05:b61d636411b774c7e6eea0dfe38a80f6ebb4cb76:6106462863",
+      "status": "AUTOMATIC_REVIEW_SUCCESSOR_PENDING",
+      "resultAt": "2026-10-11T06:59:23Z",
+      "resultUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106462863",
+      "publicationAt": "2026-10-11T06:59:40Z",
+      "publicationUrl": "https://github.com/charliefq/base3router/pull/28",
+      "sha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
+      "review": {
+        "time": "2026-10-11T07:06:39.058Z",
+        "automaticEvent": true,
+        "source": "event review; initial STATUS_ONLY issue_comment wakeup; published PR28.opened also observed in same invocation",
+        "deliveryId": "2e6e4240-c541-11f1-9cc9-baa878635312",
+        "publicationDeliveryId": "55114fa0-c541-11f1-8b41-246fcf591bd4",
+        "resultKey": "base3-offline-pilot-brakes-20261011-05:b61d636411b774c7e6eea0dfe38a80f6ebb4cb76:6106462863",
+        "pr": 28,
+        "head": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
+        "resultCommentId": 6106462863,
+        "outcome": "CHANGES_REQUIRED",
+        "ciRun": 38119865290,
+        "checkId": 114413096689,
+        "check": "failure",
+        "actualCheckoutSha": "eadf4c605e53f3a70ae1233b2fa8e5bc5946422f",
+        "findings": [
+          "Mobile cold-start highlighter test line68 numeric token color undefined; tracked focused repair 2 selected.",
+          "Active budget/deadline exhaustion only requests cancellation upon subsequent admission; usage writer has no reaction.",
+          "Restart test uses one in-memory SQLite service, no close/reopen.",
+          "Omitting optional brakes bypasses frozen deadline via pilotActive=false; persisted bounds must remain enforced.",
+          "Cumulative thresholds do not promise no in-turn overshoot; retain explicit limitations."
+        ]
+      },
+      "strictNoAdditionalUserMessageProof": "UNVERIFIED: initial wakeup was status-only human-authored comment, not publication; natural opened event observed while owner active",
+      "successor": "base3-mobile-highlighter-repair-20261011-06"
     }
   ],
-  "followup": {
-    "resultKey": "base3-offline-pilot-brakes-20261011-05:b61d636411b774c7e6eea0dfe38a80f6ebb4cb76:6106462863",
-    "PR": 28,
-    "sha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
-    "pendingChecks": [
-      "Test Server 1",
-      "Test",
-      "Test Web",
-      "Test Server 2",
-      "Test Server 4",
-      "Test Server 5",
-      "Test Server 3",
-      "Test Server 6"
-    ],
-    "source": "hourly reconciliation",
-    "state": "CI_WAIT",
-    "observedAt": "2026-10-11T07:02:31.390Z",
-    "boundedWaitStartedAt": "2026-10-11T07:00:09Z"
-  },
+  "followup": null,
   "predecessor": {
     "taskId": "base3-chat-integration-20261011-04",
     "resultKey": "base3-chat-integration-20261011-04:9dc41f4e168af5cdc233751ae23e3e9e5e17b29b:6106124642",
