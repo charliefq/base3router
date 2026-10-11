@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 19,
+  "generation": 20,
   "taskId": "base3-offline-pilot-brakes-20261011-05",
   "workerId": "reserved-reviewer:event:35f2e0f0-c53e-11f1-8d2d-c8657370dc18",
   "dispatchId": "base3-offline-pilot-brakes-20261011-05",
@@ -9,12 +9,12 @@
   "startingSha": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b",
   "coordinationPr": 23,
   "ack": {
-    "delivery": "pending",
-    "commentId": null,
-    "commentUrl": null
+    "delivery": "confirmed",
+    "commentId": 6106330787,
+    "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106330787"
   },
   "provider": {
-    "status": "reserved; awaiting exactly one dispatch comment",
+    "status": "dispatch sent; explicit acceptance pending",
     "startMechanism": "PR23 comment"
   },
   "termination": null,
@@ -407,8 +407,8 @@
     "collaboration": "Internal agents and external contractors support bidirectional task-scoped conversation and delegation",
     "nextTask": "Minimal agent collaboration and chat-first UI; repair slot validation prerequisite"
   },
-  "commentUrl": null,
-  "commentDelivery": "PENDING",
+  "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106330787",
+  "commentDelivery": "confirmed",
   "lastOwnerDirection": "Minimal T3 chat UI + Agents + Tasks; embedded/internal and external contractor agents converse and delegate bidirectionally.",
   "loopAcceptance": {
     "status": "UNVERIFIED",
@@ -515,8 +515,9 @@
   "dispatchTimestamps": {
     "claimedAt": "2026-10-11T06:40:14.224Z",
     "timezone": "America/Los_Angeles",
-    "sentAt": null,
-    "acceptedAt": null
+    "sentAt": "2026-10-11T06:40:32Z",
+    "acceptedAt": null,
+    "sentAtLocal": "2026-10-10 23:40:32 PDT"
   },
   "eventCheckpoints": [
     {
