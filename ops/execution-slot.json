@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 22,
+  "generation": 23,
   "taskId": "base3-offline-pilot-brakes-20261011-05",
   "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
   "dispatchId": "base3-offline-pilot-brakes-20261011-05",
@@ -348,9 +348,38 @@
       "dependency": "current explicit terminal + CI review + exclusive successor claim",
       "attempt": 0,
       "scope": "actual T3 threads and project/capability context, V2/ActionGate/contracts, authenticated sender binding, multi-cycle reply integrity; no paid/live external calls"
+    },
+    {
+      "id": "OPS-CLOSED-LOOP-RECONCILER",
+      "state": "READY_AFTER_DEPENDENCY",
+      "predecessor": "base3-offline-pilot-brakes-20261011-05",
+      "dependencies": [
+        "base3-offline-pilot-brakes-20261011-05"
+      ],
+      "priority": "after current bounded brakes result review",
+      "goal": "Codify the verified delivery/review/dispatch protocol as a testable durable transition engine, used by both event and periodic entrypoints.",
+      "scope": [
+        "Extend scripts/ops-contents-slot.mjs or focused adjacent module, preserving existing recordValid and live ledger schema",
+        "Normalize result packets task/predecessor/dependencies/worker/branch/PR/exact SHA and published-before-review evidence",
+        "CI_WAIT checkpoint and reconciliation when CI later becomes terminal",
+        "Deduplicate task+SHA+result comment, including edited acknowledgments and no-code result",
+        "Atomic reviewer ownership, successor reservation and dispatch intent before one start; reconcile indeterminate post without duplicate",
+        "Repository-wide PR discovery adapter with pagination; never fixed PR numbers",
+        "Durable history and successor claim binding; restart preserves state"
+      ],
+      "acceptance": [
+        "Fixture replay two cycles with result-before-push and delayed CI",
+        "Race event and scheduled reconcilers: one review owner, one dispatch",
+        "Crash after posting before receipt: match existing comment, no second start",
+        "Bot-only/no-code completion reconciles without unsupported event assumption",
+        "Malformed slot and stale active labels investigated fail-closed",
+        "Real evidence remains separate from fixtures"
+      ],
+      "brake": "Offline fake adapters/disposable stores only; no new scheduler/service/secrets, no live-slot mutations by worker, no merge/main/release/paid pilot",
+      "evidence": "PLANNED; not implemented or verified"
     }
   ],
-  "nonce": "base3-offline-pilot-brakes-20261011-05-22",
+  "nonce": "base3-offline-pilot-brakes-20261011-05:roadmap:2026-10-11T06:46:17.394Z",
   "discoveredPrs": [
     27,
     26,
@@ -711,5 +740,12 @@
     "eventReviewId": "6acb0759adf0819187bba4ea45ef080e",
     "hourlyId": "6aca9c8fc4588191817558f56d812a18",
     "proof": "configuration only; hourly read-only checkpoint observed shared review owner and avoided duplicate dispatch"
+  },
+  "roadmapCheckpoint": {
+    "time": "2026-10-11T06:46:17.395Z",
+    "source": "owner closed-loop implementation request",
+    "currentTask": "base3-offline-pilot-brakes-20261011-05",
+    "next": "OPS-CLOSED-LOOP-RECONCILER",
+    "product": "T3 chat UI; named internal/external agents; Agents/Tasks; V2/ActionGate; routing evaluation; reliable handoffs"
   }
 }
