@@ -89,13 +89,14 @@ move for this repair.
 
 ## Dispatches
 
-| Dispatch                        | State                                                                                                                      | Agent                                                               |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `base3-unattended-20261010-01`  | Earlier packet. Agent IDLE.                                                                                                | <https://cursor.com/agents/bc-0b48c998-6c41-4ef0-bbff-a5ce12a0d2e4> |
-| `base3-unattended-20261010-02`  | **REVIEW_READY** in PR #22 comment 6104214316. Agent IDLE. Not overlapped.                                                 | <https://cursor.com/agents/bc-b428813a-b3b5-45dd-ba61-1d5591398ee5> |
-| `base3-closed-loop-20261011-01` | **COMPLETED** in PR #23 comment 6105316354. PR #24 head `08e36ac02d78f3f9d18ad29bcc68652c4ce95232`. Required Check failed. | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
-| `base3-repair-20261011-02`      | **COMPLETED** in PR #23 comment 6105520995. PR #25 head `a4541db95049ec595570afaa6a9f17aed9702310`.                        | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
-| `base3-chat-agents-20261011-03` | This slice. Ledger stays with event review. Cursor does not read or release it.                                            | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| Dispatch                             | State                                                                                                                      | Agent                                                               |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `base3-unattended-20261010-01`       | Earlier packet. Agent IDLE.                                                                                                | <https://cursor.com/agents/bc-0b48c998-6c41-4ef0-bbff-a5ce12a0d2e4> |
+| `base3-unattended-20261010-02`       | **REVIEW_READY** in PR #22 comment 6104214316. Agent IDLE. Not overlapped.                                                 | <https://cursor.com/agents/bc-b428813a-b3b5-45dd-ba61-1d5591398ee5> |
+| `base3-closed-loop-20261011-01`      | **COMPLETED** in PR #23 comment 6105316354. PR #24 head `08e36ac02d78f3f9d18ad29bcc68652c4ce95232`. Required Check failed. | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| `base3-repair-20261011-02`           | **COMPLETED** in PR #23 comment 6105520995. PR #25 head `a4541db95049ec595570afaa6a9f17aed9702310`.                        | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| `base3-chat-agents-20261011-03`      | **COMPLETED** in PR #23. PR #26 head `00c007a12564f0a7945aec111dde027b7e60015a`. Ledger stays with event review.           | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| `base3-chat-integration-20261011-04` | This slice. Agents and Tasks use a real project thread. Ledger stays with event review.                                    | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
 
 ## Checkpoints
 
@@ -359,8 +360,8 @@ stacked PR on PR #23 as soon as it exists.
 
 ## Next task
 
-`base3-chat-agents-20261011-03` is the current slice. Its direction and the
-remaining queue are in
+`base3-chat-integration-20261011-04` is the current slice. Its direction and
+the remaining queue are in
 [the chat-agents note](../internals/chat-agents.md). This worker does not
 dispatch the next item.
 

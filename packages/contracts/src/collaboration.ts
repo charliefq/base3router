@@ -70,6 +70,7 @@ export const CollaborationTask = Schema.Struct({
   threadId: Schema.NullOr(TrimmedNonEmptyString),
   correlationId: TrimmedNonEmptyString,
   revision: Schema.Number,
+  pendingClarificationId: Schema.NullOr(TrimmedNonEmptyString),
   gateDecision: CollaborationGateDecision,
 });
 export type CollaborationTask = typeof CollaborationTask.Type;
@@ -108,6 +109,7 @@ export const CollaborationCommand = Schema.Struct({
     "reply",
     "result",
     "accept",
+    "thread.bind",
     "scenario.rehearse",
   ]),
   commandId: TrimmedNonEmptyString,
@@ -128,6 +130,11 @@ export const CollaborationCommand = Schema.Struct({
   taskId: Schema.optional(TrimmedNonEmptyString),
   replyTo: Schema.optional(TrimmedNonEmptyString),
   scenario: Schema.optional(Schema.Literals(["A", "B"])),
+  threadId: Schema.optional(TrimmedNonEmptyString),
+  admittedBy: Schema.optional(TrimmedNonEmptyString),
+  admissionSource: Schema.optional(Schema.Literal("server")),
+  gateDecision: Schema.optional(CollaborationGateDecision),
+  revision: Schema.optional(Schema.Number),
 });
 export type CollaborationCommand = typeof CollaborationCommand.Type;
 

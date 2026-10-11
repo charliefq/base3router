@@ -1,8 +1,12 @@
+import { useAtomValue } from "@effect/atom-react";
 import {
+  isProviderAvailable,
+  isProviderTextGenerationCapable,
   type CollaborationAgent,
   type CollaborationCommand,
   type CollaborationSnapshot,
   type CollaborationTask,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { useCallback, useEffect, useState } from "react";
@@ -10,7 +14,13 @@ import { useNavigate } from "@tanstack/react-router";
 
 import { PrimaryEnvironmentHttpClient } from "../../environments/primary/httpClient";
 import { isElectron } from "../../env";
+import { newThreadId, randomUUID } from "../../lib/utils";
 import { runPrimaryHttp } from "../../lib/runtime";
+import { primaryEnvironmentIdAtom } from "../../state/primaryEnvironment";
+import { useProjects } from "../../state/entities";
+import { primaryServerProvidersAtom } from "../../state/server";
+import { threadEnvironment } from "../../state/threads";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
@@ -53,8 +63,10 @@ function useCollaboration() {
       const result = await sendCommand(command);
       setSnapshot(result.snapshot);
       setError(result.outcome === "rejected" ? result.detail : null);
+      return result;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The command was not recorded.");
+      return null;
     } finally {
       setPending(false);
     }
@@ -63,114 +75,89 @@ function useCollaboration() {
   return { snapshot, error, pending, submit };
 }
 
-function connectionLabel(agent: CollaborationAgent) {
-  if (agent.origin === "external" && agent.connection === "NOT_CONNECTED") return "NOT_CONNECTED";
-  if (agent.connection === "SIMULATED") return "simulated transport";
-  return agent.availability;
+const providerExecutable = (provider: ServerProvider) =>
+  provider.installed &&
+  provider.enabled &&
+  provider.status === "ready" &&
+  isProviderAvailable(provider) &&
+  isProviderTextGenerationCapable(provider) &&
+  provider.models.length > 0;
+
+function connectionLabel(
+  agent: CollaborationAgent | undefined,
+  provider: ServerProvider | undefined,
+) {
+  if (!provider && agent?.origin === "external") return "NOT_CONNECTED";
+  if (!provider) return agent?.availability ?? "unknown";
+  if (!providerExecutable(provider)) return provider.status;
+  return agent?.availability ?? "unknown";
 }
 
-function AgentList({
-  agents,
-  tasks,
-  selectedAgentId,
-  onSelect,
-}: {
-  agents: ReadonlyArray<CollaborationAgent>;
-  tasks: ReadonlyArray<CollaborationTask>;
-  selectedAgentId: string | undefined;
-  onSelect: (agentId: string) => void;
-}) {
-  return (
-    <ul>
-      {agents.map((agent) => {
-        const linked = tasks.filter(
-          (task) =>
-            task.state !== "completed" &&
-            (task.ownerAgentId === agent.id || task.assigneeAgentId === agent.id),
-        );
-        return (
-          <li key={agent.id}>
-            <Button
-              aria-pressed={selectedAgentId === agent.id}
-              onClick={() => onSelect(agent.id)}
-              size="sm"
-              variant={selectedAgentId === agent.id ? "secondary" : "ghost"}
-            >
-              {agent.displayName}
-            </Button>
-            <p>
-              {agent.origin} · {agent.role} · {connectionLabel(agent)} · {agent.availability}
-            </p>
-            <p>{agent.capabilities.join(", ")}</p>
-            {linked.length > 0 ? (
-              <p>{linked.map((task) => task.title).join(", ")}</p>
-            ) : (
-              <p>No open tasks.</p>
-            )}
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function Transcript({
-  snapshot,
-  agentId,
-  taskId,
-}: {
-  snapshot: CollaborationSnapshot;
-  agentId: string;
-  taskId: string | undefined;
-}) {
-  const agent = snapshot.agents.find((item) => item.id === agentId);
-  const messages = snapshot.messages.filter((message) => {
-    if (taskId) return message.taskId === taskId;
-    return message.senderId === agentId || message.recipientId === agentId;
-  });
-  if (!agent) return <p>That agent is not in the directory.</p>;
-  return (
-    <section>
-      <h2>{agent.displayName}</h2>
-      <p>
-        {agent.origin} · {agent.role} · {connectionLabel(agent)}
-      </p>
-      {agent.origin === "external" ? (
-        <p>
-          Real Grokbot API: {snapshot.realGrokbot}. A simulated transcript is not a live connection.
-        </p>
-      ) : null}
-      {messages.length === 0 ? (
-        <p>
-          No messages yet. A provider CLI is not an employee, and this page does not invent one.
-        </p>
-      ) : (
-        <ol>
-          {messages.map((message) => (
-            <li key={message.id}>
-              <p>
-                {message.kind} · {message.transport} · does not grant execution
-              </p>
-              <p>{message.body}</p>
-              {message.replyTo ? <p>Reply to {message.replyTo}</p> : null}
-            </li>
-          ))}
-        </ol>
-      )}
-    </section>
-  );
-}
-
-export function AgentsPage({
-  agentId,
-  taskId,
-}: {
-  agentId: string | undefined;
-  taskId: string | undefined;
-}) {
+export function AgentsPage() {
   const navigate = useNavigate();
+  const environmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const providers = useAtomValue(primaryServerProvidersAtom);
+  const projects = useProjects().filter((project) => project.environmentId === environmentId);
+  const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
   const { snapshot, error, pending, submit } = useCollaboration();
-  const projectId = "owner-project";
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const selectedProject =
+    projects.length === 1 ? projects[0] : projects.find((project) => project.id === projectId);
+
+  const openThread = (threadId: string) => {
+    if (!environmentId) return;
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: { environmentId, threadId },
+    });
+  };
+
+  const openAgent = async (agentId: string) => {
+    const bound = snapshot?.agents.find((agent) => agent.id === agentId);
+    if (agentId === "grokbot" || bound?.origin === "external") {
+      return;
+    }
+    if (bound?.threadId) {
+      openThread(bound.threadId);
+      return;
+    }
+    const provider = providers.find((item) => item.instanceId === agentId);
+    if (!provider || !providerExecutable(provider)) return;
+    if (!environmentId || !selectedProject) return;
+    const model = provider.models.find((item) => item.isDefault) ?? provider.models[0];
+    if (!model) return;
+    const threadId = newThreadId();
+    const created = await createThread({
+      environmentId,
+      input: {
+        threadId,
+        projectId: selectedProject.id,
+        title: `Chat with ${provider.displayName ?? provider.driver}`,
+        modelSelection: { instanceId: provider.instanceId, model: model.slug },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      },
+    });
+    if (created._tag === "Failure") {
+      setNotice("The project thread was not created.");
+      return;
+    }
+    const linked = await submit({
+      type: "thread.bind",
+      commandId: randomUUID(),
+      projectId: selectedProject.id,
+      threadId,
+      agentId: provider.instanceId,
+      title: `Chat with ${provider.displayName ?? provider.driver}`,
+    });
+    if (!linked || linked.outcome === "rejected") return;
+    openThread(threadId);
+  };
+
+  const grokbot = snapshot?.agents.find((agent) => agent.id === "grokbot");
   return (
     <SidebarInset>
       <WorkspacePageHeader electron={isElectron}>
@@ -178,6 +165,27 @@ export function AgentsPage({
       </WorkspacePageHeader>
       <div>
         {error ? <p>{error}</p> : null}
+        {notice ? <p>{notice}</p> : null}
+        {!environmentId ? <p>No primary environment is connected.</p> : null}
+        {projects.length === 0 ? (
+          <p>No project is open on this environment. An agent thread needs a real project.</p>
+        ) : null}
+        {projects.length > 1 ? (
+          <label>
+            Project
+            <select
+              value={projectId ?? ""}
+              onChange={(event) => setProjectId(event.target.value || null)}
+            >
+              <option value="">Select a project</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.title}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         {snapshot ? (
           <>
             <p>Real Grokbot: {snapshot.realGrokbot}</p>
@@ -186,57 +194,85 @@ export function AgentsPage({
                 <li key={item}>{item}</li>
               ))}
             </ul>
-            <AgentList
-              agents={snapshot.agents}
-              onSelect={(id) => {
-                void navigate({ to: "/agents", search: { agent: id } });
-              }}
-              selectedAgentId={agentId}
-              tasks={snapshot.tasks}
-            />
-            {agentId ? <Transcript agentId={agentId} snapshot={snapshot} taskId={taskId} /> : null}
-            <Button
-              disabled={pending}
-              onClick={() => {
-                void submit({
-                  type: "scenario.rehearse",
-                  commandId: "scenario-a-owner-project",
-                  scenario: "A",
-                  projectId,
-                });
-              }}
-              variant="outline"
-            >
-              Rehearse scenario A on a simulated transport
-            </Button>
-            <Button
-              disabled={pending}
-              onClick={() => {
-                void submit({
-                  type: "scenario.rehearse",
-                  commandId: "scenario-b-owner-project",
-                  scenario: "B",
-                  projectId,
-                });
-              }}
-              variant="outline"
-            >
-              Rehearse scenario B on a simulated transport
-            </Button>
           </>
         ) : (
           <p>Reading the agent directory.</p>
         )}
+        <ul>
+          {grokbot ? (
+            <li>
+              <Button aria-pressed={false} disabled size="sm" variant="ghost">
+                {grokbot.displayName}
+              </Button>
+              <p>
+                {grokbot.origin} · {grokbot.role} · {connectionLabel(grokbot, undefined)} ·{" "}
+                {grokbot.availability}
+              </p>
+              <p>Grokbot is NOT_CONNECTED. No chat was opened.</p>
+            </li>
+          ) : null}
+          {providers.map((provider) => {
+            const bound = snapshot?.agents.find((agent) => agent.id === provider.instanceId);
+            const ready = providerExecutable(provider);
+            const tasks =
+              snapshot?.tasks.filter(
+                (task) =>
+                  task.state !== "completed" &&
+                  (task.assigneeAgentId === provider.instanceId ||
+                    task.ownerAgentId === provider.instanceId),
+              ) ?? [];
+            return (
+              <li key={provider.instanceId}>
+                <Button
+                  disabled={pending || !ready || (!bound?.threadId && !selectedProject)}
+                  onClick={() => {
+                    void openAgent(provider.instanceId);
+                  }}
+                  size="sm"
+                  variant="ghost"
+                >
+                  {provider.displayName ?? provider.driver}
+                </Button>
+                <p>
+                  internal · provider · {connectionLabel(bound, provider)} ·{" "}
+                  {bound?.availability ?? (ready ? "unknown" : "offline")}
+                </p>
+                <p>
+                  {ready
+                    ? provider.models.map((model) => model.slug).join(", ") || "No model"
+                    : "This provider is not ready. No conversation was fabricated."}
+                </p>
+                {tasks.length > 0 ? (
+                  <p>{tasks.map((task) => task.title).join(", ")}</p>
+                ) : (
+                  <p>No open tasks.</p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+        {providers.length === 0 ? (
+          <p>No provider is configured. A provider CLI is not an employee.</p>
+        ) : null}
       </div>
     </SidebarInset>
   );
 }
 
-export function TasksPage({ taskId }: { taskId: string | undefined }) {
+export function TasksPage() {
   const navigate = useNavigate();
+  const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const { snapshot, error } = useCollaboration();
   const tasks = snapshot?.tasks ?? [];
-  const selected = tasks.find((task) => task.id === taskId);
+
+  const openTask = (task: CollaborationTask) => {
+    if (!environmentId || !task.threadId) return;
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: { environmentId, threadId: task.threadId },
+    });
+  };
+
   return (
     <SidebarInset>
       <WorkspacePageHeader electron={isElectron}>
@@ -251,15 +287,10 @@ export function TasksPage({ taskId }: { taskId: string | undefined }) {
             {tasks.map((task) => (
               <li key={task.id}>
                 <Button
-                  aria-pressed={task.id === taskId}
-                  onClick={() => {
-                    void navigate({
-                      to: "/agents",
-                      search: { agent: task.assigneeAgentId, task: task.id },
-                    });
-                  }}
+                  disabled={!task.threadId || !environmentId}
+                  onClick={() => openTask(task)}
                   size="sm"
-                  variant={task.id === taskId ? "secondary" : "ghost"}
+                  variant="ghost"
                 >
                   {task.title}
                 </Button>
@@ -269,13 +300,15 @@ export function TasksPage({ taskId }: { taskId: string | undefined }) {
                 <p>{task.waitReason ?? "No wait."}</p>
                 <p>Acceptance: {task.acceptance}</p>
                 <p>Gate {task.gateDecision}. This task does not grant execution.</p>
+                <p>
+                  {task.threadId
+                    ? "Opening this task returns to its project thread."
+                    : "This task has no project thread."}
+                </p>
               </li>
             ))}
           </ul>
         )}
-        {snapshot && selected ? (
-          <Transcript agentId={selected.assigneeAgentId} snapshot={snapshot} taskId={selected.id} />
-        ) : null}
       </div>
     </SidebarInset>
   );
