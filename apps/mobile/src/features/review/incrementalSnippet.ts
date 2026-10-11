@@ -5,8 +5,10 @@ export function createIncrementalSnippet(
   highlighter: HighlighterCore,
   language: string,
   theme: string,
+  // 0 finishes the line. Shiki's 500ms default can stop a cold grammar mid-line.
+  tokenizeTimeLimit = 0,
 ) {
-  const options = { lang: language, theme };
+  const options = { lang: language, theme, tokenizeTimeLimit };
   let cached:
     | {
         prefix: string;

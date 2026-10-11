@@ -64,8 +64,8 @@ fast-forward git push is not the claim.
 ## Brake
 
 One implementation worker. Two failed repair iterations per demonstrated
-defect. This repair is attempt 1 of 2 for the highlighter failure and attempt
-1 of 2 for the claim procedure. No merge, no push to `main`, no live paid
+defect. Highlighter repair `base3-mobile-highlighter-repair-20261011-06` is
+attempt 2 of 2. No merge, no push to `main`, no live paid
 pilot, no signing or publication, no spend, auth, or credential change, and
 no real user data. Spend remains **UNKNOWN**. Do not infer unlimited or
 finite. Finish at `COMPLETED` or `STOPPED`. Do not auto-expire a claim and do
@@ -89,15 +89,16 @@ move for this repair.
 
 ## Dispatches
 
-| Dispatch                                 | State                                                                                                                      | Agent                                                               |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `base3-unattended-20261010-01`           | Earlier packet. Agent IDLE.                                                                                                | <https://cursor.com/agents/bc-0b48c998-6c41-4ef0-bbff-a5ce12a0d2e4> |
-| `base3-unattended-20261010-02`           | **REVIEW_READY** in PR #22 comment 6104214316. Agent IDLE. Not overlapped.                                                 | <https://cursor.com/agents/bc-b428813a-b3b5-45dd-ba61-1d5591398ee5> |
-| `base3-closed-loop-20261011-01`          | **COMPLETED** in PR #23 comment 6105316354. PR #24 head `08e36ac02d78f3f9d18ad29bcc68652c4ce95232`. Required Check failed. | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
-| `base3-repair-20261011-02`               | **COMPLETED** in PR #23 comment 6105520995. PR #25 head `a4541db95049ec595570afaa6a9f17aed9702310`.                        | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
-| `base3-chat-agents-20261011-03`          | **COMPLETED** in PR #23. PR #26 head `00c007a12564f0a7945aec111dde027b7e60015a`. Ledger stays with event review.           | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
-| `base3-chat-integration-20261011-04`     | **COMPLETED**. PR #27 head `9dc41f4e168af5cdc233751ae23e3e9e5e17b29b`. Ledger stays with event review.                     | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
-| `base3-offline-pilot-brakes-20261011-05` | This slice. Offline token, dollar, and deadline brakes. Ledger stays with event review.                                    | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| Dispatch                                      | State                                                                                                                                            | Agent                                                               |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| `base3-unattended-20261010-01`                | Earlier packet. Agent IDLE.                                                                                                                      | <https://cursor.com/agents/bc-0b48c998-6c41-4ef0-bbff-a5ce12a0d2e4> |
+| `base3-unattended-20261010-02`                | **REVIEW_READY** in PR #22 comment 6104214316. Agent IDLE. Not overlapped.                                                                       | <https://cursor.com/agents/bc-b428813a-b3b5-45dd-ba61-1d5591398ee5> |
+| `base3-closed-loop-20261011-01`               | **COMPLETED** in PR #23 comment 6105316354. PR #24 head `08e36ac02d78f3f9d18ad29bcc68652c4ce95232`. Required Check failed.                       | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| `base3-repair-20261011-02`                    | **COMPLETED** in PR #23 comment 6105520995. PR #25 head `a4541db95049ec595570afaa6a9f17aed9702310`.                                              | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| `base3-chat-agents-20261011-03`               | **COMPLETED** in PR #23. PR #26 head `00c007a12564f0a7945aec111dde027b7e60015a`. Ledger stays with event review.                                 | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| `base3-chat-integration-20261011-04`          | **COMPLETED**. PR #27 head `9dc41f4e168af5cdc233751ae23e3e9e5e17b29b`. Ledger stays with event review.                                           | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| `base3-offline-pilot-brakes-20261011-05`      | **COMPLETED**. PR #28 head `b61d636411b774c7e6eea0dfe38a80f6ebb4cb76`. Required Check failed on the highlighter. Ledger stays with event review. | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
+| `base3-mobile-highlighter-repair-20261011-06` | This slice. Cold highlighter tokenization finishes. Ledger stays with event review.                                                              | <https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5> |
 
 ## Checkpoints
 
@@ -120,8 +121,8 @@ move for this repair.
   failed. Job `Check` is 114385418283. Job `Test` is 114384569050. The run's
   head SHA was `08e36ac02d78f3f9d18ad29bcc68652c4ce95232`. Checkout of that
   job was test-merge `10cfbd78858acde5b56ad87ced8464da14ef6a0b`, not the PR
-  head. Slot and claim tests passed in that job. The candidate stays
-  unaccepted. See the highlighter note below. Attempt 1 of 2.
+  head. Slot and claim tests passed in that job. The missing `42` token was
+  the 500ms tokenize cutoff, fixed in dispatch 06. See the highlighter note.
 - `update_ref` `expected_sha` stays unverified and is not used. A
   fast-forward ref update can move a held slot.
 - Account spend at <https://cursor.com/dashboard/spending> was not read.
@@ -135,27 +136,28 @@ move for this repair.
 
 ## Highlighter repair
 
-CI failure, before this edit:
-`apps/mobile/src/features/review/shikiReviewHighlighter.test.ts` cold
-initialization. `highlightSourceFile` emitted `= 42;` as one red token
-(`#FF7B72`). `highlightCodeSnippet` emitted `=`, a space, `42` (`#79C0FF`),
-and `;` separately. The test compared those results with `toEqual`.
+Cold TypeScript highlighting on the JavaScript regex engine was stopping
+mid-line. Shiki's default `tokenizeTimeLimit` is 500ms. vscode-textmate
+checks that limit with `Date.now()` while the engine compiles long grammar
+patterns, then the unfinished tail is appended to the last token.
 
-Local investigation on this repair, once:
+Required Check
+[38119865290](https://github.com/charliefq/base3router/actions/runs/38119865290)
+job `Test` 114412195874 checked out test-merge
+`eadf4c605e53f3a70ae1233b2fa8e5bc5946422f` and failed
+`shikiReviewHighlighter.test.ts:68`: no token content was exactly `42`.
+Run 38110398025 stopped on the red operator and produced one token
+`= 42;`. Node `v24.21.0` on this machine finishes the same cold line in
+about 140ms, so the separate `42` token (`#79C0FF`) appears. A fresh
+highlighter with `tokenizeTimeLimit: 1`, and one whose `Date.now` advances
+600ms per read under the 500ms default, returns a single token for the
+whole line.
 
-- Node `v24.21.0`
-- Vitest `4.1.11`
-- `@shikijs/core` `4.2.0` and `@shikijs/engine-javascript` `4.2.0`
-- `vp test run --config ../../vite.config.ts src/features/review/shikiReviewHighlighter.test.ts`
-  from `apps/mobile`: 7 passed, including the cold test
-- The same cold path did not emit a collapsed `= 42;` token
-
-`shikiReviewHighlighter.ts` is unchanged. The cold test still requires the
-source and the snippet to be equal. It also rejects a collapsed `= 42;` token
-and requires `42` to be its own colored token. Line text, colors, aliases,
-and the long-line plain fallback stay covered by the same file. If the next
-required `Check` fails this assertion again, that is failure 2 of 2 for this
-defect. Stop there. Do not weaken the equality.
+`highlightLines` and the incremental snippet pass `tokenizeTimeLimit: 0`,
+vscode-textmate's unlimited value. Lines longer than 1000 characters still
+skip the tokenizer. The cold test still requires source and snippet
+equality, rejects a collapsed `= 42;` token, and requires `42` to be its
+own colored token. This is repair attempt 2 of 2.
 
 ## Repository execution slot
 
@@ -361,14 +363,13 @@ stacked PR on PR #23 as soon as it exists.
 
 ## Next task
 
-`base3-offline-pilot-brakes-20261011-05` is the current slice. An explicit
-token cap, dollar cap, and absolute deadline are enforced across the task
-tree. Unknown usage or an unverified price denies the next start. The real
-pilot stays prohibited. Remaining gaps are in
-[the chat-agents note](../internals/chat-agents.md): the live composer and
-Grokbot are unverified, provider ids are interim, per-principal project
-authorization is still required before external ingress, and repeated project
-selection needs a later test. This worker does not dispatch the next item.
+`base3-mobile-highlighter-repair-20261011-06` is the current slice. Offline
+pilot brakes from dispatch 05 stay in place. Chat execution stays deny, and
+Grokbot stays not connected. Remaining product gaps are in
+[the chat-agents note](../internals/chat-agents.md). Budget interruption of
+active work, immutable tree bounds, and SQLite reopen tests stay queued.
+`OPS-CLOSED-LOOP-RECONCILER` follows those bounded repairs. This worker does
+not dispatch the next item.
 
 ChatGPT finishes the current ledger only after the terminal result, then
 acquires a new hold before any later send. A missing or unreadable slot file
