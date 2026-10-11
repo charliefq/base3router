@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "state": "DISPATCHED",
-  "generation": 39,
+  "state": "TERMINAL",
+  "generation": 40,
   "taskId": "base3-brakes-active-restart-20261011-07",
   "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
   "dispatchId": "base3-brakes-active-restart-20261011-07",
@@ -14,7 +14,7 @@
     "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106710477"
   },
   "provider": {
-    "status": "COMPLETED_REPORTED",
+    "status": "COMPLETED",
     "startMechanism": "PR23 comment",
     "acceptance": {
       "commentId": 6106715715,
@@ -25,16 +25,32 @@
       "dispatchId": "base3-brakes-active-restart-20261011-07"
     }
   },
-  "termination": null,
-  "priorResultCommentId": 6106636499,
-  "reviewOutcome": "ACCEPTED_BOUNDED_HIGHLIGHTER_FIX",
+  "termination": {
+    "established": true,
+    "workerState": "COMPLETED",
+    "evidence": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106817145"
+  },
+  "priorResultCommentId": 6106817145,
+  "reviewOutcome": "ACCEPTED_BOUNDED_BRAKE_REPAIR_WITH_CI_REPLAY_REPAIR_REQUIRED",
   "ci": {
     "run": 38122531716,
-    "check": "pending",
-    "checkId": null,
-    "actualCheckoutSha": null,
+    "check": "failure",
+    "checkId": 114421031105,
+    "actualCheckoutSha": "f4a532cf4c66218c4e140575fb79a6f9abd72f24",
     "prHead": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
-    "taskId": "base3-brakes-active-restart-20261011-07"
+    "taskId": "base3-brakes-active-restart-20261011-07",
+    "failedJobs": [
+      {
+        "id": 114420044271,
+        "name": "Test Server 4",
+        "failure": "ACP status JSON partial read"
+      },
+      {
+        "id": 114420044079,
+        "name": "Test Server 3",
+        "failure": "approval replay waiting instead of completed"
+      }
+    ]
   },
   "attempts": {
     "highlighterRepair": 2,
@@ -54,6 +70,17 @@
   },
   "taskGraph": [
     {
+      "pr": 30,
+      "head": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+      "branch": "cursor/brakes-active-restart-abd5",
+      "base": "cursor/mobile-highlighter-repair-abd5",
+      "baseSha": "975af300b65c66ea427cd79bc81a994ea53582d7",
+      "state": "open",
+      "merged": false,
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:54:26.180Z"
+    },
+    {
       "pr": 23,
       "head": "f13055e307c28068cb4f21c87429bd27b0963215",
       "branch": "cursor/v2-unattended-followup-02-8ee5",
@@ -62,7 +89,7 @@
       "state": "open",
       "merged": false,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 29,
@@ -73,7 +100,7 @@
       "state": "open",
       "merged": false,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 28,
@@ -84,7 +111,7 @@
       "state": "open",
       "merged": false,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 27,
@@ -95,7 +122,7 @@
       "state": "open",
       "merged": false,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 26,
@@ -106,7 +133,7 @@
       "state": "open",
       "merged": false,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 25,
@@ -117,7 +144,7 @@
       "state": "open",
       "merged": false,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 24,
@@ -128,7 +155,7 @@
       "state": "open",
       "merged": false,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 22,
@@ -139,7 +166,7 @@
       "state": "open",
       "merged": false,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 21,
@@ -150,7 +177,7 @@
       "state": "open",
       "merged": false,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 20,
@@ -161,7 +188,7 @@
       "state": "open",
       "merged": false,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 18,
@@ -172,7 +199,7 @@
       "state": "open",
       "merged": false,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 19,
@@ -183,7 +210,7 @@
       "state": "closed",
       "merged": true,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 17,
@@ -194,7 +221,7 @@
       "state": "open",
       "merged": false,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 16,
@@ -205,7 +232,7 @@
       "state": "open",
       "merged": false,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 15,
@@ -216,7 +243,7 @@
       "state": "closed",
       "merged": true,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 14,
@@ -227,7 +254,7 @@
       "state": "closed",
       "merged": true,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 13,
@@ -238,7 +265,7 @@
       "state": "closed",
       "merged": true,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 12,
@@ -249,7 +276,7 @@
       "state": "closed",
       "merged": true,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 11,
@@ -260,7 +287,7 @@
       "state": "closed",
       "merged": true,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 10,
@@ -271,7 +298,7 @@
       "state": "closed",
       "merged": true,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 9,
@@ -282,7 +309,7 @@
       "state": "closed",
       "merged": true,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 8,
@@ -293,7 +320,7 @@
       "state": "closed",
       "merged": true,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 6,
@@ -304,7 +331,7 @@
       "state": "closed",
       "merged": true,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 5,
@@ -315,7 +342,7 @@
       "state": "closed",
       "merged": true,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 4,
@@ -326,7 +353,7 @@
       "state": "closed",
       "merged": true,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 3,
@@ -337,7 +364,7 @@
       "state": "closed",
       "merged": true,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 2,
@@ -348,7 +375,7 @@
       "state": "closed",
       "merged": true,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 1,
@@ -359,7 +386,7 @@
       "state": "closed",
       "merged": true,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "pr": 7,
@@ -370,7 +397,7 @@
       "state": "open",
       "merged": false,
       "verification": "fresh",
-      "checkedAt": "2026-10-11T07:42:30Z"
+      "checkedAt": "2026-10-11T07:54:26.180Z"
     },
     {
       "taskId": "base3-offline-pilot-brakes-20261011-05",
@@ -424,10 +451,37 @@
       ],
       "startSha": "975af300b65c66ea427cd79bc81a994ea53582d7",
       "base": "cursor/mobile-highlighter-repair-abd5",
-      "pr": null,
-      "successor": null,
+      "pr": 30,
+      "successor": "base3-replay-fixture-ci-repair-20261011-08",
       "worker": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
-      "acceptedAt": "2026-10-11T07:33:18Z"
+      "acceptedAt": "2026-10-11T07:33:18Z",
+      "branch": "cursor/brakes-active-restart-abd5",
+      "resultSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+      "resultCommentId": 6106817145,
+      "resultAt": "2026-10-11T07:46:41Z",
+      "publicationCommentId": 6106820627,
+      "publicationAt": "2026-10-11T07:47:08Z",
+      "completedAt": "2026-10-11T07:46:41Z",
+      "review": {
+        "time": "2026-10-11T07:54:26.180Z",
+        "automaticEvent": true,
+        "source": "natural pull_request.opened ef1e0d30-c547-11f1-860a-00fcf96f54da",
+        "deliveryId": "ef1e0d30-c547-11f1-860a-00fcf96f54da",
+        "resultKey": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
+        "pr": 30,
+        "head": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+        "resultCommentId": 6106817145,
+        "outcome": "ACCEPTED_BOUNDED_BRAKE_REPAIR_WITH_CI_REPLAY_REPAIR_REQUIRED",
+        "ciRun": 38122531716,
+        "checkId": 114421031105,
+        "check": "failure",
+        "actualCheckoutSha": "f4a532cf4c66218c4e140575fb79a6f9abd72f24",
+        "findings": [
+          "Frozen token/dollar/deadline bounds persist across omission and a real file-backed SQLite reopen; usage and startup recovery request interrupt without a new admission; lease release remains terminal-evidence-only.",
+          "One provider turn can overshoot remaining budget and a silent deadline waits for usage or database startup; both are explicitly recorded capability limits.",
+          "Required Check failed in unchanged deterministic replay harnesses: ACP status JSON was read before a complete write, and two Codex approval fixtures remained waiting instead of completed. Focused replay reliability repair required before the reconciler."
+        ]
+      }
     }
   ],
   "nextTasks": [
@@ -495,7 +549,7 @@
     },
     {
       "id": "OFFLINE-BRAKES-ACTIVE-RESTART-REPAIR",
-      "state": "DISPATCHED",
+      "state": "ACCEPTED_WITH_CI_REPAIR_REQUIRED",
       "dependencies": [
         "base3-mobile-highlighter-repair-20261011-06"
       ],
@@ -508,13 +562,32 @@
       ],
       "plannedPrompt": "@cursor\ndispatch_id: TEMPLATE_ASSIGN_UNIQUE_DISPATCH_ID_AT_RESERVATION\npredecessor: base3-offline-pilot-brakes-20261011-05\npredecessor_result: https://github.com/charliefq/base3router/pull/23#issuecomment-6106462863\nstarting_sha: b61d636411b774c7e6eea0dfe38a80f6ebb4cb76\nbase: cursor/offline-pilot-brakes-abd5\ntask: OFFLINE-BRAKES-ACTIVE-RESTART-REPAIR\nrepair_attempt: 1 of maximum 2 per demonstrated defect\n\nThe predecessor is explicitly COMPLETED and its exact reported substantive head is published as draft PR28. Technical review requires this bounded repair before OPS-CLOSED-LOOP-RECONCILER. The review result is recorded durably; this sole comment starts the successor, not a second dispatcher.\n\nFirst publish a NEW explicit CLAIMED/RUNNING comment on PR23 with this dispatch ID, actual worker ID/agent link, exact starting SHA and UTC/Los_Angeles timestamps. Same single worker only. Never self-dispatch or read/write/release/recreate the live ops ledger.\n\nCreate a FRESH branch from the exact starting SHA and a draft stacked PR targeting cursor/offline-pilot-brakes-abd5. Preserve all prior branch heads.\n\nDemonstrated defects:\n1. New TaskContract.commitTaskAdmission requests cancellation only when another governed start/handoff is attempted. TaskUsageAccounting.recordTaskUsage contains no exhaustion reaction; PR28 adds no active deadline enforcement. A running turn can cross its token/dollar cap or deadline with no subsequent start and never be interrupted. Existing pin test calls a second dispatch to trigger cancellation.\n2. TaskPilotBrakes.test.ts uses SqlitePersistenceMemory for the alleged restart test; rewriting payload on the same connection is not restart evidence.\n3. Frozen deadline is conditional on pilotActive(current brake). Removing optional brakes makes pilotAllows SQL 1, bypassing the existing persisted deadline. Tightening/redirect/restart must not accidentally disable a previously bound tree brake.\n\nBounded implementation:\n- Reuse existing V2 policy/runtime cancellation pathways. Add a durable, idempotent brake evaluation after usage updates AND deadline-driven evaluation of active governed leases, including startup recovery. Once cumulative tree usage reaches/exceeds cap or absolute deadline passes, request interrupt without needing another admission. Do not free the lease on request or unknown stream end; free exactly once only on explicit provider terminal evidence.\n- Persist the enforced tree bounds so omission, child, retry, handoff, revision or restart cannot silently reset/disable them. Unknown usage/price denies new starts. Keep synthetic pricing exclusively in explicitly injected offline fixtures, no production default price.\n- Preserve atomic admission and idempotency. Be precise: cumulative threshold checks do not guarantee zero overshoot within a provider turn; do not claim a hard no-overshoot cap without supported bounded reservation/provider enforcement. For the offline provider, demonstrate bounded starts/reservations against remaining budget; if provider limits cannot enforce that, fail closed and record that capability blocker.\n- Add REAL file-backed disposable SQLite restart tests: close/discard service/runtime A, construct B over the same temp database. Verify totals, frozen bounds/deadline, pending interrupt and occupied lease survive; recover already-expired active work without a new task start. Test streamed usage crossing cap with no subsequent dispatch, deadline crossing with no subsequent dispatch, duplicate/reordered observations, cancellation unconfirmed/terminal confirmed, and attempted brake omission. Use fake providers/controlled clock only. Retain meaningful lifecycle regressions.\n- Keep scope to policy/accounting/runtime brake integration, additive migrations and targeted tests/docs. T3 chat shell only Agents + Tasks; named internal employees and external contractor bidirectional direction preserved. Chat execution DENY, Grokbot NOT_CONNECTED.\n\nNo merge/main push, release/signing, paid/live provider calls, credential/spend changes or real user data. No new scheduler/service or provider connection. Record unavailable live provider/Grokbot/per-principal authorization as blockers and continue this offline work.\n\nDELIVERY: after local implementation/tests, publish a NEW complete PR23 result BEFORE final substantive push: task/dispatch ID, actual worker ID, implementation_state and worker_state COMPLETED or STOPPED, exact FINAL LOCAL SHA, branch/base, changes/files, meaningful tests/evidence, limitations/blockers, publication_pending=true, ci_status=PENDING. Then push THAT exact SHA and create the stacked draft PR, then publication note. Do not wait for CI before terminal implementation result. No fake commits. No-code terminal must name exact existing remote SHA and explicit no-code classification. You do not dispatch the next worker.",
       "plannedPromptStatus": "TEMPLATE_ONLY; refresh predecessor/start SHA after current delivery review",
-      "workerState": "RUNNING",
+      "workerState": "COMPLETED",
       "dispatchId": "base3-brakes-active-restart-20261011-07",
-      "acceptanceCommentId": 6106715715
+      "acceptanceCommentId": 6106715715,
+      "pr": 30,
+      "resultSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+      "resultCommentId": 6106817145,
+      "check": "failure"
+    },
+    {
+      "id": "DETERMINISTIC-REPLAY-CI-REPAIR",
+      "state": "READY",
+      "attempt": 1,
+      "dependencies": [
+        "base3-brakes-active-restart-20261011-07"
+      ],
+      "goal": "Remove deterministic replay harness races exposed by PR30 without changing provider product semantics.",
+      "defects": [
+        "ACP status JSON can be read after the child starts writing but before the write is complete.",
+        "Two Codex approval replay fixtures can finish observation while the run is still waiting."
+      ],
+      "next": "OPS-CLOSED-LOOP-RECONCILER"
     }
   ],
-  "nonce": "ciwait:2026-10-11T07:48:22.598Z",
+  "nonce": "terminal:2026-10-11T07:54:26.180Z",
   "discoveredPrs": [
+    30,
     23,
     29,
     28,
@@ -546,21 +619,23 @@
     7
   ],
   "lastReview": {
-    "time": "2026-10-11T07:32:00.899Z",
-    "automaticEvent": false,
-    "source": "interactive recovery after PR29 event run left no review checkpoint",
-    "resultKey": "base3-mobile-highlighter-repair-20261011-06:975af300b65c66ea427cd79bc81a994ea53582d7:6106636499",
-    "pr": 29,
-    "head": "975af300b65c66ea427cd79bc81a994ea53582d7",
-    "outcome": "ACCEPTED_BOUNDED_HIGHLIGHTER_FIX",
-    "ciRun": 38121186501,
-    "checkId": 114416912510,
-    "check": "success",
-    "actualCheckoutSha": "aadc9bd885d114e7b8236655ac1c1da37bcee6da",
+    "time": "2026-10-11T07:54:26.180Z",
+    "automaticEvent": true,
+    "source": "natural pull_request.opened ef1e0d30-c547-11f1-860a-00fcf96f54da",
+    "deliveryId": "ef1e0d30-c547-11f1-860a-00fcf96f54da",
+    "resultKey": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
+    "pr": 30,
+    "head": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+    "resultCommentId": 6106817145,
+    "outcome": "ACCEPTED_BOUNDED_BRAKE_REPAIR_WITH_CI_REPLAY_REPAIR_REQUIRED",
+    "ciRun": 38122531716,
+    "checkId": 114421031105,
+    "check": "failure",
+    "actualCheckoutSha": "f4a532cf4c66218c4e140575fb79a6f9abd72f24",
     "findings": [
-      "Cold cutoff cause reproduced in worker evidence; exact numeric token assertion retained; source/snippet correction and full CI pass.",
-      "Unlimited tokenize limit removes CPU time cutoff; line length fallback retained for source, incremental session worst-case performance requires separate follow-up.",
-      "Active budget interruption, immutable bounds and real SQLite reopen remain required before offline brake acceptance."
+      "Frozen token/dollar/deadline bounds persist across omission and a real file-backed SQLite reopen; usage and startup recovery request interrupt without a new admission; lease release remains terminal-evidence-only.",
+      "One provider turn can overshoot remaining budget and a silent deadline waits for usage or database startup; both are explicitly recorded capability limits.",
+      "Required Check failed in unchanged deterministic replay harnesses: ACP status JSON was read before a complete write, and two Codex approval fixtures remained waiting instead of completed. Focused replay reliability repair required before the reconciler."
     ]
   },
   "independentPreparation": {
@@ -796,6 +871,48 @@
         "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
         "dispatchId": "base3-brakes-active-restart-20261011-07"
       }
+    },
+    {
+      "taskId": "base3-brakes-active-restart-20261011-07",
+      "resultKey": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
+      "termination": {
+        "established": true,
+        "workerState": "COMPLETED",
+        "evidence": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106817145",
+        "commentId": 6106817145,
+        "finalSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+        "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5"
+      },
+      "review": {
+        "time": "2026-10-11T07:54:26.180Z",
+        "automaticEvent": true,
+        "source": "natural pull_request.opened ef1e0d30-c547-11f1-860a-00fcf96f54da",
+        "deliveryId": "ef1e0d30-c547-11f1-860a-00fcf96f54da",
+        "resultKey": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
+        "pr": 30,
+        "head": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+        "resultCommentId": 6106817145,
+        "outcome": "ACCEPTED_BOUNDED_BRAKE_REPAIR_WITH_CI_REPLAY_REPAIR_REQUIRED",
+        "ciRun": 38122531716,
+        "checkId": 114421031105,
+        "check": "failure",
+        "actualCheckoutSha": "f4a532cf4c66218c4e140575fb79a6f9abd72f24",
+        "findings": [
+          "Frozen token/dollar/deadline bounds persist across omission and a real file-backed SQLite reopen; usage and startup recovery request interrupt without a new admission; lease release remains terminal-evidence-only.",
+          "One provider turn can overshoot remaining budget and a silent deadline waits for usage or database startup; both are explicitly recorded capability limits.",
+          "Required Check failed in unchanged deterministic replay harnesses: ACP status JSON was read before a complete write, and two Codex approval fixtures remained waiting instead of completed. Focused replay reliability repair required before the reconciler."
+        ]
+      },
+      "predecessor": "base3-mobile-highlighter-repair-20261011-06",
+      "dependencies": [
+        "base3-mobile-highlighter-repair-20261011-06"
+      ],
+      "worker": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+      "branch": "cursor/brakes-active-restart-abd5",
+      "pr": 30,
+      "startSha": "975af300b65c66ea427cd79bc81a994ea53582d7",
+      "completedAt": "2026-10-11T07:46:41Z",
+      "successor": "base3-replay-fixture-ci-repair-20261011-08"
     }
   ],
   "dispatchTimestamps": {
@@ -857,7 +974,7 @@
   "reviewOwnership": {
     "id": "event:ef1e0d30-c547-11f1-860a-00fcf96f54da",
     "key": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
-    "state": "CI_WAIT",
+    "state": "REVIEWED",
     "claimedAt": "2026-10-11T07:47:51.040Z",
     "source": "pull_request.opened",
     "pr": 30,
@@ -1059,6 +1176,37 @@
         "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
         "dispatchId": "base3-mobile-highlighter-repair-20261011-06"
       }
+    },
+    {
+      "resultKey": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
+      "status": "AUTOMATIC_REVIEW_SUCCESSOR_PENDING",
+      "resultAt": "2026-10-11T07:46:41Z",
+      "resultUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106817145",
+      "publicationAt": "2026-10-11T07:47:08Z",
+      "publicationUrl": "https://github.com/charliefq/base3router/pull/30",
+      "sha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+      "review": {
+        "time": "2026-10-11T07:54:26.180Z",
+        "automaticEvent": true,
+        "source": "natural pull_request.opened ef1e0d30-c547-11f1-860a-00fcf96f54da",
+        "deliveryId": "ef1e0d30-c547-11f1-860a-00fcf96f54da",
+        "resultKey": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
+        "pr": 30,
+        "head": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+        "resultCommentId": 6106817145,
+        "outcome": "ACCEPTED_BOUNDED_BRAKE_REPAIR_WITH_CI_REPLAY_REPAIR_REQUIRED",
+        "ciRun": 38122531716,
+        "checkId": 114421031105,
+        "check": "failure",
+        "actualCheckoutSha": "f4a532cf4c66218c4e140575fb79a6f9abd72f24",
+        "findings": [
+          "Frozen token/dollar/deadline bounds persist across omission and a real file-backed SQLite reopen; usage and startup recovery request interrupt without a new admission; lease release remains terminal-evidence-only.",
+          "One provider turn can overshoot remaining budget and a silent deadline waits for usage or database startup; both are explicitly recorded capability limits.",
+          "Required Check failed in unchanged deterministic replay harnesses: ACP status JSON was read before a complete write, and two Codex approval fixtures remained waiting instead of completed. Focused replay reliability repair required before the reconciler."
+        ]
+      },
+      "strictNoAdditionalUserMessageProof": true,
+      "successor": "base3-replay-fixture-ci-repair-20261011-08"
     }
   ],
   "followup": null,
@@ -1128,6 +1276,26 @@
     "publicationCommentId": 6106820627,
     "publicationAt": "2026-10-11T07:47:08Z",
     "published": true,
-    "ciState": "in_progress"
+    "ciState": "FAILURE",
+    "review": {
+      "time": "2026-10-11T07:54:26.180Z",
+      "automaticEvent": true,
+      "source": "natural pull_request.opened ef1e0d30-c547-11f1-860a-00fcf96f54da",
+      "deliveryId": "ef1e0d30-c547-11f1-860a-00fcf96f54da",
+      "resultKey": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
+      "pr": 30,
+      "head": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+      "resultCommentId": 6106817145,
+      "outcome": "ACCEPTED_BOUNDED_BRAKE_REPAIR_WITH_CI_REPLAY_REPAIR_REQUIRED",
+      "ciRun": 38122531716,
+      "checkId": 114421031105,
+      "check": "failure",
+      "actualCheckoutSha": "f4a532cf4c66218c4e140575fb79a6f9abd72f24",
+      "findings": [
+        "Frozen token/dollar/deadline bounds persist across omission and a real file-backed SQLite reopen; usage and startup recovery request interrupt without a new admission; lease release remains terminal-evidence-only.",
+        "One provider turn can overshoot remaining budget and a silent deadline waits for usage or database startup; both are explicitly recorded capability limits.",
+        "Required Check failed in unchanged deterministic replay harnesses: ACP status JSON was read before a complete write, and two Codex approval fixtures remained waiting instead of completed. Focused replay reliability repair required before the reconciler."
+      ]
+    }
   }
 }
