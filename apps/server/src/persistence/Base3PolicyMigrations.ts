@@ -204,6 +204,26 @@ const taskUsageTables = Effect.gen(function* () {
   `;
 });
 
+const pilotBrakeColumns = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    ALTER TABLE task_usage_attempts ADD COLUMN price_verified INTEGER NOT NULL DEFAULT 0
+  `;
+  yield* sql`
+    ALTER TABLE task_usage_attempts ADD COLUMN price_label TEXT
+  `;
+  yield* sql`
+    ALTER TABLE task_contract_members ADD COLUMN parent_thread_id TEXT
+  `;
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS task_contract_deadlines (
+      root_thread_id TEXT PRIMARY KEY,
+      deadline_at TEXT NOT NULL,
+      frozen_at TEXT NOT NULL
+    )
+  `;
+});
+
 const collaborationTables = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`
@@ -236,6 +256,7 @@ const steps: ReadonlyArray<
   ["b3-068", "TaskContractAdmissionMessage", taskContractAdmissionMessage],
   ["b3-069", "TaskUsageAttempts", taskUsageTables],
   ["b3-070", "CollaborationCommands", collaborationTables],
+  ["b3-071", "PilotBrakeColumns", pilotBrakeColumns],
 ];
 
 export const runBase3PolicyMigrations = Effect.gen(function* () {
