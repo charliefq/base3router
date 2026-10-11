@@ -1,0 +1,153 @@
+/**
+ * Chat-hub identities and cross-agent tasks.
+ * A provider CLI is not an employee. A simulated transport is not a live contractor.
+ */
+import * as Schema from "effect/Schema";
+
+import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+
+export const CollaborationConnection = Schema.Literals(["NOT_CONNECTED", "SIMULATED"]);
+export type CollaborationConnection = typeof CollaborationConnection.Type;
+
+export const CollaborationAvailability = Schema.Literals([
+  "working",
+  "waiting",
+  "offline",
+  "unknown",
+]);
+export type CollaborationAvailability = typeof CollaborationAvailability.Type;
+
+export const CollaborationOrigin = Schema.Literals(["internal", "external"]);
+export type CollaborationOrigin = typeof CollaborationOrigin.Type;
+
+export const CollaborationTaskState = Schema.Literals([
+  "running",
+  "blocked",
+  "review-ready",
+  "completed",
+]);
+export type CollaborationTaskState = typeof CollaborationTaskState.Type;
+
+export const CollaborationMessageKind = Schema.Literals([
+  "delegation",
+  "clarification",
+  "reply",
+  "result",
+]);
+export type CollaborationMessageKind = typeof CollaborationMessageKind.Type;
+
+export const CollaborationGateDecision = Schema.Literals(["ALLOW", "DENY", "ASK"]);
+export type CollaborationGateDecision = typeof CollaborationGateDecision.Type;
+
+export const GROKBOT_INTEGRATION_REQUIREMENTS = [
+  "Grokbot API base URL",
+  "An owner-held credential that is not written into this repository",
+  "A capability advertisement that names the target agent",
+] as const;
+
+export const CollaborationAgent = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  displayName: TrimmedNonEmptyString,
+  origin: CollaborationOrigin,
+  role: TrimmedNonEmptyString,
+  capabilities: Schema.Array(TrimmedNonEmptyString),
+  connection: CollaborationConnection,
+  availability: CollaborationAvailability,
+  projectId: Schema.NullOr(TrimmedNonEmptyString),
+  threadId: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type CollaborationAgent = typeof CollaborationAgent.Type;
+
+export const CollaborationTask = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  ownerAgentId: TrimmedNonEmptyString,
+  assigneeAgentId: TrimmedNonEmptyString,
+  projectId: TrimmedNonEmptyString,
+  state: CollaborationTaskState,
+  waitReason: Schema.NullOr(Schema.String),
+  acceptance: TrimmedNonEmptyString,
+  threadId: Schema.NullOr(TrimmedNonEmptyString),
+  correlationId: TrimmedNonEmptyString,
+  revision: Schema.Number,
+  gateDecision: CollaborationGateDecision,
+});
+export type CollaborationTask = typeof CollaborationTask.Type;
+
+export const CollaborationMessage = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  taskId: TrimmedNonEmptyString,
+  senderId: TrimmedNonEmptyString,
+  recipientId: TrimmedNonEmptyString,
+  replyTo: Schema.NullOr(TrimmedNonEmptyString),
+  kind: CollaborationMessageKind,
+  body: TrimmedNonEmptyString,
+  correlationId: TrimmedNonEmptyString,
+  revision: Schema.Number,
+  grantsExecution: Schema.Literal(false),
+  transport: Schema.Literals(["simulated", "internal"]),
+});
+export type CollaborationMessage = typeof CollaborationMessage.Type;
+
+export const CollaborationSnapshot = Schema.Struct({
+  agents: Schema.Array(CollaborationAgent),
+  tasks: Schema.Array(CollaborationTask),
+  messages: Schema.Array(CollaborationMessage),
+  realGrokbot: Schema.Literal("NOT_CONNECTED"),
+  grokbotIntegration: Schema.Array(TrimmedNonEmptyString),
+});
+export type CollaborationSnapshot = typeof CollaborationSnapshot.Type;
+
+export const CollaborationCommand = Schema.Struct({
+  type: Schema.Literals([
+    "agent.register",
+    "transport.simulate",
+    "delegate",
+    "resolve",
+    "clarify",
+    "reply",
+    "result",
+    "accept",
+    "scenario.rehearse",
+  ]),
+  commandId: TrimmedNonEmptyString,
+  agentId: Schema.optional(TrimmedNonEmptyString),
+  displayName: Schema.optional(TrimmedNonEmptyString),
+  origin: Schema.optional(CollaborationOrigin),
+  role: Schema.optional(TrimmedNonEmptyString),
+  capabilities: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  projectId: Schema.optional(TrimmedNonEmptyString),
+  correlationId: Schema.optional(TrimmedNonEmptyString),
+  fromAgentId: Schema.optional(TrimmedNonEmptyString),
+  toAgentId: Schema.optional(TrimmedNonEmptyString),
+  title: Schema.optional(TrimmedNonEmptyString),
+  body: Schema.optional(TrimmedNonEmptyString),
+  acceptance: Schema.optional(TrimmedNonEmptyString),
+  actor: Schema.optional(Schema.Literal("owner")),
+  name: Schema.optional(TrimmedNonEmptyString),
+  taskId: Schema.optional(TrimmedNonEmptyString),
+  replyTo: Schema.optional(TrimmedNonEmptyString),
+  scenario: Schema.optional(Schema.Literals(["A", "B"])),
+});
+export type CollaborationCommand = typeof CollaborationCommand.Type;
+
+export const CollaborationRejection = Schema.Literals([
+  "ambiguous-target",
+  "not-connected",
+  "cross-project",
+  "unknown-agent",
+  "unauthorized",
+  "identity-conflict",
+  "not-ready",
+]);
+export type CollaborationRejection = typeof CollaborationRejection.Type;
+
+export const CollaborationCommandResult = Schema.Struct({
+  outcome: Schema.Literals(["applied", "rejected"]),
+  code: Schema.NullOr(CollaborationRejection),
+  detail: Schema.String,
+  idempotent: Schema.Boolean,
+  gateDecision: Schema.NullOr(CollaborationGateDecision),
+  snapshot: CollaborationSnapshot,
+});
+export type CollaborationCommandResult = typeof CollaborationCommandResult.Type;

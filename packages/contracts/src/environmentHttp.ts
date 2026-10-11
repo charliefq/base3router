@@ -9,6 +9,11 @@ import * as HttpServerRespondable from "effect/unstable/http/HttpServerRespondab
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 import {
+  CollaborationCommand,
+  CollaborationCommandResult,
+  CollaborationSnapshot,
+} from "./collaboration.ts";
+import {
   AuthAccessTokenResult,
   AuthBrowserSessionRequest,
   AuthBrowserSessionResult,
@@ -557,6 +562,28 @@ class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
+class EnvironmentCollaborationHttpApi extends HttpApiGroup.make("collaboration")
+  .add(
+    HttpApiEndpoint.get("snapshot", "/api/collaboration", {
+      headers: OptionalBearerHeaders,
+      success: CollaborationSnapshot,
+      error: [EnvironmentAuthInvalidError, EnvironmentScopeRequiredError, EnvironmentInternalError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("command", "/api/collaboration/command", {
+      headers: OptionalBearerHeaders,
+      payload: CollaborationCommand,
+      success: CollaborationCommandResult,
+      error: [
+        EnvironmentRequestInvalidError,
+        EnvironmentAuthInvalidError,
+        EnvironmentScopeRequiredError,
+        EnvironmentInternalError,
+      ],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 class EnvironmentProjectsHttpApi extends HttpApiGroup.make("projects")
   .add(
     HttpApiEndpoint.get("snapshot", "/api/projects", {
@@ -657,4 +684,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentOrchestrationHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentProjectsHttpApi)
+  .add(EnvironmentCollaborationHttpApi)
   .add(EnvironmentConnectHttpApi) {}

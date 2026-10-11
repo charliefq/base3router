@@ -144,4 +144,52 @@ describe("contents slot", () => {
     assert.equal(posts, 1);
     assert.equal(checkSlot(remote).expired, false);
   });
+
+  it("blocks null, scalars, malformed records, and a terminal record without evidence", () => {
+    const cases = ["null", "1", '"slot"', "[]", "{}", '{"state":"CLAIMED"}'];
+    for (const bytes of cases) {
+      const remote = createMockContentsRemote({ branchExists: true, bytes });
+      assert.equal(checkSlot(remote).reason, "blocked");
+      assert.equal(
+        acquireSlot({ remote, taskId: "queue-item", workerId: "worker-a" }).reason,
+        "blocked",
+      );
+      assert.equal(remote.read().status, "invalid");
+      assert.equal(remote.read().record, null);
+    }
+
+    const terminal = createMockContentsRemote({
+      branchExists: true,
+      bytes: `${JSON.stringify({
+        schema: 1,
+        generation: 2,
+        nonce: "nonce-1",
+        state: "TERMINAL",
+        taskId: "queue-item",
+        workerId: "worker-a",
+        dispatchId: "worker-a:queue-item:1",
+        dispatchCount: 1,
+        commentUrl: null,
+        commentDelivery: null,
+        termination: { established: false },
+      })}\n`,
+    });
+    const before = terminal.read().blobSha;
+    assert.equal(checkSlot(terminal).reason, "blocked");
+    assert.equal(
+      acquireSlot({ remote: terminal, taskId: "next", workerId: "worker-b" }).reason,
+      "blocked",
+    );
+    assert.equal(terminal.read().blobSha, before);
+
+    const held = createMockContentsRemote();
+    const claimed = acquireSlot({ remote: held, taskId: "queue-item", workerId: "worker-a" });
+    const rejected = held.compareAndSwap({
+      expectedBlobSha: claimed.blobSha,
+      record: { state: "TERMINAL" },
+    });
+    assert.equal(rejected.status, 422);
+    assert.equal(held.read().record.state, "CLAIMED");
+    assert.equal(held.read().record.workerId, "worker-a");
+  });
 });

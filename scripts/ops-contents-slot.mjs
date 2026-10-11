@@ -13,8 +13,56 @@
  */
 import * as NodeCrypto from "node:crypto";
 
-const occupiedState = (record) =>
-  record !== null && record !== undefined && record.state !== "TERMINAL";
+const occupiedState = (record) => record.state !== "TERMINAL";
+
+const nonEmptyString = (value) => typeof value === "string" && value.trim().length > 0;
+
+const terminationEstablished = (termination) =>
+  termination !== null &&
+  typeof termination === "object" &&
+  !Array.isArray(termination) &&
+  termination.established === true &&
+  nonEmptyString(termination.evidence) &&
+  (termination.workerState === "COMPLETED" || termination.workerState === "STOPPED");
+
+/**
+ * A readable file is held until it is a complete record. JSON null, scalars,
+ * and a TERMINAL object without observed evidence are not free slots.
+ */
+export const recordValid = (record) => {
+  if (record === null || typeof record !== "object" || Array.isArray(record)) return false;
+  if (record.schema !== 1) return false;
+  if (!Number.isInteger(record.generation) || record.generation < 1) return false;
+  if (!nonEmptyString(record.nonce)) return false;
+  if (!["CLAIMED", "DISPATCHED", "UNCERTAIN", "TERMINAL"].includes(record.state)) return false;
+  if (!nonEmptyString(record.taskId) || !nonEmptyString(record.workerId)) return false;
+  if (record.dispatchId !== null && !nonEmptyString(record.dispatchId)) return false;
+  if (record.commentUrl !== null && !nonEmptyString(record.commentUrl)) return false;
+  if (
+    record.commentDelivery !== null &&
+    record.commentDelivery !== "started" &&
+    record.commentDelivery !== "uncertain" &&
+    record.commentDelivery !== "confirmed"
+  ) {
+    return false;
+  }
+  if (record.state === "CLAIMED") {
+    if (record.dispatchCount !== 0 || record.dispatchId !== null || record.termination !== null) {
+      return false;
+    }
+  } else if (record.state === "DISPATCHED" || record.state === "UNCERTAIN") {
+    if (
+      record.dispatchCount !== 1 ||
+      !nonEmptyString(record.dispatchId) ||
+      record.termination !== null
+    ) {
+      return false;
+    }
+  } else if (!terminationEstablished(record.termination)) {
+    return false;
+  }
+  return record.dispatchCount === 0 || record.dispatchCount === 1;
+};
 
 const nextIdentity = (current) => ({
   schema: 1,
@@ -38,23 +86,19 @@ export const createMockContentsRemote = ({ branchExists = false, bytes = null } 
     read() {
       if (!branch) return { status: "absent-branch", blobSha: null, record: null };
       if (!file) return { status: "missing-file", blobSha: null, record: null };
+      const blobSha = file.blobSha ?? hashBytes(file.bytes);
       try {
-        return {
-          status: "ok",
-          blobSha: file.blobSha ?? hashBytes(file.bytes),
-          record: JSON.parse(file.bytes),
-        };
+        const record = JSON.parse(file.bytes);
+        if (!recordValid(record)) return { status: "invalid", blobSha, record: null };
+        return { status: "ok", blobSha, record };
       } catch {
-        return {
-          status: "unreadable",
-          blobSha: file.blobSha ?? hashBytes(file.bytes),
-          record: null,
-        };
+        return { status: "unreadable", blobSha, record: null };
       }
     },
     compareAndSwap({ expectedBlobSha, record }) {
       if (!branch) {
         if (expectedBlobSha !== null) return { ok: false, status: 409 };
+        if (!recordValid(record)) return { ok: false, status: 422, reason: "invalid-record" };
         branch = true;
         const written = publish(record);
         return { ok: true, status: 201, blobSha: written.blobSha, record };
@@ -62,6 +106,7 @@ export const createMockContentsRemote = ({ branchExists = false, bytes = null } 
       if (!file) return { ok: false, status: 409, reason: "missing-file" };
       const currentSha = file.blobSha ?? hashBytes(file.bytes);
       if (currentSha !== expectedBlobSha) return { ok: false, status: 409 };
+      if (!recordValid(record)) return { ok: false, status: 422, reason: "invalid-record" };
       const written = publish(record);
       return { ok: true, status: 200, blobSha: written.blobSha, record };
     },
@@ -69,7 +114,9 @@ export const createMockContentsRemote = ({ branchExists = false, bytes = null } 
 };
 
 const blockedRead = (current) =>
-  current.status === "missing-file" || current.status === "unreadable"
+  current.status === "missing-file" ||
+  current.status === "unreadable" ||
+  current.status === "invalid"
     ? { ok: false, reason: "blocked", occupied: true, releasable: false }
     : null;
 
@@ -234,14 +281,6 @@ export const reserveDispatch = ({ remote, workerId, postComment }) => {
     blobSha: written.ok ? written.blobSha : swapped.blobSha,
   };
 };
-
-const terminationEstablished = (termination) =>
-  termination !== null &&
-  termination !== undefined &&
-  termination.established === true &&
-  typeof termination.evidence === "string" &&
-  termination.evidence.trim().length > 0 &&
-  (termination.workerState === "COMPLETED" || termination.workerState === "STOPPED");
 
 export const finishSlot = ({ remote, workerId, termination, maxAgeMs }) => {
   if (maxAgeMs !== undefined)
