@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "state": "DISPATCHED",
-  "generation": 13,
+  "state": "TERMINAL",
+  "generation": 14,
   "taskId": "base3-chat-agents-20261011-03",
   "workerId": "event-review:base3-chat-agents-20261011-03",
   "dispatchId": "event-review:base3-chat-agents-20261011-03:base3-chat-agents-20261011-03:1",
@@ -18,13 +18,19 @@
     "status": "accepted by same worker",
     "acknowledgmentCommentId": 6105697563
   },
-  "termination": null,
+  "termination": {
+    "established": true,
+    "workerState": "COMPLETED",
+    "evidence": "PR23 comment 6105911508, confirmed by 6105918214; published PR26 head 00c007a12564f0a7945aec111dde027b7e60015a; CI Check 114398850561 success; checkout 20cbb6451be80cff3882a4208f27a8f1a6106c19",
+    "resultCommentId": 6105911508,
+    "time": "2026-10-11T05:39:49Z"
+  },
   "priorResultCommentId": 6105316354,
-  "reviewOutcome": "CI_WAIT_AND_TERMINAL_WAIT_POST_REVIEW_PUSH",
+  "reviewOutcome": "REVIEWED_CHANGES_REQUIRED",
   "ci": {
     "run": 38115005811,
-    "check": "pending",
-    "actualCheckoutSha": null,
+    "check": "success",
+    "actualCheckoutSha": "20cbb6451be80cff3882a4208f27a8f1a6106c19",
     "prHead": "00c007a12564f0a7945aec111dde027b7e60015a"
   },
   "attempts": {
@@ -168,16 +174,16 @@
       "df3fd5f0-c534-11f1-9bc8-b7a987513d14",
       "f677e5a0-c534-11f1-9764-c540b6e5d9ff"
     ],
-    "automaticEvent": true,
-    "time": "2026-10-11T05:31:32Z",
+    "automaticEvent": false,
+    "time": "2026-10-11T05:46:24.362Z",
     "pr": 26,
     "head": "00c007a12564f0a7945aec111dde027b7e60015a",
     "previousHead": "adf252c0732c2ab2e228b3d4364056885fe54c74",
-    "resultCommentId": null,
+    "resultCommentId": 6105911508,
     "latestObservedCommentId": 6105852731,
-    "outcome": "CI_WAIT_AND_TERMINAL_WAIT_POST_REVIEW_PUSH",
+    "outcome": "REVIEWED_CHANGES_REQUIRED",
     "ciRun": 38115005811,
-    "ciStatus": "in_progress",
+    "ciStatus": "success",
     "requiredCheck": "not terminal; actual checkout SHA not yet verified",
     "checkoutEvidence": null,
     "newDispatchCount": 0,
@@ -211,7 +217,7 @@
         "detail": "recordValid now rejects null/scalars/malformed schema and TERMINAL missing established evidence. Mock CAS and fixtures improved; production GitHub API does not inherit mock 422 checks. Candidate CI and terminal packet pending."
       }
     ],
-    "reason": "Current worker has no explicit COMPLETED/STOPPED result. Preserve DISPATCHED hold; no successor."
+    "reason": "Interactive recovery: terminal result arrived after final automatic review; direct composer/thread/project, V2/ActionGate and multi-round message correlation remain missing."
   },
   "independentPreparation": {
     "next": "OFFLINE-PILOT-BRAKES",
@@ -282,5 +288,14 @@
       }
     ],
     "protocolFinding": "Current cycle cannot prove report-before-push because no terminal result preceded either published head. Do not manufacture another push; a future substantive delivery must follow the order."
-  }
+  },
+  "history": [
+    {
+      "taskId": "base3-chat-agents-20261011-03",
+      "resultCommentId": 6105911508,
+      "finalSha": "00c007a12564f0a7945aec111dde027b7e60015a",
+      "reviewOutcome": "REVIEWED_CHANGES_REQUIRED",
+      "completedAt": "2026-10-11T05:39:49Z"
+    }
+  ]
 }
