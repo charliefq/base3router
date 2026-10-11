@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 36,
+  "generation": 37,
   "taskId": "base3-brakes-active-restart-20261011-07",
   "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
   "dispatchId": "base3-brakes-active-restart-20261011-07",
@@ -26,14 +26,15 @@
     }
   },
   "termination": null,
-  "priorResultCommentId": 6106462863,
-  "reviewOutcome": "CHANGES_REQUIRED",
+  "priorResultCommentId": 6106636499,
+  "reviewOutcome": "ACCEPTED_BOUNDED_HIGHLIGHTER_FIX",
   "ci": {
-    "run": 38119865290,
-    "check": "failure",
-    "checkId": 114413096689,
-    "actualCheckoutSha": "eadf4c605e53f3a70ae1233b2fa8e5bc5946422f",
-    "prHead": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76"
+    "run": 38121186501,
+    "check": "success",
+    "checkId": 114416912510,
+    "actualCheckoutSha": "aadc9bd885d114e7b8236655ac1c1da37bcee6da",
+    "prHead": "975af300b65c66ea427cd79bc81a994ea53582d7",
+    "taskId": "base3-mobile-highlighter-repair-20261011-06"
   },
   "attempts": {
     "highlighterRepair": 2,
@@ -53,6 +54,39 @@
   },
   "taskGraph": [
     {
+      "pr": 23,
+      "head": "f13055e307c28068cb4f21c87429bd27b0963215",
+      "branch": "cursor/v2-unattended-followup-02-8ee5",
+      "base": "cursor/v2-unattended-q1-q4-d2e4",
+      "baseSha": "ffd2203305b8b66cd8dfb2d982d7bd09c7f9ff8e",
+      "state": "open",
+      "merged": false,
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
+    },
+    {
+      "pr": 29,
+      "head": "975af300b65c66ea427cd79bc81a994ea53582d7",
+      "branch": "cursor/mobile-highlighter-repair-abd5",
+      "base": "cursor/offline-pilot-brakes-abd5",
+      "baseSha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
+      "state": "open",
+      "merged": false,
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
+    },
+    {
+      "pr": 28,
+      "head": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
+      "branch": "cursor/offline-pilot-brakes-abd5",
+      "base": "cursor/chat-integration-abd5",
+      "baseSha": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b",
+      "state": "open",
+      "merged": false,
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
+    },
+    {
       "pr": 27,
       "head": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b",
       "branch": "cursor/chat-integration-abd5",
@@ -60,7 +94,8 @@
       "baseSha": "00c007a12564f0a7945aec111dde027b7e60015a",
       "state": "open",
       "merged": false,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 26,
@@ -70,7 +105,8 @@
       "baseSha": "a4541db95049ec595570afaa6a9f17aed9702310",
       "state": "open",
       "merged": false,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 25,
@@ -80,7 +116,8 @@
       "baseSha": "08e36ac02d78f3f9d18ad29bcc68652c4ce95232",
       "state": "open",
       "merged": false,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 24,
@@ -90,17 +127,8 @@
       "baseSha": "f13055e307c28068cb4f21c87429bd27b0963215",
       "state": "open",
       "merged": false,
-      "verification": "fresh"
-    },
-    {
-      "pr": 23,
-      "head": "f13055e307c28068cb4f21c87429bd27b0963215",
-      "branch": "cursor/v2-unattended-followup-02-8ee5",
-      "base": "cursor/v2-unattended-q1-q4-d2e4",
-      "baseSha": "ffd2203305b8b66cd8dfb2d982d7bd09c7f9ff8e",
-      "state": "open",
-      "merged": false,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 22,
@@ -110,7 +138,8 @@
       "baseSha": "b52026eab554ee4a5f4f4b20cac990c4355310fd",
       "state": "open",
       "merged": false,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 21,
@@ -120,7 +149,8 @@
       "baseSha": "55a1ea4f496eadea161c0e88822b375e42a0f127",
       "state": "open",
       "merged": false,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 20,
@@ -130,17 +160,8 @@
       "baseSha": "2a07e9e10a3aeeb95ce09dcdb7c8b234cc34afdf",
       "state": "open",
       "merged": false,
-      "verification": "fresh"
-    },
-    {
-      "pr": 19,
-      "head": "228f2fea696bb3dcaa6ab46492ee3b23cfb37945",
-      "branch": "cursor/github-hosted-runner-fallback-29c5",
-      "base": "cursor/v2-policy-integration",
-      "baseSha": "6ad62d9757cb7b7ca55d423583210ea85ae5280f",
-      "state": "closed",
-      "merged": true,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 18,
@@ -150,7 +171,19 @@
       "baseSha": "bab26191075ec8806894478970e8d9954c357290",
       "state": "open",
       "merged": false,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
+    },
+    {
+      "pr": 19,
+      "head": "228f2fea696bb3dcaa6ab46492ee3b23cfb37945",
+      "branch": "cursor/github-hosted-runner-fallback-29c5",
+      "base": "cursor/v2-policy-integration",
+      "baseSha": "6ad62d9757cb7b7ca55d423583210ea85ae5280f",
+      "state": "closed",
+      "merged": true,
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 17,
@@ -160,7 +193,8 @@
       "baseSha": "8191cfc534b25b3d6f06c06031bfe53691f83e1a",
       "state": "open",
       "merged": false,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 16,
@@ -170,7 +204,8 @@
       "baseSha": "1c4ed9e59b7c697063dc42cffaf45dba799c1248",
       "state": "open",
       "merged": false,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 15,
@@ -180,7 +215,8 @@
       "baseSha": "4c425d06623a4ca4638d8dfe817248b8bfaabc4b",
       "state": "closed",
       "merged": true,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 14,
@@ -190,7 +226,8 @@
       "baseSha": "1e5e09418a757fcd9771042cf77f4034dad7fb9f",
       "state": "closed",
       "merged": true,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 13,
@@ -200,7 +237,8 @@
       "baseSha": "71156d891154a18291ff1304675b6d81c5eb2210",
       "state": "closed",
       "merged": true,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 12,
@@ -210,7 +248,8 @@
       "baseSha": "0b41edbbfe249b7695c36032759ea7fd7dd892e5",
       "state": "closed",
       "merged": true,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 11,
@@ -220,7 +259,8 @@
       "baseSha": "4208ff30a0f1b916b89d0a9defa555b01077c931",
       "state": "closed",
       "merged": true,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 10,
@@ -230,7 +270,8 @@
       "baseSha": "e39e44c7c52204d29f1fa7bc458a3a7e16979772",
       "state": "closed",
       "merged": true,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 9,
@@ -240,7 +281,8 @@
       "baseSha": "e39e44c7c52204d29f1fa7bc458a3a7e16979772",
       "state": "closed",
       "merged": true,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 8,
@@ -250,17 +292,8 @@
       "baseSha": "e56e77e969df8e345099619c587a5ddda59eba3d",
       "state": "closed",
       "merged": true,
-      "verification": "fresh"
-    },
-    {
-      "pr": 7,
-      "head": "effa89bdde9306785d91a0673cde46e564b8caea",
-      "branch": "cursor/cloud-agent-toolchain-notes-289d",
-      "base": "main",
-      "baseSha": "7cfb4987fe27da3e1d4e86abacae3a1fc12af5bb",
-      "state": "open",
-      "merged": false,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 6,
@@ -270,7 +303,8 @@
       "baseSha": "3e7d858869c4b2896ec8b7a1051424e627559c14",
       "state": "closed",
       "merged": true,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 5,
@@ -280,7 +314,8 @@
       "baseSha": "3af42a44c0fcd5f9d3f479d0e3c0edbc1afdcdf2",
       "state": "closed",
       "merged": true,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 4,
@@ -290,7 +325,8 @@
       "baseSha": "45b392f340899075361363b15b77fb6fc9ff406c",
       "state": "closed",
       "merged": true,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 3,
@@ -300,7 +336,8 @@
       "baseSha": "803294ef4e2c69773e3781053f075e449e6ce101",
       "state": "closed",
       "merged": true,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 2,
@@ -310,7 +347,8 @@
       "baseSha": "0c99583534d07bc6fca4b97cb367246e897bed8f",
       "state": "closed",
       "merged": true,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "pr": 1,
@@ -320,7 +358,19 @@
       "baseSha": "7cfb4987fe27da3e1d4e86abacae3a1fc12af5bb",
       "state": "closed",
       "merged": true,
-      "verification": "fresh"
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
+    },
+    {
+      "pr": 7,
+      "head": "effa89bdde9306785d91a0673cde46e564b8caea",
+      "branch": "cursor/cloud-agent-toolchain-notes-289d",
+      "base": "main",
+      "baseSha": "7cfb4987fe27da3e1d4e86abacae3a1fc12af5bb",
+      "state": "open",
+      "merged": false,
+      "verification": "fresh",
+      "checkedAt": "2026-10-11T07:42:30Z"
     },
     {
       "taskId": "base3-offline-pilot-brakes-20261011-05",
@@ -355,12 +405,16 @@
         "base3-offline-pilot-brakes-20261011-05"
       ],
       "worker": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
-      "branch": "fresh branch from b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
+      "branch": "cursor/mobile-highlighter-repair-abd5",
       "base": "cursor/offline-pilot-brakes-abd5",
       "pr": 29,
       "startSha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
       "resultSha": "975af300b65c66ea427cd79bc81a994ea53582d7",
-      "successor": null
+      "successor": "base3-brakes-active-restart-20261011-07",
+      "resultCommentId": 6106636499,
+      "resultAt": "2026-10-11T07:22:47Z",
+      "publicationCommentId": 6106640033,
+      "publicationAt": "2026-10-11T07:23:16Z"
     },
     {
       "taskId": "base3-brakes-active-restart-20261011-07",
@@ -430,7 +484,14 @@
         "Real evidence remains separate from fixtures"
       ],
       "brake": "Offline fake adapters/disposable stores only; no new scheduler/service/secrets, no live-slot mutations by worker, no merge/main/release/paid pilot",
-      "evidence": "PLANNED; not implemented or verified"
+      "evidence": "PLANNED; not implemented or verified",
+      "demonstratedCoordinationDefects": [
+        {
+          "at": "2026-10-11T07:42:30Z",
+          "finding": "Successor reservation inherited predecessor scope, CI and prior result ID. Derive current task metadata and predecessor review separately; graph completeness and exact result-comment relations must survive rollover/restart.",
+          "evidenceBlob": "853f1f01198acc44136e51e4d53ea800ce22b0ce"
+        }
+      ]
     },
     {
       "id": "OFFLINE-BRAKES-ACTIVE-RESTART-REPAIR",
@@ -446,22 +507,26 @@
         "Cumulative thresholds do not promise no in-turn overshoot; retain explicit limitations."
       ],
       "plannedPrompt": "@cursor\ndispatch_id: TEMPLATE_ASSIGN_UNIQUE_DISPATCH_ID_AT_RESERVATION\npredecessor: base3-offline-pilot-brakes-20261011-05\npredecessor_result: https://github.com/charliefq/base3router/pull/23#issuecomment-6106462863\nstarting_sha: b61d636411b774c7e6eea0dfe38a80f6ebb4cb76\nbase: cursor/offline-pilot-brakes-abd5\ntask: OFFLINE-BRAKES-ACTIVE-RESTART-REPAIR\nrepair_attempt: 1 of maximum 2 per demonstrated defect\n\nThe predecessor is explicitly COMPLETED and its exact reported substantive head is published as draft PR28. Technical review requires this bounded repair before OPS-CLOSED-LOOP-RECONCILER. The review result is recorded durably; this sole comment starts the successor, not a second dispatcher.\n\nFirst publish a NEW explicit CLAIMED/RUNNING comment on PR23 with this dispatch ID, actual worker ID/agent link, exact starting SHA and UTC/Los_Angeles timestamps. Same single worker only. Never self-dispatch or read/write/release/recreate the live ops ledger.\n\nCreate a FRESH branch from the exact starting SHA and a draft stacked PR targeting cursor/offline-pilot-brakes-abd5. Preserve all prior branch heads.\n\nDemonstrated defects:\n1. New TaskContract.commitTaskAdmission requests cancellation only when another governed start/handoff is attempted. TaskUsageAccounting.recordTaskUsage contains no exhaustion reaction; PR28 adds no active deadline enforcement. A running turn can cross its token/dollar cap or deadline with no subsequent start and never be interrupted. Existing pin test calls a second dispatch to trigger cancellation.\n2. TaskPilotBrakes.test.ts uses SqlitePersistenceMemory for the alleged restart test; rewriting payload on the same connection is not restart evidence.\n3. Frozen deadline is conditional on pilotActive(current brake). Removing optional brakes makes pilotAllows SQL 1, bypassing the existing persisted deadline. Tightening/redirect/restart must not accidentally disable a previously bound tree brake.\n\nBounded implementation:\n- Reuse existing V2 policy/runtime cancellation pathways. Add a durable, idempotent brake evaluation after usage updates AND deadline-driven evaluation of active governed leases, including startup recovery. Once cumulative tree usage reaches/exceeds cap or absolute deadline passes, request interrupt without needing another admission. Do not free the lease on request or unknown stream end; free exactly once only on explicit provider terminal evidence.\n- Persist the enforced tree bounds so omission, child, retry, handoff, revision or restart cannot silently reset/disable them. Unknown usage/price denies new starts. Keep synthetic pricing exclusively in explicitly injected offline fixtures, no production default price.\n- Preserve atomic admission and idempotency. Be precise: cumulative threshold checks do not guarantee zero overshoot within a provider turn; do not claim a hard no-overshoot cap without supported bounded reservation/provider enforcement. For the offline provider, demonstrate bounded starts/reservations against remaining budget; if provider limits cannot enforce that, fail closed and record that capability blocker.\n- Add REAL file-backed disposable SQLite restart tests: close/discard service/runtime A, construct B over the same temp database. Verify totals, frozen bounds/deadline, pending interrupt and occupied lease survive; recover already-expired active work without a new task start. Test streamed usage crossing cap with no subsequent dispatch, deadline crossing with no subsequent dispatch, duplicate/reordered observations, cancellation unconfirmed/terminal confirmed, and attempted brake omission. Use fake providers/controlled clock only. Retain meaningful lifecycle regressions.\n- Keep scope to policy/accounting/runtime brake integration, additive migrations and targeted tests/docs. T3 chat shell only Agents + Tasks; named internal employees and external contractor bidirectional direction preserved. Chat execution DENY, Grokbot NOT_CONNECTED.\n\nNo merge/main push, release/signing, paid/live provider calls, credential/spend changes or real user data. No new scheduler/service or provider connection. Record unavailable live provider/Grokbot/per-principal authorization as blockers and continue this offline work.\n\nDELIVERY: after local implementation/tests, publish a NEW complete PR23 result BEFORE final substantive push: task/dispatch ID, actual worker ID, implementation_state and worker_state COMPLETED or STOPPED, exact FINAL LOCAL SHA, branch/base, changes/files, meaningful tests/evidence, limitations/blockers, publication_pending=true, ci_status=PENDING. Then push THAT exact SHA and create the stacked draft PR, then publication note. Do not wait for CI before terminal implementation result. No fake commits. No-code terminal must name exact existing remote SHA and explicit no-code classification. You do not dispatch the next worker.",
-      "plannedPromptStatus": "TEMPLATE_ONLY; refresh predecessor/start SHA after current delivery review"
+      "plannedPromptStatus": "TEMPLATE_ONLY; refresh predecessor/start SHA after current delivery review",
+      "workerState": "RUNNING",
+      "dispatchId": "base3-brakes-active-restart-20261011-07",
+      "acceptanceCommentId": 6106715715
     }
   ],
-  "nonce": "base3-mobile-highlighter-repair-20261011-06:2026-10-11T07:07:07.048Z",
+  "nonce": "reconcile:2026-10-11T07:42:30Z:metadata",
   "discoveredPrs": [
+    23,
+    29,
     28,
     27,
     26,
     25,
     24,
-    23,
     22,
     21,
     20,
-    19,
     18,
+    19,
     17,
     16,
     15,
@@ -472,13 +537,13 @@
     10,
     9,
     8,
-    7,
     6,
     5,
     4,
     3,
     2,
-    1
+    1,
+    7
   ],
   "lastReview": {
     "time": "2026-10-11T07:32:00.899Z",
@@ -839,6 +904,51 @@
       ],
       "newDispatchCount": 0,
       "loopStatus": "UNVERIFIED"
+    },
+    {
+      "id": "reconcile:2026-10-11T07:42:30Z",
+      "time": "2026-10-11T07:42:30Z",
+      "source": "scheduled reconciliation",
+      "outcome": "ACTIVE_WORKER_ACCEPTANCE_NO_TERMINAL",
+      "taskId": "base3-brakes-active-restart-20261011-07",
+      "claimCommentId": 6106715715,
+      "lastObservedClaimAt": "2026-10-11T07:33:18Z",
+      "liveness": "Explicit acceptance observed; current provider execution not independently observed",
+      "terminalObserved": false,
+      "discoveredPrs": [
+        23,
+        29,
+        28,
+        27,
+        26,
+        25,
+        24,
+        22,
+        21,
+        20,
+        18,
+        19,
+        17,
+        16,
+        15,
+        14,
+        13,
+        12,
+        11,
+        10,
+        9,
+        8,
+        6,
+        5,
+        4,
+        3,
+        2,
+        1,
+        7
+      ],
+      "newDispatchCount": 0,
+      "loopStatus": "UNVERIFIED",
+      "coordinationRepair": "Corrected stale inherited metadata; no implementation review"
     }
   ],
   "cycles": [
@@ -934,8 +1044,8 @@
   ],
   "branch": "fresh branch from 975af300b65c66ea427cd79bc81a994ea53582d7",
   "base": "cursor/mobile-highlighter-repair-abd5",
-  "scope": "Mobile highlighter cold-start CI repair, tracked attempt 2",
-  "acceptance": "Prove cold source/snippet coloring correctness, CI equivalent targeted regression; preserve semantic assertions.",
+  "scope": "Active budget/deadline interruption, immutable persisted tree brakes, real file-backed SQLite close/reopen recovery.",
+  "acceptance": "Usage/deadline exhaustion interrupts without another admission; unknown termination retains lease; persisted limits cannot be omitted/reset; disposable SQLite reopen preserves totals, bounds, pending cancellation and lease.",
   "brake": "Offline only, maximum 2 focused attempts, no live-slot worker mutation/main/merge/release/paid/data",
   "plannedPrompt": "@cursor\ndispatch_id: base3-brakes-active-restart-20261011-07\npredecessor: base3-mobile-highlighter-repair-20261011-06\npredecessor_result: https://github.com/charliefq/base3router/pull/23#issuecomment-6106462863\nstarting_sha: 975af300b65c66ea427cd79bc81a994ea53582d7\nbase: cursor/mobile-highlighter-repair-abd5\ntask: OFFLINE-BRAKES-ACTIVE-RESTART-REPAIR\nrepair_attempt: 1 of maximum 2 per demonstrated defect\n\nThe predecessor is explicitly COMPLETED and its exact reported substantive head is published as draft PR28. Technical review requires this bounded repair before OPS-CLOSED-LOOP-RECONCILER. The review result is recorded durably; this sole comment starts the successor, not a second dispatcher.\n\nFirst publish a NEW explicit CLAIMED/RUNNING comment on PR23 with this dispatch ID, actual worker ID/agent link, exact starting SHA and UTC/Los_Angeles timestamps. Same single worker only. Never self-dispatch or read/write/release/recreate the live ops ledger.\n\nCreate a FRESH branch from the exact starting SHA and a draft stacked PR targeting cursor/mobile-highlighter-repair-abd5. Preserve all prior branch heads.\n\nDemonstrated defects:\n1. New TaskContract.commitTaskAdmission requests cancellation only when another governed start/handoff is attempted. TaskUsageAccounting.recordTaskUsage contains no exhaustion reaction; PR28 adds no active deadline enforcement. A running turn can cross its token/dollar cap or deadline with no subsequent start and never be interrupted. Existing pin test calls a second dispatch to trigger cancellation.\n2. TaskPilotBrakes.test.ts uses SqlitePersistenceMemory for the alleged restart test; rewriting payload on the same connection is not restart evidence.\n3. Frozen deadline is conditional on pilotActive(current brake). Removing optional brakes makes pilotAllows SQL 1, bypassing the existing persisted deadline. Tightening/redirect/restart must not accidentally disable a previously bound tree brake.\n\nBounded implementation:\n- Reuse existing V2 policy/runtime cancellation pathways. Add a durable, idempotent brake evaluation after usage updates AND deadline-driven evaluation of active governed leases, including startup recovery. Once cumulative tree usage reaches/exceeds cap or absolute deadline passes, request interrupt without needing another admission. Do not free the lease on request or unknown stream end; free exactly once only on explicit provider terminal evidence.\n- Persist the enforced tree bounds so omission, child, retry, handoff, revision or restart cannot silently reset/disable them. Unknown usage/price denies new starts. Keep synthetic pricing exclusively in explicitly injected offline fixtures, no production default price.\n- Preserve atomic admission and idempotency. Be precise: cumulative threshold checks do not guarantee zero overshoot within a provider turn; do not claim a hard no-overshoot cap without supported bounded reservation/provider enforcement. For the offline provider, demonstrate bounded starts/reservations against remaining budget; if provider limits cannot enforce that, fail closed and record that capability blocker.\n- Add REAL file-backed disposable SQLite restart tests: close/discard service/runtime A, construct B over the same temp database. Verify totals, frozen bounds/deadline, pending interrupt and occupied lease survive; recover already-expired active work without a new task start. Test streamed usage crossing cap with no subsequent dispatch, deadline crossing with no subsequent dispatch, duplicate/reordered observations, cancellation unconfirmed/terminal confirmed, and attempted brake omission. Use fake providers/controlled clock only. Retain meaningful lifecycle regressions.\n- Keep scope to policy/accounting/runtime brake integration, additive migrations and targeted tests/docs. T3 chat shell only Agents + Tasks; named internal employees and external contractor bidirectional direction preserved. Chat execution DENY, Grokbot NOT_CONNECTED.\n\nNo merge/main push, release/signing, paid/live provider calls, credential/spend changes or real user data. No new scheduler/service or provider connection. Record unavailable live provider/Grokbot/per-principal authorization as blockers and continue this offline work.\n\nDELIVERY: after local implementation/tests, publish a NEW complete PR23 result BEFORE final substantive push: task/dispatch ID, actual worker ID, implementation_state and worker_state COMPLETED or STOPPED, exact FINAL LOCAL SHA, branch/base, changes/files, meaningful tests/evidence, limitations/blockers, publication_pending=true, ci_status=PENDING. Then push THAT exact SHA and create the stacked draft PR, then publication note. Do not wait for CI before terminal implementation result. No fake commits. No-code terminal must name exact existing remote SHA and explicit no-code classification. You do not dispatch the next worker.\n\nPR29 highlighter repair is accepted against exact HEAD 975af300b65c66ea427cd79bc81a994ea53582d7, Check 114416912510 success; test-merge aadc9bd885d114e7b8236655ac1c1da37bcee6da. Preserve it in the new branch. Brake defects originate in PR28. Update runbook to distinguish product recurring execution disabled from enabled hosted ChatGPT reconciliation; do not claim either is verified by configuration. Next queued item is OPS-CLOSED-LOOP-RECONCILER; do not implement or dispatch it in this bounded repair.",
   "protocolCorrections": [
@@ -956,6 +1066,11 @@
       "at": "2026-10-11T07:33:46.801Z",
       "finding": "PR29 event last_run at 07:23:34Z but no durable reviewer/CI_WAIT/continuation observed by 07:32; interactive recovery excluded from cycle proof.",
       "successor": "base3-brakes-active-restart-20261011-07"
+    },
+    {
+      "at": "2026-10-11T07:42:30Z",
+      "finding": "Corrected current -07 scope/acceptance and predecessor -06 review metadata; added missing PR28/29 ref records, -06 result/publication/successor links. Preserved immutable history and dispatch intent; no new dispatch or acceptance.",
+      "oldBlob": "853f1f01198acc44136e51e4d53ea800ce22b0ce"
     }
   ],
   "verifiedAutomationConfiguration": {
