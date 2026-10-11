@@ -147,6 +147,87 @@ CAS. Existing Contents-helper tests remain separate from live HTTP 409 proof.
 
 ## Before real integration
 
+### B3R-05A: disabled evidence adapters
+
+`scripts/ops-evidence-adapters.mjs` is a contract boundary, not an installed
+GitHub integration. It has no HTTP implementation, credential access, CLI,
+scheduler, or default transport. Tests inject synthetic REST responses from
+`scripts/testFixtures/ops-github-evidence.json`; fixture values are not live
+cycle evidence. The read facade constructs GET requests only. Contents CAS,
+technical review submission, and worker start always throw
+`offline-write-disabled`; there is no enable flag. The Contents request planner
+and receipt journal updater return data without sending or writing it.
+
+The normalizers follow these GitHub contracts:
+
+- [PRs](https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request) supply
+  head/base refs and SHAs. Discovery requests all PR states; evidence evaluation
+  currently rejects closed/merged and fork PRs instead of guessing their merge
+  semantics. A null test-merge SHA cannot validate a merge checkout.
+- [Issue comments](https://docs.github.com/en/rest/issues/comments) supply numeric
+  `user.id`, comment ID, URL and timestamps. Task authority must bind that ID;
+  login, bot status, author association and body claims are not authorization.
+  Native JSON result bodies remain unchanged. Recognized legacy key/value report
+  markers block with `legacy-result-format-unapproved`; other prose remains
+  opaque. Legacy/Markdown reports need an explicit approved format before they
+  can authorize a transition; this is not a general legacy parser.
+- [Pagination](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api)
+  uses Link headers. The fixture adapter rejects foreign hosts/repositories,
+  changed query scopes, skipped/repeated pages, malformed headers and failed
+  reads. It does not follow arbitrary returned URLs. GET-only is not a promise
+  of an atomic repository snapshot while comments or PRs change.
+- [Workflow runs](https://docs.github.com/en/rest/actions/workflow-runs),
+  [jobs](https://docs.github.com/en/rest/actions/workflow-jobs) and
+  [checks](https://docs.github.com/en/rest/checks/runs) bind configured repository,
+  workflow ID/path, app ID, check name, run attempt, job/check relation and head.
+  API metadata alone does not prove the job's actual checkout. `normalizeCI`
+  returns unknown without checkout evidence; its only accepted checkout input
+  is explicitly synthetic and its output is labeled `fixture-only`. Tests bind
+  exact head or test-merge SHA and both parent SHAs. The read facade's `getCI`
+  remains blocked; no fixture result is wired into real acceptance.
+- [Contents](https://docs.github.com/en/rest/repos/contents) supplies base64 bytes
+  and the current blob SHA. Reads validate bytes, Git blob digest and slot schema.
+  A 404 means missing or inaccessible, never permission to recreate a slot.
+  Pure update plans require the expected blob SHA, next generation and changed
+  nonce. Response fixtures distinguish 409 conflict, 422 validation rejection,
+  unknown response and a matching successful content receipt. These are not
+  live CAS or permission tests; the slot schema check is not a substitute for
+  the reconciler's coordination and ownership validation.
+
+First publication remains `unknown`: commit dates, polling timestamps and one
+push event do not establish that a SHA was never published earlier. The owner
+must approve a durable publication evidence source or revise the protocol;
+the adapter cannot fabricate this field. Actual checkout similarly needs a
+reviewed provenance source bound to the run attempt, not a comment claiming it.
+
+Receipt journal entries bind review request ID to owner/result/head, or dispatch
+ID to task/worker/starting SHA. Pending and uncertain entries never become a
+confirmed receipt merely because time passed. Changed bindings, duplicate keys,
+conflicting confirmations and state regressions fail closed. Tests reopen a
+temporary file to recover a confirmed mapping without another send. Production
+journal storage, CAS, signer/author verification and retention are not provided;
+the injected store and binding map are trusted inputs, not evidence that an
+arbitrary file or receipt is authentic. There is no guessed Codex cloud API.
+
+The dot/main-thread coordinator can hand work to its existing Codex task. That
+platform capability and identity do not give this repository a worker launcher.
+The local Codex app-server provider is another execution path, not an automatic
+bridge to dot's cloud task. GitHub comments are records, not a demonstrated Codex
+wakeup mechanism. Choosing an executor and proving its start/lookup/auth contract
+remain B3R-05 decisions; provider execution verification remains B3R-06.
+
+Before any live wiring, independently resolve the old holder, approve result
+and technical-review identities, publication and checkout provenance, receipt
+storage and executor authentication, then separately authorize writes and
+dispatch. This slice changes none of those decisions and does not enable chat
+execution, which remains DENY.
+
+Run the three offline script suites together:
+
+```sh
+node_modules/.bin/vp test run --config vite.config.ts --dir scripts scripts/ops-evidence-adapters.test.mjs scripts/ops-reconciler.test.mjs scripts/ops-contents-slot.test.mjs
+```
+
 The coordinator owner must resolve the existing holder using independent
 terminal evidence, agree the authoritative task/technical-review inputs, and
 review real read/receipt adapters and result normalization. Event and periodic
