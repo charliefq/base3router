@@ -1,0 +1,53 @@
+name: Task 4A evidence
+
+on:
+  pull_request:
+    paths:
+      - apps/server/src/policy/TaskUsageAccounting.test.ts
+      - scripts/bind-task-usage-accounting-report.mjs
+      - docs/operations/evidence/**
+      - docs/operations/task-4a-accounting-evidence.md
+      - .github/workflows/task-4a-evidence.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: task-4a-evidence-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  bind:
+    name: Bind synthetic cohort
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Bind the fresh cohort
+        env:
+          TASK_USAGE_ARTIFACT_DIR: ${{ github.workspace }}/task-4a-artifacts
+        run: node scripts/bind-task-usage-accounting-report.mjs
+
+      - name: Upload synthetic evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: task-4a-synthetic-evidence
+          path: |
+            task-4a-artifacts/synthetic-accounting-report.json
+            task-4a-artifacts/task-4a-binding-report.json
+          if-no-files-found: error
+          retention-days: 14

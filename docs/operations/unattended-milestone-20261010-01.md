@@ -1,5 +1,10 @@
 # Milestone base3-unattended-20261010-01
 
+Dispatch `base3-unattended-20261010-02` continues in
+[unattended-milestone-20261010-02.md](unattended-milestone-20261010-02.md).
+The nine-token sentence in the Task 4A evidence doc is corrected there: those
+tokens are outside the internal complete-pair metric only.
+
 One packet for the approved queue. States mean: **PREPARED** is written and
 not running, **ENABLED** is a live trigger, **EXECUTED** is a run that
 happened. Owner acceptance is the only **DONE**.

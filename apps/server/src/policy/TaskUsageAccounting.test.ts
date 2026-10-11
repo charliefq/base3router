@@ -851,7 +851,7 @@ it.effect("accounts a synthetic cohort through provider ingestion", () =>
       },
     };
     expect(report.observed).toEqual(report.expected);
-    const artifactDir = "/opt/cursor/artifacts";
+    const artifactDir = process.env.TASK_USAGE_ARTIFACT_DIR ?? "/opt/cursor/artifacts";
     if (NodeFS.existsSync(artifactDir)) {
       NodeFS.writeFileSync(
         `${artifactDir}/synthetic-accounting-report.json`,
