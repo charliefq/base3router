@@ -101,7 +101,7 @@ function fixture() {
   const paginate = (items, cursor) => {
     const offset = cursor === null ? 0 : Number(cursor);
     return {
-      items: items.slice(offset, offset + 1),
+      items: structuredClone(items.slice(offset, offset + 1)),
       nextCursor: offset + 1 < items.length ? String(offset + 1) : null,
     };
   };
@@ -118,10 +118,10 @@ function fixture() {
       return structuredClone(prs.get(number));
     },
     async getPublication({ branch, sha: commit }) {
-      return publications.get(`${branch}:${commit}`) ?? null;
+      return structuredClone(publications.get(`${branch}:${commit}`) ?? null);
     },
     async getCI({ prNumber }) {
-      return runs.get(prNumber) ?? null;
+      return structuredClone(runs.get(prNumber) ?? null);
     },
   };
   const worker = {
@@ -140,10 +140,10 @@ function fixture() {
       };
       starts.set(intent.id, receipt);
       if (loseStartReceipt) throw new Error("receipt lost after send");
-      return receipt;
+      return structuredClone(receipt);
     },
     async findStart(id) {
-      return starts.get(id) ?? null;
+      return structuredClone(starts.get(id) ?? null);
     },
   };
   const reviewer = {
@@ -159,10 +159,10 @@ function fixture() {
       };
       reviews.set(request.requestId, receipt);
       if (loseReviewReceipt) throw new Error("review receipt lost");
-      return receipt;
+      return structuredClone(receipt);
     },
     async findReview(id) {
-      return reviews.get(id) ?? null;
+      return structuredClone(reviews.get(id) ?? null);
     },
   };
   function report(binding, finalSha, options = {}) {
@@ -630,6 +630,83 @@ describe("offline closed-loop reconciler", () => {
       f.dispose();
     }
   });
+
+  it.each(
+    [true, false].flatMap((hasSuccessor) =>
+      ["direct", "recovered"].flatMap((receiptMode) =>
+        ["head", "publication", "pending-ci", "failed-ci"].map((change) => ({
+          hasSuccessor,
+          receiptMode,
+          change,
+        })),
+      ),
+    ),
+  )(
+    "rechecks $change before acceptance ($receiptMode receipt, successor=$hasSuccessor)",
+    async ({ hasSuccessor, receiptMode, change }) => {
+      const f = fixture();
+      try {
+        const delivery = f.report(first, B);
+        f.publish(delivery);
+        const tasks = hasSuccessor ? [first, second] : [first];
+        if (receiptMode === "recovered") {
+          f.loseReview();
+          assert.equal((await f.run({ tasks })).reason, "review receipt lost");
+        }
+        let changed = false;
+        const mutateEvidence = (receipt) => {
+          if (!changed) {
+            changed = true;
+            if (change === "head") f.prs.get(delivery.number).headSha = C;
+            if (change === "publication") f.publications.clear();
+            if (change === "pending-ci") {
+              f.runs.get(delivery.number).status = "in_progress";
+              f.runs.get(delivery.number).conclusion = null;
+            }
+            if (change === "failed-ci") f.runs.get(delivery.number).conclusion = "failure";
+          }
+          return receipt;
+        };
+        const reviewer = {
+          async review(request) {
+            return mutateEvidence(await f.reviewer.review(request));
+          },
+          async findReview(id) {
+            return mutateEvidence(await f.reviewer.findReview(id));
+          },
+        };
+        const observed = await f.run({ reviewer, tasks });
+        assert.notEqual(f.read().coordination.results[0].phase, "ACCEPTED");
+        assert.notEqual(f.read().state, "TERMINAL");
+        assert.equal(f.read().termination, null);
+        assert.equal(f.calls.start, 0);
+        assert.equal(
+          observed.status,
+          change === "publication"
+            ? "PUBLICATION_WAIT"
+            : change === "pending-ci"
+              ? "CI_WAIT"
+              : "BLOCKED",
+        );
+        assert.equal(f.read().coordination.results[0].phase, observed.status);
+        const reviewRequestId = f.read().coordination.results[0].review.requestId;
+
+        f.publish(delivery);
+        f.runs.get(delivery.number).id = "fresh-post-review-ci";
+        assert.equal(
+          (await f.run({ reviewer, tasks, ownerId: "restart-reader" })).status,
+          hasSuccessor ? "DISPATCH_CONFIRMED" : "ACCEPTED",
+        );
+        assert.equal(f.read().coordination.results[0].ci.id, "fresh-post-review-ci");
+        assert.equal(f.read().coordination.results[0].review.requestId, reviewRequestId);
+        await f.run({ reviewer, tasks });
+        assert.equal(f.calls.review, 1);
+        assert.equal(f.calls.start, hasSuccessor ? 1 : 0);
+      } finally {
+        f.dispose();
+      }
+    },
+  );
 
   it("rechecks head changes made during technical review before reserving a successor", async () => {
     const f = fixture();

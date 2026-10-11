@@ -336,6 +336,29 @@ async function verification(github, result, task) {
   return { status: "VERIFIED", publication, ci };
 }
 
+async function saveVerificationWait(remote, snapshot, result, verified) {
+  const checkpoint = {
+    phase: verified.status,
+    reason: verified.reason ?? null,
+    ci: verified.ci ?? null,
+    publication: verified.publication ?? null,
+  };
+  if (
+    Object.entries(checkpoint).some(
+      ([field, value]) => digest(result[field] ?? null) !== digest(value),
+    )
+  ) {
+    const saved = await transition(remote, snapshot, checkpoint.phase, (_record, coordination) => {
+      Object.assign(
+        coordination.results.find((entry) => entry.key === result.key),
+        checkpoint,
+      );
+    });
+    if (!saved) return { status: "CONFLICT" };
+  }
+  return verified;
+}
+
 function matchingStart(receipt, intent) {
   return (
     receipt?.dispatchId === intent.id &&
@@ -498,27 +521,8 @@ export async function reconcile({ source, ownerId, remote, github, reviewer, wor
     if (result.packet.workerState !== "COMPLETED") return blocked("worker-stopped");
     if (!dependenciesAccepted(task, state)) return blocked("dependency-not-accepted");
     const verified = await verification(github, result, task);
-    if (verified.status !== "VERIFIED") {
-      const phase = verified.status;
-      if (
-        result.phase !== phase ||
-        (result.reason ?? null) !== (verified.reason ?? null) ||
-        digest(result.ci) !== digest(verified.ci ?? null)
-      ) {
-        await transition(remote, snapshot, phase, (_record, coordination) => {
-          Object.assign(
-            coordination.results.find((entry) => entry.key === result.key),
-            {
-              phase,
-              reason: verified.reason ?? null,
-              ci: verified.ci ?? null,
-              publication: verified.publication ?? null,
-            },
-          );
-        });
-      }
-      return verified;
-    }
+    if (verified.status !== "VERIFIED")
+      return await saveVerificationWait(remote, snapshot, result, verified);
     let receipt;
     if (result.review === null) {
       const review = { ownerId, requestId: NodeCrypto.randomUUID() };
@@ -546,15 +550,18 @@ export async function reconcile({ source, ownerId, remote, github, reviewer, wor
     }
     if (!receipt) return { status: "REVIEW_WAIT", key: result.key };
     if (!matchingReview(receipt, result)) return blocked("invalid-review-receipt");
+    // Review and receipt lookup can outlive the evidence observed before them.
+    // Every decision, including a terminal task with no successor, uses fresh evidence.
+    const reviewedEvidence = await verification(github, result, task);
     await revalidateResult(github, result);
+    if (reviewedEvidence.status !== "VERIFIED")
+      return await saveVerificationWait(remote, snapshot, result, reviewedEvidence);
     snapshot = await transition(remote, snapshot, "review-recorded", (record, coordination) => {
       const entry = coordination.results.find((item) => item.key === result.key);
       entry.phase = receipt.decision;
       entry.review.receipt = receipt;
-      // Receipt recovery may follow a temporary publication or CI wait.
-      // Persist the evidence verified in this iteration with the decision.
-      entry.ci = verified.ci;
-      entry.publication = verified.publication;
+      entry.ci = reviewedEvidence.ci;
+      entry.publication = reviewedEvidence.publication;
       entry.reason = null;
       if (receipt.decision === "ACCEPTED") {
         record.state = "TERMINAL";
