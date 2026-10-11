@@ -2319,6 +2319,26 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.lengthOf(requests, 1);
         assert.equal(requests[0]?.status, "pending");
         assert.deepEqual(requests[0]?.responseCapability, { type: "message" });
+        const requestIndex = harness.events.findIndex(
+          (event) => event.type === "runtime_request.updated",
+        );
+        const eventsBeforeRequest = harness.events.slice(0, requestIndex);
+        assert.isTrue(
+          eventsBeforeRequest.some(
+            (event) => event.type === "node.updated" && event.node.id === requests[0]?.nodeId,
+          ),
+          "the asynchronous question node must exist before the request becomes answerable",
+        );
+        assert.isTrue(
+          eventsBeforeRequest.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "user_input_request" &&
+              event.turnItem.requestId === requests[0]?.id &&
+              event.turnItem.nodeId === requests[0]?.nodeId,
+          ),
+          "a fast answer to an asynchronous question must already have its turn item",
+        );
         const questionItem = harness.events.find(
           (event) =>
             event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",

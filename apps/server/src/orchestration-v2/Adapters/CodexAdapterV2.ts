@@ -4420,22 +4420,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   options: (question.options ?? []).map((label) => ({ label, description: "" })),
                 })),
               });
-              yield* emitProviderEvent({
-                type: "node.updated",
-                driver: CODEX_PROVIDER,
-                node: artifacts.node,
-              });
-              yield* emitProviderEvent({
-                type: "runtime_request.updated",
-                driver: CODEX_PROVIDER,
-                threadId: artifacts.node.threadId,
-                runtimeRequest: artifacts.request,
-              });
-              yield* emitProviderEvent({
-                type: "turn_item.updated",
-                driver: CODEX_PROVIDER,
-                turnItem: artifacts.turnItem,
-              });
+              yield* emitRuntimeRequestArtifacts(artifacts);
               yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
                 const ids = current.get(payload.turnId);
                 if (!ids?.has(payload.item.id)) return current;
