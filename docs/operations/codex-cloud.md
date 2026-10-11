@@ -2,7 +2,7 @@
 
 This checkout is based on PR #30 (`5f1a9f3e3ef2c43af5165ca3a657e792029e5431`), which includes the stacked Agents and Tasks work beyond `main`. Use the existing checkout; cloud tasks are already isolated and do not need another worktree.
 
-Node 24.13 or newer is required. From any directory, run `bash /workspace/base3router/scripts/codex-cloud-setup.sh`. The script uses the repository's `pnpm@11.10.0` pin and frozen lockfile, and provides the local `vp` executable at `node_modules/.bin/vp`. It needs access to the package registry but no production credentials.
+Node 24.13.1 or newer is required. From any directory, run `bash /workspace/base3router/scripts/codex-cloud-setup.sh`. The script uses the repository's `pnpm@11.10.0` pin and frozen lockfile, and provides the local `vp` executable at `node_modules/.bin/vp`. It needs access to the package registry but no production credentials.
 
 From `/workspace/base3router`, start the web and server development workflow with:
 
