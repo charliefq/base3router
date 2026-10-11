@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "TERMINAL",
-  "generation": 0,
+  "generation": 1,
   "taskId": "bootstrap",
   "workerId": "event-review",
   "dispatchCount": 0,
@@ -9,5 +9,6 @@
     "workerState": "STOPPED",
     "established": true,
     "evidence": "No worker launched; initialization only"
-  }
+  },
+  "verification": "blob-sha guard probe; no sender"
 }
