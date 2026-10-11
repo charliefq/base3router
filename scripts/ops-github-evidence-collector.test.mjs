@@ -43,10 +43,19 @@ function fixture() {
     steps: [
       {
         name: "Checkout",
+        number: 2,
         status: "completed",
         conclusion: "success",
         started_at: "2026-01-01T10:00:00Z",
         completed_at: "2026-01-01T10:00:07Z",
+      },
+      {
+        name: "Test",
+        number: 4,
+        status: "completed",
+        conclusion: "success",
+        started_at: "2026-01-01T10:00:08Z",
+        completed_at: "2026-01-01T10:00:10Z",
       },
     ],
   };
@@ -74,6 +83,7 @@ function fixture() {
     requiredWorkflow: { id: 7, path: ".github/workflows/ci.yml", name: "CI" },
     requiredCheck: { id: 81, jobId: 82, appId: 99, name: "Check" },
     actualTestJobId: 83,
+    actualTestStep: { name: "Test", number: 4 },
     comments: [{ id: 44, authorId: 91, bodyDigest: hash(raw.comment.body) }],
   };
   const calls = [];
@@ -123,6 +133,8 @@ describe("read-only GitHub evidence collector", () => {
       assert.equal(bundle.evidence.checkout.value.attempt, 2);
       assert.equal(bundle.evidence.requiredCheck.value.job.id, 82);
       assert.equal(bundle.evidence.actualTestJob.value.job.id, 83);
+      assert.deepEqual(bundle.evidence.actualTestJob.value.testStep, f.raw(paths.testJob).steps[1]);
+      assert.equal(bundle.evidence.actualJob.status, "verified");
       assert.equal(
         bundle.evidence.comments.value.envelopes[0].bodyDigest,
         f.input.comments[0].bodyDigest,
@@ -210,6 +222,7 @@ describe("read-only GitHub evidence collector", () => {
     noExecution(bundle);
     assert.equal(bundle.evidence.requiredCheck.status, "verified");
     assert.notEqual(bundle.evidence.checkout.status, "verified");
+    if (change === "absent-log") assert.equal(bundle.evidence.actualTestJob.status, "verified");
   });
 
   it.each([
@@ -243,6 +256,45 @@ describe("read-only GitHub evidence collector", () => {
     const bundle = await f.run();
     noExecution(bundle);
     assert.equal(bundle.evidence.checkout.status, "blocked");
+  });
+
+  it.each([
+    "missing",
+    "skipped",
+    "failure",
+    "pending",
+    "duplicate",
+    "duplicate-name",
+    "duplicate-number",
+    "wrong-name",
+    "wrong-number",
+  ])("rejects %s Test step while preserving independent checkout", async (change) => {
+    const f = fixture();
+    const steps = f.raw(paths.testJob).steps;
+    const test = steps[1];
+    if (change === "missing") steps.pop();
+    if (change === "skipped" || change === "failure") test.conclusion = change;
+    if (change === "pending") {
+      test.status = "pending";
+      test.conclusion = null;
+    }
+    if (change === "duplicate") steps.push({ ...test });
+    if (change === "duplicate-name") steps.push({ ...test, number: 5 });
+    if (change === "duplicate-number") steps.push({ ...test, name: "Unrelated" });
+    if (change === "wrong-name") test.name = "Unrelated";
+    if (change === "wrong-number") test.number = 5;
+    const bundle = await f.run();
+    noExecution(bundle);
+    assert.notEqual(bundle.evidence.actualTestJob.status, "verified");
+    assert.equal(bundle.evidence.checkout.status, "verified");
+    assert.equal(bundle.evidence.requiredCheck.status, "verified");
+  });
+
+  it.each(["unbound", "checkout-as-test"])("rejects %s test-step binding", async (change) => {
+    const f = fixture();
+    if (change === "unbound") delete f.input.actualTestStep;
+    else f.input.actualTestStep = { name: "Checkout", number: 2 };
+    noExecution(await f.run());
   });
 
   it.each(["edited", "author", "body", "missing", "unbound"])(

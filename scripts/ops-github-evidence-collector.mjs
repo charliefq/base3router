@@ -36,6 +36,9 @@ function validateInput(input) {
       id(input.runId) &&
       id(input.attempt) &&
       id(input.actualTestJobId) &&
+      text(input.actualTestStep?.name) &&
+      input.actualTestStep.name !== "Checkout" &&
+      id(input.actualTestStep.number) &&
       id(input.requiredWorkflow?.id) &&
       text(input.requiredWorkflow.name) &&
       /^\.github\/workflows\/[\w.-]+\.ya?ml$/.test(input.requiredWorkflow.path) &&
@@ -137,6 +140,7 @@ export async function collectGitHubEvidence({
     "comments",
     "run",
     "requiredCheck",
+    "actualJob",
     "actualTestJob",
     "checkout",
     "publication",
@@ -368,32 +372,61 @@ export async function collectGitHubEvidence({
       ),
     ),
   );
-  await part("actualTestJob", async (save) => {
+  await part("actualJob", async (save) => {
     const value = await jobAndCheck(binding.actualTestJobId, undefined, undefined, save);
     requireEvidence(value.check.id !== binding.requiredCheck.id, "aggregate-is-not-test-job");
-    const steps = value.job.steps?.filter((step) => step.name === "Checkout");
-    requireEvidence(
-      steps?.length === 1 && steps[0].status === "completed" && steps[0].conclusion === "success",
-      "checkout-step-missing-or-ambiguous",
+    return verified(value, "job-and-check-status-not-test-step-evidence");
+  });
+  await part("actualTestJob", async (save) => {
+    if (!dependent("actualJob")) return structuredClone(evidence.actualJob);
+    const value = evidence.actualJob.value;
+    save(value);
+    const expected = binding.actualTestStep;
+    const candidates = value.job.steps?.filter(
+      (step) => step.name === expected.name || step.number === expected.number,
     );
-    return verified(value);
+    requireEvidence(
+      candidates?.length === 1 &&
+        candidates[0].name === expected.name &&
+        candidates[0].number === expected.number,
+      "test-step-missing-or-ambiguous",
+    );
+    successful(candidates[0], "test-step");
+    return verified(
+      {
+        ...value,
+        testStep: candidates[0],
+        provenance: "github-step-status-observation-not-execution-attestation",
+      },
+      "caller-bound-test-step-completed-successfully",
+    );
   });
 
   await part("checkout", async (save) => {
     requireEvidence(
-      dependent("actualTestJob", "requiredCheck", "pr"),
-      "test-or-check-unverified",
+      dependent("actualJob", "requiredCheck", "pr"),
+      "job-or-check-unverified",
       "unknown",
+    );
+    const checkoutSteps = evidence.actualJob.value.job.steps?.filter(
+      (step) => step.name === "Checkout",
+    );
+    requireEvidence(
+      checkoutSteps?.length === 1 &&
+        checkoutSteps[0].status === "completed" &&
+        checkoutSteps[0].conclusion === "success",
+      "checkout-step-missing-or-ambiguous",
+    );
+    requireEvidence(
+      checkoutSteps[0].number !== binding.actualTestStep.number,
+      "checkout-is-not-test-step",
     );
     const response = await request(
       `${root}/actions/jobs/${binding.actualTestJobId}/logs`,
       {},
       "text",
     );
-    const checkoutStep = evidence.actualTestJob.value.job.steps.find(
-      (step) => step.name === "Checkout",
-    );
-    const extracted = extractCheckoutLog(response.data, checkoutStep);
+    const extracted = extractCheckoutLog(response.data, checkoutSteps[0]);
     save(extracted);
     const direct = extracted.actualSha === binding.expectedHead;
     requireEvidence(

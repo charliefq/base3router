@@ -240,7 +240,8 @@ worker. Publish real cycle evidence separately from fixture results.
 `scripts/ops-github-evidence-collector.mjs` exports `collectGitHubEvidence`.
 It requires an injected `readTransport` and explicit repository name/ID, PR,
 expected head/base SHAs, workflow ID/name/path, run ID/attempt, required check
-ID/name/app ID/job ID, a separate actual test job ID, and comment ID/author ID/
+ID/name/app ID/job ID, a separate actual test job ID, an `actualTestStep` with
+the exact trusted step `name` and positive `number`, and comment ID/author ID/
 body SHA-256 bindings. Those bindings are trusted caller inputs, not a role
 authorization policy. There is no default transport, credential discovery, CLI,
 scheduler, provider invocation, reconciler integration, or write path.
@@ -255,7 +256,7 @@ follows a returned external URL. Its tests inject synthetic REST envelopes and
 sanitized checkout logs, not a production authenticated transport.
 
 Evidence separates PR metadata, raw comment envelopes, workflow run, aggregate
-required check, actual test job, checkout, publication observation, and closing
+required check, actual job/check status, actual test step, checkout, publication observation, and closing
 stability reads. Each part is `verified`, `unknown`, or `blocked` with a reason;
 an overall verified result means only that these observations match the supplied
 bindings. It is not an acceptance, review, dispatch, or execution permission.
@@ -263,8 +264,19 @@ Comment envelopes preserve numeric author IDs, created/updated timestamps, raw
 bodies, and body digests. Bound edited comments fail closed even when their
 current digest matches; comment creation time is never a body-version proof.
 
-The required aggregate check does not establish checkout. The separate test job
-must match the run attempt and check suite and have a successful Checkout step.
+The required aggregate check does not establish checkout or test execution.
+`actualJob` preserves successful job/check status bound to the run attempt and
+check suite. `actualTestJob` additionally requires exactly one step matching both
+the caller's name and number, with completed/success status. Missing, skipped,
+failed, pending or duplicate/ambiguous step identities cannot verify that part.
+The caller must bind the reviewed workflow's actual test step; a name alone does
+not establish what commands it runs. This is GitHub step-status observation,
+not execution attestation, proof of test counts, or a log-echo inference.
+
+Checkout is evaluated independently from the Test step and requires a successful
+Checkout step. A skipped Test can therefore leave checkout verified while the
+overall bundle and actual test evidence are unverified. Conversely, successful
+Test status does not repair missing checkout logs.
 Its complete log must contain one checkout group/command, one short-SHA HEAD
 marker, one full-SHA `git log -1 --format=%H` result, and a following step boundary.
 The action start, checkout command, HEAD marker, git-log command and full SHA
