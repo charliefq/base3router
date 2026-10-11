@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 10,
+  "generation": 11,
   "taskId": "base3-chat-agents-20261011-03",
   "workerId": "event-review:base3-chat-agents-20261011-03",
   "dispatchId": "event-review:base3-chat-agents-20261011-03:base3-chat-agents-20261011-03:1",
@@ -15,7 +15,8 @@
   },
   "provider": {
     "startMechanism": "PR23 dispatch comment",
-    "status": "sent; acknowledgment pending"
+    "status": "accepted by same worker",
+    "acknowledgmentCommentId": 6105697563
   },
   "termination": null,
   "priorResultCommentId": 6105316354,
@@ -117,7 +118,7 @@
       "state": "PLANNED"
     }
   ],
-  "nonce": "owner-chat-agents-confirmed-20261011-0505",
+  "nonce": "report-before-push-amendment-20261011-0516",
   "discoveredPrs": [
     25,
     23,
@@ -197,5 +198,18 @@
   },
   "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6105691648",
   "commentDelivery": "confirmed",
-  "lastOwnerDirection": "Minimal T3 chat UI + Agents + Tasks; embedded/internal and external contractor agents converse and delegate bidirectionally."
+  "lastOwnerDirection": "Minimal T3 chat UI + Agents + Tasks; embedded/internal and external contractor agents converse and delegate bidirectionally.",
+  "loopAcceptance": {
+    "status": "UNVERIFIED",
+    "requiredOrder": [
+      "implementation result with local final SHA",
+      "substantive push matches SHA",
+      "automatic event review",
+      "CAS successor dispatch",
+      "successor acknowledgment"
+    ],
+    "deliveryAmendmentCommentId": 6105752499,
+    "currentDispatch": "base3-chat-agents-20261011-03",
+    "longTerm": "OBSERVING"
+  }
 }
