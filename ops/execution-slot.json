@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 3,
+  "generation": 4,
   "taskId": "base3-repair-20261011-02",
   "workerId": "event-review:base3-repair-20261011-02",
   "dispatchId": "base3-repair-20261011-02",
@@ -9,12 +9,13 @@
   "startingSha": "08e36ac02d78f3f9d18ad29bcc68652c4ce95232",
   "coordinationPr": 23,
   "ack": {
-    "delivery": "pending",
-    "commentId": null
+    "delivery": "confirmed",
+    "commentId": 6105381954,
+    "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6105381954"
   },
   "provider": {
     "startMechanism": "PR23 @cursor comment; same side effect as dispatch",
-    "status": "unknown"
+    "status": "awaiting acknowledgment"
   },
   "termination": null,
   "priorResultCommentId": 6105316354,
@@ -75,6 +76,27 @@
       "head": "08e36ac02d78f3f9d18ad29bcc68652c4ce95232",
       "base": "f13055e307c28068cb4f21c87429bd27b0963215",
       "verification": "fresh"
+    }
+  ],
+  "nextTasks": [
+    {
+      "id": "CI-HIGHLIGHTER",
+      "state": "DISPATCHED",
+      "attempt": 1
+    },
+    {
+      "id": "CONTENTS-CLAIM-PROTOCOL",
+      "state": "DISPATCHED",
+      "attempt": 1
+    },
+    {
+      "id": "OFFLINE-PILOT-BRAKES",
+      "state": "PLANNED",
+      "dependencies": [
+        "CI-HIGHLIGHTER",
+        "CONTENTS-CLAIM-PROTOCOL"
+      ],
+      "scope": "enforced token/dollar/clock stop preparation; no real pilot"
     }
   ]
 }
