@@ -9,9 +9,11 @@
   "startingSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
   "coordinationPr": 23,
   "ack": {
-    "delivery": "started",
-    "commentId": null,
-    "commentUrl": null
+    "delivery": "confirmed",
+    "commentId": 6106886673,
+    "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106886673",
+    "sentAt": "2026-10-11T07:55:54Z",
+    "githubCreatedAt": "2026-10-11T07:55:54Z"
   },
   "provider": {
     "status": "CLAIM_WAIT",
@@ -473,7 +475,10 @@
       "startSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
       "resultSha": null,
       "successor": null,
-      "state": "DISPATCHED"
+      "state": "DISPATCHED",
+      "dispatchCommentId": 6106886673,
+      "dispatchCommentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106886673",
+      "dispatchedAt": "2026-10-11T07:55:54Z"
     }
   ],
   "nextTasks": [
@@ -650,8 +655,8 @@
     "collaboration": "Internal agents and external contractors support bidirectional task-scoped conversation and delegation",
     "nextTask": "Minimal agent collaboration and chat-first UI; repair slot validation prerequisite"
   },
-  "commentUrl": null,
-  "commentDelivery": "started",
+  "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106886673",
+  "commentDelivery": "confirmed",
   "lastOwnerDirection": "Minimal T3 chat UI + Agents + Tasks; embedded/internal and external contractor agents converse and delegate bidirectionally.",
   "loopAcceptance": {
     "status": "UNVERIFIED",
@@ -911,7 +916,7 @@
     }
   ],
   "dispatchTimestamps": {
-    "sentAt": "2026-10-11T07:32:36Z",
+    "sentAt": "2026-10-11T07:55:54Z",
     "timezone": "America/Los_Angeles"
   },
   "eventCheckpoints": [
@@ -964,6 +969,16 @@
       "publicationCommentId": 6106820627,
       "deliveryOrder": "result-before-push",
       "newDispatchCount": 0
+    },
+    {
+      "deliveryId": "300a9380-c549-11f1-8f2b-dd0ad25b94a4",
+      "event": "issue_comment.created",
+      "pr": 23,
+      "commentId": 6106886673,
+      "time": "2026-10-11T07:56:04Z",
+      "finding": "own successor dispatch receipt confirmed; generic provider acknowledgment 6106888586 is not an explicit task-matching CLAIMED/RUNNING acceptance",
+      "taskId": "base3-replay-fixture-ci-repair-20261011-08",
+      "newDispatchCount": 0
     }
   ],
   "reviewOwnership": {
@@ -975,7 +990,7 @@
     "pr": 30,
     "resultCommentId": 6106817145,
     "ciRun": 38122531716,
-    "updatedAt": "2026-10-11T07:55:01.236Z",
+    "updatedAt": "2026-10-11T07:55:54Z",
     "successorTaskId": "base3-replay-fixture-ci-repair-20261011-08"
   },
   "readOnlyCheckpoints": [
@@ -1202,7 +1217,14 @@
         ]
       },
       "strictNoAdditionalUserMessageProof": true,
-      "successor": "base3-replay-fixture-ci-repair-20261011-08"
+      "successor": "base3-replay-fixture-ci-repair-20261011-08",
+      "successorDispatch": {
+        "taskId": "base3-replay-fixture-ci-repair-20261011-08",
+        "commentId": 6106886673,
+        "url": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106886673",
+        "sentAt": "2026-10-11T07:55:54Z",
+        "startSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431"
+      }
     }
   ],
   "followup": null,
