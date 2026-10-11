@@ -7,7 +7,9 @@
  * detect a dead worker and does not dispatch a replacement.
  *
  * The repository may be a local bare repo. Tests use that. Nothing here
- * contacts a provider.
+ * contacts a provider. This per-task ref is not the repository execution
+ * slot. Two working copies do not share it. The shared slot is
+ * `scripts/ops-slot.mjs`.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
