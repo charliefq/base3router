@@ -127,6 +127,26 @@ const runFixtureProvider = Effect.fn("runOrchestratorReplayFixture")(function* <
     input.harness,
     input.driver.runContinuationWorker === true ? { runContinuationWorker: true } : {},
   ).pipe(provideDeterministicTestRuntime);
+  if (input.driver.driver === "codex") {
+    for (const [index, event] of result.domainEvents.entries()) {
+      if (event.type !== "runtime-request.updated" || event.payload.status !== "pending") continue;
+      const request = event.payload;
+      assert.isTrue(
+        result.domainEvents
+          .slice(0, index)
+          .some(
+            (prior) =>
+              prior.type === "turn-item.updated" &&
+              prior.threadId === event.threadId &&
+              prior.payload.nodeId === request.nodeId &&
+              (prior.payload.type === "approval_request" ||
+                prior.payload.type === "user_input_request") &&
+              prior.payload.requestId === request.id,
+          ),
+        "an answerable Codex request must already have its turn item so a fast response can settle it",
+      );
+    }
+  }
   input.driver.assertOutput(result, transcript);
   assertProviderNativeSubagentRootTurns(result);
   const expectedAbsentWorkspacePaths = input.driver.expectedAbsentWorkspacePaths;
