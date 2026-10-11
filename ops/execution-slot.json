@@ -30,7 +30,13 @@
       "state": "CLAIMED",
       "workerState": "RUNNING"
     },
-    "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5"
+    "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+    "liveness": {
+      "status": "NOT_INDEPENDENTLY_OBSERVED_AFTER_ACCEPTANCE",
+      "lastEvidenceAt": "2026-10-11T07:56:37Z",
+      "checkedAt": "2026-10-11T09:41:07Z",
+      "evidence": "No PR23 terminal/result comment, matching remote branch, or new delivery PR through this reconciliation."
+    }
   },
   "termination": null,
   "priorResultCommentId": 6106817145,
@@ -1141,6 +1147,26 @@
       "newDispatchCount": 0,
       "loopStatus": "UNVERIFIED",
       "coordinationRepair": "Corrected stale inherited metadata; no implementation review"
+    },
+    {
+      "id": "reconcile:2026-10-11T09:41:07Z",
+      "time": "2026-10-11T09:41:07Z",
+      "source": "scheduled reconciliation",
+      "outcome": "CLAIMED_WORKER_LIVENESS_UNKNOWN_RESERVATION_PRESERVED",
+      "taskId": "base3-replay-fixture-ci-repair-20261011-08",
+      "claimCommentId": 6106892146,
+      "lastObservedClaimAt": "2026-10-11T07:56:37Z",
+      "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+      "investigation": {
+        "pr23CommentsAfterClaim": 0,
+        "matchingRemoteBranch": false,
+        "newDeliveryPr": null,
+        "discoveredPrCount": 30,
+        "latestDeliveryPr": 30
+      },
+      "finding": "Explicit matching CLAIMED/RUNNING remains the latest worker evidence, but no independent current execution evidence exists. Preserve the same-worker reservation; do not expire, replace, release, review, or dispatch.",
+      "newDispatchCount": 0,
+      "loopStatus": "STRICT_AUTOMATIC_CYCLE_1_CONFIRMED_REPEATABILITY_PENDING"
     }
   ],
   "cycles": [
