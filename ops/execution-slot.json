@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 38,
+  "generation": 39,
   "taskId": "base3-brakes-active-restart-20261011-07",
   "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
   "dispatchId": "base3-brakes-active-restart-20261011-07",
@@ -29,12 +29,12 @@
   "priorResultCommentId": 6106636499,
   "reviewOutcome": "ACCEPTED_BOUNDED_HIGHLIGHTER_FIX",
   "ci": {
-    "run": 38121186501,
-    "check": "success",
-    "checkId": 114416912510,
-    "actualCheckoutSha": "aadc9bd885d114e7b8236655ac1c1da37bcee6da",
-    "prHead": "975af300b65c66ea427cd79bc81a994ea53582d7",
-    "taskId": "base3-mobile-highlighter-repair-20261011-06"
+    "run": 38122531716,
+    "check": "pending",
+    "checkId": null,
+    "actualCheckoutSha": null,
+    "prHead": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+    "taskId": "base3-brakes-active-restart-20261011-07"
   },
   "attempts": {
     "highlighterRepair": 2,
@@ -513,7 +513,7 @@
       "acceptanceCommentId": 6106715715
     }
   ],
-  "nonce": "event:ef1e0d30:2026-10-11T07:47:51.040Z",
+  "nonce": "ciwait:2026-10-11T07:48:22.598Z",
   "discoveredPrs": [
     23,
     29,
@@ -838,16 +838,32 @@
       "commentId": 6106522915,
       "finding": "own dispatch delivery; no duplicate dispatch",
       "time": "2026-10-11T07:07:49Z"
+    },
+    {
+      "deliveryId": "ef1e0d30-c547-11f1-860a-00fcf96f54da",
+      "event": "pull_request.opened",
+      "pr": 30,
+      "time": "2026-10-11T07:48:22.598Z",
+      "automaticEvent": true,
+      "outcome": "CI_WAIT",
+      "resultKey": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
+      "head": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+      "resultCommentId": 6106817145,
+      "publicationCommentId": 6106820627,
+      "deliveryOrder": "result-before-push",
+      "newDispatchCount": 0
     }
   ],
   "reviewOwnership": {
     "id": "event:ef1e0d30-c547-11f1-860a-00fcf96f54da",
     "key": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
-    "state": "REVIEWING",
+    "state": "CI_WAIT",
     "claimedAt": "2026-10-11T07:47:51.040Z",
     "source": "pull_request.opened",
     "pr": 30,
-    "resultCommentId": 6106817145
+    "resultCommentId": 6106817145,
+    "ciRun": 38122531716,
+    "updatedAt": "2026-10-11T07:48:22.598Z"
   },
   "readOnlyCheckpoints": [
     {
@@ -1112,6 +1128,6 @@
     "publicationCommentId": 6106820627,
     "publicationAt": "2026-10-11T07:47:08Z",
     "published": true,
-    "ciState": "PENDING"
+    "ciState": "in_progress"
   }
 }
