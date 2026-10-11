@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 4,
+  "generation": 5,
   "taskId": "base3-repair-20261011-02",
   "workerId": "event-review:base3-repair-20261011-02",
   "dispatchId": "base3-repair-20261011-02",
@@ -15,7 +15,9 @@
   },
   "provider": {
     "startMechanism": "PR23 @cursor comment; same side effect as dispatch",
-    "status": "awaiting acknowledgment"
+    "status": "acknowledged; completion not observed",
+    "acknowledgmentCommentId": 6105382550,
+    "agentUrl": "https://cursor.com/agents/bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5"
   },
   "termination": null,
   "priorResultCommentId": 6105316354,
