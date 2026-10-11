@@ -14,8 +14,10 @@
     "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6105963077"
   },
   "provider": {
-    "status": "awaiting explicit matching acceptance",
-    "startMechanism": "PR23 comment"
+    "status": "provider acknowledgment only; awaiting explicit matching acceptance and terminal result",
+    "startMechanism": "PR23 comment",
+    "acknowledgmentCommentId": 6105965807,
+    "acknowledgmentWorkerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5"
   },
   "termination": null,
   "priorResultCommentId": 6105911508,
@@ -297,5 +299,28 @@
     "sentAt": "2026-10-11T05:47:22Z",
     "acceptedAt": null,
     "sentAtLocal": "2026-10-10 22:47:22 PDT"
-  }
+  },
+  "eventCheckpoints": [
+    {
+      "deliveryId": "3b8c7550-c537-11f1-995c-9fbe1ce3bbf6",
+      "time": "2026-10-11 05:48:31 UTC",
+      "automaticEvent": true,
+      "event": "PR23 issue_comment created by charliefq",
+      "outcome": "OWN_DISPATCH_AND_ACK_NO_TERMINAL_IGNORE",
+      "currentDispatch": "base3-chat-integration-20261011-04",
+      "dispatchCommentId": 6105963077,
+      "providerAcknowledgmentCommentId": 6105965807,
+      "providerWorkerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+      "explicitMatchingAcceptance": false,
+      "terminalObserved": false,
+      "newDispatchCount": 0,
+      "head": "00c007a12564f0a7945aec111dde027b7e60015a",
+      "ciRun": 38115005811,
+      "checkJob": 114398850561,
+      "check": "success",
+      "actualCheckoutSha": "20cbb6451be80cff3882a4208f27a8f1a6106c19",
+      "review": "Fresh PR1–26 refs unchanged; PR26 patch confirms already queued thread/composer, V2/ActionGate, authenticated sender and multi-round correlation gaps. Current -04 covers those gaps. No duplicate dispatch, release, tests or new repair.",
+      "loop": "UNVERIFIED; predecessor result followed publication; interactive successor cannot establish required automatic cycle."
+    }
+  ]
 }
