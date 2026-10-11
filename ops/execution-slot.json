@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 11,
+  "generation": 12,
   "taskId": "base3-chat-agents-20261011-03",
   "workerId": "event-review:base3-chat-agents-20261011-03",
   "dispatchId": "event-review:base3-chat-agents-20261011-03:base3-chat-agents-20261011-03:1",
@@ -20,11 +20,12 @@
   },
   "termination": null,
   "priorResultCommentId": 6105316354,
-  "reviewOutcome": "DELIVERED_WITH_RECORDED_COORDINATION_DEFECT",
+  "reviewOutcome": "CI_WAIT_AND_TERMINAL_WAIT_WITH_REVIEW_FINDINGS",
   "ci": {
-    "run": 38110398025,
-    "check": "failure",
-    "actualCheckoutSha": "10cfbd78858acde5b56ad87ced8464da14ef6a0b"
+    "run": 38114936998,
+    "check": "pending",
+    "actualCheckoutSha": null,
+    "prHead": "adf252c0732c2ab2e228b3d4364056885fe54c74"
   },
   "attempts": {
     "highlighterRepair": 1,
@@ -43,41 +44,17 @@
   },
   "taskGraph": [
     {
-      "pr": 18,
-      "head": "2a07e9e10a3aeeb95ce09dcdb7c8b234cc34afdf",
-      "base": "bab26191075ec8806894478970e8d9954c357290",
+      "pr": 26,
+      "head": "adf252c0732c2ab2e228b3d4364056885fe54c74",
+      "base": "a4541db95049ec595570afaa6a9f17aed9702310",
       "verification": "fresh",
       "state": "open",
       "merged": false
     },
     {
-      "pr": 20,
-      "head": "55a1ea4f496eadea161c0e88822b375e42a0f127",
-      "base": "2a07e9e10a3aeeb95ce09dcdb7c8b234cc34afdf",
-      "verification": "fresh",
-      "state": "open",
-      "merged": false
-    },
-    {
-      "pr": 21,
-      "head": "b52026eab554ee4a5f4f4b20cac990c4355310fd",
-      "base": "55a1ea4f496eadea161c0e88822b375e42a0f127",
-      "verification": "fresh",
-      "state": "open",
-      "merged": false
-    },
-    {
-      "pr": 22,
-      "head": "ffd2203305b8b66cd8dfb2d982d7bd09c7f9ff8e",
-      "base": "b52026eab554ee4a5f4f4b20cac990c4355310fd",
-      "verification": "fresh",
-      "state": "open",
-      "merged": false
-    },
-    {
-      "pr": 23,
-      "head": "f13055e307c28068cb4f21c87429bd27b0963215",
-      "base": "ffd2203305b8b66cd8dfb2d982d7bd09c7f9ff8e",
+      "pr": 25,
+      "head": "a4541db95049ec595570afaa6a9f17aed9702310",
+      "base": "08e36ac02d78f3f9d18ad29bcc68652c4ce95232",
       "verification": "fresh",
       "state": "open",
       "merged": false
@@ -91,9 +68,41 @@
       "merged": false
     },
     {
-      "pr": 25,
-      "head": "a4541db95049ec595570afaa6a9f17aed9702310",
-      "base": "08e36ac02d78f3f9d18ad29bcc68652c4ce95232",
+      "pr": 23,
+      "head": "f13055e307c28068cb4f21c87429bd27b0963215",
+      "base": "ffd2203305b8b66cd8dfb2d982d7bd09c7f9ff8e",
+      "verification": "fresh",
+      "state": "open",
+      "merged": false
+    },
+    {
+      "pr": 22,
+      "head": "ffd2203305b8b66cd8dfb2d982d7bd09c7f9ff8e",
+      "base": "b52026eab554ee4a5f4f4b20cac990c4355310fd",
+      "verification": "fresh",
+      "state": "open",
+      "merged": false
+    },
+    {
+      "pr": 21,
+      "head": "b52026eab554ee4a5f4f4b20cac990c4355310fd",
+      "base": "55a1ea4f496eadea161c0e88822b375e42a0f127",
+      "verification": "fresh",
+      "state": "open",
+      "merged": false
+    },
+    {
+      "pr": 20,
+      "head": "55a1ea4f496eadea161c0e88822b375e42a0f127",
+      "base": "2a07e9e10a3aeeb95ce09dcdb7c8b234cc34afdf",
+      "verification": "fresh",
+      "state": "open",
+      "merged": false
+    },
+    {
+      "pr": 18,
+      "head": "2a07e9e10a3aeeb95ce09dcdb7c8b234cc34afdf",
+      "base": "bab26191075ec8806894478970e8d9954c357290",
       "verification": "fresh",
       "state": "open",
       "merged": false
@@ -116,18 +125,26 @@
     {
       "id": "OFFLINE-PILOT-BRAKES",
       "state": "PLANNED"
+    },
+    {
+      "id": "CHAT-COLLABORATION-INTEGRATION-REPAIR",
+      "state": "PLANNED",
+      "dependency": "current explicit terminal + CI review + exclusive successor claim",
+      "attempt": 0,
+      "scope": "actual T3 threads and project/capability context, V2/ActionGate/contracts, authenticated sender binding, multi-cycle reply integrity; no paid/live external calls"
     }
   ],
-  "nonce": "report-before-push-amendment-20261011-0516",
+  "nonce": "event-review-26-b4e2f4e0-20261011-053013",
   "discoveredPrs": [
+    26,
     25,
-    23,
     24,
+    23,
     22,
     21,
     20,
-    18,
     19,
+    18,
     17,
     16,
     15,
@@ -138,46 +155,54 @@
     10,
     9,
     8,
+    7,
     6,
     5,
     4,
     3,
     2,
-    1,
-    7
+    1
   ],
   "lastReview": {
-    "eventKey": "d4622230-c52c-11f1-8ea2-c88554140c75",
-    "pr": 25,
-    "head": "a4541db95049ec595570afaa6a9f17aed9702310",
+    "eventKey": "b4e2f4e0-c534-11f1-9413-7fa46fa54ea8",
+    "automaticEvent": true,
+    "time": "2026-10-11T05:30:13Z",
+    "pr": 26,
+    "head": "adf252c0732c2ab2e228b3d4364056885fe54c74",
     "resultCommentId": null,
-    "latestLinkCommentId": 6105466145,
-    "outcome": "CI_WAIT_AND_TERMINAL_WAIT",
-    "ciRun": 38111935085,
+    "latestLinkCommentId": 6105840965,
+    "outcome": "CI_WAIT_AND_TERMINAL_WAIT_WITH_REVIEW_FINDINGS",
+    "ciRun": 38114936998,
     "ciStatus": "in_progress",
-    "requiredCheck": "pending; not yet created in inspected jobs",
-    "checkoutEvidence": {
-      "job": 114389121310,
-      "name": "Release Smoke",
-      "actualSha": "50f1a7e67e62fdc2cdf2d5ae91680179a9670023",
-      "source": "actual completed job log; candidate Check checkout still pending"
-    },
+    "requiredCheck": "not terminal; aggregate Check not yet present",
+    "checkoutEvidence": null,
+    "newDispatchCount": 0,
     "findings": [
       {
-        "file": "scripts/ops-contents-slot.mjs",
-        "severity": "coordination",
+        "file": "apps/web/src/components/collaboration/CollaborationPages.tsx",
         "status": "STATIC_REVIEW_CONFIRMED",
-        "detail": "JSON null is parseable and occupiedState(null) is false, so existing file containing null is reported free and acquire can overwrite it. Any object with state TERMINAL is reusable without schema/identity/generation/termination validation. Invalid existing records must fail closed.",
+        "detail": "Agent opens custom read-only Transcript, no composer or existing T3 thread; task and agent threadId are null. Fixed owner-project and production rehearsal buttons persist simulated commands. Sidebar lacks capability negotiation. Owner direct-chat and existing-thread requirements not met.",
         "repairAttempts": 0
       },
       {
-        "file": "apps/mobile/src/features/review/shikiReviewHighlighter.test.ts",
-        "status": "ROOT_CAUSE_UNRESOLVED",
-        "detail": "Patch only adds assertions; production highlighter unchanged because worker reports failure not reproduced. Do not label defect fixed before required candidate Check and explicit terminal evidence."
+        "file": "apps/server/src/collaboration/decide.ts",
+        "status": "STATIC_REVIEW_CONFIRMED",
+        "detail": "Separate collaboration command fold/table with hard-coded ALLOW/DENY; no V2 task binding, ActionGate call, goal/redirect/brake contract or execution/usage link. Client actor owner and fromAgentId supply claimed identity; HTTP checks operate scope but does not bind sender to authenticated agent. Real Grokbot remains disconnected; fake scenarios are state-fold fixtures, not live transport evidence.",
+        "repairAttempts": 0
+      },
+      {
+        "file": "apps/server/src/collaboration/decide.ts",
+        "status": "STATIC_REVIEW_CONFIRMED",
+        "detail": "Repeated clarification cycles use constant task.id + :clarify message ID. Reply validates only same task, not pending clarification kind/id. Second clarify after reply reuses message identity; reply can cite delegation/old question. Needs focused multi-cycle regression.",
+        "repairAttempts": 0
+      },
+      {
+        "file": "scripts/ops-contents-slot.mjs",
+        "status": "STATIC_REVIEW_PROGRESS",
+        "detail": "recordValid now rejects null/scalars/malformed schema and TERMINAL missing established evidence. Mock CAS and fixtures improved; production GitHub API does not inherit mock 422 checks. Candidate CI and terminal packet pending."
       }
     ],
-    "newDispatchCount": 0,
-    "reason": "Current dispatch has no observed COMPLETED/STOPPED; preserve occupied slot, no replacement."
+    "reason": "Published PR with no NEW terminal result for dispatch 03. Do not release or replace current worker."
   },
   "independentPreparation": {
     "next": "OFFLINE-PILOT-BRAKES",
@@ -210,6 +235,21 @@
     ],
     "deliveryAmendmentCommentId": 6105752499,
     "currentDispatch": "base3-chat-agents-20261011-03",
-    "longTerm": "OBSERVING"
+    "longTerm": "OBSERVING",
+    "publicationObserved": {
+      "pr": 26,
+      "head": "adf252c0732c2ab2e228b3d4364056885fe54c74",
+      "prCreatedAt": "2026-10-11T05:29:17Z",
+      "linkCommentId": 6105840965,
+      "linkTime": "2026-10-11T05:29:24Z",
+      "prePushTerminalResultObserved": false,
+      "order": "Report-before-push not established for this published candidate; worker link says result follows CI"
+    },
+    "automaticReview": {
+      "eventKey": "b4e2f4e0-c534-11f1-9413-7fa46fa54ea8",
+      "time": "2026-10-11T05:30:13Z",
+      "head": "adf252c0732c2ab2e228b3d4364056885fe54c74",
+      "resultCommentId": null
+    }
   }
 }
