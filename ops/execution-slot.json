@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 24,
+  "generation": 25,
   "taskId": "base3-offline-pilot-brakes-20261011-05",
   "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
   "dispatchId": "base3-offline-pilot-brakes-20261011-05",
@@ -322,6 +322,32 @@
       "state": "closed",
       "merged": true,
       "verification": "fresh"
+    },
+    {
+      "taskId": "base3-offline-pilot-brakes-20261011-05",
+      "predecessor": {
+        "taskId": "base3-chat-integration-20261011-04",
+        "resultKey": "base3-chat-integration-20261011-04:9dc41f4e168af5cdc233751ae23e3e9e5e17b29b:6106124642",
+        "pr": 27
+      },
+      "dependencies": [
+        {
+          "pr": 27,
+          "sha": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b",
+          "state": "REVIEWED"
+        }
+      ],
+      "worker": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+      "branch": "cursor/offline-pilot-brakes-abd5",
+      "base": "cursor/chat-integration-abd5",
+      "pr": 28,
+      "startSha": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b",
+      "resultSha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
+      "resultCommentId": 6106462863,
+      "resultAt": "2026-10-11T06:59:23Z",
+      "publicationCommentId": 6106466259,
+      "publicationAt": "2026-10-11T06:59:52Z",
+      "successor": null
     }
   ],
   "nextTasks": [
@@ -381,6 +407,7 @@
   ],
   "nonce": "base3-offline-pilot-brakes-20261011-05:roadmap:2026-10-11T06:46:17.394Z",
   "discoveredPrs": [
+    28,
     27,
     26,
     25,
@@ -588,6 +615,13 @@
       "actualCheckoutSha": "20cbb6451be80cff3882a4208f27a8f1a6106c19",
       "review": "Fresh PR1–26 refs unchanged; PR26 patch confirms already queued thread/composer, V2/ActionGate, authenticated sender and multi-round correlation gaps. Current -04 covers those gaps. No duplicate dispatch, release, tests or new repair.",
       "loop": "UNVERIFIED; predecessor result followed publication; interactive successor cannot establish required automatic cycle."
+    },
+    {
+      "deliveryId": "55114fa0-c541-11f1-8b41-246fcf591bd4",
+      "event": "pull_request.opened",
+      "pr": 28,
+      "time": "2026-10-11T07:00:45Z",
+      "finding": "same active review owner continues; published head matches pre-push result"
     }
   ],
   "reviewOwnership": {
@@ -700,10 +734,23 @@
     }
   ],
   "followup": {
-    "dispatchId": "base3-offline-pilot-brakes-20261011-05",
-    "source": "repository events and enabled hourly reconciliation",
-    "state": "AWAIT_RESULT",
-    "repeatability": "UNVERIFIED"
+    "resultKey": "base3-offline-pilot-brakes-20261011-05:b61d636411b774c7e6eea0dfe38a80f6ebb4cb76:6106462863",
+    "PR": 28,
+    "sha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
+    "pendingChecks": [
+      "Test Server 1",
+      "Test",
+      "Test Web",
+      "Test Server 2",
+      "Test Server 4",
+      "Test Server 5",
+      "Test Server 3",
+      "Test Server 6"
+    ],
+    "source": "hourly reconciliation",
+    "state": "CI_WAIT",
+    "observedAt": "2026-10-11T07:02:31.390Z",
+    "boundedWaitStartedAt": "2026-10-11T07:00:09Z"
   },
   "predecessor": {
     "taskId": "base3-chat-integration-20261011-04",
