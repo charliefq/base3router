@@ -1,56 +1,33 @@
 {
   "schema": 1,
-  "state": "TERMINAL",
-  "generation": 40,
-  "taskId": "base3-brakes-active-restart-20261011-07",
+  "state": "DISPATCHED",
+  "generation": 41,
+  "taskId": "base3-replay-fixture-ci-repair-20261011-08",
   "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
-  "dispatchId": "base3-brakes-active-restart-20261011-07",
+  "dispatchId": "base3-replay-fixture-ci-repair-20261011-08",
   "dispatchCount": 1,
-  "startingSha": "975af300b65c66ea427cd79bc81a994ea53582d7",
+  "startingSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
   "coordinationPr": 23,
   "ack": {
-    "delivery": "confirmed",
-    "commentId": 6106710477,
-    "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106710477"
+    "delivery": "started",
+    "commentId": null,
+    "commentUrl": null
   },
   "provider": {
-    "status": "COMPLETED",
+    "status": "CLAIM_WAIT",
     "startMechanism": "PR23 comment",
-    "acceptance": {
-      "commentId": 6106715715,
-      "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106715715",
-      "githubCreatedAt": "2026-10-11T07:33:18Z",
-      "reportedAcceptedAt": "2026-10-11T07:33:11Z",
-      "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
-      "dispatchId": "base3-brakes-active-restart-20261011-07"
-    }
+    "acceptance": null
   },
-  "termination": {
-    "established": true,
-    "workerState": "COMPLETED",
-    "evidence": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106817145"
-  },
+  "termination": null,
   "priorResultCommentId": 6106817145,
-  "reviewOutcome": "ACCEPTED_BOUNDED_BRAKE_REPAIR_WITH_CI_REPLAY_REPAIR_REQUIRED",
+  "reviewOutcome": "CHANGES_REQUIRED_CI_REPLAY_REPAIR",
   "ci": {
     "run": 38122531716,
     "check": "failure",
     "checkId": 114421031105,
     "actualCheckoutSha": "f4a532cf4c66218c4e140575fb79a6f9abd72f24",
     "prHead": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
-    "taskId": "base3-brakes-active-restart-20261011-07",
-    "failedJobs": [
-      {
-        "id": 114420044271,
-        "name": "Test Server 4",
-        "failure": "ACP status JSON partial read"
-      },
-      {
-        "id": 114420044079,
-        "name": "Test Server 3",
-        "failure": "approval replay waiting instead of completed"
-      }
-    ]
+    "predecessorTask": "base3-brakes-active-restart-20261011-07"
   },
   "attempts": {
     "highlighterRepair": 2,
@@ -482,6 +459,21 @@
           "Required Check failed in unchanged deterministic replay harnesses: ACP status JSON was read before a complete write, and two Codex approval fixtures remained waiting instead of completed. Focused replay reliability repair required before the reconciler."
         ]
       }
+    },
+    {
+      "taskId": "base3-replay-fixture-ci-repair-20261011-08",
+      "predecessor": "base3-brakes-active-restart-20261011-07",
+      "dependencies": [
+        "base3-brakes-active-restart-20261011-07"
+      ],
+      "worker": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
+      "branch": "fresh branch from 5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+      "base": "cursor/brakes-active-restart-abd5",
+      "pr": null,
+      "startSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+      "resultSha": null,
+      "successor": null,
+      "state": "DISPATCHED"
     }
   ],
   "nextTasks": [
@@ -572,7 +564,7 @@
     },
     {
       "id": "DETERMINISTIC-REPLAY-CI-REPAIR",
-      "state": "READY",
+      "state": "DISPATCHED",
       "attempt": 1,
       "dependencies": [
         "base3-brakes-active-restart-20261011-07"
@@ -582,10 +574,13 @@
         "ACP status JSON can be read after the child starts writing but before the write is complete.",
         "Two Codex approval replay fixtures can finish observation while the run is still waiting."
       ],
-      "next": "OPS-CLOSED-LOOP-RECONCILER"
+      "next": "OPS-CLOSED-LOOP-RECONCILER",
+      "dispatchId": "base3-replay-fixture-ci-repair-20261011-08",
+      "startSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+      "worker": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5"
     }
   ],
-  "nonce": "terminal:2026-10-11T07:54:26.180Z",
+  "nonce": "dispatch:base3-replay-fixture-ci-repair-20261011-08:2026-10-11T07:55:01.236Z",
   "discoveredPrs": [
     30,
     23,
@@ -655,8 +650,8 @@
     "collaboration": "Internal agents and external contractors support bidirectional task-scoped conversation and delegation",
     "nextTask": "Minimal agent collaboration and chat-first UI; repair slot validation prerequisite"
   },
-  "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106710477",
-  "commentDelivery": "confirmed",
+  "commentUrl": null,
+  "commentDelivery": "started",
   "lastOwnerDirection": "Minimal T3 chat UI + Agents + Tasks; embedded/internal and external contractor agents converse and delegate bidirectionally.",
   "loopAcceptance": {
     "status": "UNVERIFIED",
@@ -974,13 +969,14 @@
   "reviewOwnership": {
     "id": "event:ef1e0d30-c547-11f1-860a-00fcf96f54da",
     "key": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
-    "state": "REVIEWED",
+    "state": "DISPATCHING",
     "claimedAt": "2026-10-11T07:47:51.040Z",
     "source": "pull_request.opened",
     "pr": 30,
     "resultCommentId": 6106817145,
     "ciRun": 38122531716,
-    "updatedAt": "2026-10-11T07:48:22.598Z"
+    "updatedAt": "2026-10-11T07:55:01.236Z",
+    "successorTaskId": "base3-replay-fixture-ci-repair-20261011-08"
   },
   "readOnlyCheckpoints": [
     {
@@ -1210,16 +1206,16 @@
     }
   ],
   "followup": null,
-  "predecessor": "base3-mobile-highlighter-repair-20261011-06",
+  "predecessor": "base3-brakes-active-restart-20261011-07",
   "dependencies": [
-    "base3-mobile-highlighter-repair-20261011-06"
+    "base3-brakes-active-restart-20261011-07"
   ],
-  "branch": "fresh branch from 975af300b65c66ea427cd79bc81a994ea53582d7",
-  "base": "cursor/mobile-highlighter-repair-abd5",
-  "scope": "Active budget/deadline interruption, immutable persisted tree brakes, real file-backed SQLite close/reopen recovery.",
-  "acceptance": "Usage/deadline exhaustion interrupts without another admission; unknown termination retains lease; persisted limits cannot be omitted/reset; disposable SQLite reopen preserves totals, bounds, pending cancellation and lease.",
-  "brake": "Offline only, maximum 2 focused attempts, no live-slot worker mutation/main/merge/release/paid/data",
-  "plannedPrompt": "@cursor\ndispatch_id: base3-brakes-active-restart-20261011-07\npredecessor: base3-mobile-highlighter-repair-20261011-06\npredecessor_result: https://github.com/charliefq/base3router/pull/23#issuecomment-6106462863\nstarting_sha: 975af300b65c66ea427cd79bc81a994ea53582d7\nbase: cursor/mobile-highlighter-repair-abd5\ntask: OFFLINE-BRAKES-ACTIVE-RESTART-REPAIR\nrepair_attempt: 1 of maximum 2 per demonstrated defect\n\nThe predecessor is explicitly COMPLETED and its exact reported substantive head is published as draft PR28. Technical review requires this bounded repair before OPS-CLOSED-LOOP-RECONCILER. The review result is recorded durably; this sole comment starts the successor, not a second dispatcher.\n\nFirst publish a NEW explicit CLAIMED/RUNNING comment on PR23 with this dispatch ID, actual worker ID/agent link, exact starting SHA and UTC/Los_Angeles timestamps. Same single worker only. Never self-dispatch or read/write/release/recreate the live ops ledger.\n\nCreate a FRESH branch from the exact starting SHA and a draft stacked PR targeting cursor/mobile-highlighter-repair-abd5. Preserve all prior branch heads.\n\nDemonstrated defects:\n1. New TaskContract.commitTaskAdmission requests cancellation only when another governed start/handoff is attempted. TaskUsageAccounting.recordTaskUsage contains no exhaustion reaction; PR28 adds no active deadline enforcement. A running turn can cross its token/dollar cap or deadline with no subsequent start and never be interrupted. Existing pin test calls a second dispatch to trigger cancellation.\n2. TaskPilotBrakes.test.ts uses SqlitePersistenceMemory for the alleged restart test; rewriting payload on the same connection is not restart evidence.\n3. Frozen deadline is conditional on pilotActive(current brake). Removing optional brakes makes pilotAllows SQL 1, bypassing the existing persisted deadline. Tightening/redirect/restart must not accidentally disable a previously bound tree brake.\n\nBounded implementation:\n- Reuse existing V2 policy/runtime cancellation pathways. Add a durable, idempotent brake evaluation after usage updates AND deadline-driven evaluation of active governed leases, including startup recovery. Once cumulative tree usage reaches/exceeds cap or absolute deadline passes, request interrupt without needing another admission. Do not free the lease on request or unknown stream end; free exactly once only on explicit provider terminal evidence.\n- Persist the enforced tree bounds so omission, child, retry, handoff, revision or restart cannot silently reset/disable them. Unknown usage/price denies new starts. Keep synthetic pricing exclusively in explicitly injected offline fixtures, no production default price.\n- Preserve atomic admission and idempotency. Be precise: cumulative threshold checks do not guarantee zero overshoot within a provider turn; do not claim a hard no-overshoot cap without supported bounded reservation/provider enforcement. For the offline provider, demonstrate bounded starts/reservations against remaining budget; if provider limits cannot enforce that, fail closed and record that capability blocker.\n- Add REAL file-backed disposable SQLite restart tests: close/discard service/runtime A, construct B over the same temp database. Verify totals, frozen bounds/deadline, pending interrupt and occupied lease survive; recover already-expired active work without a new task start. Test streamed usage crossing cap with no subsequent dispatch, deadline crossing with no subsequent dispatch, duplicate/reordered observations, cancellation unconfirmed/terminal confirmed, and attempted brake omission. Use fake providers/controlled clock only. Retain meaningful lifecycle regressions.\n- Keep scope to policy/accounting/runtime brake integration, additive migrations and targeted tests/docs. T3 chat shell only Agents + Tasks; named internal employees and external contractor bidirectional direction preserved. Chat execution DENY, Grokbot NOT_CONNECTED.\n\nNo merge/main push, release/signing, paid/live provider calls, credential/spend changes or real user data. No new scheduler/service or provider connection. Record unavailable live provider/Grokbot/per-principal authorization as blockers and continue this offline work.\n\nDELIVERY: after local implementation/tests, publish a NEW complete PR23 result BEFORE final substantive push: task/dispatch ID, actual worker ID, implementation_state and worker_state COMPLETED or STOPPED, exact FINAL LOCAL SHA, branch/base, changes/files, meaningful tests/evidence, limitations/blockers, publication_pending=true, ci_status=PENDING. Then push THAT exact SHA and create the stacked draft PR, then publication note. Do not wait for CI before terminal implementation result. No fake commits. No-code terminal must name exact existing remote SHA and explicit no-code classification. You do not dispatch the next worker.\n\nPR29 highlighter repair is accepted against exact HEAD 975af300b65c66ea427cd79bc81a994ea53582d7, Check 114416912510 success; test-merge aadc9bd885d114e7b8236655ac1c1da37bcee6da. Preserve it in the new branch. Brake defects originate in PR28. Update runbook to distinguish product recurring execution disabled from enabled hosted ChatGPT reconciliation; do not claim either is verified by configuration. Next queued item is OPS-CLOSED-LOOP-RECONCILER; do not implement or dispatch it in this bounded repair.",
+  "branch": "fresh branch from 5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
+  "base": "cursor/brakes-active-restart-abd5",
+  "scope": "Deterministic replay harness lifecycle and status publication repair for PR30 CI failures.",
+  "acceptance": "ACP status publication cannot expose partial JSON; approval fixtures await typed terminal completion and worker drain; repeated/concurrent targeted tests pass without sleeps, retries, weakened assertions or production semantic changes.",
+  "brake": "Offline replay/test infrastructure only unless production lifecycle evidence requires a focused invariant; max 2 attempts, no merge/main/release/paid/live/credentials/data.",
+  "plannedPrompt": "@cursor\ndispatch_id: base3-replay-fixture-ci-repair-20261011-08\npredecessor: base3-brakes-active-restart-20261011-07\npredecessor_result: https://github.com/charliefq/base3router/pull/23#issuecomment-6106817145\nstarting_sha: 5f1a9f3e3ef2c43af5165ca3a657e792029e5431\nbase: cursor/brakes-active-restart-abd5\ntask: DETERMINISTIC-REPLAY-CI-REPAIR\nrepair_attempt: 1 of maximum 2 per demonstrated defect\n\nPR30's bounded brake implementation is technically accepted with explicit provider-ceiling and silent-deadline limitations. Its required Check failed on two deterministic replay harness defects outside the seven changed files. This task repairs those failures before OPS-CLOSED-LOOP-RECONCILER.\n\nFirst publish a NEW explicit CLAIMED/RUNNING PR23 comment with this dispatch ID, actual worker ID/agent link, exact starting SHA, and UTC/Los_Angeles timestamps. Same single worker only. Never self-dispatch or read/write/release/recreate the live ops ledger.\n\nCreate a FRESH branch from the exact starting SHA and a draft stacked PR targeting cursor/brakes-active-restart-abd5. Preserve PR30 and every earlier head.\n\nEvidence to reproduce:\n1. CI run 38122531716, Test Server 4 job 114420044271, test AcpRegistryAdapterV2 > agent mode picker > session/set_mode. The replay child wrote status.json while makeAcpReplayCompletenessAssertion read it; JSON.parse saw Unexpected end of JSON input. Checkout was test-merge f4a532cf4c66218c4e140575fb79a6f9abd72f24.\n2. The same run, Test Server 3 job 114420044079, OrchestratorReplayFixtures.integration: subagent_v2_approval/codex and subagent_v2_nested_approval/codex ended with run status waiting instead of completed.\n\nBounded implementation:\n- Trace the actual lifecycle in the replay agent, ACP runtime scope finalization, ProviderReplayHarness, continuation/approval workers, and typed receipts. Do not assume both failures share one cause.\n- For ACP status, establish a deterministic writer/reader boundary: completion must be observed after the child is finished and the status must be published atomically or through an equivalent typed completion signal. Do not add sleeps, polling retries, or catch-and-ignore partial JSON.\n- For the approval fixtures, wait for the correct completion receipt and drain the responsible worker/fiber before asserting terminal state. Do not raise timeouts, weaken completed to waiting, make test order serial, or change production approval behavior to satisfy the fixture.\n- Add focused regressions that fail under the observed ordering and prove repeated/concurrent execution remains isolated. Keep fixes in test/replay infrastructure unless evidence proves a production lifecycle bug; if production behavior must change, explain the invariant and test it directly.\n- Preserve PR30 brake behavior and its real file-backed SQLite test. No blanket CI reruns during diagnosis. Run only the relevant ACP mode-picker and approval replay fixture tests plus narrowly affected checks.\n- Chat execution remains DENY; Grokbot remains NOT_CONNECTED. Do not add UI or start OPS-CLOSED-LOOP-RECONCILER here.\n\nNo merge/main push, release/signing, paid/live provider calls, credential/spend changes, or real user data. Maximum two focused attempts per demonstrated defect. If either defect remains unresolved after this attempt, publish STOPPED with the exact trace rather than hiding it.\n\nMANDATORY DELIVERY: after implementation and targeted tests, publish a NEW complete PR23 result BEFORE final substantive push with dispatch/task ID, worker ID, COMPLETED or STOPPED, exact final LOCAL SHA, branch/base, changed files, root causes, tests, blockers, publication_pending=true, and ci_status=PENDING. Then push exactly that SHA and create the stacked draft PR, followed by a publication note. No fake commit and no successor self-dispatch. The next dependency-satisfied task after technical acceptance is OPS-CLOSED-LOOP-RECONCILER.",
   "protocolCorrections": [
     {
       "time": "2026-10-11T06:41:12.925Z",
@@ -1260,42 +1256,7 @@
     "next": "OPS-CLOSED-LOOP-RECONCILER",
     "product": "T3 chat UI; named internal/external agents; Agents/Tasks; V2/ActionGate; routing evaluation; reliable handoffs"
   },
-  "dispatchStartedAt": "2026-10-11T07:32:21.594Z",
-  "acceptedAt": "2026-10-11T07:33:18Z",
-  "resultCheckpoint": {
-    "taskId": "base3-brakes-active-restart-20261011-07",
-    "resultKey": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
-    "resultCommentId": 6106817145,
-    "resultUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106817145",
-    "workerState": "COMPLETED",
-    "finalSha": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
-    "branch": "cursor/brakes-active-restart-abd5",
-    "base": "cursor/mobile-highlighter-repair-abd5",
-    "pr": 30,
-    "resultAt": "2026-10-11T07:46:41Z",
-    "publicationCommentId": 6106820627,
-    "publicationAt": "2026-10-11T07:47:08Z",
-    "published": true,
-    "ciState": "FAILURE",
-    "review": {
-      "time": "2026-10-11T07:54:26.180Z",
-      "automaticEvent": true,
-      "source": "natural pull_request.opened ef1e0d30-c547-11f1-860a-00fcf96f54da",
-      "deliveryId": "ef1e0d30-c547-11f1-860a-00fcf96f54da",
-      "resultKey": "base3-brakes-active-restart-20261011-07:5f1a9f3e3ef2c43af5165ca3a657e792029e5431:6106817145",
-      "pr": 30,
-      "head": "5f1a9f3e3ef2c43af5165ca3a657e792029e5431",
-      "resultCommentId": 6106817145,
-      "outcome": "ACCEPTED_BOUNDED_BRAKE_REPAIR_WITH_CI_REPLAY_REPAIR_REQUIRED",
-      "ciRun": 38122531716,
-      "checkId": 114421031105,
-      "check": "failure",
-      "actualCheckoutSha": "f4a532cf4c66218c4e140575fb79a6f9abd72f24",
-      "findings": [
-        "Frozen token/dollar/deadline bounds persist across omission and a real file-backed SQLite reopen; usage and startup recovery request interrupt without a new admission; lease release remains terminal-evidence-only.",
-        "One provider turn can overshoot remaining budget and a silent deadline waits for usage or database startup; both are explicitly recorded capability limits.",
-        "Required Check failed in unchanged deterministic replay harnesses: ACP status JSON was read before a complete write, and two Codex approval fixtures remained waiting instead of completed. Focused replay reliability repair required before the reconciler."
-      ]
-    }
-  }
+  "dispatchStartedAt": "2026-10-11T07:55:01.236Z",
+  "acceptedAt": null,
+  "resultCheckpoint": null
 }
