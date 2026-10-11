@@ -1,40 +1,22 @@
 {
   "schema": 1,
-  "state": "TERMINAL",
-  "generation": 33,
-  "taskId": "base3-mobile-highlighter-repair-20261011-06",
-  "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
-  "dispatchId": "base3-mobile-highlighter-repair-20261011-06",
+  "state": "DISPATCHED",
+  "generation": 34,
+  "taskId": "base3-brakes-active-restart-20261011-07",
+  "workerId": "reserved-interactive-recovery-0732",
+  "dispatchId": "base3-brakes-active-restart-20261011-07",
   "dispatchCount": 1,
-  "startingSha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
+  "startingSha": "975af300b65c66ea427cd79bc81a994ea53582d7",
   "coordinationPr": 23,
   "ack": {
-    "delivery": "confirmed",
-    "commentId": 6106522915,
-    "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106522915"
+    "delivery": "started",
+    "commentId": null
   },
   "provider": {
-    "status": "RUNNING",
-    "startMechanism": "PR23 comment",
-    "acknowledgmentCommentId": 6106523457,
-    "acknowledgmentWorkerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
-    "acceptance": {
-      "commentId": 6106528486,
-      "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106528486",
-      "githubCreatedAt": "2026-10-11T07:08:24Z",
-      "reportedAcceptedAt": "2026-10-11T07:08:16Z",
-      "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
-      "dispatchId": "base3-mobile-highlighter-repair-20261011-06"
-    }
+    "status": "CLAIM_WAIT",
+    "startMechanism": "PR23 comment"
   },
-  "termination": {
-    "established": true,
-    "workerState": "COMPLETED",
-    "evidence": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106636499",
-    "commentId": 6106636499,
-    "finalSha": "975af300b65c66ea427cd79bc81a994ea53582d7",
-    "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5"
-  },
+  "termination": null,
   "priorResultCommentId": 6106462863,
   "reviewOutcome": "CHANGES_REQUIRED",
   "ci": {
@@ -370,6 +352,17 @@
       "startSha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
       "resultSha": "975af300b65c66ea427cd79bc81a994ea53582d7",
       "successor": null
+    },
+    {
+      "taskId": "base3-brakes-active-restart-20261011-07",
+      "predecessor": "base3-mobile-highlighter-repair-20261011-06",
+      "dependencies": [
+        "base3-mobile-highlighter-repair-20261011-06"
+      ],
+      "startSha": "975af300b65c66ea427cd79bc81a994ea53582d7",
+      "base": "cursor/mobile-highlighter-repair-abd5",
+      "pr": null,
+      "successor": null
     }
   ],
   "nextTasks": [
@@ -430,7 +423,7 @@
     },
     {
       "id": "OFFLINE-BRAKES-ACTIVE-RESTART-REPAIR",
-      "state": "READY_AFTER_DEPENDENCY",
+      "state": "DISPATCHED",
       "dependencies": [
         "base3-mobile-highlighter-repair-20261011-06"
       ],
@@ -511,8 +504,8 @@
     "collaboration": "Internal agents and external contractors support bidirectional task-scoped conversation and delegation",
     "nextTask": "Minimal agent collaboration and chat-first UI; repair slot validation prerequisite"
   },
-  "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106522915",
-  "commentDelivery": "confirmed",
+  "commentUrl": null,
+  "commentDelivery": "started",
   "lastOwnerDirection": "Minimal T3 chat UI + Agents + Tasks; embedded/internal and external contractor agents converse and delegate bidirectionally.",
   "loopAcceptance": {
     "status": "UNVERIFIED",
@@ -925,16 +918,16 @@
     }
   ],
   "followup": null,
-  "predecessor": "base3-offline-pilot-brakes-20261011-05",
+  "predecessor": "base3-mobile-highlighter-repair-20261011-06",
   "dependencies": [
-    "base3-offline-pilot-brakes-20261011-05"
+    "base3-mobile-highlighter-repair-20261011-06"
   ],
-  "branch": "fresh branch from b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
-  "base": "cursor/offline-pilot-brakes-abd5",
+  "branch": "fresh branch from 975af300b65c66ea427cd79bc81a994ea53582d7",
+  "base": "cursor/mobile-highlighter-repair-abd5",
   "scope": "Mobile highlighter cold-start CI repair, tracked attempt 2",
   "acceptance": "Prove cold source/snippet coloring correctness, CI equivalent targeted regression; preserve semantic assertions.",
   "brake": "Offline only, maximum 2 focused attempts, no live-slot worker mutation/main/merge/release/paid/data",
-  "plannedPrompt": "@cursor\ndispatch_id: base3-mobile-highlighter-repair-20261011-06\npredecessor: base3-offline-pilot-brakes-20261011-05\npredecessor_result: https://github.com/charliefq/base3router/pull/23#issuecomment-6106462863\nstarting_sha: b61d636411b774c7e6eea0dfe38a80f6ebb4cb76\nbase: cursor/offline-pilot-brakes-abd5\ntask: MOBILE-HIGHLIGHTER-COLD-START-CI-REPAIR\nrepair_attempt: 2 of maximum 2 for the tracked highlighter defect\n\nThe predecessor explicitly reports COMPLETED before publishing this exact head as draft PR28. Automatic review found required Check 114413096689 failed in CI run 38119865290. Actual test checkout eadf4c605e53f3a70ae1233b2fa8e5bc5946422f merges this head into 9dc41f4e168af5cdc233751ae23e3e9e5e17b29b. All server shards, Build, Lint, Typecheck, Rust, Test Web and Release Smoke passed; the Test job 114412195874 failed:\napps/mobile/src/features/review/shikiReviewHighlighter.test.ts:68\nhighlightSourceFile > initializes source and snippet highlighting without a warmup\nexpected sourceTokens.find(token => token.content === \"42\")?.color to be truthy, received undefined.\nhttps://github.com/charliefq/base3router/actions/runs/38119865290/job/114412195874\n\nThis sole comment starts a bounded successor. First publish a NEW PR23 CLAIMED/RUNNING acceptance with this dispatch ID, actual worker ID/agent link, exact starting SHA, UTC and America/Los_Angeles timestamps. Same single worker; never self-dispatch. Do not read/write/release/recreate the live ops ledger.\n\nFresh branch from the exact starting SHA; draft stacked PR targeting cursor/offline-pilot-brakes-abd5. Preserve existing heads; no merge/main push, release/signing, paid/live calls, credentials/spend changes or real user data.\n\nFocus only on highlighter cold initialization correctness and its targeted tests. Read apps/mobile/src/features/review/shikiReviewHighlighter.ts, reviewHighlighterEngine/incrementalSnippet and the test. Reproduce under actual CI-selected engine before changing it. The current code eagerly registers seven grammar modules; source and snippet entrypoints must share a correctly initialized highlighter, preserve exact source content, syntax coloring and consistent tokenization on a cold import. Diagnose why the \"42\" token is absent, including module reset/caches/language selection/regex engine differences. Do not weaken the assertion or substitute a warmed test to hide the observed defect. If token boundaries legitimately differ by supported engine, prove semantic numeric-range coloring and source/snippet equality for cold paths rather than inventing unsupported exact-token assumptions; document that tradeoff with actual output. Cover repeat/concurrent cold calls, unknown language/plain fallback, long lines and both themes. Preserve native fallback behavior; no real native signing/install needed. Run meaningful targeted reproduction/regressions and package checks only; no blanket repeated CI reruns. Maximum two focused repairs for this defect; if unresolved, publish STOPPED with evidence, no third retry.\n\nProduct direction remains T3 chat with only Agents + Tasks and named internal/external contractor bidirectional collaboration. Grokbot NOT_CONNECTED and chat execution DENY. Do not broaden UI or budgets in this repair. Budget active interruption, immutable tree bounds and actual SQLite reopen tests are demonstrated follow-up defects already queued; OPS-CLOSED-LOOP-RECONCILER remains next after bounded correctness repairs.\n\nMANDATORY DELIVERY: after local tests publish a NEW complete PR23 result BEFORE final substantive push, with task/dispatch ID, actual worker ID, implementation_state and worker_state COMPLETED or STOPPED, exact final LOCAL SHA, branch/base, changed files, reproduction/root cause/tests/evidence, limitations/blockers, publication_pending=true, ci_status=PENDING. Then push exactly that SHA and open the stacked draft PR; add publication note. Do not wait for CI to report implementation terminal. No fake commits or self-dispatched successor. No-code terminal names exact existing remote SHA and no-code classification.",
+  "plannedPrompt": "@cursor\ndispatch_id: base3-brakes-active-restart-20261011-07\npredecessor: base3-mobile-highlighter-repair-20261011-06\npredecessor_result: https://github.com/charliefq/base3router/pull/23#issuecomment-6106462863\nstarting_sha: 975af300b65c66ea427cd79bc81a994ea53582d7\nbase: cursor/mobile-highlighter-repair-abd5\ntask: OFFLINE-BRAKES-ACTIVE-RESTART-REPAIR\nrepair_attempt: 1 of maximum 2 per demonstrated defect\n\nThe predecessor is explicitly COMPLETED and its exact reported substantive head is published as draft PR28. Technical review requires this bounded repair before OPS-CLOSED-LOOP-RECONCILER. The review result is recorded durably; this sole comment starts the successor, not a second dispatcher.\n\nFirst publish a NEW explicit CLAIMED/RUNNING comment on PR23 with this dispatch ID, actual worker ID/agent link, exact starting SHA and UTC/Los_Angeles timestamps. Same single worker only. Never self-dispatch or read/write/release/recreate the live ops ledger.\n\nCreate a FRESH branch from the exact starting SHA and a draft stacked PR targeting cursor/mobile-highlighter-repair-abd5. Preserve all prior branch heads.\n\nDemonstrated defects:\n1. New TaskContract.commitTaskAdmission requests cancellation only when another governed start/handoff is attempted. TaskUsageAccounting.recordTaskUsage contains no exhaustion reaction; PR28 adds no active deadline enforcement. A running turn can cross its token/dollar cap or deadline with no subsequent start and never be interrupted. Existing pin test calls a second dispatch to trigger cancellation.\n2. TaskPilotBrakes.test.ts uses SqlitePersistenceMemory for the alleged restart test; rewriting payload on the same connection is not restart evidence.\n3. Frozen deadline is conditional on pilotActive(current brake). Removing optional brakes makes pilotAllows SQL 1, bypassing the existing persisted deadline. Tightening/redirect/restart must not accidentally disable a previously bound tree brake.\n\nBounded implementation:\n- Reuse existing V2 policy/runtime cancellation pathways. Add a durable, idempotent brake evaluation after usage updates AND deadline-driven evaluation of active governed leases, including startup recovery. Once cumulative tree usage reaches/exceeds cap or absolute deadline passes, request interrupt without needing another admission. Do not free the lease on request or unknown stream end; free exactly once only on explicit provider terminal evidence.\n- Persist the enforced tree bounds so omission, child, retry, handoff, revision or restart cannot silently reset/disable them. Unknown usage/price denies new starts. Keep synthetic pricing exclusively in explicitly injected offline fixtures, no production default price.\n- Preserve atomic admission and idempotency. Be precise: cumulative threshold checks do not guarantee zero overshoot within a provider turn; do not claim a hard no-overshoot cap without supported bounded reservation/provider enforcement. For the offline provider, demonstrate bounded starts/reservations against remaining budget; if provider limits cannot enforce that, fail closed and record that capability blocker.\n- Add REAL file-backed disposable SQLite restart tests: close/discard service/runtime A, construct B over the same temp database. Verify totals, frozen bounds/deadline, pending interrupt and occupied lease survive; recover already-expired active work without a new task start. Test streamed usage crossing cap with no subsequent dispatch, deadline crossing with no subsequent dispatch, duplicate/reordered observations, cancellation unconfirmed/terminal confirmed, and attempted brake omission. Use fake providers/controlled clock only. Retain meaningful lifecycle regressions.\n- Keep scope to policy/accounting/runtime brake integration, additive migrations and targeted tests/docs. T3 chat shell only Agents + Tasks; named internal employees and external contractor bidirectional direction preserved. Chat execution DENY, Grokbot NOT_CONNECTED.\n\nNo merge/main push, release/signing, paid/live provider calls, credential/spend changes or real user data. No new scheduler/service or provider connection. Record unavailable live provider/Grokbot/per-principal authorization as blockers and continue this offline work.\n\nDELIVERY: after local implementation/tests, publish a NEW complete PR23 result BEFORE final substantive push: task/dispatch ID, actual worker ID, implementation_state and worker_state COMPLETED or STOPPED, exact FINAL LOCAL SHA, branch/base, changes/files, meaningful tests/evidence, limitations/blockers, publication_pending=true, ci_status=PENDING. Then push THAT exact SHA and create the stacked draft PR, then publication note. Do not wait for CI before terminal implementation result. No fake commits. No-code terminal must name exact existing remote SHA and explicit no-code classification. You do not dispatch the next worker.\n\nPR29 highlighter repair is accepted against exact HEAD 975af300b65c66ea427cd79bc81a994ea53582d7, Check 114416912510 success; test-merge aadc9bd885d114e7b8236655ac1c1da37bcee6da. Preserve it in the new branch. Brake defects originate in PR28. Update runbook to distinguish product recurring execution disabled from enabled hosted ChatGPT reconciliation; do not claim either is verified by configuration. Next queued item is OPS-CLOSED-LOOP-RECONCILER; do not implement or dispatch it in this bounded repair.",
   "protocolCorrections": [
     {
       "time": "2026-10-11T06:41:12.925Z",
@@ -965,6 +958,6 @@
     "next": "OPS-CLOSED-LOOP-RECONCILER",
     "product": "T3 chat UI; named internal/external agents; Agents/Tasks; V2/ActionGate; routing evaluation; reliable handoffs"
   },
-  "dispatchStartedAt": "2026-10-11T07:07:25.514Z",
-  "acceptedAt": "2026-10-11T07:08:24Z"
+  "dispatchStartedAt": "2026-10-11T07:32:21.594Z",
+  "acceptedAt": null
 }
