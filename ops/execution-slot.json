@@ -1,18 +1,20 @@
 {
   "schema": 1,
-  "state": "CLAIMED",
-  "generation": 15,
+  "state": "DISPATCHED",
+  "generation": 16,
   "taskId": "base3-chat-integration-20261011-04",
   "workerId": "interactive-review:base3-chat-integration-20261011-04",
-  "dispatchId": null,
-  "dispatchCount": 0,
+  "dispatchId": "base3-chat-integration-20261011-04",
+  "dispatchCount": 1,
   "startingSha": "00c007a12564f0a7945aec111dde027b7e60015a",
   "coordinationPr": 23,
   "ack": null,
-  "provider": null,
+  "provider": {
+    "status": "start reserved; comment not yet posted"
+  },
   "termination": null,
   "priorResultCommentId": 6105911508,
-  "reviewOutcome": "SUCCESSOR_CLAIMED",
+  "reviewOutcome": "SUCCESSOR_RESERVED",
   "ci": {
     "run": 38115005811,
     "check": "success",
@@ -223,7 +225,7 @@
     "nextTask": "Minimal agent collaboration and chat-first UI; repair slot validation prerequisite"
   },
   "commentUrl": null,
-  "commentDelivery": null,
+  "commentDelivery": "started",
   "lastOwnerDirection": "Minimal T3 chat UI + Agents + Tasks; embedded/internal and external contractor agents converse and delegate bidirectionally.",
   "loopAcceptance": {
     "status": "UNVERIFIED",
