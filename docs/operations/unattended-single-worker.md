@@ -64,11 +64,13 @@ The tests are `vp test run --config vite.config.ts --dir scripts scripts/ops-cla
 
 Those refs live in the repository path passed to the script. Two working
 copies do not share them, and a fresh comment is not a claim either. The
-closed-loop slot is the single remote ref
-`refs/heads/ops/base3-execution-slot`, described in
-[the closed-loop runbook](closed-loop-runbook.md). `scripts/ops-claim.mjs`
-remains the local per-task rehearsal from dispatch
-`base3-unattended-20261010-02`. It is not the mandatory shared claim.
+closed-loop slot is `ops/execution-slot.json` on branch
+`ops/base3-execution-slot`. The handoff updates that file with its current
+blob SHA, as described in
+[the closed-loop runbook](closed-loop-runbook.md). `scripts/ops-slot.mjs` is a
+local git-lease rehearsal, not that handoff. `scripts/ops-claim.mjs` remains
+the local per-task rehearsal from dispatch `base3-unattended-20261010-02`.
+It is not the mandatory shared claim.
 
 ## Account blocker
 
