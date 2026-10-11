@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 16,
+  "generation": 17,
   "taskId": "base3-chat-integration-20261011-04",
   "workerId": "interactive-review:base3-chat-integration-20261011-04",
   "dispatchId": "base3-chat-integration-20261011-04",
@@ -322,5 +322,11 @@
       "review": "Fresh PR1–26 refs unchanged; PR26 patch confirms already queued thread/composer, V2/ActionGate, authenticated sender and multi-round correlation gaps. Current -04 covers those gaps. No duplicate dispatch, release, tests or new repair.",
       "loop": "UNVERIFIED; predecessor result followed publication; interactive successor cannot establish required automatic cycle."
     }
-  ]
+  ],
+  "reviewOwnership": {
+    "id": "event:35f2e0f0-c53e-11f1-8d2d-c8657370dc18",
+    "key": "base3-chat-integration-20261011-04:9dc41f4e168af5cdc233751ae23e3e9e5e17b29b:6106124642",
+    "state": "REVIEWING",
+    "claimedAt": "2026-10-11T06:37:59.989Z"
+  }
 }
