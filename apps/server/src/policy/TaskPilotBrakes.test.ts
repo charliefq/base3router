@@ -1,5 +1,10 @@
 // Disposable SQLite files live under the OS temp directory.
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   AuthOrchestrationOperateScope,
   childConstraintConflict,
@@ -18,11 +23,24 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import {
+  SqlitePersistenceMemory,
+  makeSqlitePersistenceLive,
+} from "../persistence/Layers/Sqlite.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
-import { authorizeDispatch, confirmProviderTermination, countOccupied } from "./Base3PolicyGate.ts";
+import {
+  authorizeDispatch,
+  confirmProviderTermination,
+  countOccupied,
+  noteUnconfirmedDisconnect,
+} from "./Base3PolicyGate.ts";
 import { PolicyExecutionContext } from "./executionContext.ts";
-import { loadTaskState, reserveGovernedStart, reserveProviderHandoff } from "./TaskContract.ts";
+import {
+  evaluatePersistedBrakes,
+  loadTaskState,
+  reserveGovernedStart,
+  reserveProviderHandoff,
+} from "./TaskContract.ts";
 import { recordTaskUsage } from "./TaskUsageAccounting.ts";
 
 const provider: ServerProvider = {
@@ -82,7 +100,19 @@ const payloadFor = (
   threadId: string,
   rootThreadId: string,
   parentThreadId: string | null,
-  contract: typeof pilotContract,
+  contract: {
+    readonly revision: number;
+    readonly goal: string;
+    readonly redirect: string;
+    readonly acceptance: string;
+    readonly brake: {
+      readonly maxProviderStarts: number;
+      readonly stopConditions: string;
+      readonly maxTokens?: number;
+      readonly maxCostUsd?: number;
+      readonly deadlineAt?: string;
+    };
+  },
 ) =>
   JSON.stringify({
     taskGovernance: "required",
@@ -328,7 +358,7 @@ it.effect("unknown usage and unverified prices deny the next start", () =>
   }).pipe(Effect.provide(gateLayer)),
 );
 
-it.effect("a restart keeps the frozen deadline and does not extend it", () =>
+it.effect("a later payload does not move a frozen deadline", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const expired = {
@@ -503,3 +533,395 @@ it.effect(
       ).toBe(0);
     }).pipe(Effect.provide(gateLayer)),
 );
+
+const bareContract = {
+  revision: 2,
+  goal: pilotContract.goal,
+  redirect: pilotContract.redirect,
+  acceptance: pilotContract.acceptance,
+  brake: {
+    maxProviderStarts: pilotBrake.maxProviderStarts,
+    stopConditions: pilotBrake.stopConditions,
+  },
+};
+
+const usageEvent = (
+  threadId: string,
+  eventId: string,
+  turnId: string,
+  input: {
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+    readonly costUsd: number;
+    readonly basis: "snapshot" | "incremental";
+  },
+) =>
+  ({
+    id: eventId,
+    type: "provider-turn.updated",
+    threadId,
+    occurredAt: duplicateAt,
+    runId: `run-${turnId}`,
+    providerInstanceId: provider.instanceId,
+    payload: {
+      id: turnId,
+      status: "running",
+      usageAccounting: input.basis,
+      reportedCostUsd: input.costUsd,
+      turnTokenUsage: {
+        usageStatus: "complete",
+        inputTokens: input.inputTokens,
+        outputTokens: input.outputTokens,
+        cachedInputTokens: 0,
+        cacheCreationTokens: 0,
+        reasoningTokens: 0,
+      },
+    },
+  }) as Extract<OrchestrationV2DomainEvent, { type: "provider-turn.updated" }>;
+
+const leaseFlags = (sql: SqlClient.SqlClient, threadId: string) =>
+  sql<{
+    readonly interrupt_requested: number;
+    readonly disconnect_unconfirmed: number;
+    readonly released_at: string | null;
+  }>`
+    SELECT interrupt_requested, disconnect_unconfirmed, released_at
+    FROM base3_capacity_leases
+    WHERE thread_id = ${threadId}
+  `;
+
+const tokenTotal = (sql: SqlClient.SqlClient, rootThreadId: string) =>
+  sql<{ readonly tokens: number | null; readonly cost: number | null }>`
+    SELECT SUM(input_tokens + output_tokens) AS tokens, SUM(reported_cost_usd) AS cost
+    FROM task_usage_attempts
+    WHERE root_thread_id = ${rootThreadId}
+  `.pipe(
+    Effect.map((rows) => ({
+      tokens: Number(rows[0]?.tokens ?? 0),
+      cost: Number(rows[0]?.cost ?? 0),
+    })),
+  );
+
+it.effect("streamed usage crossing a cap interrupts the open lease without another start", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* insertThread(sql, "thread-stream", "thread-stream", null);
+    yield* dispatchMessage("thread-stream", "stream-1", "message-stream");
+    expect(yield* admissionCount(sql, "thread-stream")).toBe(1);
+    yield* sql`
+        INSERT INTO orchestration_v2_projection_provider_threads (
+          provider_thread_id, thread_id, provider, provider_session_id, status, updated_at, payload_json
+        ) VALUES (
+          'provider-thread-stream', 'thread-stream', 'codex', 'session-stream', 'running',
+          '2019-01-01T00:00:00.000Z', '{}'
+        )
+      `;
+    yield* sql`
+        INSERT INTO orchestration_v2_projection_provider_turns (
+          provider_turn_id, thread_id, provider_thread_id, node_id, ordinal, status, payload_json
+        ) VALUES (
+          'turn-stream', 'thread-stream', 'provider-thread-stream', 'node-stream', 1, 'running', '{}'
+        )
+      `;
+    const under = usageEvent("thread-stream", "event-stream-under", "turn-stream", {
+      inputTokens: 10,
+      outputTokens: 5,
+      costUsd: 1,
+      basis: "snapshot",
+    });
+    yield* recordTaskUsage("local", under);
+    const underFlags = yield* leaseFlags(sql, "thread-stream");
+    expect(underFlags[0]?.interrupt_requested).toBe(0);
+    expect(underFlags[0]?.released_at).toBeNull();
+    const over = usageEvent("thread-stream", "event-stream-over", "turn-stream", {
+      inputTokens: 70,
+      outputTokens: 25,
+      costUsd: 1,
+      basis: "incremental",
+    });
+    yield* recordTaskUsage("local", over);
+    expect(yield* tokenTotal(sql, "thread-stream")).toMatchObject({ tokens: 110, cost: 2 });
+    yield* recordTaskUsage("local", over);
+    yield* recordTaskUsage("local", under);
+    expect(yield* tokenTotal(sql, "thread-stream")).toMatchObject({ tokens: 110, cost: 2 });
+    const interrupted = yield* leaseFlags(sql, "thread-stream");
+    expect(interrupted[0]?.interrupt_requested).toBe(1);
+    expect(interrupted[0]?.released_at).toBeNull();
+    const outbox = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count FROM orchestration_v2_effect_outbox
+        WHERE effect_id = 'effect:task-contract-cancel:turn-stream'
+      `;
+    expect(Number(outbox[0]?.count ?? 0)).toBe(1);
+    yield* noteUnconfirmedDisconnect({ threadId: "thread-stream" });
+    const unconfirmed = yield* leaseFlags(sql, "thread-stream");
+    expect(unconfirmed[0]?.disconnect_unconfirmed).toBe(1);
+    expect(unconfirmed[0]?.released_at).toBeNull();
+    expect(yield* admissionCount(sql, "thread-stream")).toBe(1);
+
+    yield* insertThread(sql, "thread-dollars", "thread-dollars", null, {
+      ...pilotContract,
+      brake: { ...pilotBrake, maxTokens: 1000, maxCostUsd: 2 },
+    });
+    yield* dispatchMessage("thread-dollars", "dollars-1", "message-dollars");
+    yield* recordTaskUsage(
+      "local",
+      usageEvent("thread-dollars", "event-dollars-under", "turn-dollars", {
+        inputTokens: 1,
+        outputTokens: 0,
+        costUsd: 1,
+        basis: "snapshot",
+      }),
+    );
+    expect((yield* leaseFlags(sql, "thread-dollars"))[0]?.interrupt_requested).toBe(0);
+    yield* recordTaskUsage(
+      "local",
+      usageEvent("thread-dollars", "event-dollars-over", "turn-dollars", {
+        inputTokens: 1,
+        outputTokens: 0,
+        costUsd: 2,
+        basis: "incremental",
+      }),
+    );
+    expect(yield* tokenTotal(sql, "thread-dollars")).toMatchObject({ tokens: 2, cost: 3 });
+    const dollarFlags = yield* leaseFlags(sql, "thread-dollars");
+    expect(dollarFlags[0]?.interrupt_requested).toBe(1);
+    expect(dollarFlags[0]?.released_at).toBeNull();
+    expect(yield* admissionCount(sql, "thread-dollars")).toBe(1);
+  }).pipe(Effect.provide(gateLayer)),
+);
+
+it.effect("a passed deadline interrupts the open lease without another start", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* TestClock.setTime(Date.parse("2019-01-01T00:00:00.000Z"));
+    yield* insertThread(sql, "thread-deadline", "thread-deadline", null, {
+      ...pilotContract,
+      brake: { ...pilotBrake, deadlineAt: "2020-06-01T00:00:00.000Z" },
+    });
+    yield* dispatchMessage("thread-deadline", "deadline-1", "message-deadline");
+    expect((yield* leaseFlags(sql, "thread-deadline"))[0]?.interrupt_requested).toBe(0);
+    expect(yield* admissionCount(sql, "thread-deadline")).toBe(1);
+    yield* TestClock.setTime(Date.parse("2026-10-12T00:00:00.000Z"));
+    yield* evaluatePersistedBrakes(sql, "thread-deadline");
+    const flags = yield* leaseFlags(sql, "thread-deadline");
+    expect(flags[0]?.interrupt_requested).toBe(1);
+    expect(flags[0]?.released_at).toBeNull();
+    yield* noteUnconfirmedDisconnect({ threadId: "thread-deadline" });
+    expect((yield* leaseFlags(sql, "thread-deadline"))[0]?.released_at).toBeNull();
+    yield* confirmProviderTermination({
+      threadId: "thread-deadline",
+      messageId: "message-deadline",
+    });
+    const once = yield* leaseFlags(sql, "thread-deadline");
+    expect(once[0]?.released_at).not.toBeNull();
+    yield* confirmProviderTermination({
+      threadId: "thread-deadline",
+      messageId: "message-deadline",
+    });
+    expect((yield* leaseFlags(sql, "thread-deadline"))[0]?.released_at).toBe(once[0]?.released_at);
+    expect(yield* admissionCount(sql, "thread-deadline")).toBe(1);
+  }).pipe(Effect.provide(gateLayer)),
+);
+
+it.effect("omitting brakes does not disable a frozen tree bound", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* TestClock.setTime(Date.parse("2026-10-11T00:00:00.000Z"));
+    yield* insertThread(sql, "thread-omit", "thread-omit", null, {
+      ...pilotContract,
+      brake: { ...pilotBrake, deadlineAt: PAST },
+    });
+    const first = yield* Effect.flip(dispatchMessage("thread-omit", "omit-1", "message-omit"));
+    expect(first.message).toContain("Absolute deadline");
+    yield* sql`
+      UPDATE orchestration_v2_projection_threads
+      SET payload_json = ${payloadFor("thread-omit", "thread-omit", null, bareContract)}
+      WHERE thread_id = 'thread-omit'
+    `;
+    const second = yield* Effect.flip(dispatchMessage("thread-omit", "omit-2", "message-omit-2"));
+    expect(second.message).toContain("Absolute deadline");
+    expect(second.message).toContain("does not extend");
+    const stored = yield* sql<{
+      readonly deadline_at: string;
+      readonly max_tokens: number | null;
+      readonly max_cost_usd: number | null;
+    }>`
+      SELECT deadline_at, max_tokens, max_cost_usd
+      FROM task_contract_deadlines
+      WHERE root_thread_id = 'thread-omit'
+    `;
+    expect(stored[0]?.deadline_at.startsWith("2020-01-01")).toBe(true);
+    expect(stored[0]?.max_tokens).toBe(100);
+    expect(stored[0]?.max_cost_usd).toBe(10);
+    expect(yield* admissionCount(sql, "thread-omit")).toBe(0);
+  }).pipe(Effect.provide(gateLayer)),
+);
+
+it.effect("a lower cap replaces the frozen cap and a later omission does not raise it", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* insertThread(sql, "thread-tighten", "thread-tighten", null);
+    yield* dispatchMessage("thread-tighten", "tighten-1", "message-tighten");
+    yield* releaseLease("thread-tighten", "message-tighten");
+    yield* insertSyntheticUsage(sql, {
+      turnId: "turn-tighten",
+      rootThreadId: "thread-tighten",
+      threadId: "thread-tighten",
+      messageId: "message-tighten",
+      inputTokens: 40,
+      outputTokens: 20,
+      costUsd: 1,
+      role: "primary",
+    });
+    yield* sql`
+      UPDATE orchestration_v2_projection_threads
+      SET payload_json = ${payloadFor("thread-tighten", "thread-tighten", null, {
+        ...pilotContract,
+        brake: { ...pilotBrake, maxTokens: 50 },
+      })}
+      WHERE thread_id = 'thread-tighten'
+    `;
+    const tightened = yield* Effect.flip(
+      dispatchMessage("thread-tighten", "tighten-2", "message-tighten-2"),
+    );
+    expect(tightened.message).toContain("Token budget exhausted");
+    expect(tightened.message).toContain("50");
+    yield* sql`
+      UPDATE orchestration_v2_projection_threads
+      SET payload_json = ${payloadFor("thread-tighten", "thread-tighten", null, bareContract)}
+      WHERE thread_id = 'thread-tighten'
+    `;
+    const omitted = yield* Effect.flip(
+      dispatchMessage("thread-tighten", "tighten-3", "message-tighten-3"),
+    );
+    expect(omitted.message).toContain("Token budget exhausted");
+    expect(omitted.message).toContain("50");
+    const stored = yield* sql<{ readonly max_tokens: number | null }>`
+      SELECT max_tokens FROM task_contract_deadlines WHERE root_thread_id = 'thread-tighten'
+    `;
+    expect(stored[0]?.max_tokens).toBe(50);
+    expect(yield* admissionCount(sql, "thread-tighten")).toBe(1);
+  }).pipe(Effect.provide(gateLayer)),
+);
+
+it.effect("a reopened sqlite file keeps bounds and recovers an expired lease", () => {
+  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-brake-restart-"));
+  const dbPath = NodePath.join(tempDir, "state.sqlite");
+  const fileLayer = Layer.mergeAll(
+    makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer)),
+    providerLayer,
+  );
+  const lateDeadline = "2020-06-01T00:00:00.000Z";
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2019-01-01T00:00:00.000Z"));
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* insertThread(sql, "thread-keep", "thread-keep", null);
+      yield* dispatchMessage("thread-keep", "keep-1", "message-keep");
+      yield* recordTaskUsage(
+        "local",
+        usageEvent("thread-keep", "event-keep", "turn-keep", {
+          inputTokens: 10,
+          outputTokens: 5,
+          costUsd: 1,
+          basis: "snapshot",
+        }),
+      );
+      yield* insertThread(sql, "thread-spent", "thread-spent", null);
+      yield* dispatchMessage("thread-spent", "spent-1", "message-spent");
+      yield* recordTaskUsage(
+        "local",
+        usageEvent("thread-spent", "event-spent-under", "turn-spent", {
+          inputTokens: 10,
+          outputTokens: 5,
+          costUsd: 1,
+          basis: "snapshot",
+        }),
+      );
+      yield* recordTaskUsage(
+        "local",
+        usageEvent("thread-spent", "event-spent-over", "turn-spent", {
+          inputTokens: 70,
+          outputTokens: 25,
+          costUsd: 1,
+          basis: "incremental",
+        }),
+      );
+      yield* recordTaskUsage(
+        "local",
+        usageEvent("thread-spent", "event-spent-over", "turn-spent", {
+          inputTokens: 70,
+          outputTokens: 25,
+          costUsd: 1,
+          basis: "incremental",
+        }),
+      );
+      yield* recordTaskUsage(
+        "local",
+        usageEvent("thread-spent", "event-spent-under", "turn-spent", {
+          inputTokens: 10,
+          outputTokens: 5,
+          costUsd: 1,
+          basis: "snapshot",
+        }),
+      );
+      expect((yield* leaseFlags(sql, "thread-spent"))[0]?.interrupt_requested).toBe(1);
+      expect((yield* leaseFlags(sql, "thread-spent"))[0]?.released_at).toBeNull();
+      yield* insertThread(sql, "thread-late", "thread-late", null, {
+        ...pilotContract,
+        brake: { ...pilotBrake, deadlineAt: lateDeadline },
+      });
+      yield* dispatchMessage("thread-late", "late-1", "message-late");
+      expect((yield* leaseFlags(sql, "thread-late"))[0]?.interrupt_requested).toBe(0);
+      yield* insertThread(sql, "thread-file-omit", "thread-file-omit", null, {
+        ...pilotContract,
+        brake: { ...pilotBrake, deadlineAt: lateDeadline },
+      });
+      yield* dispatchMessage("thread-file-omit", "file-omit-1", "message-file-omit");
+      yield* releaseLease("thread-file-omit", "message-file-omit");
+      yield* sql`
+          UPDATE orchestration_v2_projection_threads
+          SET payload_json = ${payloadFor("thread-file-omit", "thread-file-omit", null, bareContract)}
+          WHERE thread_id = 'thread-file-omit'
+        `;
+      yield* sql`PRAGMA wal_checkpoint(TRUNCATE)`;
+    }).pipe(Effect.provide(fileLayer));
+
+    yield* TestClock.setTime(Date.parse("2026-10-12T00:00:00.000Z"));
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      expect(yield* tokenTotal(sql, "thread-keep")).toMatchObject({ tokens: 15 });
+      expect((yield* leaseFlags(sql, "thread-keep"))[0]?.interrupt_requested).toBe(0);
+      expect((yield* leaseFlags(sql, "thread-keep"))[0]?.released_at).toBeNull();
+      expect(yield* admissionCount(sql, "thread-keep")).toBe(1);
+      expect(yield* tokenTotal(sql, "thread-spent")).toMatchObject({ tokens: 110 });
+      expect((yield* leaseFlags(sql, "thread-spent"))[0]?.interrupt_requested).toBe(1);
+      expect((yield* leaseFlags(sql, "thread-spent"))[0]?.released_at).toBeNull();
+      expect(yield* admissionCount(sql, "thread-spent")).toBe(1);
+      yield* confirmProviderTermination({ threadId: "thread-spent", messageId: "message-spent" });
+      const once = (yield* leaseFlags(sql, "thread-spent"))[0]?.released_at;
+      expect(once).not.toBeNull();
+      yield* confirmProviderTermination({ threadId: "thread-spent", messageId: "message-spent" });
+      expect((yield* leaseFlags(sql, "thread-spent"))[0]?.released_at).toBe(once);
+      expect((yield* leaseFlags(sql, "thread-late"))[0]?.interrupt_requested).toBe(1);
+      expect((yield* leaseFlags(sql, "thread-late"))[0]?.released_at).toBeNull();
+      expect(yield* admissionCount(sql, "thread-late")).toBe(1);
+      const denied = yield* Effect.flip(
+        dispatchMessage("thread-file-omit", "file-omit-2", "message-file-omit-2"),
+      );
+      expect(denied.message).toContain("Absolute deadline");
+      expect(yield* admissionCount(sql, "thread-file-omit")).toBe(1);
+      const stored = yield* sql<{
+        readonly deadline_at: string;
+        readonly max_tokens: number | null;
+      }>`
+          SELECT deadline_at, max_tokens FROM task_contract_deadlines
+          WHERE root_thread_id = 'thread-file-omit'
+        `;
+      expect(stored[0]?.deadline_at.startsWith("2020-06-01")).toBe(true);
+      expect(stored[0]?.max_tokens).toBe(100);
+    }).pipe(Effect.provide(fileLayer));
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
+  );
+});
