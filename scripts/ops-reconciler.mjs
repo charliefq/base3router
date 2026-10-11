@@ -533,6 +533,11 @@ export async function reconcile({ source, ownerId, remote, github, reviewer, wor
       const entry = coordination.results.find((item) => item.key === result.key);
       entry.phase = receipt.decision;
       entry.review.receipt = receipt;
+      // Receipt recovery may follow a temporary publication or CI wait.
+      // Persist the evidence verified in this iteration with the decision.
+      entry.ci = verified.ci;
+      entry.publication = verified.publication;
+      entry.reason = null;
       if (receipt.decision === "ACCEPTED") {
         record.state = "TERMINAL";
         record.termination = {

@@ -395,6 +395,58 @@ describe("offline closed-loop reconciler", () => {
     }
   });
 
+  it.each([
+    ["pending", "CI_WAIT"],
+    ["pending", "PUBLICATION_WAIT"],
+    ["lost", "CI_WAIT"],
+    ["lost", "PUBLICATION_WAIT"],
+  ])("recovers a %s review after temporary %s", async (mode, waitPhase) => {
+    const f = fixture();
+    try {
+      const delivery = f.report(first, B);
+      f.publish(delivery);
+      if (mode === "lost") f.loseReview();
+      const reviewer = {
+        ...f.reviewer,
+        async review(request) {
+          await f.reviewer.review(request);
+          return null;
+        },
+      };
+      const initial = await f.run({ reviewer });
+      assert.equal(initial.status, mode === "lost" ? "BLOCKED" : "REVIEW_WAIT");
+      const ownership = structuredClone(f.read().coordination.results[0].review);
+      if (waitPhase === "CI_WAIT") {
+        f.runs.get(delivery.number).status = "in_progress";
+        f.runs.get(delivery.number).conclusion = null;
+      } else {
+        f.publications.clear();
+      }
+      assert.equal((await f.run({ source: "event", reviewer })).status, waitPhase);
+      assert.deepEqual(f.read().coordination.results[0].review, ownership);
+      assert.equal(f.calls.start, 0);
+
+      f.publish(delivery);
+      f.runs.get(delivery.number).id = "recovered-ci";
+      assert.equal(
+        (await f.run({ reviewer, ownerId: "restart-reader" })).status,
+        "DISPATCH_CONFIRMED",
+      );
+      const recovered = f.read().coordination.results[0];
+      assert.equal(recovered.phase, "ACCEPTED");
+      assert.equal(recovered.ci.id, "recovered-ci");
+      assert.equal(recovered.ci.status, "completed");
+      assert.equal(recovered.publication.sha, B);
+      assert.equal(recovered.review.requestId, ownership.requestId);
+      assert.equal(recovered.reason, null);
+      await f.run({ reviewer });
+      assert.equal(f.calls.review, 1);
+      assert.equal(f.calls.start, 1);
+    } finally {
+      f.dispose();
+    }
+  });
+
   it("does not equate a green CI with technical acceptance", async () => {
     const f = fixture();
     try {
