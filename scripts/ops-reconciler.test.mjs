@@ -674,6 +674,28 @@ describe("offline closed-loop reconciler", () => {
     }
   });
 
+  it("rejects a contradictory terminal packet even when its fingerprint is recomputed", async () => {
+    const f = fixture();
+    try {
+      const delivery = f.report(first, B);
+      f.publish(delivery);
+      await f.run({ tasks: [first] });
+      const corrupted = f.read();
+      const result = corrupted.coordination.results[0];
+      result.packet.workerState = "STOPPED";
+      delivery.comment.body = JSON.stringify({ ...delivery.packet, workerState: "STOPPED" });
+      result.fingerprint = NodeCrypto.createHash("sha256")
+        .update(JSON.stringify(result.packet))
+        .digest("hex");
+      NodeFS.writeFileSync(NodePath.join(f.directory, "slot.json"), JSON.stringify(corrupted));
+      assert.equal((await f.run({ tasks: [first] })).reason, "invalid-coordination-state");
+      assert.deepEqual(f.read(), corrupted);
+      assert.equal(f.calls.start, 0);
+    } finally {
+      f.dispose();
+    }
+  });
+
   it("fails closed on discovery errors and repeated cursors without changing the slot", async () => {
     const f = fixture();
     try {

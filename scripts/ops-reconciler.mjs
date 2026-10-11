@@ -46,6 +46,12 @@ function coordinationValid(state, record) {
       !text(result.comment?.url) ||
       !Number.isFinite(timestamp(result.comment?.createdAt)) ||
       !sha(result.packet.finalSha) ||
+      !["COMPLETED", "STOPPED"].includes(result.packet.workerState) ||
+      !["code", "no_code"].includes(result.packet.classification) ||
+      !Number.isInteger(result.packet.prNumber) ||
+      result.packet.prNumber < 1 ||
+      (result.packet.classification === "no_code" &&
+        result.packet.finalSha !== result.packet.startingSha) ||
       !phases.has(result.phase) ||
       result.key !== `${result.packet.taskId}:${result.packet.finalSha}:${result.comment.id}` ||
       result.fingerprint !== digest(result.packet) ||
@@ -70,11 +76,14 @@ function coordinationValid(state, record) {
       return false;
     if (
       ["ACCEPTED", "CHANGES_REQUIRED"].includes(result.phase) &&
-      (!matchingReview(result.review?.receipt, result) ||
+      (result.packet.workerState !== "COMPLETED" ||
+        !matchingReview(result.review?.receipt, result) ||
         result.review.receipt.decision !== result.phase ||
         result.ci?.status !== "completed" ||
         result.ci?.conclusion !== "success" ||
         result.ci?.headSha !== result.packet.finalSha ||
+        result.ci?.workflow !== task.requiredCI.workflow ||
+        result.ci?.check !== task.requiredCI.check ||
         !result.publication)
     )
       return false;
