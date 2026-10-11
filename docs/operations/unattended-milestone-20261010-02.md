@@ -19,12 +19,30 @@ were not moved.
 | Q5 This packet         | REVIEW_READY after the evidence publication commit and current-head Check | This file.                                                                                                                              |
 
 Branch `cursor/v2-unattended-followup-02-8ee5`, based on
-`cursor/v2-unattended-q1-q4-d2e4`. The publication commit adds
-`docs/operations/evidence/`. `testedCommitSha` inside
-`task-4a-binding-report.json` is the clean commit the local binder ran
-against. It is not this file's commit. The workflow `Task 4A evidence`
-uploads a separate artifact for its own head. Aggregate `Check` does not
-upload that artifact.
+`cursor/v2-unattended-q1-q4-d2e4`.
+
+Local binder, clean tree, command
+`node scripts/bind-task-usage-accounting-report.mjs`:
+
+| Field             | Value                                      |
+| ----------------- | ------------------------------------------ |
+| testedCommitSha   | `dd92cfa19cbd6701364c405ee3691bc3cbf5fedf` |
+| dirty             | false                                      |
+| startedAt         | 2026-10-11T01:42:32.254Z                   |
+| finishedAt        | 2026-10-11T01:42:37.434Z                   |
+| input             | 269                                        |
+| output            | 64                                         |
+| input plus output | 333                                        |
+| complete-pair     | 324                                        |
+| excluded          | 9, vendor billability unknown              |
+| reported cost     | 13 synthetic USD                           |
+| generator commit  | null                                       |
+| cohort tests      | 2 passed                                   |
+
+The publication commit adds `docs/operations/evidence/` and is not
+`testedCommitSha`. The workflow `Task 4A evidence` uploads a separate
+artifact for its own head. Aggregate `Check` does not upload that artifact
+and does not prove a missing local file.
 
 The in-test generator still reports `commitSha: null`.
 

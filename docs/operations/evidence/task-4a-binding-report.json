@@ -1,0 +1,111 @@
+{
+  "label": "SYNTHETIC_ACCOUNTING_VERIFIED",
+  "dispatchId": "base3-unattended-20261010-02",
+  "synthetic": true,
+  "notModelPerformance": true,
+  "notAutoVsManualComparison": true,
+  "notVendorInvoice": true,
+  "notRealSpend": true,
+  "testedCommitSha": "dd92cfa19cbd6701364c405ee3691bc3cbf5fedf",
+  "dirty": false,
+  "porcelain": "",
+  "command": "vp test run apps/server/src/policy/TaskUsageAccounting.test.ts",
+  "startedAt": "2026-10-11T01:42:32.254Z",
+  "finishedAt": "2026-10-11T01:42:37.434Z",
+  "generatorCommitSha": null,
+  "baselineSha": "55a1ea4f496eadea161c0e88822b375e42a0f127",
+  "reconciliation": {
+    "reportedInputTokens": 269,
+    "reportedOutputTokens": 64,
+    "reportedInputPlusOutput": 333,
+    "reportedBillableTokens": 324,
+    "excludedFromInternalCompletePairMetric": 9,
+    "incompleteAttemptOutputTokens": 9,
+    "vendorBillableDetermination": "unknown",
+    "explanation": "269 + 64 = 333 sums every known input and output report, including the unfinished attempt that reported 9 output tokens and no input. reportedBillableTokens is 324 because the internal complete-pair metric adds input and output only when an attempt reported both. 333 - 9 = 324. Those 9 tokens are excluded from that metric only. This run does not decide whether a vendor would bill them. The attempt reported no cost, so its provider-reported cost stays unknown. Cache and reasoning stay inside the reported input and output totals and are not added again."
+  },
+  "currency": {
+    "field": "reportedCostUsd",
+    "amount": 13,
+    "unit": "USD-shaped provider-reported number from the synthetic fixture",
+    "vendorInvoice": false,
+    "realSpend": false
+  },
+  "sourceReport": {
+    "label": "SYNTHETIC_ACCOUNTING_VERIFIED",
+    "synthetic": true,
+    "notModelPerformance": true,
+    "notAutoVsManualComparison": true,
+    "baselineSha": "55a1ea4f496eadea161c0e88822b375e42a0f127",
+    "commitSha": null,
+    "definitions": {
+      "attempt": "One provider turn on a governed task tree.",
+      "snapshot": "turnTokenUsage replaces the same turn. Input includes cache. Output includes reasoning.",
+      "incremental": "A later incremental report adds to that turn.",
+      "contextWindow": "tokenUsage.usedTokens is not task consumption.",
+      "missing": "Unknown stays null. It is not stored or displayed as zero.",
+      "cost": "Provider-reported cost only. No price table.",
+      "acceptance": "Human accept of the current contract revision. Provider completion is not acceptance.",
+      "perAccepted": "All cohort consumption divided by accepted tasks. Undefined when none are accepted.",
+      "partial": "Any missing usage category or cost makes the total partial."
+    },
+    "expected": {
+      "attempted": 5,
+      "accepted": 2,
+      "rejected": 1,
+      "unfinished": 2,
+      "coverage": "partial",
+      "reported": {
+        "inputTokens": 269,
+        "cachedInputTokens": 56,
+        "cacheCreationTokens": 10,
+        "outputTokens": 64,
+        "reasoningTokens": 9,
+        "reportedCostUsd": 13
+      },
+      "reportedBillableTokens": 324,
+      "perAccepted": {
+        "defined": true,
+        "reportedInputTokens": 134.5,
+        "reportedOutputTokens": 32,
+        "reportedCachedInputTokens": 28,
+        "reportedCacheCreationTokens": 5,
+        "reportedReasoningTokens": 4.5,
+        "reportedCostUsdKnown": 6.5,
+        "reportedBillableTokens": 162,
+        "inputTokens": null,
+        "outputTokens": null,
+        "reportedCostUsd": null
+      }
+    },
+    "observed": {
+      "attempted": 5,
+      "accepted": 2,
+      "rejected": 1,
+      "unfinished": 2,
+      "coverage": "partial",
+      "reported": {
+        "inputTokens": 269,
+        "outputTokens": 64,
+        "cachedInputTokens": 56,
+        "cacheCreationTokens": 10,
+        "reasoningTokens": 9,
+        "reportedCostUsd": 13
+      },
+      "reportedBillableTokens": 324,
+      "perAccepted": {
+        "defined": true,
+        "reportedInputTokens": 134.5,
+        "reportedOutputTokens": 32,
+        "reportedCachedInputTokens": 28,
+        "reportedCacheCreationTokens": 5,
+        "reportedReasoningTokens": 4.5,
+        "reportedCostUsdKnown": 6.5,
+        "reportedBillableTokens": 162,
+        "inputTokens": null,
+        "outputTokens": null,
+        "reportedCostUsd": null
+      }
+    }
+  }
+}
