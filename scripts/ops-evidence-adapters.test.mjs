@@ -146,6 +146,49 @@ describe("offline GitHub evidence boundaries", () => {
     assert.equal(comments.items[0].authorId, "91");
   });
 
+  it.each(["Link", "LINK", "Headers"])("reads pagination from %s headers", (kind) => {
+    const link = `<https://api.github.com/repos/${repository}/pulls?state=all&per_page=100&page=2>; rel="next"`;
+    const headers = kind === "Headers" ? new Headers({ Link: link }) : { [kind]: link };
+    const result = normalizePage(
+      { status: 200, data: [], headers },
+      {
+        path: `/repos/${repository}/pulls`,
+        query: { state: "all", per_page: 100 },
+        page: 1,
+      },
+    );
+    assert.equal(result.nextCursor, "2");
+  });
+
+  it.each([new Map(), new Date(0), { get: () => null }, Object.create({ Link: "hidden" })])(
+    "rejects unsupported header containers instead of claiming a final page",
+    (headers) => {
+      assert.throws(() =>
+        normalizePage(
+          { status: 200, data: [], headers },
+          {
+            path: "/pulls",
+            query: {},
+            page: 1,
+          },
+        ),
+      );
+    },
+  );
+
+  it("rejects ambiguous case-duplicate Link fields", () => {
+    assert.throws(() =>
+      normalizePage(
+        { status: 200, data: [], headers: { link: "", Link: "" } },
+        {
+          path: "/pulls",
+          query: {},
+          page: 1,
+        },
+      ),
+    );
+  });
+
   it.each([
     "https://evil.invalid/repos/fixture-owner/fixture-repo/pulls?state=all&per_page=100&page=2",
     "https://api.github.com/repos/other/repo/pulls?state=all&per_page=100&page=2",

@@ -64,16 +64,30 @@ export function normalizeIssueComment(raw, repository, prNumber) {
   };
 }
 
+function linkHeader(headers) {
+  requireEvidence(
+    headers !== null && typeof headers === "object" && !Array.isArray(headers),
+    "missing-page-headers",
+  );
+  if (headers instanceof Headers) return headers.get("link") ?? undefined;
+  requireEvidence(
+    Object.getPrototypeOf(headers) === Object.prototype || Object.getPrototypeOf(headers) === null,
+    "unsupported-header-container",
+  );
+  const entries = Object.entries(headers);
+  requireEvidence(
+    entries.every(([, value]) => typeof value === "string"),
+    "unsupported-header-container",
+  );
+  const matches = entries.filter(([name]) => name.toLowerCase() === "link");
+  requireEvidence(matches.length <= 1, "ambiguous-link-header");
+  return matches[0]?.[1];
+}
+
 export function normalizePage(response, { path, query, page }) {
   requireEvidence(response?.status === 200 && Array.isArray(response.data), "page-unavailable");
   requireEvidence(id(page), "invalid-page-number");
-  requireEvidence(
-    response.headers !== null &&
-      typeof response.headers === "object" &&
-      !Array.isArray(response.headers),
-    "missing-page-headers",
-  );
-  const link = response.headers?.link;
+  const link = linkHeader(response.headers);
   let nextCursor = null;
   if (link !== undefined) {
     requireEvidence(typeof link === "string", "invalid-link-header");
