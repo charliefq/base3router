@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "state": "DISPATCHED",
-  "generation": 12,
+  "generation": 13,
   "taskId": "base3-chat-agents-20261011-03",
   "workerId": "event-review:base3-chat-agents-20261011-03",
   "dispatchId": "event-review:base3-chat-agents-20261011-03:base3-chat-agents-20261011-03:1",
@@ -20,12 +20,12 @@
   },
   "termination": null,
   "priorResultCommentId": 6105316354,
-  "reviewOutcome": "CI_WAIT_AND_TERMINAL_WAIT_WITH_REVIEW_FINDINGS",
+  "reviewOutcome": "CI_WAIT_AND_TERMINAL_WAIT_POST_REVIEW_PUSH",
   "ci": {
-    "run": 38114936998,
+    "run": 38115005811,
     "check": "pending",
     "actualCheckoutSha": null,
-    "prHead": "adf252c0732c2ab2e228b3d4364056885fe54c74"
+    "prHead": "00c007a12564f0a7945aec111dde027b7e60015a"
   },
   "attempts": {
     "highlighterRepair": 1,
@@ -45,7 +45,7 @@
   "taskGraph": [
     {
       "pr": 26,
-      "head": "adf252c0732c2ab2e228b3d4364056885fe54c74",
+      "head": "00c007a12564f0a7945aec111dde027b7e60015a",
       "base": "a4541db95049ec595570afaa6a9f17aed9702310",
       "verification": "fresh",
       "state": "open",
@@ -134,7 +134,7 @@
       "scope": "actual T3 threads and project/capability context, V2/ActionGate/contracts, authenticated sender binding, multi-cycle reply integrity; no paid/live external calls"
     }
   ],
-  "nonce": "event-review-26-b4e2f4e0-20261011-053013",
+  "nonce": "event-review-26-df3fd5f0-20261011-053132",
   "discoveredPrs": [
     26,
     25,
@@ -164,20 +164,29 @@
     1
   ],
   "lastReview": {
-    "eventKey": "b4e2f4e0-c534-11f1-9413-7fa46fa54ea8",
+    "eventKeys": [
+      "df3fd5f0-c534-11f1-9bc8-b7a987513d14",
+      "f677e5a0-c534-11f1-9764-c540b6e5d9ff"
+    ],
     "automaticEvent": true,
-    "time": "2026-10-11T05:30:13Z",
+    "time": "2026-10-11T05:31:32Z",
     "pr": 26,
-    "head": "adf252c0732c2ab2e228b3d4364056885fe54c74",
+    "head": "00c007a12564f0a7945aec111dde027b7e60015a",
+    "previousHead": "adf252c0732c2ab2e228b3d4364056885fe54c74",
     "resultCommentId": null,
-    "latestLinkCommentId": 6105840965,
-    "outcome": "CI_WAIT_AND_TERMINAL_WAIT_WITH_REVIEW_FINDINGS",
-    "ciRun": 38114936998,
+    "latestObservedCommentId": 6105852731,
+    "outcome": "CI_WAIT_AND_TERMINAL_WAIT_POST_REVIEW_PUSH",
+    "ciRun": 38115005811,
     "ciStatus": "in_progress",
-    "requiredCheck": "not terminal; aggregate Check not yet present",
+    "requiredCheck": "not terminal; actual checkout SHA not yet verified",
     "checkoutEvidence": null,
     "newDispatchCount": 0,
     "findings": [
+      {
+        "file": "apps/server/src/collaboration/store.test.ts",
+        "status": "TEST_ONLY_COMMIT_AFTER_INITIAL_REVIEW",
+        "detail": "Commit 00c007a adds persistence/idempotency/cross-project-refusal tests only. It does not address direct chat, V2/ActionGate integration, sender binding, or multi-cycle clarification findings. This commit was created at 05:30:26Z after the opened-event review time 05:30:13Z, with no prior terminal implementation result."
+      },
       {
         "file": "apps/web/src/components/collaboration/CollaborationPages.tsx",
         "status": "STATIC_REVIEW_CONFIRMED",
@@ -202,7 +211,7 @@
         "detail": "recordValid now rejects null/scalars/malformed schema and TERMINAL missing established evidence. Mock CAS and fixtures improved; production GitHub API does not inherit mock 422 checks. Candidate CI and terminal packet pending."
       }
     ],
-    "reason": "Published PR with no NEW terminal result for dispatch 03. Do not release or replace current worker."
+    "reason": "Current worker has no explicit COMPLETED/STOPPED result. Preserve DISPATCHED hold; no successor."
   },
   "independentPreparation": {
     "next": "OFFLINE-PILOT-BRAKES",
@@ -238,18 +247,40 @@
     "longTerm": "OBSERVING",
     "publicationObserved": {
       "pr": 26,
-      "head": "adf252c0732c2ab2e228b3d4364056885fe54c74",
-      "prCreatedAt": "2026-10-11T05:29:17Z",
-      "linkCommentId": 6105840965,
-      "linkTime": "2026-10-11T05:29:24Z",
+      "heads": [
+        {
+          "sha": "adf252c0732c2ab2e228b3d4364056885fe54c74",
+          "publishedAt": "2026-10-11T05:29:17Z"
+        },
+        {
+          "sha": "00c007a12564f0a7945aec111dde027b7e60015a",
+          "commitAt": "2026-10-11T05:30:26Z",
+          "eventReceivedAt": "2026-10-11T05:30:31.062Z"
+        }
+      ],
       "prePushTerminalResultObserved": false,
-      "order": "Report-before-push not established for this published candidate; worker link says result follows CI"
+      "order": "Two substantive publications observed before any terminal implementation result; second was a test-only commit after initial automatic review."
     },
     "automaticReview": {
       "eventKey": "b4e2f4e0-c534-11f1-9413-7fa46fa54ea8",
       "time": "2026-10-11T05:30:13Z",
       "head": "adf252c0732c2ab2e228b3d4364056885fe54c74",
       "resultCommentId": null
-    }
+    },
+    "automaticReviews": [
+      {
+        "eventKey": "b4e2f4e0-c534-11f1-9413-7fa46fa54ea8",
+        "time": "2026-10-11T05:30:13Z",
+        "head": "adf252c0732c2ab2e228b3d4364056885fe54c74",
+        "resultCommentId": null
+      },
+      {
+        "eventKey": "df3fd5f0-c534-11f1-9bc8-b7a987513d14",
+        "time": "2026-10-11T05:31:32Z",
+        "head": "00c007a12564f0a7945aec111dde027b7e60015a",
+        "resultCommentId": null
+      }
+    ],
+    "protocolFinding": "Current cycle cannot prove report-before-push because no terminal result preceded either published head. Do not manufacture another push; a future substantive delivery must follow the order."
   }
 }
