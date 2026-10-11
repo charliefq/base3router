@@ -40,7 +40,15 @@ function fixture() {
     id: 83,
     name: "Test",
     check_run_url: `https://api.github.com${root}/check-runs/84`,
-    steps: [{ name: "Checkout", status: "completed", conclusion: "success" }],
+    steps: [
+      {
+        name: "Checkout",
+        status: "completed",
+        conclusion: "success",
+        started_at: "2026-01-01T10:00:00Z",
+        completed_at: "2026-01-01T10:00:07Z",
+      },
+    ],
   };
   const responses = new Map(
     Object.entries({
@@ -202,6 +210,39 @@ describe("read-only GitHub evidence collector", () => {
     noExecution(bundle);
     assert.equal(bundle.evidence.requiredCheck.status, "verified");
     assert.notEqual(bundle.evidence.checkout.status, "verified");
+  });
+
+  it.each([
+    "boundary-before-command",
+    "boundary-before-head",
+    "boundary-before-log",
+    "command-before-action",
+    "command-after-head",
+    "command-after-sha",
+    "outside-step-time",
+    "missing-step-time",
+  ])("rejects checkout evidence with %s", async (change) => {
+    const f = fixture();
+    const lines = logFixture.trimEnd().split("\n");
+    const boundary = "2026-01-01T10:00:03.5000000Z ##[group]Run unrelated";
+    const before = {
+      "boundary-before-command": 3,
+      "boundary-before-head": 4,
+      "boundary-before-log": 6,
+    };
+    if (change in before) lines.splice(before[change], 0, boundary);
+    const moves = { "command-before-action": 0, "command-after-head": 4, "command-after-sha": 7 };
+    if (change in moves) {
+      const [command] = lines.splice(3, 1);
+      lines.splice(moves[change], 0, command);
+    }
+    if (change === "outside-step-time")
+      f.raw(paths.testJob).steps[0].completed_at = "2026-01-01T10:00:03Z";
+    if (change === "missing-step-time") delete f.raw(paths.testJob).steps[0].started_at;
+    f.responses.get(paths.logs).data = lines.join("\n") + "\n";
+    const bundle = await f.run();
+    noExecution(bundle);
+    assert.equal(bundle.evidence.checkout.status, "blocked");
   });
 
   it.each(["edited", "author", "body", "missing", "unbound"])(

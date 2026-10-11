@@ -267,6 +267,13 @@ The required aggregate check does not establish checkout. The separate test job
 must match the run attempt and check suite and have a successful Checkout step.
 Its complete log must contain one checkout group/command, one short-SHA HEAD
 marker, one full-SHA `git log -1 --format=%H` result, and a following step boundary.
+The action start, checkout command, HEAD marker, git-log command and full SHA
+must occur in that order, all before the first subsequent Run group. Their log
+timestamps must be ordered and fall inside the successful Checkout step's REST
+start/end times (compared at the API's second precision). Missing step times or
+markers supplied across another step fail closed; a later arbitrary echo cannot
+fill missing checkout evidence. Text markers alone do not establish provenance:
+the caller must trust the workflow and authentic complete job-log transport.
 The full SHA must be the expected head or the PR test-merge with exactly the
 expected head/base parents. These job-log observations are not cryptographic
 attestations and still depend on the reviewed workflow and transport. Missing,

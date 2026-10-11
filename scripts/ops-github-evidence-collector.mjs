@@ -61,13 +61,11 @@ function successful(raw, label) {
 
 // These log markers are an observation of the trusted job log, not a signed
 // attestation. The complete-body assertion belongs to the injected transport.
-export function extractCheckoutLog(body) {
+export function extractCheckoutLog(body, checkoutStep) {
   requireEvidence(typeof body === "string" && body.length > 0, "checkout-log-missing", "unknown");
-  const lines = body
-    .split(/\r?\n/)
-    .map((line) =>
-      NodeUtil.stripVTControlCharacters(line).replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z /, ""),
-    );
+  const rawLines = body.split(/\r?\n/).map(NodeUtil.stripVTControlCharacters);
+  const timestamp = /^(\d{4}-\d\d-\d\dT[\d:.]+Z) /;
+  const lines = rawLines.map((line) => line.replace(timestamp, ""));
   const groups = lines
     .map((line, index) => (/^##\[group\]Run actions\/checkout@\S+$/.test(line) ? index : -1))
     .filter((index) => index >= 0);
@@ -79,7 +77,9 @@ export function extractCheckoutLog(body) {
       /^\[command\](?:\/[^ ]+\/)?git log -1 --format=%H$/.test(line) ? index : -1,
     )
     .filter((index) => index >= 0);
-  const checkouts = lines.filter((line) => /^\[command\].*\bgit\s.*\bcheckout\s/.test(line));
+  const checkouts = lines
+    .map((line, index) => (/^\[command\].*\bgit\s.*\bcheckout\s/.test(line) ? index : -1))
+    .filter((index) => index >= 0);
   requireEvidence(
     groups.length === 1 && heads.length === 1 && commands.length === 1 && checkouts.length === 1,
     "checkout-log-missing-or-ambiguous",
@@ -89,16 +89,40 @@ export function extractCheckoutLog(body) {
   requireEvidence(
     sha(actualSha) &&
       actualSha.startsWith(heads[0].match[1]) &&
-      groups[0] < heads[0].index &&
+      groups[0] < checkouts[0] &&
+      checkouts[0] < heads[0].index &&
       heads[0].index < command,
     "checkout-log-inconsistent",
   );
-  // Require a subsequent step boundary: EOF immediately after the SHA is not a
-  // complete checkout observation. Extra checkout groups/commands already fail.
+  // Bound markers to the FIRST subsequent Run group, not any later group.
+  // A later step echoing plausible git output cannot fill checkout's evidence.
+  const nextStep = lines.findIndex(
+    (line, index) => index > groups[0] && line.startsWith("##[group]Run "),
+  );
+  requireEvidence(nextStep >= 0, "checkout-log-truncated", "unknown");
+  requireEvidence(command + 1 < nextStep, "checkout-log-crosses-step");
   requireEvidence(
-    lines.slice(command + 2).some((line) => line.startsWith("##[group]Run ")),
-    "checkout-log-truncated",
-    "unknown",
+    time(checkoutStep?.started_at) &&
+      time(checkoutStep?.completed_at) &&
+      Date.parse(checkoutStep.started_at) <= Date.parse(checkoutStep.completed_at),
+    "checkout-step-time-unproven",
+  );
+  // REST step times have second precision. Compare at that same precision;
+  // the first subsequent Run boundary still excludes another step in that second.
+  const startSecond = Math.floor(Date.parse(checkoutStep.started_at) / 1000);
+  const endSecond = Math.floor(Date.parse(checkoutStep.completed_at) / 1000);
+  const markerSeconds = [groups[0], checkouts[0], heads[0].index, command, command + 1].map(
+    (index) => Math.floor(Date.parse(timestamp.exec(rawLines[index])?.[1]) / 1000),
+  );
+  requireEvidence(
+    markerSeconds.every(
+      (second, index) =>
+        Number.isFinite(second) &&
+        second >= startSecond &&
+        second <= endSecond &&
+        (index === 0 || second >= markerSeconds[index - 1]),
+    ),
+    "checkout-log-outside-step-time",
   );
   return { actualSha, bodyDigest: hash(body), headLine: heads[0].index + 1, shaLine: command + 2 };
 }
@@ -366,7 +390,10 @@ export async function collectGitHubEvidence({
       {},
       "text",
     );
-    const extracted = extractCheckoutLog(response.data);
+    const checkoutStep = evidence.actualTestJob.value.job.steps.find(
+      (step) => step.name === "Checkout",
+    );
+    const extracted = extractCheckoutLog(response.data, checkoutStep);
     save(extracted);
     const direct = extracted.actualSha === binding.expectedHead;
     requireEvidence(
