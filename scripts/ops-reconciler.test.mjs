@@ -380,6 +380,25 @@ describe("offline closed-loop reconciler", () => {
     }
   });
 
+  it("normalizes dependency object property order in result reports", async () => {
+    const f = fixture();
+    try {
+      f.publish(f.report(first, B));
+      assert.equal((await f.run()).status, "DISPATCH_CONFIRMED");
+      const delivery = f.report(second, C);
+      delivery.comment.body = JSON.stringify({
+        ...delivery.packet,
+        dependencies: delivery.packet.dependencies.map(({ taskId, sha }) => ({ sha, taskId })),
+      });
+      f.publish(delivery);
+      assert.equal((await f.run()).status, "DISPATCH_CONFIRMED");
+      assert.equal(f.calls.start, 2);
+      assert.equal(f.calls.review, 2);
+    } finally {
+      f.dispose();
+    }
+  });
+
   it("recovers a technical review receipt without re-reviewing", async () => {
     const f = fixture();
     try {
@@ -631,6 +650,40 @@ describe("offline closed-loop reconciler", () => {
       f.dispose();
     }
   });
+
+  it.each(["edit", "conflict"])(
+    "blocks a result %s during review before acceptance or successor start",
+    async (change) => {
+      const f = fixture();
+      try {
+        const delivery = f.report(first, B);
+        f.publish(delivery);
+        const reviewer = {
+          ...f.reviewer,
+          async review(request) {
+            const receipt = await f.reviewer.review(request);
+            const body = JSON.stringify({ ...delivery.packet, workerState: "STOPPED" });
+            if (change === "edit") delivery.comment.body = body;
+            else
+              f.comments.get(delivery.number).push({
+                ...delivery.comment,
+                id: "conflicting-result",
+                body,
+              });
+            return receipt;
+          },
+        };
+        assert.equal((await f.run({ reviewer })).status, "BLOCKED");
+        assert.notEqual(f.read().state, "TERMINAL");
+        assert.notEqual(f.read().coordination.results[0].phase, "ACCEPTED");
+        assert.equal((await f.run({ reviewer })).status, "BLOCKED");
+        assert.equal(f.calls.review, 1);
+        assert.equal(f.calls.start, 0);
+      } finally {
+        f.dispose();
+      }
+    },
+  );
 
   it("waits for an explicit technical receipt when green CI has no review result", async () => {
     const f = fixture();

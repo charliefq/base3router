@@ -227,7 +227,13 @@ async function discover(github, task) {
         !["COMPLETED", "STOPPED"].includes(packet.workerState) ||
         !["code", "no_code"].includes(packet.classification) ||
         packet.predecessor !== task.predecessor ||
-        JSON.stringify(packet.dependencies) !== JSON.stringify(task.dependencies) ||
+        !Array.isArray(packet.dependencies) ||
+        packet.dependencies.length !== task.dependencies.length ||
+        !packet.dependencies.every(
+          (dependency, index) =>
+            dependency?.taskId === task.dependencies[index].taskId &&
+            dependency?.sha === task.dependencies[index].sha,
+        ) ||
         (packet.classification === "no_code" && packet.finalSha !== packet.startingSha)
       )
         throw new Error("invalid-result-binding");
@@ -259,6 +265,16 @@ async function discover(github, task) {
     throw new Error("conflicting-results");
   }
   return candidates[0];
+}
+
+async function revalidateResult(github, result) {
+  const current = await discover(github, result.task);
+  if (
+    !current ||
+    current.fingerprint !== result.fingerprint ||
+    digest(current.comment) !== digest(result.comment)
+  )
+    throw new Error("changed-result-binding");
 }
 
 function dependenciesAccepted(task, state) {
@@ -365,6 +381,7 @@ async function successor({ remote, snapshot, result, tasks, worker, github }) {
   // Re-read publication/CI after review: a review of an older head cannot start work.
   const verified = await verification(github, result, result.task);
   if (verified.status !== "VERIFIED") return verified;
+  await revalidateResult(github, result);
   const intent = {
     id: NodeCrypto.randomUUID(),
     task: next,
@@ -529,6 +546,7 @@ export async function reconcile({ source, ownerId, remote, github, reviewer, wor
     }
     if (!receipt) return { status: "REVIEW_WAIT", key: result.key };
     if (!matchingReview(receipt, result)) return blocked("invalid-review-receipt");
+    await revalidateResult(github, result);
     snapshot = await transition(remote, snapshot, "review-recorded", (record, coordination) => {
       const entry = coordination.results.find((item) => item.key === result.key);
       entry.phase = receipt.decision;
