@@ -52,6 +52,11 @@ const REVIEW_HIGHLIGHTER_ENGINE_PREFERENCE = resolveReviewHighlighterEnginePrefe
 const REVIEW_HIGHLIGHT_CHUNK_LINE_THRESHOLD = 8;
 const REVIEW_HIGHLIGHT_CHUNK_SIZE = 200;
 const REVIEW_TOKENIZE_MAX_LINE_LENGTH = 1_000;
+// vscode-textmate treats 0 as no cutoff. Shiki's 500ms default stops while the
+// JavaScript engine compiles a cold grammar and glues the tail onto the last
+// token, so "42" disappears into that token. Lines over the length cap never
+// reach the tokenizer.
+const REVIEW_TOKENIZE_TIME_LIMIT = 0;
 const REVIEW_INITIAL_LANGUAGE_MODULES = [
   bashLanguage,
   javascriptLanguage,
@@ -523,6 +528,7 @@ async function highlightLines(
     const tokenLines = highlighter.codeToTokensBase(shortLineBatch.join("\n"), {
       lang: language,
       theme,
+      tokenizeTimeLimit: REVIEW_TOKENIZE_TIME_LIMIT,
     });
     highlightedLines.push(...normalizeHighlightedLines(tokenLines));
     shortLineBatch.length = 0;
@@ -588,7 +594,7 @@ export async function highlightCodeSnippet(input: {
     session = {
       language,
       theme,
-      highlight: createIncrementalSnippet(highlighter, language, theme),
+      highlight: createIncrementalSnippet(highlighter, language, theme, REVIEW_TOKENIZE_TIME_LIMIT),
     };
     snippetSessions.set(input.session, session);
   }
