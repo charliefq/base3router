@@ -164,6 +164,7 @@ describe("offline GitHub evidence boundaries", () => {
   it("does not turn incomplete or failed discovery into an empty successful page", () => {
     const request = { path: "/pulls", query: {}, page: 1 };
     assert.throws(() => normalizePage({ status: 403, data: [] }, request));
+    assert.throws(() => normalizePage({ status: 200, data: [] }, request));
     assert.throws(() =>
       normalizePage({ status: 200, data: [], headers: { link: "truncated" } }, request),
     );

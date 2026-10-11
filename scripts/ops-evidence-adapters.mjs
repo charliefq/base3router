@@ -67,6 +67,12 @@ export function normalizeIssueComment(raw, repository, prNumber) {
 export function normalizePage(response, { path, query, page }) {
   requireEvidence(response?.status === 200 && Array.isArray(response.data), "page-unavailable");
   requireEvidence(id(page), "invalid-page-number");
+  requireEvidence(
+    response.headers !== null &&
+      typeof response.headers === "object" &&
+      !Array.isArray(response.headers),
+    "missing-page-headers",
+  );
   const link = response.headers?.link;
   let nextCursor = null;
   if (link !== undefined) {
