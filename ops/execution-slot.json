@@ -1,41 +1,22 @@
 {
   "schema": 1,
-  "state": "TERMINAL",
-  "generation": 26,
-  "taskId": "base3-offline-pilot-brakes-20261011-05",
-  "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
-  "dispatchId": "base3-offline-pilot-brakes-20261011-05",
+  "state": "DISPATCHED",
+  "generation": 27,
+  "taskId": "base3-mobile-highlighter-repair-20261011-06",
+  "workerId": "reserved-reviewer:event:2e6e4240-c541-11f1-9cc9-baa878635312",
+  "dispatchId": "base3-mobile-highlighter-repair-20261011-06",
   "dispatchCount": 1,
-  "startingSha": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b",
+  "startingSha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
   "coordinationPr": 23,
   "ack": {
-    "delivery": "confirmed",
-    "commentId": 6106330787,
-    "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106330787"
+    "delivery": "PENDING"
   },
   "provider": {
-    "status": "COMPLETED",
-    "startMechanism": "PR23 comment",
-    "acknowledgmentCommentId": 6106331703,
-    "acknowledgmentWorkerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
-    "acceptance": {
-      "commentId": 6106336353,
-      "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106336353",
-      "githubCreatedAt": "2026-10-11T06:41:20Z",
-      "reportedAcceptedAt": "2026-10-11T06:41:13Z",
-      "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5",
-      "dispatchId": "base3-offline-pilot-brakes-20261011-05"
-    }
+    "status": "AWAITING_DISPATCH",
+    "startMechanism": "PR23 comment"
   },
-  "termination": {
-    "established": true,
-    "workerState": "COMPLETED",
-    "evidence": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106462863",
-    "commentId": 6106462863,
-    "finalSha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
-    "workerId": "bc-8d1b16a8-c6a0-431c-a643-681f4f36abd5"
-  },
-  "priorResultCommentId": 6105911508,
+  "termination": null,
+  "priorResultCommentId": 6106462863,
   "reviewOutcome": "CHANGES_REQUIRED",
   "ci": {
     "run": 38119865290,
@@ -45,7 +26,7 @@
     "prHead": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76"
   },
   "attempts": {
-    "highlighterRepair": 1,
+    "highlighterRepair": 2,
     "coordinationRepair": 1
   },
   "blockers": [
@@ -355,6 +336,20 @@
       "resultAt": "2026-10-11T06:59:23Z",
       "publicationCommentId": 6106466259,
       "publicationAt": "2026-10-11T06:59:52Z",
+      "successor": "base3-mobile-highlighter-repair-20261011-06"
+    },
+    {
+      "taskId": "base3-mobile-highlighter-repair-20261011-06",
+      "predecessor": "base3-offline-pilot-brakes-20261011-05",
+      "dependencies": [
+        "base3-offline-pilot-brakes-20261011-05"
+      ],
+      "worker": "reserved-reviewer:event:2e6e4240-c541-11f1-9cc9-baa878635312",
+      "branch": "fresh branch from b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
+      "base": "cursor/offline-pilot-brakes-abd5",
+      "pr": null,
+      "startSha": "b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
+      "resultSha": null,
       "successor": null
     }
   ],
@@ -428,7 +423,7 @@
       "plannedPrompt": "@cursor\ndispatch_id: base3-offline-brakes-repair-20261011-06\npredecessor: base3-offline-pilot-brakes-20261011-05\npredecessor_result: https://github.com/charliefq/base3router/pull/23#issuecomment-6106462863\nstarting_sha: b61d636411b774c7e6eea0dfe38a80f6ebb4cb76\nbase: cursor/offline-pilot-brakes-abd5\ntask: OFFLINE-BRAKES-ACTIVE-RESTART-REPAIR\nrepair_attempt: 1 of maximum 2 per demonstrated defect\n\nThe predecessor is explicitly COMPLETED and its exact reported substantive head is published as draft PR28. Technical review requires this bounded repair before OPS-CLOSED-LOOP-RECONCILER. The review result is recorded durably; this sole comment starts the successor, not a second dispatcher.\n\nFirst publish a NEW explicit CLAIMED/RUNNING comment on PR23 with this dispatch ID, actual worker ID/agent link, exact starting SHA and UTC/Los_Angeles timestamps. Same single worker only. Never self-dispatch or read/write/release/recreate the live ops ledger.\n\nCreate a FRESH branch from the exact starting SHA and a draft stacked PR targeting cursor/offline-pilot-brakes-abd5. Preserve all prior branch heads.\n\nDemonstrated defects:\n1. New TaskContract.commitTaskAdmission requests cancellation only when another governed start/handoff is attempted. TaskUsageAccounting.recordTaskUsage contains no exhaustion reaction; PR28 adds no active deadline enforcement. A running turn can cross its token/dollar cap or deadline with no subsequent start and never be interrupted. Existing pin test calls a second dispatch to trigger cancellation.\n2. TaskPilotBrakes.test.ts uses SqlitePersistenceMemory for the alleged restart test; rewriting payload on the same connection is not restart evidence.\n3. Frozen deadline is conditional on pilotActive(current brake). Removing optional brakes makes pilotAllows SQL 1, bypassing the existing persisted deadline. Tightening/redirect/restart must not accidentally disable a previously bound tree brake.\n\nBounded implementation:\n- Reuse existing V2 policy/runtime cancellation pathways. Add a durable, idempotent brake evaluation after usage updates AND deadline-driven evaluation of active governed leases, including startup recovery. Once cumulative tree usage reaches/exceeds cap or absolute deadline passes, request interrupt without needing another admission. Do not free the lease on request or unknown stream end; free exactly once only on explicit provider terminal evidence.\n- Persist the enforced tree bounds so omission, child, retry, handoff, revision or restart cannot silently reset/disable them. Unknown usage/price denies new starts. Keep synthetic pricing exclusively in explicitly injected offline fixtures, no production default price.\n- Preserve atomic admission and idempotency. Be precise: cumulative threshold checks do not guarantee zero overshoot within a provider turn; do not claim a hard no-overshoot cap without supported bounded reservation/provider enforcement. For the offline provider, demonstrate bounded starts/reservations against remaining budget; if provider limits cannot enforce that, fail closed and record that capability blocker.\n- Add REAL file-backed disposable SQLite restart tests: close/discard service/runtime A, construct B over the same temp database. Verify totals, frozen bounds/deadline, pending interrupt and occupied lease survive; recover already-expired active work without a new task start. Test streamed usage crossing cap with no subsequent dispatch, deadline crossing with no subsequent dispatch, duplicate/reordered observations, cancellation unconfirmed/terminal confirmed, and attempted brake omission. Use fake providers/controlled clock only. Retain meaningful lifecycle regressions.\n- Keep scope to policy/accounting/runtime brake integration, additive migrations and targeted tests/docs. T3 chat shell only Agents + Tasks; named internal employees and external contractor bidirectional direction preserved. Chat execution DENY, Grokbot NOT_CONNECTED.\n\nNo merge/main push, release/signing, paid/live provider calls, credential/spend changes or real user data. No new scheduler/service or provider connection. Record unavailable live provider/Grokbot/per-principal authorization as blockers and continue this offline work.\n\nDELIVERY: after local implementation/tests, publish a NEW complete PR23 result BEFORE final substantive push: task/dispatch ID, actual worker ID, implementation_state and worker_state COMPLETED or STOPPED, exact FINAL LOCAL SHA, branch/base, changes/files, meaningful tests/evidence, limitations/blockers, publication_pending=true, ci_status=PENDING. Then push THAT exact SHA and create the stacked draft PR, then publication note. Do not wait for CI before terminal implementation result. No fake commits. No-code terminal must name exact existing remote SHA and explicit no-code classification. You do not dispatch the next worker."
     }
   ],
-  "nonce": "base3-offline-pilot-brakes-20261011-05:roadmap:2026-10-11T06:46:17.394Z",
+  "nonce": "base3-mobile-highlighter-repair-20261011-06:2026-10-11T07:07:07.048Z",
   "discoveredPrs": [
     28,
     27,
@@ -499,8 +494,8 @@
     "collaboration": "Internal agents and external contractors support bidirectional task-scoped conversation and delegation",
     "nextTask": "Minimal agent collaboration and chat-first UI; repair slot validation prerequisite"
   },
-  "commentUrl": "https://github.com/charliefq/base3router/pull/23#issuecomment-6106330787",
-  "commentDelivery": "confirmed",
+  "commentUrl": null,
+  "commentDelivery": null,
   "lastOwnerDirection": "Minimal T3 chat UI + Agents + Tasks; embedded/internal and external contractor agents converse and delegate bidirectionally.",
   "loopAcceptance": {
     "status": "UNVERIFIED",
@@ -847,24 +842,16 @@
     }
   ],
   "followup": null,
-  "predecessor": {
-    "taskId": "base3-chat-integration-20261011-04",
-    "resultKey": "base3-chat-integration-20261011-04:9dc41f4e168af5cdc233751ae23e3e9e5e17b29b:6106124642",
-    "pr": 27
-  },
+  "predecessor": "base3-offline-pilot-brakes-20261011-05",
   "dependencies": [
-    {
-      "pr": 27,
-      "sha": "9dc41f4e168af5cdc233751ae23e3e9e5e17b29b",
-      "state": "REVIEWED"
-    }
+    "base3-offline-pilot-brakes-20261011-05"
   ],
-  "branch": "new worker branch required",
-  "base": "cursor/chat-integration-abd5",
-  "scope": "OFFLINE-PILOT-BRAKES",
-  "acceptance": "Cumulative tree token/dollar/deadline enforcement across restart; unknown usage/prices denies new starts; interrupt pins lease until terminal",
-  "brake": "fake providers/disposable SQLite only; no live/paid/main/release/user-data changes",
-  "plannedPrompt": "@cursor\ndispatch_id: base3-offline-pilot-brakes-20261011-05\npredecessor: base3-chat-integration-20261011-04\npredecessor_result: https://github.com/charliefq/base3router/pull/23#issuecomment-6106124642\nstarting_sha: 9dc41f4e168af5cdc233751ae23e3e9e5e17b29b\nbase: cursor/chat-integration-abd5\ntask: OFFLINE-PILOT-BRAKES\n\nThe predecessor is explicitly COMPLETED and PR27's exact reported head is published; required Check run 38117254970 succeeds, tested merge 93e0beb10bcd2eef94e09efe3d494c52282690ad. Review accepts this bounded slice with gaps; it does NOT accept full collaboration. This human-requested recovery is excluded from automatic cycle proof.\n\nSame single worker only. First post a NEW explicit CLAIMED/RUNNING acceptance naming this dispatch ID, your actual worker ID, exact start SHA and current timestamp UTC/America_Los_Angeles. Do not self-dispatch another worker and do not read/write/release the ops ledger.\n\nStart a FRESH branch from the exact start SHA. Draft stacked PR targeting cursor/chat-integration-abd5. Preserve existing heads. No merge/main push, signing/release, live external connections, paid calls, credential/spend changes or real user data.\n\nImplement one bounded OFFLINE pilot-brakes slice:\n1. Reuse existing V2 task contract and policy paths. Persist goal/redirect/acceptance/brake and root/parent/task identity. Enforce cumulative token and dollar budgets across the whole task tree, retries and handoffs; no per-child budget reset.\n2. Persist absolute deadline before start; restart must not extend it. Unknown usage or unknown/unverified pricing denies NEW starts. Synthetic explicit prices are permitted ONLY in fixtures, clearly labeled, never production defaults.\n3. Admission checks and reservations must be atomic/idempotent against concurrency and restart. Exhaustion/deadline denies new admissions and requests interrupt for active work. Keep lease pinned until explicit completed/aborted terminal evidence. Interrupt request is not termination.\n4. Use disposable SQLite, fake providers, controlled clock ONLY. Wire/validate actual policy admission code with fake provider rather than a disconnected model test. Keep production collaboration execution DENY and Grokbot NOT_CONNECTED.\n5. Meaningful tests: tree cumulative usage, unknown cost/usage fail closed, restart keeps deadline/accounting, duplicate event idempotency, concurrent starts cannot overshoot reservation, cancel/interrupt does not free lease, explicit terminal frees exactly once. Verify no existing V2 lifecycle regression.\n6. Keep T3 chat UI with only Agents/Tasks additions. Do not broaden UI now.\n\nRecord remaining blockers: live provider composer and Grokbot unverified; provider IDs are interim, not independent named employee identity; per-principal project authorization must be verified before external/multi-principal ingress; repeated-click/project-select thread binding needs later bounded tests. Continue independent offline task.\n\nDELIVERY ORDER MANDATORY: after meaningful local tests, save NEW complete result comment on PR23 BEFORE final substantive push. Include task/dispatch ID, actual worker ID, implementation_state and worker_state COMPLETED or STOPPED, exact FINAL LOCAL SHA, branch/base, changes/files, tests/evidence and blockers; publication_pending=true and ci_status=PENDING. THEN push that exact SHA and create stacked draft PR, add publication note. No fake commit to manufacture trigger. If CI fails, diagnose and at most two focused repairs per defect; each substantive final repair follows report-before-push. No-code terminal uses existing remote SHA with explicit no-code classification. Do not wait for CI to publish terminal implementation report.\nacceptance: offline brakes enforce cumulative tree/deadline/unknown-data denial and pinned interrupt leases through restart with meaningful fake-provider evidence.\nbrake: stop any live/paid/credential/release/main/user-data action; record blocker, continue safe independent work.\n",
+  "branch": "fresh branch from b61d636411b774c7e6eea0dfe38a80f6ebb4cb76",
+  "base": "cursor/offline-pilot-brakes-abd5",
+  "scope": "Mobile highlighter cold-start CI repair, tracked attempt 2",
+  "acceptance": "Prove cold source/snippet coloring correctness, CI equivalent targeted regression; preserve semantic assertions.",
+  "brake": "Offline only, maximum 2 focused attempts, no live-slot worker mutation/main/merge/release/paid/data",
+  "plannedPrompt": "@cursor\ndispatch_id: base3-mobile-highlighter-repair-20261011-06\npredecessor: base3-offline-pilot-brakes-20261011-05\npredecessor_result: https://github.com/charliefq/base3router/pull/23#issuecomment-6106462863\nstarting_sha: b61d636411b774c7e6eea0dfe38a80f6ebb4cb76\nbase: cursor/offline-pilot-brakes-abd5\ntask: MOBILE-HIGHLIGHTER-COLD-START-CI-REPAIR\nrepair_attempt: 2 of maximum 2 for the tracked highlighter defect\n\nThe predecessor explicitly reports COMPLETED before publishing this exact head as draft PR28. Automatic review found required Check 114413096689 failed in CI run 38119865290. Actual test checkout eadf4c605e53f3a70ae1233b2fa8e5bc5946422f merges this head into 9dc41f4e168af5cdc233751ae23e3e9e5e17b29b. All server shards, Build, Lint, Typecheck, Rust, Test Web and Release Smoke passed; the Test job 114412195874 failed:\napps/mobile/src/features/review/shikiReviewHighlighter.test.ts:68\nhighlightSourceFile > initializes source and snippet highlighting without a warmup\nexpected sourceTokens.find(token => token.content === \"42\")?.color to be truthy, received undefined.\nhttps://github.com/charliefq/base3router/actions/runs/38119865290/job/114412195874\n\nThis sole comment starts a bounded successor. First publish a NEW PR23 CLAIMED/RUNNING acceptance with this dispatch ID, actual worker ID/agent link, exact starting SHA, UTC and America/Los_Angeles timestamps. Same single worker; never self-dispatch. Do not read/write/release/recreate the live ops ledger.\n\nFresh branch from the exact starting SHA; draft stacked PR targeting cursor/offline-pilot-brakes-abd5. Preserve existing heads; no merge/main push, release/signing, paid/live calls, credentials/spend changes or real user data.\n\nFocus only on highlighter cold initialization correctness and its targeted tests. Read apps/mobile/src/features/review/shikiReviewHighlighter.ts, reviewHighlighterEngine/incrementalSnippet and the test. Reproduce under actual CI-selected engine before changing it. The current code eagerly registers seven grammar modules; source and snippet entrypoints must share a correctly initialized highlighter, preserve exact source content, syntax coloring and consistent tokenization on a cold import. Diagnose why the \"42\" token is absent, including module reset/caches/language selection/regex engine differences. Do not weaken the assertion or substitute a warmed test to hide the observed defect. If token boundaries legitimately differ by supported engine, prove semantic numeric-range coloring and source/snippet equality for cold paths rather than inventing unsupported exact-token assumptions; document that tradeoff with actual output. Cover repeat/concurrent cold calls, unknown language/plain fallback, long lines and both themes. Preserve native fallback behavior; no real native signing/install needed. Run meaningful targeted reproduction/regressions and package checks only; no blanket repeated CI reruns. Maximum two focused repairs for this defect; if unresolved, publish STOPPED with evidence, no third retry.\n\nProduct direction remains T3 chat with only Agents + Tasks and named internal/external contractor bidirectional collaboration. Grokbot NOT_CONNECTED and chat execution DENY. Do not broaden UI or budgets in this repair. Budget active interruption, immutable tree bounds and actual SQLite reopen tests are demonstrated follow-up defects already queued; OPS-CLOSED-LOOP-RECONCILER remains next after bounded correctness repairs.\n\nMANDATORY DELIVERY: after local tests publish a NEW complete PR23 result BEFORE final substantive push, with task/dispatch ID, actual worker ID, implementation_state and worker_state COMPLETED or STOPPED, exact final LOCAL SHA, branch/base, changed files, reproduction/root cause/tests/evidence, limitations/blockers, publication_pending=true, ci_status=PENDING. Then push exactly that SHA and open the stacked draft PR; add publication note. Do not wait for CI to report implementation terminal. No fake commits or self-dispatched successor. No-code terminal names exact existing remote SHA and no-code classification.",
   "protocolCorrections": [
     {
       "time": "2026-10-11T06:41:12.925Z",
