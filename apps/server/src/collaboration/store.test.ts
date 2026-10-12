@@ -303,3 +303,58 @@ it.effect("refuses cross-project task identity reuse and masks ambiguous legacy 
     );
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
+
+it.effect(
+  "rejects bind correlation collisions and hides the agent link of a legacy inconsistent binding",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* createTable;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES ('thread-b', 'project-b', 'provider-codex', NULL, NULL)`;
+      const bind = {
+        type: "thread.bind" as const,
+        commandId: "bind-a",
+        projectId: "project-a",
+        threadId: "thread-1",
+        agentId: "provider-codex",
+        displayName: "Codex",
+        origin: "internal" as const,
+        capabilities: ["gpt"],
+        admissionSource: "server" as const,
+        admittedBy: "principal-owner",
+      };
+      yield* submitCollaborationCommand(sql, bind, { allowNewBinding: true });
+      yield* submitCollaborationCommand(sql, {
+        type: "delegate",
+        commandId: "held",
+        projectId: "project-a",
+        toAgentId: "provider-codex",
+        correlationId: "thread:thread-b",
+        title: "Held",
+        body: "Blocked work",
+        acceptance: "Review",
+        admissionSource: "server",
+        admittedBy: "principal-owner",
+        gateDecision: "DENY",
+      });
+      const other = { ...bind, commandId: "bind-b", projectId: "project-b", threadId: "thread-b" };
+      assert.equal(
+        (yield* submitCollaborationCommand(sql, other, { allowNewBinding: true })).outcome,
+        "rejected",
+      );
+      const encode = Schema.encodeEffect(Schema.fromJsonString(CollaborationCommand));
+      yield* sql`INSERT INTO collaboration_commands VALUES ('bind-b', 3, ${yield* encode(other)}, '2026-10-12')`;
+      const snapshot = yield* readCollaborationSnapshot(sql, "principal-owner");
+      assert.equal(
+        snapshot.agents.find((agent) => agent.projectId === "project-b")?.threadId,
+        null,
+      );
+      assert.isTrue(
+        snapshot.tasks
+          .filter((task) => task.correlationId === "thread:thread-b")
+          .every((task) => task.threadId === null),
+      );
+      const replay = yield* submitCollaborationCommand(sql, other);
+      assert.equal(replay.outcome, "rejected");
+      assert.equal(replay.idempotent, false);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);

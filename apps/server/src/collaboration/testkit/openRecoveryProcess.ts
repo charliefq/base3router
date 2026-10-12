@@ -8,6 +8,8 @@ import {
   AuthOrchestrationOperateScope,
   EnvironmentHttpApi,
   type CollaborationCommandResult,
+  CollaborationCommand,
+  ProjectId,
   CommandId,
   ThreadId,
   EnvironmentId,
@@ -29,6 +31,7 @@ import * as ProjectStore from "../../orchestration-v2/ProjectStore.ts";
 import { makeProviderRegistryLayer } from "../../provider/testUtils/providerRegistryMock.ts";
 import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
 import * as CollaborationThreads from "../CollaborationThreads.ts";
+import { sealCollaborationCommand, collaborationExecutionGate } from "../admit.ts";
 import { readCollaborationSnapshot, readCommands, submitCollaborationCommand } from "../store.ts";
 
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
@@ -124,6 +127,8 @@ const routes = HttpApiBuilder.layer(CollaborationTestApi).pipe(
   Layer.provide(NodeServices.layer),
 );
 const encodeReport = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const encodeCommand = Schema.encodeEffect(Schema.fromJsonString(CollaborationCommand));
+const decodeTarget = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.String));
 const json = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const program = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -131,6 +136,81 @@ const program = Effect.gen(function* () {
   for (const projectId of ["project-a", "project-b"])
     yield* sql`INSERT OR IGNORE INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at)
       VALUES (${projectId}, 'Recovery', ${directory}, '[]', ${at}, ${at})`;
+  if (phase === "collision" || phase === "legacy-collision") {
+    yield* service.open("principal-a", input);
+    const target = decodeTarget(
+      NodeFS.readFileSync(NodePath.join(directory, "collision-target.json"), "utf8"),
+    );
+    const sealed = sealCollaborationCommand(
+      {
+        type: "delegate",
+        commandId: "preexisting-cross-project-task",
+        projectId: "project-a",
+        toAgentId: instanceId,
+        correlationId: `thread:${target}`,
+        title: "Occupied identity",
+        body: "Existing blocked project A work",
+        acceptance: "Explicit repair required",
+      },
+      {
+        principalId: "principal-a",
+        projectIds: ["project-a", "project-b"],
+        providers: [
+          { id: instanceId, displayName: "codex", capabilities: ["fake-model"], executable: true },
+        ],
+        threads: [],
+        executionGate: collaborationExecutionGate,
+      },
+    );
+    if (sealed.outcome !== "sealed") return yield* Effect.die("failed collision fixture admission");
+    const saved = yield* submitCollaborationCommand(sql, sealed.command);
+    if (saved.outcome !== "applied")
+      return yield* Effect.die("failed collision fixture persistence");
+    if (phase === "legacy-collision") {
+      const managementService = yield* ThreadManagement.ThreadManagementService;
+      yield* managementService.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("legacy-project-b-create"),
+        threadId: ThreadId.make(target),
+        projectId: ProjectId.make("project-b"),
+        title: "Legacy",
+        modelSelection: { instanceId, model: "fake-model" },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "server",
+      });
+      const legacy = sealCollaborationCommand(
+        {
+          type: "thread.bind",
+          commandId: "legacy-project-b-bind",
+          projectId: "project-b",
+          threadId: target,
+          agentId: instanceId,
+        },
+        {
+          principalId: "principal-a",
+          projectIds: ["project-a", "project-b"],
+          providers: [
+            {
+              id: instanceId,
+              displayName: "codex",
+              capabilities: ["fake-model"],
+              executable: true,
+            },
+          ],
+          threads: [{ id: target, projectId: "project-b" }],
+          executionGate: collaborationExecutionGate,
+        },
+      );
+      if (legacy.outcome !== "sealed") return yield* Effect.die("failed legacy fixture admission");
+      // Preserve a row accepted by the old implementation, without using the repaired admission path.
+      yield* sql`INSERT INTO collaboration_commands (command_id, sequence, payload_json, created_at)
+        VALUES ('legacy-project-b-bind', 3, ${yield* encodeCommand(legacy.command)}, ${at})`;
+    }
+  }
   if (phase === "partial")
     yield* sql`CREATE TEMP TRIGGER fail_bind BEFORE INSERT ON collaboration_commands
       BEGIN SELECT RAISE(ABORT, 'injected-bind-failure'); END`;
@@ -198,7 +278,17 @@ const program = Effect.gen(function* () {
               ],
               { concurrency: "unbounded" },
             )
-          : [yield* service.open("principal-a", input)]);
+          : phase === "collision" || phase === "legacy-collision"
+            ? [
+                yield* service.open("principal-a", { ...input, projectId: "project-b" }),
+                yield* service.open("principal-a", { ...input, projectId: "project-b" }),
+              ]
+            : [
+                yield* service.open(
+                  "principal-a",
+                  phase === "seed-b" ? { ...input, projectId: "project-b" } : input,
+                ),
+              ]);
   const commands = yield* readCommands(sql);
   let replays = null;
   if (phase === "replay") {
@@ -222,7 +312,7 @@ const program = Effect.gen(function* () {
     (SELECT count(*) FROM orchestration_v2_projection_threads) AS threads,
     (SELECT count(*) FROM orchestration_v2_projection_runs) AS runs,
     (SELECT count(*) FROM orchestration_v2_projection_messages) AS messages,
-    (SELECT count(*) FROM collaboration_commands) AS bindings`;
+    (SELECT count(*) FROM collaboration_commands WHERE json_extract(payload_json, '$.type') = 'thread.bind') AS bindings`;
   const providerEffects = yield* sql<{ readonly count: number }>`SELECT count(*) AS count
     FROM orchestration_v2_effect_outbox
     WHERE json_extract(payload_json, '$.type') IN ('provider-turn.start', 'provider-turn.restart', 'provider-turn.steer', 'provider-runtime.continue')`;

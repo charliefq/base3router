@@ -90,6 +90,32 @@ const scopedSnapshot = (commands: ReadonlyArray<CollaborationCommand>, principal
   };
 };
 
+export const hasCanonicalCollaborationLink = (
+  snapshot: CollaborationSnapshot,
+  scope: {
+    readonly principalId: string;
+    readonly projectId: string;
+    readonly agentId: string;
+    readonly threadId: string;
+  },
+) =>
+  snapshot.agents.some(
+    (agent) =>
+      agent.origin === "internal" &&
+      agent.id === scope.agentId &&
+      agent.projectId === scope.projectId &&
+      agent.threadId === scope.threadId,
+  ) &&
+  snapshot.tasks.some(
+    (task) =>
+      task.id === `task:thread:${scope.threadId}` &&
+      task.correlationId === `thread:${scope.threadId}` &&
+      task.ownerAgentId === scope.principalId &&
+      task.assigneeAgentId === scope.agentId &&
+      task.projectId === scope.projectId &&
+      task.threadId === scope.threadId,
+  );
+
 const validateThreadLinks = (
   sql: SqlClient.SqlClient,
   snapshot: CollaborationSnapshot,
@@ -115,7 +141,13 @@ const validateThreadLinks = (
         thread.provider_instance_id !== agent.id ||
         thread.archived_at !== null ||
         thread.deleted_at !== null ||
-        bindingConflict(commands, principalId, agent.projectId, agent.id, agent.threadId)
+        bindingConflict(commands, principalId, agent.projectId, agent.id, agent.threadId) ||
+        !hasCanonicalCollaborationLink(snapshot, {
+          principalId,
+          projectId: agent.projectId,
+          agentId: agent.id,
+          threadId: agent.threadId,
+        })
       ) {
         invalid.add(agent.threadId);
         return { ...agent, threadId: null };
@@ -219,6 +251,19 @@ export const submitCollaborationCommand = (
             "identity-conflict",
             "The command identity cannot be replayed with different ownership or semantics.",
           );
+        if (
+          command.type === "thread.bind" &&
+          !hasCanonicalCollaborationLink(snapshot, {
+            principalId,
+            projectId: command.projectId ?? "",
+            agentId: command.agentId ?? "",
+            threadId: command.threadId ?? "",
+          })
+        )
+          return refusal(
+            "identity-conflict",
+            "The binding cannot be replayed without a consistent canonical task.",
+          );
         return {
           outcome: "applied" as const,
           code: null,
@@ -232,11 +277,16 @@ export const submitCollaborationCommand = (
       const projectId = projectFor(owned, command);
       if (!projectId)
         return refusal("unauthorized", "The command does not identify one owned project.");
+      const correlationId =
+        command.type === "thread.bind" && command.threadId
+          ? `thread:${command.threadId}`
+          : command.type === "delegate" || command.type === "resolve"
+            ? command.correlationId
+            : undefined;
       if (
-        (command.type === "delegate" || command.type === "resolve") &&
-        command.correlationId &&
+        correlationId &&
         snapshot.tasks.some(
-          (task) => task.correlationId === command.correlationId && task.projectId !== projectId,
+          (task) => task.correlationId === correlationId && task.projectId !== projectId,
         )
       )
         return refusal(

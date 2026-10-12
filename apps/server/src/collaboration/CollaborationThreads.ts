@@ -23,6 +23,7 @@ import {
 } from "../orchestration-v2/CommandReceiptStore.ts";
 import { ProjectStoreV2 } from "../orchestration-v2/ProjectStore.ts";
 import {
+  hasCanonicalCollaborationLink,
   bindingConflict,
   ownedCommands,
   readCommands,
@@ -124,6 +125,16 @@ const make = Effect.gen(function* () {
       input.providerId,
     );
     const threadId = existing?.threadId ? ThreadId.make(existing.threadId) : identity.threadId;
+    const scope = { principalId, projectId: input.projectId, agentId: input.providerId, threadId };
+    const before = yield* readCollaborationSnapshot(sql, principalId);
+    if (
+      before.tasks.some(
+        (task) => task.correlationId === `thread:${threadId}` && task.projectId !== input.projectId,
+      )
+    )
+      return yield* refuse(
+        "That canonical thread correlation belongs to another project. Explicit repair is required.",
+      );
     const receipt = yield* receipts.getByCommandId(identity.commandId);
     const readThread = () =>
       Effect.gen(function* () {
@@ -185,20 +196,7 @@ const make = Effect.gen(function* () {
     }
     if (existing) {
       const recovered = yield* readCollaborationSnapshot(sql, principalId);
-      const agent = recovered.agents.find(
-        (item) => item.id === input.providerId && item.projectId === input.projectId,
-      );
-      const task = recovered.tasks.find(
-        (item) => item.correlationId === `thread:${threadId}` && item.projectId === input.projectId,
-      );
-      if (
-        agent?.threadId !== threadId ||
-        !task ||
-        task.threadId !== threadId ||
-        task.assigneeAgentId !== input.providerId ||
-        task.ownerAgentId !== principalId ||
-        task.id !== `task:thread:${threadId}`
-      )
+      if (!hasCanonicalCollaborationLink(recovered, scope))
         return yield* refuse(
           "The agent, task and thread link disagree. Explicit repair is required.",
         );
@@ -243,7 +241,14 @@ const make = Effect.gen(function* () {
       },
     );
     if (sealed.outcome === "rejected") return yield* refuse(sealed.detail);
-    return yield* submitCollaborationCommand(sql, sealed.command, { allowNewBinding: true });
+    const result = yield* submitCollaborationCommand(sql, sealed.command, {
+      allowNewBinding: true,
+    });
+    if (result.outcome === "applied" && !hasCanonicalCollaborationLink(result.snapshot, scope))
+      return yield* refuse(
+        "The agent, task and thread link disagree. Explicit repair is required.",
+      );
+    return result;
   });
   return CollaborationThreads.of({
     open: (principalId, input) =>
