@@ -327,7 +327,7 @@ it.effect("accepts collaboration navigation and existing configurations", () =>
       { key: "mod+j", command: "terminal.toggle" },
       { key: "ctrl+alt+a", command: "agents.open", when: "!terminalFocus" },
       { key: "ctrl+alt+t", command: "tasks.open", when: "!previewFocus" },
-    ];
+    ] as const;
     const config = yield* decode(KeybindingsConfig, input);
     assert.deepEqual(config, input);
     assert.deepEqual(
