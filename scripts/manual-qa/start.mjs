@@ -2,15 +2,13 @@ import * as NodeProcess from "node:process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
-const repo = NodePath.resolve(process.argv[2] ?? process.cwd());
-const base = NodePath.resolve(process.argv[3] ?? NodePath.join(repo, ".t3/qa-ac0-local"));
-if (
-  NodeFS.existsSync(NodePath.join(repo, ".t3")) &&
-  NodeFS.lstatSync(NodePath.join(repo, ".t3")).isSymbolicLink()
-)
-  throw Error("Do not use a symlinked state directory.");
-if (!base.startsWith(NodePath.join(repo, ".t3/qa-")))
-  throw Error("Use a disposable repo/.t3/qa-* base.");
+import * as NodeURL from "node:url";
+import { qaPaths, qaEnvironment, validateFixture, hasLiveOwnership } from "./safety.mjs";
+const args = process.argv.slice(2);
+if (args.some((arg) => arg.startsWith("--") && arg !== "--stop")) throw Error("Unknown QA option.");
+const positional = args.filter((arg) => arg !== "--stop");
+if (positional.length > 2) throw Error("Use start.mjs [repo] [base] [--stop].");
+const { repo, base } = qaPaths(positional[0], positional[1]);
 if (
   NodeChildProcess.execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], {
     encoding: "utf8",
@@ -22,46 +20,74 @@ if (!NodeFS.existsSync(NodePath.join(base, "qa-public.json")))
 for (const name of ["", "userdata", "fake-codex-home"])
   if (NodeFS.lstatSync(NodePath.join(base, name)).isSymbolicLink())
     throw Error("Do not use symlinked QA state.");
-const stopPid = (pid) => {
+const stopPid = async (pid) => {
   if (!Number.isInteger(pid) || pid <= 1) throw Error("Invalid QA ownership record.");
   let command;
-  try { command = NodeChildProcess.execFileSync("ps", ["-p", String(pid), "-o", "args="], {encoding:"utf8"}); }
-  catch { console.log("Recorded launcher is no longer present; no process stopped."); return; }
+  try {
+    command = NodeChildProcess.execFileSync("ps", ["-p", String(pid), "-o", "args="], {
+      encoding: "utf8",
+    });
+  } catch {
+    if (hasLiveOwnership(pid))
+      throw Error(
+        "Recorded launcher absent but group live; manual ownership verification required.",
+      );
+    console.log("Recorded launcher is no longer present; no process stopped.");
+    return;
+  }
   if (!command.includes("scripts/dev-runner.ts dev --home-dir") || !command.includes(base))
     throw Error("PID ownership mismatch; no process stopped.");
-  if (NodeProcess.platform === "win32") throw Error("Use the captured PID with the local Windows process supervisor; no broad kill.");
+  if (NodeProcess.platform === "win32")
+    throw Error("Use the captured PID with the local Windows process supervisor; no broad kill.");
   process.kill(-pid, "SIGTERM");
-  console.log("Sent SIGTERM to the recorded QA-only process group.");
+  for (let attempt = 0; attempt < 80; attempt++) {
+    if (!hasLiveOwnership(pid)) {
+      console.log("Recorded QA-only process group stopped.");
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 125));
+  }
+  throw Error("QA group has not fully stopped; do not restart or restore yet.");
 };
 if (process.argv.includes("--stop")) {
-  stopPid(JSON.parse(NodeFS.readFileSync(NodePath.join(base,"qa-owned-process.json"),"utf8")).pid);
+  await stopPid(
+    JSON.parse(NodeFS.readFileSync(NodePath.join(base, "qa-owned-process.json"), "utf8")).pid,
+  );
   process.exit(0);
 }
-const settings = JSON.parse(
-  NodeFS.readFileSync(NodePath.join(base, "userdata/settings.json"), "utf8"),
+const ownership = NodePath.join(base, "qa-owned-process.json");
+if (NodeFS.existsSync(ownership)) {
+  const { pid } = JSON.parse(NodeFS.readFileSync(ownership, "utf8"));
+  if (hasLiveOwnership(pid))
+    throw Error(
+      "Recorded process/group is still live; refusing duplicate startup without changing ownership/log.",
+    );
+}
+const env = qaEnvironment(repo, base);
+validateFixture(
+  base,
+  NodePath.join(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "qa-provider.mjs"),
 );
-if (
-  Object.values(settings.providers ?? {}).some((p) => p.enabled !== false) ||
-  Object.keys(settings.providerInstances ?? {}).some((k) => k !== "qa-fixture")
-)
-  throw Error("QA permits only its metadata fixture; restore isolated settings.");
 const log = NodePath.join(base, "private-startup.log");
 const fd = NodeFS.openSync(log, "w", 0o600);
 NodeFS.chmodSync(log, 0o600);
 const child = NodeChildProcess.spawn(
   process.execPath,
-  ["scripts/dev-runner.ts", "dev", "--home-dir", base, "--auto-bootstrap-project-from-cwd=false"],
+  [
+    "scripts/dev-runner.ts",
+    "dev",
+    "--home-dir",
+    base,
+    "--auto-bootstrap-project-from-cwd=false",
+    "--host",
+    "127.0.0.1",
+    "--share=false",
+  ],
   {
     detached: NodeProcess.platform !== "win32",
     cwd: repo,
     stdio: ["inherit", fd, fd],
-    env: {
-      ...process.env,
-      PATH: NodePath.join(repo, "node_modules/.bin") + NodePath.delimiter + process.env.PATH,
-      T3CODE_TELEMETRY_ENABLED: "false",
-      T3CODE_PORT_OFFSET: "700",
-      T3_FAKE_CODEX_LOG: NodePath.join(base, "fake-peer.jsonl"),
-    },
+    env,
   },
 );
 NodeFS.closeSync(fd);
@@ -74,9 +100,15 @@ console.log(
   "Run health.mjs locally; read the complete fresh pairing URL locally. Never send that URL or log to chat/GitHub.",
 );
 for (const signal of ["SIGINT", "SIGTERM"])
-  process.on(signal, () => {
-    try { stopPid(child.pid); }
-    catch (error) { console.error("QA shutdown failed; use --stop and verify the recorded PID locally:", error.message); }
+  process.on(signal, async () => {
+    try {
+      await stopPid(child.pid);
+    } catch (error) {
+      console.error(
+        "QA shutdown failed; use --stop and verify the recorded PID locally:",
+        error.message,
+      );
+    }
   });
 child.on("exit", (code) => {
   process.exitCode = code ?? 0;

@@ -3,8 +3,14 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeChildProcess from "node:child_process";
 const kit = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
-const repo = NodePath.resolve(process.argv[2] ?? process.cwd());
-const base = NodePath.resolve(process.argv[3] ?? NodePath.join(repo, ".t3/qa-ac0-local"));
+import { qaPaths, qaEnvironment, validateFixture, hasLiveOwnership } from "./safety.mjs";
+const args = process.argv.slice(2);
+if (args.some((arg) => arg.startsWith("--") && arg !== "--restore-settings"))
+  throw Error("Unknown QA option.");
+const positional = args.filter((arg) => arg !== "--restore-settings");
+if (positional.length > 2) throw Error("Use prepare.mjs [repo] [base] [--restore-settings].");
+const { repo, base } = qaPaths(positional[0], positional[1]);
+const env = qaEnvironment(repo, base);
 const expected = "ac0c3ace530744960abb9deeb7ca350a7e7c71cb";
 if (
   NodeChildProcess.execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], {
@@ -12,13 +18,16 @@ if (
   }).trim() !== expected
 )
   throw Error("Use exact accepted ac0c3ace checkout.");
-if (
-  NodeFS.existsSync(NodePath.join(repo, ".t3")) &&
-  NodeFS.lstatSync(NodePath.join(repo, ".t3")).isSymbolicLink()
-)
-  throw Error("Do not use a symlinked state directory.");
-if (!base.startsWith(NodePath.join(repo, ".t3/qa-")))
-  throw Error("Only disposable repo/.t3/qa-* base directories are allowed.");
+if (process.argv.includes("--restore-settings")) {
+  const record = NodePath.join(base, "qa-owned-process.json");
+  if (NodeFS.existsSync(record)) {
+    const { pid } = JSON.parse(NodeFS.readFileSync(record, "utf8"));
+    if (hasLiveOwnership(pid)) throw Error("Stop the recorded QA group before restoring defaults.");
+  }
+  validateFixture(base, NodePath.join(kit, "qa-provider.mjs"), true);
+  console.log("Restored only verified QA defaults omitted by settings serialization.");
+  process.exit(0);
+}
 if (NodeFS.existsSync(base))
   throw Error("Base already exists: choose a fresh .t3/qa-* path; never overwrite state.");
 if (!NodeFS.existsSync(NodePath.join(repo, "node_modules/.bin/vp")))
@@ -109,6 +118,6 @@ const seed = NodePath.join(cache, "seed.mjs");
 NodeFS.copyFileSync(NodePath.join(kit, "seed.mjs"), seed);
 NodeChildProcess.execFileSync(process.execPath, [seed, repo, base], {
   stdio: "inherit",
-  env: process.env,
+  env,
 });
 console.log("Prepared disposable candidate. No credentials included in this kit.");

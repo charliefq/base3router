@@ -24,6 +24,7 @@
         "internal-beta-acceptance.ts",
         "internal-beta-production-browser.ts",
         "internal-beta-fake-codex.mjs",
+        "manual-qa/*.mjs",
         "v2-governance-surfaces.ts",
         // docs/operations/task-4a-accounting-evidence.md runs this directly.
         "bind-task-usage-accounting-report.mjs",

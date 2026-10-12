@@ -16,7 +16,11 @@ const [repo, base] = process.argv.slice(2);
 if (
   !repo ||
   !base ||
-  !NodePath.resolve(base).startsWith(NodePath.join(NodePath.resolve(repo), ".t3/qa-")) ||
+  NodePath.dirname(NodePath.resolve(base)) !== NodePath.join(NodeFS.realpathSync(repo), ".t3") ||
+  !/^qa-[A-Za-z0-9][A-Za-z0-9._-]*$/.test(NodePath.basename(base)) ||
+  [NodePath.join(repo, ".t3"), base].some(
+    (path) => NodeFS.existsSync(path) && NodeFS.lstatSync(path).isSymbolicLink(),
+  ) ||
   !NodeFS.existsSync(NodePath.join(base, "qa-public.json"))
 )
   throw Error("Only a prepared disposable QA base is allowed.");
