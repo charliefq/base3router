@@ -433,6 +433,24 @@ describe("isolated executor mapping and recovery", () => {
     assert.equal(f.reopen().read().entries[0].executor.result.outcome, "completed");
   });
 
+  it.each(["commandId", "threadId", "messageId", "stageCommandId"])(
+    "rejects a result contradicting its durable %s",
+    async (key) => {
+      const f = fixture();
+      await f.executor().dispatch(input);
+      const result = resultFor(f.acknowledgments.get(input.dispatchId));
+      assert.throws(
+        () =>
+          f.executor().observeResult(input, {
+            ...result,
+            binding: { ...result.binding, [key]: "conflicting-command" },
+          }),
+        /executor-result-binding-conflict/,
+      );
+      assert.equal(f.reopen().read().entries[0].executor.result, null);
+    },
+  );
+
   it("fails closed on missing, locked or corrupt storage without calling services", async () => {
     for (const damage of ["missing", "locked", "corrupt"]) {
       const f = fixture();

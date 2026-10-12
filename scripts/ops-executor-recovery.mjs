@@ -67,6 +67,9 @@ function resultFor(binding, receipt, result) {
   if (!result || !text(result.nativeThreadId) || !text(result.nativeTurnId)) return null;
   if (
     !same(bindingFor(result.binding), binding) ||
+    ["commandId", "threadId", "messageId", "stageCommandId"].some(
+      (key) => result.binding[key] !== binding[key],
+    ) ||
     result.dispatchId !== binding.dispatchId ||
     result.nativeThreadId !== receipt.nativeThreadId ||
     result.nativeTurnId !== receipt.nativeTurnId
