@@ -290,7 +290,7 @@ describe("isolated local receipt persistence", () => {
 
   it("rejects paths outside the temporary root", () => {
     NodeAssert.throws(
-      () => createReceiptStore({ parentDirectory: "/workspace" }),
+      () => createReceiptStore({ parentDirectory: NodePath.parse(NodeOS.tmpdir()).root }),
       /store-outside-temporary-root/,
     );
   });
