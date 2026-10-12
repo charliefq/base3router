@@ -130,7 +130,11 @@ export function AgentsPage() {
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
   const { snapshot, error, pending, submit } = useCollaboration(environmentId);
   const [projectId, setProjectId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{
+    environmentId: EnvironmentId;
+    projectId: string;
+    message: string;
+  } | null>(null);
   const [opening, setOpening] = useState(false);
   const openingRef = useRef(false);
   // Retain request identity after an uncertain response. Retrying the operation must
@@ -169,12 +173,16 @@ export function AgentsPage() {
     // A ref closes the same-render double-click window before React updates disabled.
     if (openingRef.current || !snapshot || !environmentId || !selectedProject) return;
     setNotice(null);
+    const showNotice = (message: string) => {
+      if (!context.current.mounted) return;
+      setNotice({ environmentId, projectId: selectedProject.id, message });
+    };
     const bound = snapshot?.agents.find((agent) => agent.id === agentId);
     if (agentId === "grokbot" || bound?.origin === "external") {
       return;
     }
     if (bound && bound.projectId !== selectedProject.id) {
-      setNotice(
+      showNotice(
         "This agent is linked to a different project. Select that project to open its conversation.",
       );
       return;
@@ -191,7 +199,7 @@ export function AgentsPage() {
     const key = JSON.stringify([environmentId, agentId]);
     let operation = openings.current.get(key);
     if (operation && operation.request.input.projectId !== selectedProject.id) {
-      setNotice(
+      showNotice(
         "This agent has an unfinished or linked conversation in a different project. Select that project to continue.",
       );
       return;
@@ -233,7 +241,7 @@ export function AgentsPage() {
       if (!operation.created) {
         const created = await createThread(operation.request);
         if (created._tag === "Failure") {
-          setNotice(
+          showNotice(
             "The thread creation could not be confirmed. Retry to recover the same conversation.",
           );
           return;
@@ -244,7 +252,7 @@ export function AgentsPage() {
       if (!operation.bound) {
         const linked = await submit(operation.binding);
         if (!linked || linked.outcome === "rejected") {
-          setNotice(
+          showNotice(
             "The conversation was created but could not be linked. Retry in this project to link the same conversation.",
           );
           return;
@@ -259,7 +267,7 @@ export function AgentsPage() {
         openThread(operation.request.input.threadId);
       }
     } catch {
-      setNotice(
+      showNotice(
         "The conversation could not be confirmed. Retry in this project to recover the same request.",
       );
     } finally {
@@ -276,7 +284,11 @@ export function AgentsPage() {
       </WorkspacePageHeader>
       <div>
         {error ? <p>{error}</p> : null}
-        {notice ? <p>{notice}</p> : null}
+        {notice &&
+        notice.environmentId === environmentId &&
+        notice.projectId === selectedProjectId ? (
+          <p>{notice.message}</p>
+        ) : null}
         {!environmentId ? <p>No primary environment is connected.</p> : null}
         {projects.length === 0 ? (
           <p>No project is open on this environment. An agent thread needs a real project.</p>

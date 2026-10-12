@@ -293,6 +293,67 @@ describe("Agents project thread interaction", () => {
     expect(state.bind).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["project", "create failure"],
+    ["environment", "create failure"],
+    ["project", "bind rejection"],
+    ["environment", "bind rejection"],
+    ["project", "thrown create error"],
+    ["environment", "thrown create error"],
+  ])("keeps a delayed %s switch / %s notice in its original context", async (change, failure) => {
+    const completion = deferred<void>();
+    if (failure === "bind rejection") {
+      state.bind.mockImplementationOnce(async () => {
+        await completion.promise;
+        return { outcome: "rejected", snapshot: state.snapshot };
+      });
+    } else {
+      state.create.mockImplementationOnce(async () => {
+        await completion.promise;
+        if (failure === "thrown create error") throw new Error("transport closed");
+        return { _tag: "Failure" };
+      });
+    }
+    await mount();
+    await click();
+    const originalRequest = state.create.mock.calls[0]![0];
+    const originalBinding = state.bind.mock.calls[0]?.[0];
+    state.environmentId = change === "environment" ? "environment-b" : "environment-a";
+    state.projects = [{ id: "project-b", title: "B", environmentId: state.environmentId }];
+    await act(async () => renderer.update(<AgentsPage />));
+    await act(async () => completion.resolve());
+    expect(text()).not.toContain("Retry");
+    expect(button().props.disabled).toBe(false);
+    expect(state.navigate).not.toHaveBeenCalled();
+    state.environmentId = "environment-a";
+    state.projects = [{ id: "project-a", title: "A", environmentId: "environment-a" }];
+    await act(async () => renderer.update(<AgentsPage />));
+    expect(text()).toContain("Retry");
+    await click();
+    if (failure === "bind rejection") {
+      expect(state.create).toHaveBeenCalledTimes(1);
+      expect(state.bind.mock.calls[1]![0]).toEqual(originalBinding);
+    } else {
+      expect(state.create).toHaveBeenCalledTimes(2);
+      expect(state.create.mock.calls[1]![0]).toEqual(originalRequest);
+    }
+    expect(state.navigate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["project", "environment"])(
+    "hides an existing retry notice after a %s change",
+    async (change) => {
+      state.create.mockResolvedValueOnce({ _tag: "Failure" });
+      await mount();
+      await click();
+      expect(text()).toContain("Retry");
+      state.environmentId = change === "environment" ? "environment-b" : "environment-a";
+      state.projects = [{ id: "project-b", title: "B", environmentId: state.environmentId }];
+      await act(async () => renderer.update(<AgentsPage />));
+      expect(text()).not.toContain("Retry");
+    },
+  );
+
   it("does not navigate when the selected project changes while binding", async () => {
     const binding = deferred<ReturnType<typeof bindResult>>();
     state.bind.mockReturnValueOnce(binding.promise);
