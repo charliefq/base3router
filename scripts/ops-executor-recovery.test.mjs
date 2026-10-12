@@ -7,6 +7,7 @@ import { createReceiptStore, openReceiptStore } from "./ops-receipt-store.mjs";
 import { createFixtureExecutor } from "./ops-executor-recovery.mjs";
 
 const input = {
+  version: 1,
   dispatchId: "durable-dispatch-1",
   taskId: "fixture-task",
   workerId: "fixture-worker",
@@ -21,6 +22,15 @@ const input = {
   model: "fixture-model",
 };
 const ackFor = (binding) => ({
+  version: 1,
+  status: "started",
+  provenance: {
+    source: "fixture-thread-launch",
+    commandId: binding.commandId,
+    threadId: binding.threadId,
+    commandType: "thread.create",
+    status: "accepted",
+  },
   binding,
   nativeThreadId: "native-thread-1",
   nativeTurnId: "native-turn-1",
@@ -87,6 +97,9 @@ describe("isolated executor mapping and recovery", () => {
       })
       .dispatch(input);
     assert.equal(first.status, "bound");
+    assert.equal(first.receipt.version, 1);
+    assert.equal(first.receipt.status, "started");
+    assert.equal(first.receipt.provenance.source, "fixture-thread-launch");
     assert.equal(first.receipt.nativeThreadId, "native-thread-1");
     assert.equal(first.receipt.nativeTurnId, "native-turn-1");
     assert.equal(f.reopen().read().entries[0].executor.stage, "recorded");
@@ -186,6 +199,100 @@ describe("isolated executor mapping and recovery", () => {
     assert.equal(f.counts().launches, 0);
   });
 
+  it.each(["version", "environmentId", "principalId", "providerInstanceId"])(
+    "rejects a dispatch missing its explicit %s before launch",
+    async (key) => {
+      const f = fixture();
+      await NodeAssert.rejects(
+        f.executor().dispatch({ ...input, [key]: undefined }),
+        /invalid-executor-binding/,
+      );
+      assert.deepEqual(f.counts(), { launches: 0, lookups: 0 });
+      assert.equal(f.reopen().read().entries.length, 0);
+    },
+  );
+
+  it.each(["provenance", "status"])(
+    "does not confirm native IDs with missing receipt %s",
+    async (key) => {
+      const f = fixture();
+      assert.equal(
+        (
+          await f
+            .executor({
+              launch: async (binding) => ({ ...(await f.launch(binding)), [key]: null }),
+            })
+            .dispatch(input)
+        ).status,
+        "unknown",
+      );
+      assert.equal(f.reopen().read().entries[0].state, "pending");
+      assert.equal((await f.executor().dispatch(input)).status, "bound");
+      assert.equal(f.counts().launches, 1);
+    },
+  );
+
+  it("does not promote a command-only acceptance or queued status into a native start", async () => {
+    const f = fixture();
+    assert.equal(
+      (
+        await f
+          .executor({
+            launch: async (binding) => ({ ...(await f.launch(binding)), status: "accepted" }),
+          })
+          .dispatch(input)
+      ).status,
+      "unknown",
+    );
+    assert.equal(
+      (
+        await f
+          .executor({ findLaunch: async (binding) => ({ ...ackFor(binding), status: "queued" }) })
+          .dispatch(input)
+      ).status,
+      "unknown",
+    );
+    assert.equal(f.reopen().read().entries[0].state, "pending");
+    assert.equal(f.counts().launches, 1);
+  });
+
+  it.each(["source", "commandId", "threadId", "commandType", "status"])(
+    "rejects conflicting receipt provenance %s",
+    async (key) => {
+      const f = fixture();
+      await NodeAssert.rejects(
+        f
+          .executor({
+            launch: async (binding) => {
+              const ack = await f.launch(binding);
+              return { ...ack, provenance: { ...ack.provenance, [key]: "conflicting" } };
+            },
+          })
+          .dispatch(input),
+        /executor-receipt-provenance-conflict/,
+      );
+      assert.equal(f.reopen().read().entries[0].state, "pending");
+      assert.equal((await f.executor().dispatch(input)).status, "bound");
+      assert.equal(f.counts().launches, 1);
+    },
+  );
+
+  it("rejects unsupported binding and ACK envelope versions", async () => {
+    const f = fixture();
+    await NodeAssert.rejects(
+      f.executor().dispatch({ ...input, version: 2 }),
+      /invalid-executor-binding/,
+    );
+    await NodeAssert.rejects(
+      f
+        .executor({ launch: async (binding) => ({ ...(await f.launch(binding)), version: 2 }) })
+        .dispatch(input),
+      /invalid-executor-ack-version/,
+    );
+    assert.equal(f.reopen().read().entries[0].state, "pending");
+    assert.equal(f.counts().launches, 1);
+  });
+
   it("requires an explicitly injected fake launch before reserving a dispatch", async () => {
     const f = fixture();
     assert.equal((await f.executor({ launch: undefined }).dispatch(input)).status, "blocked");
@@ -268,19 +375,22 @@ describe("isolated executor mapping and recovery", () => {
     assert.equal(f.counts().launches, 1);
   });
 
-  it.each(["environmentId", "commandId"])("rejects a lookup ACK for another %s", async (key) => {
-    const f = fixture();
-    await f.executor({ launch: async () => null }).dispatch(input);
-    const binding = f.reopen().read().entries[0].executor.binding;
-    await NodeAssert.rejects(
-      f
-        .executor({ findLaunch: async () => ackFor({ ...binding, [key]: "different" }) })
-        .dispatch(input),
-      /executor-ack-(binding|command)-conflict/,
-    );
-    assert.equal(f.reopen().read().entries[0].state, "pending");
-    assert.equal(f.counts().launches, 0);
-  });
+  it.each(["environmentId", "providerInstanceId", "commandId"])(
+    "rejects a lookup ACK for another %s",
+    async (key) => {
+      const f = fixture();
+      await f.executor({ launch: async () => null }).dispatch(input);
+      const binding = f.reopen().read().entries[0].executor.binding;
+      await NodeAssert.rejects(
+        f
+          .executor({ findLaunch: async () => ackFor({ ...binding, [key]: "different" }) })
+          .dispatch(input),
+        /executor-ack-(binding|command)-conflict/,
+      );
+      assert.equal(f.reopen().read().entries[0].state, "pending");
+      assert.equal(f.counts().launches, 0);
+    },
+  );
 
   it("lookup errors and an uncertain receipt never authorize another launch", async () => {
     const f = fixture();

@@ -430,6 +430,11 @@ command identity and `Workflow.dispatchWorkflowStage`'s deterministic thread,
 message and stage command identities. It does not invoke those services or claim
 that their command receipt proves a native turn started. JSON-RPC correlation
 IDs are not durable dispatch keys; the caller must retain its dispatch ID.
+Binding and ACK envelopes require version 1. Confirmed receipts retain explicit
+`fixture-thread-launch` provenance and the accepted `thread.create` command
+identity, plus a separate `started` native status and native thread/turn IDs.
+Command acceptance or queued status alone remains unknown. These fields describe
+trusted fake evidence, not authentication or a new authority to execute.
 
 A dispatch intent is committed before the one permitted fake launch. Any replay
 of that intent uses explicit lookup only, including a crash before launch,

@@ -22,7 +22,7 @@ const fields = [
 
 function bindingFor(input) {
   if (
-    !input ||
+    input?.version !== 1 ||
     !fields.every((key) => text(input[key])) ||
     !/^[a-f0-9]{40}$/.test(input.startingSha) ||
     !Number.isSafeInteger(input.attempt) ||
@@ -32,6 +32,7 @@ function bindingFor(input) {
   // These follow Workflow/ThreadLaunch's durable command identities. JSON-RPC
   // request IDs are deliberately neither accepted nor used as a fallback.
   return {
+    version: 1,
     ...Object.fromEntries(fields.map((key) => [key, input[key]])),
     attempt: input.attempt,
     commandId: `workflow-create-${input.dispatchId}`,
@@ -43,6 +44,7 @@ function bindingFor(input) {
 
 function receiptFor(binding, ack) {
   if (!ack || !text(ack.nativeThreadId) || !text(ack.nativeTurnId)) return null;
+  if (ack.version !== 1) fail("invalid-executor-ack-version");
   if (!same(bindingFor(ack.binding), binding)) fail("executor-ack-binding-conflict");
   if (
     ["commandId", "threadId", "messageId", "stageCommandId"].some(
@@ -51,7 +53,23 @@ function receiptFor(binding, ack) {
   )
     fail("executor-ack-command-conflict");
   if (!text(ack.url)) return null;
+  // An accepted thread.create receipt alone is not native execution evidence.
+  // This projection retains ThreadLaunch's reusable receipt fields, with an
+  // explicit fixture provenance and separate observed native status.
+  if (!ack.provenance || ack.status !== "started") return null;
+  const provenance = {
+    source: "fixture-thread-launch",
+    commandId: binding.commandId,
+    threadId: binding.threadId,
+    commandType: "thread.create",
+    status: "accepted",
+  };
+  if (!Object.entries(provenance).every(([key, value]) => ack.provenance[key] === value))
+    fail("executor-receipt-provenance-conflict");
   return {
+    version: 1,
+    status: "started",
+    provenance,
     taskId: binding.taskId,
     workerId: binding.workerId,
     startingSha: binding.startingSha,
@@ -106,6 +124,9 @@ export function createFixtureExecutor({ receiptStore, launch, findLaunch, fault 
       if (entry.state === "confirmed") {
         const receipt = entry.receipt;
         const expected = receiptFor(binding, {
+          version: receipt.version,
+          status: receipt.status,
+          provenance: receipt.provenance,
           binding: receipt.executorBinding,
           nativeThreadId: receipt.nativeThreadId,
           nativeTurnId: receipt.nativeTurnId,
