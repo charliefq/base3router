@@ -52,6 +52,10 @@ import { ThreadQueueSheet } from "./features/threads/ThreadQueueControl";
 import { ThreadRouteScreen } from "./features/threads/ThreadRouteScreen";
 import { ConnectionsRouteScreen } from "./features/connection/ConnectionsRouteScreen";
 import { ConnectionsNewRouteScreen } from "./features/connection/ConnectionsNewRouteScreen";
+import {
+  SettingsCollaborationAgentsRouteScreen,
+  SettingsCollaborationTasksRouteScreen,
+} from "./features/settings/SettingsCollaborationRouteScreen";
 import { HomeRouteScreen } from "./features/home/HomeRouteScreen";
 import { AddProjectDestinationRoute } from "./features/projects/AddProjectDestinationRoute";
 import { AddProjectLocalRoute } from "./features/projects/AddProjectLocalRoute";
@@ -201,6 +205,14 @@ const SettingsContentStack = createNativeStackNavigator({
       options: {
         title: "Settings",
       },
+    }),
+    SettingsCollaborationAgents: createNativeStackScreen({
+      screen: SettingsCollaborationAgentsRouteScreen,
+      options: { title: "Collaboration agents" },
+    }),
+    SettingsCollaborationTasks: createNativeStackScreen({
+      screen: SettingsCollaborationTasksRouteScreen,
+      options: { title: "Collaboration tasks" },
     }),
     SettingsEnvironments: createNativeStackScreen({
       screen: SettingsEnvironmentsRouteScreen,
