@@ -7,13 +7,14 @@ import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeURL from "node:url";
 import * as NodeHttp from "node:http";
+import { DEFAULT_BASE_NAME } from "./candidate.mjs";
 const kit = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const repo = process.env.B3R_QA_REPO;
 NodeTest.test(
   "actual hostile env, duplicate preservation, omitted-base stop and restart",
   { skip: !repo, timeout: 120000 },
   async () => {
-    const base = NodePath.join(NodeFS.realpathSync(repo), ".t3/qa-ac0-local");
+    const base = NodePath.join(NodeFS.realpathSync(repo), ".t3/" + DEFAULT_BASE_NAME);
     NodeAssert.equal(
       NodeFS.existsSync(base),
       false,

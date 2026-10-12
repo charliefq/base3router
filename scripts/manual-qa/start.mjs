@@ -4,19 +4,15 @@ import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeURL from "node:url";
 import { qaPaths, qaEnvironment, validateFixture, hasLiveOwnership } from "./safety.mjs";
+import { validateToolkit, validateCandidate, validateManifest } from "./candidate.mjs";
 const args = process.argv.slice(2);
 if (args.some((arg) => arg.startsWith("--") && arg !== "--stop")) throw Error("Unknown QA option.");
 const positional = args.filter((arg) => arg !== "--stop");
 if (positional.length > 2) throw Error("Use start.mjs [repo] [base] [--stop].");
 const { repo, base } = qaPaths(positional[0], positional[1]);
-if (
-  NodeChildProcess.execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], {
-    encoding: "utf8",
-  }).trim() !== "ac0c3ace530744960abb9deeb7ca350a7e7c71cb"
-)
-  throw Error("Wrong checkout.");
-if (!NodeFS.existsSync(NodePath.join(base, "qa-public.json")))
-  throw Error("Run prepare.mjs first.");
+validateToolkit();
+validateCandidate(repo);
+validateManifest(repo, base);
 for (const name of ["", "userdata", "fake-codex-home"])
   if (NodeFS.lstatSync(NodePath.join(base, name)).isSymbolicLink())
     throw Error("Do not use symlinked QA state.");

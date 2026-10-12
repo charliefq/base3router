@@ -12,6 +12,7 @@ import {
   ProviderInstanceId,
   ProviderDriverKind,
 } from "@t3tools/contracts";
+import { validateManifest } from "./candidate.mjs";
 const [repo, base] = process.argv.slice(2);
 if (
   !repo ||
@@ -24,6 +25,7 @@ if (
   !NodeFS.existsSync(NodePath.join(base, "qa-public.json"))
 )
   throw Error("Only a prepared disposable QA base is allowed.");
+validateManifest(repo, base);
 const load = (relative) => import(NodeURL.pathToFileURL(NodePath.join(repo, relative)).href);
 const { makeSqlitePersistenceLive } = await load("apps/server/src/persistence/Layers/Sqlite.ts");
 const TM = await load("apps/server/src/orchestration-v2/ThreadManagementService.ts");

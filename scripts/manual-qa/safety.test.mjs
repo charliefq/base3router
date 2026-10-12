@@ -1,3 +1,11 @@
+import {
+  CANDIDATE_SHA,
+  TOOL_REVISION,
+  TOOLKIT_SHA256,
+  validateToolkit,
+  validateCandidate,
+  validateManifestRecord,
+} from "./candidate.mjs";
 import { test, afterAll } from "vite-plus/test";
 import * as NodeAssert from "node:assert/strict";
 import * as NodeFS from "node:fs";
@@ -132,4 +140,42 @@ test("live ownership detected without killing processes", () => {
   NodeAssert.equal(hasLiveOwnership(process.pid), true);
   NodeAssert.throws(() => hasLiveOwnership(1));
 });
+test("fixed candidate/tool manifest rejects stale heads, states and mixed runtime copies", () => {
+  const manifest = {
+    head: CANDIDATE_SHA,
+    toolRevision: TOOL_REVISION,
+    toolkitSha256: TOOLKIT_SHA256,
+    repo,
+    base,
+    manifestVersion: 2,
+  };
+  validateManifestRecord(manifest, repo, base);
+  for (const drift of [
+    { head: "ac0c3ace530744960abb9deeb7ca350a7e7c71cb" },
+    { toolRevision: "old" },
+    { toolkitSha256: "old" },
+    { manifestVersion: 1 },
+    { repo: tmp },
+    { base: tmp },
+  ])
+    NodeAssert.throws(() => validateManifestRecord({ ...manifest, ...drift }, repo, base));
+  NodeAssert.throws(() => validateManifestRecord({ head: CANDIDATE_SHA }, repo, base));
+  NodeAssert.throws(() => validateCandidate(NodePath.resolve(kit, "../..")));
+  validateToolkit(kit);
+  const copy = NodePath.join(tmp, "mixed-kit");
+  NodeFS.mkdirSync(copy);
+  for (const name of [
+    "prepare.mjs",
+    "start.mjs",
+    "seed.mjs",
+    "health.mjs",
+    "safety.mjs",
+    "qa-provider.mjs",
+  ])
+    NodeFS.copyFileSync(NodePath.join(kit, name), NodePath.join(copy, name));
+  validateToolkit(copy);
+  NodeFS.appendFileSync(NodePath.join(copy, "seed.mjs"), "\n// stale seed copy");
+  NodeAssert.throws(() => validateToolkit(copy));
+});
+
 afterAll(() => NodeFS.rmSync(tmp, { recursive: true, force: true }));

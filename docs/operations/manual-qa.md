@@ -1,6 +1,6 @@
 # B3R 手工验收准备包（不是验收通过）
 
-版本：PR #45，ac0c3ace530744960abb9deeb7ca350a7e7c71cb，包含 PR #31–45。代码/自动测试已接受。
+版本：集成候选 `65c0702a09b093cb8ab5b124f15665ae6d744a7d`，直接父提交为 PR #47 `815cc9afc1832f6dbadee49a514af50c172f0986` 与 PR #48 `e843d770152c5ca4b1cbd54bd50e92be14054968`。两项源码已独立复审；本包不代表真实视觉验收通过。
 
 本包只含脚本和步骤，不含数据库、sessions、配对 URL、令牌、用户数据或启动日志。不要上传 private-startup.log 或 userdata。环境默认 provider 全禁用，仅 metadata-only QA fixture 可用；它拒绝 session/turn RPC，没有 paid network 或真实 provider。
 
@@ -9,22 +9,23 @@
 工具分支的 commit 只提供辅助脚本；不要把候选切换到该分支。已存在精确候选的机器可直接执行：
 
 ```bash
-qa_candidate=/absolute/path/to/accepted/base3router
+qa_candidate=/absolute/path/to/new/base3router-manual-qa
+qa_tool_sha=REPLACE_WITH_REVIEWED_TOOL_COMMIT
 qa_tool_dir=$(mktemp -d)
 git -C "$qa_candidate" fetch origin codex/manual-qa-preparation
-git -C "$qa_candidate" archive origin/codex/manual-qa-preparation scripts/manual-qa docs/operations/manual-qa.md | tar -x -C "$qa_tool_dir"
+git -C "$qa_candidate" archive "$qa_tool_sha" scripts/manual-qa docs/operations/manual-qa.md | tar -x -C "$qa_tool_dir"
 node "$qa_tool_dir/scripts/manual-qa/prepare.mjs" "$qa_candidate"
 node "$qa_tool_dir/scripts/manual-qa/start.mjs" "$qa_candidate"
 ```
 
-在第二个终端使用同一 `qa_tool_dir` 和 `qa_candidate` 跑 `health.mjs`。fetch/archive 不改变候选 HEAD 或工作树；候选仍必须精确 ac0c3ace。最终交接给出的精确工具 commit 可代替 `origin/codex/manual-qa-preparation`，防止工具分支后续移动。
+在第二个终端使用同一 `qa_tool_dir` 和 `qa_candidate` 跑 `health.mjs`。fetch/archive 不改变候选 HEAD 或工作树；候选必须精确 `65c0702a09b093cb8ab5b124f15665ae6d744a7d`。最终交接给出的精确工具 commit 可代替 `origin/codex/manual-qa-preparation`，防止工具分支后续移动。
 
 ## 本机启动
 
 需要已按该 checkout 的 docs/operations/development.md 安装的 Node 24+ 和 repository dependencies（冻结 lockfile）。若已有工作目录有改动，保留原目录，创建新 worktree；不要 reset/clean：
 
-    git fetch origin codex/collaboration-navigation-keybindings
-    git worktree add --detach ../base3router-manual-qa ac0c3ace530744960abb9deeb7ca350a7e7c71cb
+    git fetch origin codex/manual-qa-candidate
+    git worktree add --detach ../base3router-manual-qa 65c0702a09b093cb8ab5b124f15665ae6d744a7d
 
 在新 worktree 按仓库开发文档准备依赖。解压此包到仓库以外，例如 ~/Downloads/b3r-qa-kit。
 
@@ -35,9 +36,9 @@ node "$qa_tool_dir/scripts/manual-qa/start.mjs" "$qa_candidate"
 
     node /path/to/b3r-qa-kit/health.mjs /path/to/base3router-manual-qa
 
-默认数据位于新 worktree 的 .t3/qa-ac0-local。prepare 拒绝覆盖已存在目录或非 .t3/qa-* 路径。重启只用 start，不重复 prepare。
+默认数据位于新 worktree 的 .t3/qa-65c0702a-local。prepare 拒绝覆盖已存在目录或非 .t3/qa-* 路径。重启只用 start，不重复 prepare。
 
-健康输出会报告实际 localhost origin；它只对同一机器可用，不是可公开分享链接。首次配对请只在自己机器打开 .t3/qa-ac0-local/private-startup.log，读取新鲜完整 startup pairing URL，直接在本机浏览器使用。不要把 URL/日志发送到聊天或 GitHub。若过期，Ctrl+C 停止自己的 start，再重新 start，读取新的启动输出。不要修改真实 ~/.t3/userdata。
+健康输出会报告实际 localhost origin；它只对同一机器可用，不是可公开分享链接。首次配对请只在自己机器打开 .t3/qa-65c0702a-local/private-startup.log，读取新鲜完整 startup pairing URL，直接在本机浏览器使用。不要把 URL/日志发送到聊天或 GitHub。若过期，Ctrl+C 停止自己的 start，再重新 start，读取新的启动输出。不要修改真实 ~/.t3/userdata。
 
 ## 手工步骤与预期
 
@@ -61,12 +62,20 @@ T3 preview/device 工具缺失，所以 AUTOMATED_QA_BLOCKED；技能禁止替�
 
 优先在第二终端运行 `node "$qa_tool_dir/scripts/manual-qa/start.mjs" "$qa_candidate" --stop`：校验记录的 dev-runner PID 和该 QA 路径后，只向其独立 process group 发 SIGTERM。Ctrl+C 也使用同一停止逻辑；停止后确认 health 无法连接，再用 start 重启。只删除确认属于此 QA 的 .t3/qa-* 目录。不要释放 generation 41，不 merge/release，不调用 Cursor，不更改付费、凭证或 live 配置。
 
-安全边界：base 必须是规范仓库路径下 `.t3` 的单层 `qa-*` 子目录；拒绝符号链接。启动会验证完整禁用的真实 provider map、唯一 fixture 的精确 driver/config 路径及可信脚本内容。已记录进程或进程组仍存活时拒绝重复启动，保留日志和所有权记录。QA 子进程过滤应用、OTEL、Clerk、Vite 等环境配置，保留平台代理与认证保护变量；固定 loopback、禁用 share/Tailscale/analytics。根目录或 apps/web、apps/server 存在 `.env`、`.env.local`、`.env.development`、`.env.development.local` 时拒绝启动，不读取值；请使用没有这些文件的隔离候选，不删除真实配置。`start.mjs [repo] [base] --stop` 支持省略 base（默认 `.t3/qa-ac0-local`），自定义 base 时必须在停止命令中提供同一 base。
+安全边界：base 必须是规范仓库路径下 `.t3` 的单层 `qa-*` 子目录；拒绝符号链接。启动会验证完整禁用的真实 provider map、唯一 fixture 的精确 driver/config 路径及可信脚本内容。已记录进程或进程组仍存活时拒绝重复启动，保留日志和所有权记录。QA 子进程过滤应用、OTEL、Clerk、Vite 等环境配置，保留平台代理与认证保护变量；固定 loopback、禁用 share/Tailscale/analytics。根目录或 apps/web、apps/server 存在 `.env`、`.env.local`、`.env.development`、`.env.development.local` 时拒绝启动，不读取值；请使用没有这些文件的隔离候选，不删除真实配置。`start.mjs [repo] [base] --stop` 支持省略 base（默认 `.t3/qa-65c0702a-local`），自定义 base 时必须在停止命令中提供同一 base。
 
 候选服务会在写 settings 时省略默认禁用的 pi/antigravity 和旧式 fixture config.enabled；严格 start 会拒绝这份非完整配置。停止并核实端口关闭后，可显式运行 `node "$qa_tool_dir/scripts/manual-qa/prepare.mjs" "$qa_candidate" /同一/qa-base --restore-settings`，仅恢复已核实省略的 QA 默认，再启动。该操作拒绝活跃进程组、其它缺失 provider、未知字段、真实 provider 启用、fixture driver/path/content 漂移；保留项目、线程和 keybindings。自定义 base 和默认 base 均支持。
 
-回归命令（工具目录执行）：`vp test scripts/manual-qa/safety.test.mjs`。实际启动回归仅对精确 ac0、已装依赖且默认 `.t3/qa-ac0-local` 尚不存在的独立候选运行：`B3R_QA_REPO=/absolute/candidate node --test scripts/manual-qa/live-regression.mjs`；会创建并保留 disposable QA 状态，测试后停止自己的进程组。不要为重跑而覆盖已有状态。
+回归命令（工具目录执行）：`vp test scripts/manual-qa/safety.test.mjs`。实际启动回归仅对精确集成候选 65c0702a、已装依赖且默认 `.t3/qa-65c0702a-local` 尚不存在的独立候选运行：`B3R_QA_REPO=/absolute/candidate node --test scripts/manual-qa/live-regression.mjs`；会创建并保留 disposable QA 状态，测试后停止自己的进程组。不要为重跑而覆盖已有状态。
 
-本次云端实测：5 组安全回归通过；1 组实际生命周期回归通过，分别注入 host 0.0.0.0 / ::、Tailscale true、relay 与三类 OTLP 地址和非秘密 headers/token。后端只监听 127.0.0.1，环境校验通过，本地外部请求 sentinel 命中 0；重复启动保留日志/进程记录，省略 base 的 --stop 成功，恢复配置后重启成功，最终进程组和 QA 端口关闭。不是 Browser/Device 验收。
+本次云端实测：6 组安全回归通过；1 组实际生命周期回归通过，分别注入 host 0.0.0.0 / ::、Tailscale true、relay 与三类 OTLP 地址和非秘密 headers/token。后端只监听 127.0.0.1，环境校验通过，本地外部请求 sentinel 命中 0；重复启动保留日志/进程记录，省略 base 的 --stop 成功，恢复配置后重启成功，最终进程组和 QA 端口关闭。不是 Browser/Device 验收。
 
-Mac 已确认的旧版本结果：以明确隔离 base 停止旧 QA 进程组 31236 后无残留，6433 ECONNREFUSED，候选 ac0 干净。Mac 尚未完成新工具启动、health 或 UI；不要把云端结果当作 Mac 通过。
+Mac 的旧 ac0 候选已由用户配对并反馈过页面呈现缺陷，当前须保留。此次集成候选和新工具尚未在 Mac 启动或验收；停旧服务时读取本机当前所有权记录，不使用历史 PID。云端健康结果不能作为 Mac 或视觉通过。
+
+## 精确版本与 Mac 切换边界
+
+候选与工具是两个独立 commit。从主线程确认的精确工具 SHA archive 到一个全新空目录，替换上面的 qa_tool_sha；不要把两版工具覆盖混在一个目录，不要 checkout 工具分支作为应用。新工具只有固定集成候选 SHA，没有任意 SHA 环境变量或 CLI 绕过开关。prepare/start/health/seed 共用同一 pin；运行脚本固定 SHA256、manifest v2 的 candidate/toolRevision/toolkitSha256/repo/base 必须一致。旧 ac0、旧 manifest、旧 seed 或混入的脚本会拒绝。候选单独的 seed cache 带候选 SHA 前缀。
+
+旧 Mac 候选与 `.t3`、cookie、配对状态均保留。此包不自动停止旧进程、切换端口或清理状态。先评审两个新 SHA，由本机任务用旧候选对应的旧工具及记录 PID/group 安全停服，核实端口关闭；再在新 worktree 的新默认 base fresh prepare/start/health。不要复用旧 base、复制旧 pairing URL 或改真实用户配置。全部配对输出只在本机私有日志读取。
+
+集成回归：Web CollaborationPages 11/11，server policy/实际 fake adapter 26/26；均在集成 SHA 上运行。真实 Browser/模拟器/真机与 queued dequeue 执行仍未验收，真实 provider 未探测/未执行。审查与本机服务切换是下一步。

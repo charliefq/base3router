@@ -2,11 +2,12 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
+import { DEFAULT_BASE_NAME } from "./candidate.mjs";
 
 export function qaPaths(repoArgument, baseArgument) {
   const repo = NodeFS.realpathSync(repoArgument ?? process.cwd());
   const state = NodePath.join(repo, ".t3");
-  const base = NodePath.resolve(baseArgument ?? NodePath.join(state, "qa-ac0-local"));
+  const base = NodePath.resolve(baseArgument ?? NodePath.join(state, DEFAULT_BASE_NAME));
   if (
     NodePath.dirname(base) !== state ||
     !/^qa-[A-Za-z0-9][A-Za-z0-9._-]*$/.test(NodePath.basename(base))

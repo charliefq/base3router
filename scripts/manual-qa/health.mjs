@@ -1,7 +1,10 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
-const repo = NodePath.resolve(process.argv[2] ?? process.cwd());
-const base = NodePath.resolve(process.argv[3] ?? NodePath.join(repo, ".t3/qa-ac0-local"));
+import { qaPaths } from "./safety.mjs";
+import { validateToolkit, validateManifest } from "./candidate.mjs";
+const { repo, base } = qaPaths(process.argv[2], process.argv[3]);
+validateToolkit();
+validateManifest(repo, base);
 const log = NodeFS.readFileSync(NodePath.join(base, "private-startup.log"), "utf8");
 const match = log.match(/serverPort=(\d+) webPort=(\d+)/);
 if (!match) throw Error("Dev runner has not selected ports; inspect private startup log locally.");

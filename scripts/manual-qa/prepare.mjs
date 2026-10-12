@@ -2,6 +2,14 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeChildProcess from "node:child_process";
+import {
+  CANDIDATE_SHA,
+  TOOL_REVISION,
+  TOOLKIT_SHA256,
+  validateToolkit,
+  validateCandidate,
+  validateManifest,
+} from "./candidate.mjs";
 const kit = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 import { qaPaths, qaEnvironment, validateFixture, hasLiveOwnership } from "./safety.mjs";
 const args = process.argv.slice(2);
@@ -11,14 +19,10 @@ const positional = args.filter((arg) => arg !== "--restore-settings");
 if (positional.length > 2) throw Error("Use prepare.mjs [repo] [base] [--restore-settings].");
 const { repo, base } = qaPaths(positional[0], positional[1]);
 const env = qaEnvironment(repo, base);
-const expected = "ac0c3ace530744960abb9deeb7ca350a7e7c71cb";
-if (
-  NodeChildProcess.execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], {
-    encoding: "utf8",
-  }).trim() !== expected
-)
-  throw Error("Use exact accepted ac0c3ace checkout.");
+validateToolkit(kit);
+validateCandidate(repo);
 if (process.argv.includes("--restore-settings")) {
+  validateManifest(repo, base);
   const record = NodePath.join(base, "qa-owned-process.json");
   if (NodeFS.existsSync(record)) {
     const { pid } = JSON.parse(NodeFS.readFileSync(record, "utf8"));
@@ -101,7 +105,10 @@ NodeFS.writeFileSync(
   NodePath.join(base, "qa-public.json"),
   JSON.stringify(
     {
-      head: expected,
+      head: CANDIDATE_SHA,
+      manifestVersion: 2,
+      toolRevision: TOOL_REVISION,
+      toolkitSha256: TOOLKIT_SHA256,
       purpose: "disposable manual QA; no UI pass claim",
       repo,
       base,
@@ -112,10 +119,14 @@ NodeFS.writeFileSync(
     2,
   ),
 );
-const cache = NodePath.join(repo, "apps/server/node_modules/.cache/b3r-qa");
+const cache = NodePath.join(
+  repo,
+  `apps/server/node_modules/.cache/b3r-qa-${CANDIDATE_SHA.slice(0, 8)}`,
+);
 NodeFS.mkdirSync(cache, { recursive: true });
 const seed = NodePath.join(cache, "seed.mjs");
 NodeFS.copyFileSync(NodePath.join(kit, "seed.mjs"), seed);
+NodeFS.copyFileSync(NodePath.join(kit, "candidate.mjs"), NodePath.join(cache, "candidate.mjs"));
 NodeChildProcess.execFileSync(process.execPath, [seed, repo, base], {
   stdio: "inherit",
   env,
