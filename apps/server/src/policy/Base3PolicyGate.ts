@@ -576,8 +576,10 @@ const continuationGrantId = (command: DispatchPolicyCommand): string | null => {
   return null;
 };
 
-export const authorizeDispatch = (
-  input: DispatchPolicyCommand | { readonly type: string; readonly commandId: string },
+export const authorizeDispatch = <
+  Command extends DispatchPolicyCommand | { readonly type: string; readonly commandId: string },
+>(
+  input: Command,
 ) => {
   const command = input as DispatchPolicyCommand;
   return Effect.gen(function* () {
@@ -731,7 +733,11 @@ export const authorizeDispatch = (
     }
     if (command.type === "message.dispatch") {
       const catalog = yield* providersForBind;
-      yield* bindRoute({ sql, command, providers: catalog, environmentId: env });
+      const binding = yield* bindRoute({ sql, command, providers: catalog, environmentId: env });
+      const effectiveCommand = {
+        ...input,
+        modelSelection: { instanceId: binding.target.instanceId, model: binding.target.model },
+      };
       const taskState = yield* loadTaskState(sql, command.threadId ?? "");
       yield* reserveGovernedStart({
         sql,
@@ -753,7 +759,7 @@ export const authorizeDispatch = (
         });
       }
       const hash = argumentHash({
-        ...messageArguments(command),
+        ...messageArguments({ ...command, modelSelection: effectiveCommand.modelSelection }),
         ...contractGrantFields(taskState.governance === "required" ? taskState.contract : null),
       });
       yield* insertGrant({
@@ -785,7 +791,7 @@ export const authorizeDispatch = (
         });
       }
       yield* recordAttempt(sql, command, "message");
-      return;
+      return effectiveCommand;
     }
     if (
       operation.kind === "queue-resume" ||
