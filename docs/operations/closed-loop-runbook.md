@@ -305,3 +305,48 @@ Run the four related offline suites together:
 ```sh
 node_modules/.bin/vp test run --config vite.config.ts --dir scripts scripts/ops-github-evidence-collector.test.mjs scripts/ops-evidence-adapters.test.mjs scripts/ops-reconciler.test.mjs scripts/ops-contents-slot.test.mjs
 ```
+
+## B3R-05E explicit HTTP read transport
+
+`scripts/ops-http-read-transport.mjs` exports `createHttpReadTransport`. Callers
+must inject a trusted standards-compatible `fetch`, repository, and exact
+`allowedPaths`. Optional request headers are copied; only Accept, Authorization,
+X-GitHub-Api-Version and User-Agent are supported. No token, environment, CLI,
+cookie jar or default fetch is discovered. A path capability is an additional
+local restriction, never an authorization grant or a connector allowlist bypass.
+The current connector's rejected direct-job endpoint remains blocked.
+
+Only GET requests to supported resources beneath that repository on
+`https://api.github.com` are constructed. Only positive integer page/per_page
+queries are accepted. The caller configures a bounded decoded-body size (8 MiB
+default, 64 MiB maximum) and timeout (30 seconds default, 5 minutes maximum).
+Actual Response status and headers, including Link, are preserved. The transport
+never follows Link itself; existing pagination validation constructs subsequent
+requests. It rejects normalized objects pretending to be Response instances.
+
+`complete: true` means the Response stream reached EOF within the limits and
+UTF-8 decoding plus requested JSON parsing succeeded. It does not mean HTTP
+success: 403/404/429 remain those statuses. Partial responses, interrupted streams,
+oversize bodies, invalid UTF-8/JSON and identity Content-Length mismatches throw
+fixed reasons without exposing upstream errors or credentials. For content-encoded
+responses, the injected fetch must correctly decode and reject truncated wire
+bodies; wire Content-Length cannot be compared with decoded byte length. A clean
+EOF without a declared length cannot establish an application's semantic
+completeness, so this is a transport guarantee, not an attestation.
+
+Redirect policy is explicitly **reject all**, including same-origin redirects.
+Requests use `redirect: "manual"` and `credentials: "omit"`; an explicit
+Authorization header is sent only to the constructed GitHub API URL. Redirect
+targets are neither followed nor given credentials. Already-followed responses,
+opaque redirects and source URL mismatches fail closed. Consequently GitHub job
+log download redirects remain unusable until a separately reviewed safe download
+capability exists. A malicious injected fetch cannot be made trustworthy by
+checking its response afterward; dependency and runtime policy remain trusted.
+
+Tests use real controlled Response/ReadableStream objects and synthetic headers,
+with no private GitHub or provider calls. This adds a future compliant HTTP
+environment's transport implementation; it does not resolve B3R-05D's current
+connector/header/permission or edited-comment blockers, and does not establish a
+live closed loop. Add `scripts/ops-http-read-transport.test.mjs` to the four-suite
+command above to run all five related suites. Independent review precedes the
+next receipt-persistence slice; green CI alone is not project completion.
