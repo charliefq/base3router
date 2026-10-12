@@ -1,6 +1,7 @@
+import { RegistryContext } from "@effect/atom-react";
 import type { EnvironmentId, ProjectId, WorkflowStagePreview as Preview } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useContext, useLayoutEffect, useRef, useState } from "react";
 
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { workflowEnvironment } from "../../state/workflow";
@@ -14,8 +15,8 @@ export function WorkflowStagePreview(props: {
   readonly stageId: string;
   readonly attempt: number;
 }) {
+  const registry = useContext(RegistryContext);
   const readPreview = useAtomQueryRunner(workflowEnvironment.stagePreview, {
-    refresh: true,
     reportFailure: false,
   });
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -43,14 +44,18 @@ export function WorkflowStagePreview(props: {
     setPreview(null);
     setError(null);
     try {
-      const result = await readPreview({
+      const target = {
         environmentId: props.environmentId,
         input: {
           environmentId: props.environmentId,
           projectId: props.projectId,
           runId: props.runId,
         },
-      });
+      };
+      // Each explicit preview must replace even a waiting RPC from a reset or
+      // an earlier catalog revision. Other query runners retain their deduping.
+      registry.refresh(workflowEnvironment.stagePreview(target));
+      const result = await readPreview(target);
       if (request.current.generation !== generation) return;
       if (result._tag === "Failure") throw squashAtomCommandFailure(result);
       const value = result.value;

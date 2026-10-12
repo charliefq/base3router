@@ -6,9 +6,6 @@ import {
   ProviderInstanceId,
   ProviderDriverKind,
   type WorkflowCatalog,
-  type AgentProfile,
-  type WorkflowTemplate,
-  type WorkflowRun,
   type WorkflowStagePreview,
 } from "@t3tools/contracts";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -27,13 +24,17 @@ vi.mock("../../state/use-atom-query-runner", () => ({
     return mocks.read;
   },
 }));
-vi.mock("../../state/workflow", () => ({
-  workflowEnvironment: {
-    stagePreview: "preview",
-    catalog: (value: unknown) => value,
-    action: "action",
-  },
-}));
+vi.mock("../../state/workflow", async () => {
+  const { Atom } = await import("effect/unstable/reactivity");
+  const preview = Atom.make(null);
+  return {
+    workflowEnvironment: {
+      stagePreview: () => preview,
+      catalog: (value: unknown) => value,
+      action: "action",
+    },
+  };
+});
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => mocks.action }));
 vi.mock("../../state/query", () => ({ useEnvironmentQuery: () => mocks.query() }));
 vi.mock("../../state/governance", () => ({ governanceEnvironment: {} }));
@@ -43,87 +44,13 @@ vi.mock("../chat/TaskContractPanel", () => ({ TaskContractReadout: () => null })
 vi.mock("../ui/button", () => ({ Button: "button" }));
 import { ProjectWorkflowDecisions } from "./GovernanceSurfaces";
 
-const environmentId = EnvironmentId.make("environment-a");
-const projectId = ProjectId.make("project-a");
-const at = "2026-10-12T00:00:00.000Z";
-const profile: AgentProfile = {
-  id: "test-role",
-  version: 1,
-  projectId: null,
-  origin: "built-in",
-  status: "active",
-  displayName: "Test role",
-  description: "Fixture",
-  purpose: "Fixture",
-  responsibilities: [],
-  exclusions: [],
-  instructions: "Fake instructions",
-  requiredOutputSections: ["Result"],
-  artifactKind: "result",
-  capabilityPreferences: [],
-  createdAt: at,
-  updatedAt: at,
-};
-const template: WorkflowTemplate = {
-  id: "test-template",
-  version: 1,
-  projectId: null,
-  origin: "built-in",
-  status: "active",
-  displayName: "Test workflow",
-  description: "Fixture",
-  createdAt: at,
-  updatedAt: at,
-  stages: [
-    {
-      id: "test-stage",
-      label: "Test stage",
-      type: "agent",
-      profileId: profile.id,
-      profileVersion: 1,
-      artifactKind: "result",
-      requiredOutputSections: ["Result"],
-      approvalRequired: true,
-      nextStageId: null,
-      capabilityPreferences: [],
-      taskPromptTemplate: "Fake task",
-      maxAttempts: 3,
-    },
-  ],
-};
-const run: WorkflowRun = {
-  id: "run-a",
+import {
+  environmentId,
   projectId,
-  templateId: template.id,
-  templateVersion: 1,
-  status: "active",
-  currentStageId: "test-stage",
-  originatingThreadId: null,
-  originatingMessageId: null,
-  attempts: [
-    {
-      stageId: "test-stage",
-      attempt: 1,
-      profileId: profile.id,
-      profileVersion: 1,
-      sourceThreadId: null,
-      sourceMessageId: null,
-      sourceTurnId: null,
-      destinationThreadId: null,
-      destinationMessageId: null,
-      destinationTurnId: null,
-      routeBinding: null,
-      status: "pending",
-      createdAt: at,
-    },
-  ],
-  artifacts: [],
-  decisions: [],
-  createdAt: at,
-  updatedAt: at,
-  endedAt: null,
-  pausedAt: null,
-};
+  profile,
+  template,
+  run,
+} from "./WorkflowStagePreview.test-fixtures";
 let props: Parameters<typeof ProjectWorkflowDecisions>[0];
 let catalog: WorkflowCatalog;
 let revision: number;
@@ -231,7 +158,7 @@ it("reads only on demand, deduplicates same-render clicks and shows the actual r
   expect(text()).toContain("configured-model");
   expect(text()).toContain("not dispatch permission");
   expect(mocks.action).not.toHaveBeenCalled();
-  expect(mocks.options).toHaveBeenCalledWith({ refresh: true, reportFailure: false });
+  expect(mocks.options).toHaveBeenCalledWith({ reportFailure: false });
   await click();
   expect(mocks.read).toHaveBeenCalledTimes(2);
 });
