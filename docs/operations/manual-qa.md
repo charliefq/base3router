@@ -59,4 +59,4 @@ node "$qa_tool_dir/scripts/manual-qa/start.mjs" "$qa_candidate"
 
 T3 preview/device 工具缺失，所以 AUTOMATED_QA_BLOCKED；技能禁止替换页面自动化。用户本机人工验收可进行。模拟器/真机还需具备 T3 host 的 device_list/device_open/device_screenshot、可用 host/device、native dev client 与可达 backend/Metro；物理设备结果不能由模拟器代替。
 
-Ctrl+C 停止自己启动的 start；只删除确认属于此 QA 的 .t3/qa-* 目录。不要释放 generation 41，不 merge/release，不调用 Cursor，不更改付费、凭证或 live 配置。
+优先在第二终端运行 `node "$qa_tool_dir/scripts/manual-qa/start.mjs" "$qa_candidate" --stop`：校验记录的 dev-runner PID 和该 QA 路径后，只向其独立 process group 发 SIGTERM。Ctrl+C 也使用同一停止逻辑；停止后确认 health 无法连接，再用 start 重启。只删除确认属于此 QA 的 .t3/qa-* 目录。不要释放 generation 41，不 merge/release，不调用 Cursor，不更改付费、凭证或 live 配置。

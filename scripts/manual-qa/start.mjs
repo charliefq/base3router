@@ -22,6 +22,21 @@ if (!NodeFS.existsSync(NodePath.join(base, "qa-public.json")))
 for (const name of ["", "userdata", "fake-codex-home"])
   if (NodeFS.lstatSync(NodePath.join(base, name)).isSymbolicLink())
     throw Error("Do not use symlinked QA state.");
+const stopPid = (pid) => {
+  if (!Number.isInteger(pid) || pid <= 1) throw Error("Invalid QA ownership record.");
+  let command;
+  try { command = NodeChildProcess.execFileSync("ps", ["-p", String(pid), "-o", "args="], {encoding:"utf8"}); }
+  catch { console.log("Recorded launcher is no longer present; no process stopped."); return; }
+  if (!command.includes("scripts/dev-runner.ts dev --home-dir") || !command.includes(base))
+    throw Error("PID ownership mismatch; no process stopped.");
+  if (NodeProcess.platform === "win32") throw Error("Use the captured PID with the local Windows process supervisor; no broad kill.");
+  process.kill(-pid, "SIGTERM");
+  console.log("Sent SIGTERM to the recorded QA-only process group.");
+};
+if (process.argv.includes("--stop")) {
+  stopPid(JSON.parse(NodeFS.readFileSync(NodePath.join(base,"qa-owned-process.json"),"utf8")).pid);
+  process.exit(0);
+}
 const settings = JSON.parse(
   NodeFS.readFileSync(NodePath.join(base, "userdata/settings.json"), "utf8"),
 );
@@ -60,10 +75,8 @@ console.log(
 );
 for (const signal of ["SIGINT", "SIGTERM"])
   process.on(signal, () => {
-    try {
-      if (NodeProcess.platform === "win32") child.kill(signal);
-      else process.kill(-child.pid, signal);
-    } catch {}
+    try { stopPid(child.pid); }
+    catch (error) { console.error("QA shutdown failed; use --stop and verify the recorded PID locally:", error.message); }
   });
 child.on("exit", (code) => {
   process.exitCode = code ?? 0;
