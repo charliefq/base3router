@@ -239,7 +239,8 @@ const bindThread = (
     current &&
     (current.displayName !== displayName ||
       current.origin !== "internal" ||
-      current.projectId !== projectId)
+      current.projectId !== projectId ||
+      current.threadId !== threadId)
   ) {
     return rejected(state, "identity-conflict", "That agent id already names someone else.");
   }

@@ -7,6 +7,7 @@ import {
   isProviderTextGenerationCapable,
   type ServerProvider,
 } from "@t3tools/contracts";
+import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -26,6 +27,8 @@ import {
   type CollaborationProviderFact,
 } from "./admit.ts";
 import { readCollaborationSnapshot, submitCollaborationCommand } from "./store.ts";
+
+import * as CollaborationThreads from "./CollaborationThreads.ts";
 
 const decodeCommand = Schema.decodeUnknownEffect(CollaborationCommand);
 
@@ -47,6 +50,7 @@ export const collaborationHttpApiLayer = HttpApiBuilder.group(
   "collaboration",
   Effect.fnUntraced(function* (handlers) {
     const sql = yield* SqlClient.SqlClient;
+    const collaborationThreads = yield* CollaborationThreads.CollaborationThreads;
     const projects = yield* ProjectStore.ProjectStoreV2;
     const providers = yield* ProviderRegistry;
 
@@ -79,10 +83,20 @@ export const collaborationHttpApiLayer = HttpApiBuilder.group(
         "snapshot",
         Effect.fn("environment.collaboration.snapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          return yield* readCollaborationSnapshot(sql).pipe(
+          const principal = yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* readCollaborationSnapshot(sql, principal.subject).pipe(
             Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
           );
+        }),
+      )
+      .handle(
+        "openThread",
+        Effect.fn("environment.collaboration.openThread")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          const principal = yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* collaborationThreads
+            .open(principal.subject, args.payload)
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)));
         }),
       )
       .handle(
@@ -98,7 +112,7 @@ export const collaborationHttpApiLayer = HttpApiBuilder.group(
             Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
           );
           if (sealed.outcome === "rejected") {
-            const snapshot = yield* readCollaborationSnapshot(sql).pipe(
+            const snapshot = yield* readCollaborationSnapshot(sql, principal.subject).pipe(
               Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
             );
             return {
@@ -116,4 +130,4 @@ export const collaborationHttpApiLayer = HttpApiBuilder.group(
         }),
       );
   }),
-);
+).pipe(Layer.provide(CollaborationThreads.layer));

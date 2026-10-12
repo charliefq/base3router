@@ -158,3 +158,9 @@ export const CollaborationCommandResult = Schema.Struct({
   snapshot: CollaborationSnapshot,
 });
 export type CollaborationCommandResult = typeof CollaborationCommandResult.Type;
+
+export const CollaborationOpenThreadInput = Schema.Struct({
+  projectId: TrimmedNonEmptyString,
+  providerId: TrimmedNonEmptyString,
+});
+export type CollaborationOpenThreadInput = typeof CollaborationOpenThreadInput.Type;

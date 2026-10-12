@@ -1,10 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
-  CommandId,
   isProviderAvailable,
   isProviderTextGenerationCapable,
   type CollaborationAgent,
   type CollaborationCommand,
+  type CollaborationCommandResult,
+  type CollaborationOpenThreadInput,
   type CollaborationSnapshot,
   type CollaborationTask,
   type EnvironmentId,
@@ -16,13 +17,10 @@ import { useNavigate } from "@tanstack/react-router";
 
 import { PrimaryEnvironmentHttpClient } from "../../environments/primary/httpClient";
 import { isElectron } from "../../env";
-import { newThreadId, randomUUID } from "../../lib/utils";
 import { runPrimaryHttp } from "../../lib/runtime";
 import { primaryEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import { useProjects } from "../../state/entities";
 import { primaryServerProvidersAtom } from "../../state/server";
-import { threadEnvironment } from "../../state/threads";
-import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
@@ -38,6 +36,13 @@ const sendCommand = (payload: CollaborationCommand) =>
   runPrimaryHttp(
     PrimaryEnvironmentHttpClient.pipe(
       Effect.flatMap((client) => client.collaboration.command({ headers: {}, payload })),
+    ),
+  );
+
+const recoverThread = (payload: CollaborationOpenThreadInput) =>
+  runPrimaryHttp(
+    PrimaryEnvironmentHttpClient.pipe(
+      Effect.flatMap((client) => client.collaboration.openThread({ headers: {}, payload })),
     ),
   );
 
@@ -75,11 +80,11 @@ function useCollaboration(environmentId: EnvironmentId | null) {
     };
   }, [environmentId]);
 
-  const submit = useCallback(
-    async (command: CollaborationCommand) => {
+  const execute = useCallback(
+    async (request: () => Promise<CollaborationCommandResult>) => {
       setPending(true);
       try {
-        const result = await sendCommand(command);
+        const result = await request();
         if (environmentId && currentEnvironment.current === environmentId) {
           setLoaded({ environmentId, snapshot: result.snapshot });
           setError(result.outcome === "rejected" ? result.detail : null);
@@ -100,7 +105,8 @@ function useCollaboration(environmentId: EnvironmentId | null) {
     snapshot: loaded?.environmentId === environmentId ? loaded.snapshot : null,
     error,
     pending,
-    submit,
+    submit: (command: CollaborationCommand) => execute(() => sendCommand(command)),
+    open: (input: CollaborationOpenThreadInput) => execute(() => recoverThread(input)),
   };
 }
 
@@ -127,8 +133,7 @@ export function AgentsPage() {
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const providers = useAtomValue(primaryServerProvidersAtom);
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
-  const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
-  const { snapshot, error, pending, submit } = useCollaboration(environmentId);
+  const { snapshot, error, pending, open } = useCollaboration(environmentId);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{
     environmentId: EnvironmentId;
@@ -137,19 +142,6 @@ export function AgentsPage() {
   } | null>(null);
   const [opening, setOpening] = useState(false);
   const openingRef = useRef(false);
-  // Retain request identity after an uncertain response. Retrying the operation must
-  // recover the same create/bind receipts, not allocate another project thread.
-  const openings = useRef(
-    new Map<
-      string,
-      {
-        request: Parameters<typeof createThread>[0];
-        binding: CollaborationCommand;
-        created: boolean;
-        bound: boolean;
-      }
-    >(),
-  );
   const selectedProject =
     projects.length === 1 ? projects[0] : projects.find((project) => project.id === projectId);
   const selectedProjectId = selectedProject?.id;
@@ -171,101 +163,51 @@ export function AgentsPage() {
 
   const openAgent = async (agentId: string) => {
     // A ref closes the same-render double-click window before React updates disabled.
-    if (openingRef.current || !snapshot || !environmentId || !selectedProject) return;
+    if (
+      openingRef.current ||
+      !snapshot ||
+      !environmentId ||
+      !selectedProject ||
+      !context.current.mounted ||
+      context.current.environmentId !== environmentId ||
+      context.current.projectId !== selectedProject.id
+    )
+      return;
     setNotice(null);
     const showNotice = (message: string) => {
       if (!context.current.mounted) return;
       setNotice({ environmentId, projectId: selectedProject.id, message });
     };
-    const bound = snapshot?.agents.find((agent) => agent.id === agentId);
-    if (agentId === "grokbot" || bound?.origin === "external") {
-      return;
-    }
-    if (bound && bound.projectId !== selectedProject.id) {
-      showNotice(
-        "This agent is linked to a different project. Select that project to open its conversation.",
-      );
-      return;
-    }
-    if (bound?.threadId) {
-      openThread(bound.threadId);
-      return;
-    }
+    const bound = snapshot.agents.find(
+      (agent) => agent.id === agentId && agent.projectId === selectedProject.id,
+    );
+    if (agentId === "grokbot" || bound?.origin === "external") return;
     const provider = providers.find((item) => item.instanceId === agentId);
     if (!provider || !providerExecutable(provider)) return;
-    if (!environmentId || !selectedProject) return;
-    const model = provider.models.find((item) => item.isDefault) ?? provider.models[0];
-    if (!model) return;
-    const key = JSON.stringify([environmentId, agentId]);
-    let operation = openings.current.get(key);
-    if (operation && operation.request.input.projectId !== selectedProject.id) {
-      showNotice(
-        "This agent has an unfinished or linked conversation in a different project. Select that project to continue.",
-      );
-      return;
-    }
-    if (!operation) {
-      const threadId = newThreadId();
-      const title = `Chat with ${provider.displayName ?? provider.driver}`;
-      operation = {
-        request: {
-          environmentId,
-          input: {
-            commandId: CommandId.make(randomUUID()),
-            threadId,
-            projectId: selectedProject.id,
-            title,
-            modelSelection: { instanceId: provider.instanceId, model: model.slug },
-            runtimeMode: "approval-required",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-          },
-        },
-        binding: {
-          type: "thread.bind",
-          commandId: randomUUID(),
-          projectId: selectedProject.id,
-          threadId,
-          agentId: provider.instanceId,
-          title,
-        },
-        created: false,
-        bound: false,
-      };
-      openings.current.set(key, operation);
-    }
     openingRef.current = true;
     setOpening(true);
     try {
-      if (!operation.created) {
-        const created = await createThread(operation.request);
-        if (created._tag === "Failure") {
-          showNotice(
-            "The thread creation could not be confirmed. Retry to recover the same conversation.",
-          );
-          return;
-        }
-        operation.created = true;
+      const linked = await open({ projectId: selectedProject.id, providerId: agentId });
+      if (!linked || linked.outcome === "rejected") {
+        showNotice(
+          linked?.detail ??
+            "The conversation could not be confirmed. Retry this project to recover it.",
+        );
+        return;
       }
-      if (!context.current.mounted || context.current.environmentId !== environmentId) return;
-      if (!operation.bound) {
-        const linked = await submit(operation.binding);
-        if (!linked || linked.outcome === "rejected") {
-          showNotice(
-            "The conversation was created but could not be linked. Retry in this project to link the same conversation.",
-          );
-          return;
-        }
-        operation.bound = true;
+      const threadId = linked.snapshot.agents.find(
+        (agent) => agent.id === agentId && agent.projectId === selectedProject.id,
+      )?.threadId;
+      if (!threadId) {
+        showNotice("The conversation has no valid thread link. Explicit repair is required.");
+        return;
       }
       if (
         context.current.mounted &&
         context.current.environmentId === environmentId &&
         context.current.projectId === selectedProject.id
-      ) {
-        openThread(operation.request.input.threadId);
-      }
+      )
+        openThread(threadId);
     } catch {
       showNotice(
         "The conversation could not be confirmed. Retry in this project to recover the same request.",
@@ -336,12 +278,15 @@ export function AgentsPage() {
             </li>
           ) : null}
           {providers.map((provider) => {
-            const bound = snapshot?.agents.find((agent) => agent.id === provider.instanceId);
+            const bound = snapshot?.agents.find(
+              (agent) => agent.id === provider.instanceId && agent.projectId === selectedProjectId,
+            );
             const ready = providerExecutable(provider);
             const tasks =
               snapshot?.tasks.filter(
                 (task) =>
                   task.state !== "completed" &&
+                  task.projectId === selectedProjectId &&
                   (task.assigneeAgentId === provider.instanceId ||
                     task.ownerAgentId === provider.instanceId),
               ) ?? [];

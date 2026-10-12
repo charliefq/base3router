@@ -9,6 +9,7 @@ import * as HttpServerRespondable from "effect/unstable/http/HttpServerRespondab
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 import {
+  CollaborationOpenThreadInput,
   CollaborationCommand,
   CollaborationCommandResult,
   CollaborationSnapshot,
@@ -574,6 +575,19 @@ class EnvironmentCollaborationHttpApi extends HttpApiGroup.make("collaboration")
     HttpApiEndpoint.post("command", "/api/collaboration/command", {
       headers: OptionalBearerHeaders,
       payload: CollaborationCommand,
+      success: CollaborationCommandResult,
+      error: [
+        EnvironmentRequestInvalidError,
+        EnvironmentAuthInvalidError,
+        EnvironmentScopeRequiredError,
+        EnvironmentInternalError,
+      ],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("openThread", "/api/collaboration/thread/open", {
+      headers: OptionalBearerHeaders,
+      payload: CollaborationOpenThreadInput,
       success: CollaborationCommandResult,
       error: [
         EnvironmentRequestInvalidError,
