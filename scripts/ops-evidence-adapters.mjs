@@ -309,7 +309,7 @@ function validateReceipt(entry) {
   );
 }
 
-function validateJournal(snapshot) {
+export function validateJournal(snapshot) {
   requireEvidence(
     snapshot?.version === 1 && Array.isArray(snapshot.entries),
     "invalid-receipt-journal",
@@ -323,7 +323,7 @@ function validateJournal(snapshot) {
   }
 }
 
-// Pure snapshot transition. Durable writes/CAS belong to a future reviewed store.
+// Pure snapshot transition, also reused by the isolated local receipt store.
 export function recordReceipt(snapshot, entry) {
   validateJournal(snapshot);
   validateReceipt(entry);

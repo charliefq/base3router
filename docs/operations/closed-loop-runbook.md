@@ -359,3 +359,64 @@ connector/header/permission or edited-comment blockers, and does not establish a
 live closed loop. Add `scripts/ops-http-read-transport.test.mjs` to the four-suite
 command above to run all five related suites. Independent review precedes the
 next receipt-persistence slice; green CI alone is not project completion.
+
+## B3R-05F isolated local receipt persistence
+
+`scripts/ops-receipt-store.mjs` reuses the existing `validateJournal`,
+`recordReceipt` and adapter lookup contract. It does not implement another
+receipt state machine, call an executor, update the execution slot, or use the
+Contents API. Review and start entries retain their existing immutable bindings
+and `kind:id` keys; only an explicitly supplied matching confirmed receipt can
+become confirmed. Pending, uncertain and absent receipts remain unknown.
+
+`createReceiptStore({parentDirectory})` creates a new private `b3r-receipts-*`
+directory under an explicit existing temporary parent. `openReceiptStore` takes
+the exact directory and retained store ID and never initializes or repairs it.
+`snapshot()` returns `{token, journal}`; `read()` returns the journal accepted
+by `createReadOnlyAdapters`; `record({expected, entry})` compares the token before
+applying the shared pure transition. Tokens bind store ID, local generation and
+the SHA-256 of the persisted envelope. Every changed journal advances generation;
+an identical entry with the current token is a no-op. A stale token cannot append
+a successor or overwrite confirmation. These are store generations, not authority
+to advance the execution slot or a real task.
+
+Both reads and writes acquire an exclusive `writer.lock` with `wx`. Cooperative
+processes cannot observe a publication in progress or concurrently win CAS. The
+writer stages a unique file in the same directory, writes and fsyncs it, renames
+it over the journal, then fsyncs the directory before releasing the lock and
+syncing the directory again. The bounded journal has an integrity digest, strict
+receipt validation, and no-follow/regular-file checks.
+FIFO opens use O_NONBLOCK before fstat so an out-of-band FIFO replacement cannot
+block synchronously while holding the lock; the regular-file check rejects it.
+Missing, truncated, corrupt, duplicate or wrongly bound journals fail closed, without resetting the
+store to empty or adopting a temporary file.
+
+Failure during publication retains the lock. A process crash can also leave a
+lock even before publication. There is no lock expiry, PID-based stealing,
+automatic cleanup, retry-send or recovery-unlock API. Recovery requires independent
+proof that every writer has stopped, storage health checks and explicit isolated
+operator action; after that, reopen validates whichever old/new journal survived.
+Orphan temporary files are not evidence. Tests remove a lock only after a
+synchronous injected failure has returned or a spawned child exit is observed.
+An unknown write outcome is resolved by reading and looking up the same receipt,
+not by calling start/review again. A lost successful return cannot add a second
+confirmed entry.
+
+This is tested on Linux with cooperative writers and trusted private local
+storage. It requires no-follow/exclusive-create, same-directory atomic rename,
+file fsync and directory fsync semantics; unsupported filesystem operations fail.
+It is not distributed CAS and is not supported on NFS/shared network filesystems.
+The checksum detects accidental damage, not hostile replacement or rollback of
+an entire valid store. A caller must retain trusted store identity/checkpoints;
+external rollback protection and receipt authenticity remain separate work.
+Temporary storage may be cleared on reboot or live in memory: fsync is not a
+promise of retention across host loss. Tests establish process-crash behavior,
+not power-loss durability or executor success. No production persistence is wired.
+
+The optional synchronous fault hook exists for isolated tests. Tests use temporary
+directories, synthetic receipts and captured child processes only. They cover
+write/fsync/rename failure windows, process exits before and after rename,
+concurrent authors, stale CAS, confirmation conflicts, unknown/lost receipts and
+reopen recovery. Add `scripts/ops-receipt-store.test.mjs` to the five-suite command
+to run all six related suites. Independent acceptance precedes B3R-05G's read-only
+executor capability audit; no live start or slot authorization follows from CI.
