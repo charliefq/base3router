@@ -354,7 +354,7 @@ export function TasksPage() {
         ) : (
           <ul>
             {tasks.map((task) => (
-              <li key={task.id}>
+              <li key={`${task.projectId}:${task.id}`}>
                 <Button
                   disabled={!task.threadId || !environmentId}
                   onClick={() => openTask(task)}

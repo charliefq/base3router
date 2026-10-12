@@ -183,15 +183,34 @@ const make = Effect.gen(function* () {
       if (Option.isNone(snapshot))
         return yield* refuse("Thread creation has not been confirmed. Retry this project.");
     }
-    if (existing)
+    if (existing) {
+      const recovered = yield* readCollaborationSnapshot(sql, principalId);
+      const agent = recovered.agents.find(
+        (item) => item.id === input.providerId && item.projectId === input.projectId,
+      );
+      const task = recovered.tasks.find(
+        (item) => item.correlationId === `thread:${threadId}` && item.projectId === input.projectId,
+      );
+      if (
+        agent?.threadId !== threadId ||
+        !task ||
+        task.threadId !== threadId ||
+        task.assigneeAgentId !== input.providerId ||
+        task.ownerAgentId !== principalId ||
+        task.id !== `task:thread:${threadId}`
+      )
+        return yield* refuse(
+          "The agent, task and thread link disagree. Explicit repair is required.",
+        );
       return {
         outcome: "applied" as const,
         code: null,
         detail: "The existing conversation was recovered.",
         idempotent: true,
         gateDecision: "DENY" as const,
-        snapshot: yield* readCollaborationSnapshot(sql, principalId),
+        snapshot: recovered,
       };
+    }
     const confirmedReceipt = yield* receipts.getByCommandId(identity.commandId);
     if (
       Option.isNone(confirmedReceipt) ||

@@ -252,3 +252,54 @@ it.effect(
       assert.equal(result.snapshot.tasks.length, 0);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
+
+it.effect("refuses cross-project task identity reuse and masks ambiguous legacy messages", () =>
+  Effect.gen(function* () {
+    const sql = yield* createTable;
+    yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES ('thread-b', 'project-b', 'provider-codex', NULL, NULL)`;
+    const bind = {
+      type: "thread.bind" as const,
+      commandId: "bind-a",
+      projectId: "project-a",
+      threadId: "thread-1",
+      agentId: "provider-codex",
+      displayName: "Codex",
+      origin: "internal" as const,
+      capabilities: ["gpt"],
+      admissionSource: "server" as const,
+      admittedBy: "principal-owner",
+    };
+    yield* submitCollaborationCommand(sql, bind, { allowNewBinding: true });
+    yield* submitCollaborationCommand(
+      sql,
+      { ...bind, commandId: "bind-b", projectId: "project-b", threadId: "thread-b" },
+      { allowNewBinding: true },
+    );
+    const delegate = {
+      type: "delegate" as const,
+      commandId: "delegate-a",
+      projectId: "project-a",
+      toAgentId: "provider-codex",
+      correlationId: "shared-correlation",
+      title: "Work",
+      body: "Private project note",
+      acceptance: "Done",
+      admissionSource: "server" as const,
+      admittedBy: "principal-owner",
+      gateDecision: "DENY" as const,
+    };
+    yield* submitCollaborationCommand(sql, delegate);
+    const other = { ...delegate, commandId: "delegate-b", projectId: "project-b" };
+    assert.equal((yield* submitCollaborationCommand(sql, other)).outcome, "rejected");
+    const encode = Schema.encodeEffect(Schema.fromJsonString(CollaborationCommand));
+    yield* sql`INSERT INTO collaboration_commands VALUES ('delegate-b', 4, ${yield* encode(other)}, '2026-10-12')`;
+    const snapshot = yield* readCollaborationSnapshot(sql, "principal-owner");
+    const ambiguous = snapshot.tasks.filter((task) => task.correlationId === "shared-correlation");
+    assert.equal(ambiguous.length, 2);
+    assert.isTrue(ambiguous.every((task) => task.threadId === null && task.state === "blocked"));
+    assert.equal(
+      snapshot.messages.filter((message) => message.taskId === "task:shared-correlation").length,
+      0,
+    );
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);

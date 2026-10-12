@@ -56,6 +56,14 @@ const scopedSnapshot = (commands: ReadonlyArray<CollaborationCommand>, principal
   const snapshots = [...projects].map((projectId) =>
     foldCollaboration(owned.filter((command) => projectFor(owned, command) === projectId)),
   );
+  const tasks = snapshots.flatMap((snapshot) => snapshot.tasks);
+  const ambiguous = new Set(
+    tasks
+      .filter((task) =>
+        tasks.some((other) => other.id === task.id && other.projectId !== task.projectId),
+      )
+      .map((task) => task.id),
+  );
   return {
     ...empty,
     agents: [
@@ -64,8 +72,21 @@ const scopedSnapshot = (commands: ReadonlyArray<CollaborationCommand>, principal
         snapshot.agents.filter((agent) => agent.origin === "internal"),
       ),
     ],
-    tasks: snapshots.flatMap((snapshot) => snapshot.tasks),
-    messages: snapshots.flatMap((snapshot) => snapshot.messages),
+    tasks: tasks.map((task) =>
+      ambiguous.has(task.id)
+        ? {
+            ...task,
+            threadId: null,
+            state: "blocked" as const,
+            gateDecision: "DENY" as const,
+            waitReason:
+              "The task identity is ambiguous across projects. Explicit repair is required.",
+          }
+        : task,
+    ),
+    messages: snapshots
+      .flatMap((snapshot) => snapshot.messages)
+      .filter((message) => !ambiguous.has(message.taskId)),
   };
 };
 
@@ -211,6 +232,17 @@ export const submitCollaborationCommand = (
       const projectId = projectFor(owned, command);
       if (!projectId)
         return refusal("unauthorized", "The command does not identify one owned project.");
+      if (
+        (command.type === "delegate" || command.type === "resolve") &&
+        command.correlationId &&
+        snapshot.tasks.some(
+          (task) => task.correlationId === command.correlationId && task.projectId !== projectId,
+        )
+      )
+        return refusal(
+          "identity-conflict",
+          "That task correlation belongs to a different project.",
+        );
       if (
         command.type === "thread.bind" &&
         !options.allowNewBinding &&
