@@ -385,8 +385,10 @@ processes cannot observe a publication in progress or concurrently win CAS. The
 writer stages a unique file in the same directory, writes and fsyncs it, renames
 it over the journal, then fsyncs the directory before releasing the lock and
 syncing the directory again. The bounded journal has an integrity digest, strict
-receipt validation, and no-follow/regular-file checks. Missing, truncated,
-corrupt, duplicate or wrongly bound journals fail closed, without resetting the
+receipt validation, and no-follow/regular-file checks.
+FIFO opens use O_NONBLOCK before fstat so an out-of-band FIFO replacement cannot
+block synchronously while holding the lock; the regular-file check rejects it.
+Missing, truncated, corrupt, duplicate or wrongly bound journals fail closed, without resetting the
 store to empty or adopting a temporary file.
 
 Failure during publication retains the lock. A process crash can also leave a

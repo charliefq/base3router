@@ -22,6 +22,7 @@ const syncDirectory = (directory) => {
 function temporaryDirectory(directory) {
   if (
     typeof NodeFS.constants.O_NOFOLLOW !== "number" ||
+    typeof NodeFS.constants.O_NONBLOCK !== "number" ||
     typeof NodeFS.constants.O_DIRECTORY !== "number" ||
     typeof directory !== "string" ||
     !NodePath.isAbsolute(directory)
@@ -74,7 +75,10 @@ export function openReceiptStore({ directory, storeId, fault = () => {} }) {
   const load = () => {
     let fd;
     try {
-      fd = NodeFS.openSync(file, NodeFS.constants.O_RDONLY | NodeFS.constants.O_NOFOLLOW);
+      fd = NodeFS.openSync(
+        file,
+        NodeFS.constants.O_RDONLY | NodeFS.constants.O_NOFOLLOW | NodeFS.constants.O_NONBLOCK,
+      );
       const stat = NodeFS.fstatSync(fd);
       if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_BYTES) fail("invalid-store-file");
       const bytes = NodeFS.readFileSync(fd);

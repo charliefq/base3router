@@ -32,6 +32,35 @@ function fixture(options = {}) {
 }
 
 describe("isolated local receipt persistence", () => {
+  it("rejects a FIFO journal without blocking the writer lock", () => {
+    const f = fixture();
+    try {
+      const file = NodePath.join(f.store.directory, "journal.json");
+      NodeFS.unlinkSync(file);
+      const fifo = NodeChildProcess.spawnSync("mkfifo", [file], { timeout: 2000 });
+      assert.equal(fifo.status, 0);
+      const moduleUrl = new URL("./ops-receipt-store.mjs", import.meta.url).href;
+      const script = `import { openReceiptStore } from ${JSON.stringify(moduleUrl)};
+        try { openReceiptStore({directory: process.argv[1], storeId: process.argv[2]}).read(); process.exit(2); }
+        catch (error) { if (error.message !== 'receipt-store-unreadable') process.exit(3); }`;
+      const child = NodeChildProcess.spawnSync(
+        process.execPath,
+        ["--input-type=module", "-e", script, f.store.directory, f.store.storeId],
+        { timeout: 1500, killSignal: "SIGKILL", encoding: "utf8" },
+      );
+      assert.equal(
+        child.error?.code,
+        undefined,
+        "FIFO read must finish before the bounded child timeout",
+      );
+      assert.equal(child.status, 0);
+      assert.equal(NodeFS.existsSync(NodePath.join(f.store.directory, "writer.lock")), false);
+      assert.equal(NodeFS.lstatSync(file).isFIFO(), true);
+    } finally {
+      f.clean();
+    }
+  });
+
   it.each(["start", "review"])("recovers one confirmed %s record without sending", async (kind) => {
     const f = fixture();
     try {
