@@ -420,3 +420,37 @@ concurrent authors, stale CAS, confirmation conflicts, unknown/lost receipts and
 reopen recovery. Add `scripts/ops-receipt-store.test.mjs` to the five-suite command
 to run all six related suites. Independent acceptance precedes B3R-05G's read-only
 executor capability audit; no live start or slot authorization follows from CI.
+
+## B3R-05H isolated executor recovery contract
+
+`scripts/ops-executor-recovery.mjs` exercises the gap between an accepted launch
+and a persisted stage binding using injected fake launch/lookup functions and
+the B3R-05F temporary receipt store. It follows `ThreadLaunchService`'s durable
+command identity and `Workflow.dispatchWorkflowStage`'s deterministic thread,
+message and stage command identities. It does not invoke those services or claim
+that their command receipt proves a native turn started. JSON-RPC correlation
+IDs are not durable dispatch keys; the caller must retain its dispatch ID.
+Binding and ACK envelopes require version 1. Confirmed receipts retain explicit
+`fixture-thread-launch` provenance and the accepted `thread.create` command
+identity, plus a separate `started` native status and native thread/turn IDs.
+Command acceptance or queued status alone remains unknown. These fields describe
+trusted fake evidence, not authentication or a new authority to execute.
+
+A dispatch intent is committed before the one permitted fake launch. Any replay
+of that intent uses explicit lookup only, including a crash before launch,
+missing native IDs and a lost ACK. With no lookup capability it returns blocked;
+an unavailable or inconclusive lookup remains unknown. Complete matching native
+thread/turn evidence confirms the existing receipt, then a separate local write
+records the stage binding. A restart between those writes completes the binding
+without sending again. `bound` describes this isolated mapping, not task success.
+Early results are not buffered or promoted into launch evidence: they must be
+replayed after binding. Conflicting scope, native IDs or terminal outcomes fail
+closed. Concurrent claims use the existing store CAS and never steal its locks.
+
+The wrapper validates executor-specific fields in addition to the shared journal
+contract. Other writers must not mutate those fields directly; legacy receipts
+without this mapping are not adopted. This remains cooperative local storage,
+with B3R-05F's retention and rollback limits. No production dispatch lookup,
+provider authorization, live execution or cloud-task resume capability is wired
+or verified. Add `scripts/ops-executor-recovery.test.mjs` to the six-suite command
+above. Independent review is required before selecting further integration work.
