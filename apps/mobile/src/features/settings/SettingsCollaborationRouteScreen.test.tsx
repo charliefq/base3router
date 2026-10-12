@@ -27,8 +27,8 @@ const mocks = vi.hoisted(() => ({
   ],
 }));
 vi.mock("react-native", () => ({ Pressable: "button", View: "div" }));
-vi.mock("@react-navigation/native", () => ({
-  useNavigation: () => ({ navigate: mocks.navigate }),
+vi.mock("../layout/AdaptiveWorkspaceLayout", () => ({
+  useAdaptiveWorkspaceLayout: () => ({ selectThread: mocks.navigate }),
 }));
 vi.mock("../../components/AppText", () => ({ AppText: "span" }));
 vi.mock("./components/SettingsScreen", () => ({ SettingsScreen: "main" }));
@@ -170,10 +170,7 @@ it.each([false, true])(
       input: { environmentId: "environment-a", projectId: "project-a" },
     });
     await click(mode ? "Open Task A" : "Open Provider A");
-    expect(mocks.navigate).toHaveBeenCalledWith("Thread", {
-      environmentId: "environment-a",
-      threadId: "thread-a",
-    });
+    expect(mocks.navigate).toHaveBeenCalledWith(mocks.threads[0]);
   },
 );
 

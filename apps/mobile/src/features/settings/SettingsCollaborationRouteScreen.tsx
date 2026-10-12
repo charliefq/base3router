@@ -1,5 +1,4 @@
 import { RegistryContext } from "@effect/atom-react";
-import { useNavigation } from "@react-navigation/native";
 import type { CollaborationSnapshot, EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { useContext, useLayoutEffect, useRef, useState } from "react";
@@ -10,6 +9,7 @@ import { useEnvironmentConnectionState, useEnvironments } from "../../state/envi
 import { useProjects, useThreadShells } from "../../state/entities";
 import { collaborationEnvironment } from "../../state/collaboration";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
+import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
 
@@ -106,7 +106,7 @@ function CollaborationRecords(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
 }) {
-  const navigation = useNavigation();
+  const { selectThread } = useAdaptiveWorkspaceLayout();
   const registry = useContext(RegistryContext);
   const read = useAtomQueryRunner(collaborationEnvironment.snapshot, { reportFailure: false });
   const threads = useThreadShells();
@@ -200,10 +200,7 @@ function CollaborationRecords(props: {
               onPress={() => {
                 if (!request.current.mounted || request.current.pending || !canOpen || !thread)
                   return;
-                navigation.navigate("Thread", {
-                  environmentId: String(props.environmentId),
-                  threadId: String(thread.id),
-                });
+                selectThread(thread);
               }}
             >
               <Text>Open existing thread</Text>
