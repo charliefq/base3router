@@ -75,7 +75,8 @@ frozen bound is spent. Collaboration execution stays `DENY`, and Grokbot stays
 - Provider ids are interim. They are not an independent named employee identity.
 - Per-principal project authorization, before any external or multi-principal
   ingress.
-- Repeated clicks and project selection for thread binding.
+- Thread binding recovery across page reloads and tabs; real-browser validation
+  of the mounted-page project selection and repeat-click guards.
 - An ActionGate tool plan for executable delegation. Until that exists, the
   chat gate stays `DENY`.
 - Mobile navigation, the command palette, and keybinding aliases.
