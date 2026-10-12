@@ -12,6 +12,7 @@ import type {
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { useEffect, useState } from "react";
 
+import { WorkflowStagePreview } from "./WorkflowStagePreview";
 import { TaskContractReadout } from "../chat/TaskContractPanel";
 import { Button } from "../ui/button";
 import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
@@ -61,7 +62,7 @@ function currentStage(catalog: WorkflowCatalog, run: WorkflowRun): WorkflowStage
   );
 }
 
-function ProjectWorkflowDecisions(props: {
+export function ProjectWorkflowDecisions(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly projectTitle: string;
@@ -83,6 +84,7 @@ function ProjectWorkflowDecisions(props: {
   const decision =
     catalog !== null && activeRun !== null ? pendingDecision(catalog, activeRun) : null;
   const stage = catalog !== null && activeRun !== null ? currentStage(catalog, activeRun) : null;
+  const attempt = activeRun?.attempts.findLast((entry) => entry.stageId === stage?.id);
   const submit = async (input: Parameters<typeof recordAction>[0]["input"]): Promise<void> => {
     setError(null);
     const result = await recordAction({
@@ -146,6 +148,28 @@ function ProjectWorkflowDecisions(props: {
             {stage?.label ?? activeRun.currentStageId ?? activeRun.status} · {activeRun.status}
             {stage?.type === "human_gate" ? " · human gate" : ""}
           </p>
+          {stage?.type === "agent" &&
+          attempt?.status === "pending" &&
+          catalogQuery.isSuccess &&
+          !catalogQuery.isPending ? (
+            <WorkflowStagePreview
+              key={JSON.stringify([
+                props.environmentId,
+                props.projectId,
+                activeRun.id,
+                stage.id,
+                attempt.attempt,
+                activeRun.updatedAt,
+                catalogQuery.dataUpdatedAt,
+                props.refreshTick,
+              ])}
+              environmentId={props.environmentId}
+              projectId={props.projectId}
+              runId={activeRun.id}
+              stageId={stage.id}
+              attempt={attempt.attempt}
+            />
+          ) : null}
           {decision === null ? (
             <p className="text-xs text-muted-foreground">
               {stage?.type === "agent" &&
