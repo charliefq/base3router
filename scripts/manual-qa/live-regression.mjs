@@ -1,3 +1,4 @@
+import * as NodeCrypto from "node:crypto";
 import * as NodeProcess from "node:process";
 import * as NodeTest from "node:test";
 import * as NodeAssert from "node:assert/strict";
@@ -99,11 +100,11 @@ NodeTest.test(
         const files = ["private-startup.log", "qa-owned-process.json"].map((name) =>
           NodePath.join(base, name),
         );
-        const before = files.map((file) => NodeFS.readFileSync(file));
+        const hash = (file) =>
+          NodeCrypto.createHash("sha256").update(NodeFS.readFileSync(file)).digest("hex");
+        const before = files.map(hash);
         NodeAssert.throws(() => run("start.mjs"));
-        files.forEach((file, index) =>
-          NodeAssert.deepEqual(NodeFS.readFileSync(file), before[index]),
-        );
+        files.forEach((file, index) => NodeAssert.equal(hash(file), before[index]));
         NodeAssert.equal(hits, 0, "No ambient relay/OTLP requests");
         await stop();
         await new Promise((resolve) => {
