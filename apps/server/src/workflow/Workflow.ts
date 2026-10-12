@@ -304,19 +304,21 @@ const persistWorkflowMutation = Effect.fn("Workflow.persistMutation")(function* 
   command: WorkflowRecordCommand,
 ) {
   const sql = yield* SqlClient.SqlClient;
-  const sequenceRows = yield* sql<{ readonly nextSequence: number }>`
+  return yield* sql.withTransaction(
+    Effect.gen(function* () {
+      const sequenceRows = yield* sql<{ readonly nextSequence: number }>`
     SELECT COALESCE(MAX(last_sequence), 0) + 1 AS "nextSequence"
     FROM projection_workflow_cursors
     WHERE project_id = ${command.projectId}
   `;
-  const sequence = sequenceRows[0]?.nextSequence ?? 1;
-  yield* projectWorkflowEvent({
-    type: "workflow.recorded",
-    sequence,
-    commandId: command.commandId,
-    payload: { projectId: command.projectId, mutation: command.mutation },
-  });
-  yield* sql`
+      const sequence = sequenceRows[0]?.nextSequence ?? 1;
+      yield* projectWorkflowEvent({
+        type: "workflow.recorded",
+        sequence,
+        commandId: command.commandId,
+        payload: { projectId: command.projectId, mutation: command.mutation },
+      });
+      yield* sql`
     INSERT INTO base3_workflow_commands (command_id, project_id, mutation_json, recorded_at)
     VALUES (${command.commandId}, ${command.projectId}, ${
       // The workflow command ledger stores the mutation the action already validated.
@@ -324,7 +326,9 @@ const persistWorkflowMutation = Effect.fn("Workflow.persistMutation")(function* 
       JSON.stringify({ projectId: command.projectId, mutation: command.mutation })
     }, ${command.createdAt})
   `;
-  return sequence;
+      return sequence;
+    }),
+  );
 });
 
 export const performWorkflowAction = Effect.fn("Workflow.action")(function* (
@@ -652,6 +656,12 @@ export const dispatchWorkflowStage = Effect.fn("Workflow.dispatchStage")(functio
   const messageId = MessageId.make(`workflow-message-${input.dispatchId}`);
   const existing = yield* workflowCatalogForProject(input.projectId);
   const existingRun = existing.runs.find((run) => run.id === input.runId);
+  const latestAttempt = existingRun?.attempts.findLast(
+    (attempt) => attempt.stageId === input.stageId,
+  );
+  if (latestAttempt !== undefined && latestAttempt.attempt !== input.attempt) {
+    return yield* new WorkflowOperationError({ message: "Stage preview is stale." });
+  }
   const existingAttempt = existingRun?.attempts.find(
     (attempt) => attempt.stageId === input.stageId && attempt.attempt === input.attempt,
   );

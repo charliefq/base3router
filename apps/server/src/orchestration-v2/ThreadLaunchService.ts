@@ -738,6 +738,19 @@ const make = Effect.gen(function* () {
         const threadId =
           claimed.storedEvents.find((stored) => stored.event.type.startsWith("thread."))?.event
             .threadId ?? candidateThreadId;
+        const created = claimed.storedEvents.find(
+          (stored) => stored.event.type === "thread.created",
+        )?.event;
+        // A replay returns the original committed event. Bind to that event,
+        // not mutable thread settings, before accepting the launch for a stage.
+        if (
+          created?.type === "thread.created" &&
+          (created.payload.projectId !== input.projectId ||
+            created.payload.modelSelection.instanceId !== input.modelSelection.instanceId ||
+            created.payload.modelSelection.model !== input.modelSelection.model)
+        ) {
+          return yield* mapError(input, "create-thread", threadId)("Launch identity changed.");
+        }
         if (project.id !== input.projectId) {
           return yield* mapError(input, "resolve-project", threadId)("Project identity changed.");
         }
