@@ -1,5 +1,5 @@
 import * as NodeAssert from "node:assert/strict";
-import { assert, describe, it } from "vite-plus/test";
+import { assert, describe, it, vi } from "vite-plus/test";
 import { createHttpReadTransport } from "./ops-http-read-transport.mjs";
 import { normalizePage } from "./ops-evidence-adapters.mjs";
 
@@ -23,6 +23,90 @@ const stream = (start) => new ReadableStream({ start });
 const bytes = (value) => new TextEncoder().encode(value);
 
 describe("explicit GET-only HTTP transport", () => {
+  it.each(["", "identity,", "unknown", "gzip; q=1"])(
+    "rejects malformed or unsupported coding %s",
+    async (encoding) => {
+      const f = setup(new Response("[]", { headers: { "content-encoding": encoding } }));
+      await NodeAssert.rejects(f.read(request), /^Error: unsupported-content-encoding$/);
+    },
+  );
+
+  it.each(["Identity", "IDENTITY", "iDeNtItY"])(
+    "checks length for case-insensitive %s coding",
+    async (encoding) => {
+      const f = setup(
+        new Response("[]", { headers: { "content-encoding": encoding, "content-length": "3" } }),
+      );
+      await NodeAssert.rejects(f.read(request), /^Error: body-length-mismatch$/);
+    },
+  );
+
+  it("does not compare compressed wire length to the decoded byte limit", async () => {
+    // Standards-compatible fetch has already decoded the body, retaining wire headers.
+    const f = setup(
+      new Response("[]", { headers: { "content-encoding": "GZip", "content-length": "22" } }),
+      { maxBytes: 2 },
+    );
+    assert.deepEqual((await f.read(request)).data, []);
+  });
+
+  it("still enforces the decoded limit on encoded responses", async () => {
+    const f = setup(
+      new Response("[1]", { headers: { "content-encoding": "gzip", "content-length": "1" } }),
+      { maxBytes: 2 },
+    );
+    await NodeAssert.rejects(f.read(request), /^Error: body-too-large$/);
+  });
+
+  it.each(["fetch", "pull", "parse", "headers"])(
+    "rejects an elapsed deadline during synchronous %s work before the timer runs",
+    async (phase) => {
+      let elapsed = 100;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+      const originalParse = JSON.parse;
+      let parse;
+      try {
+        const response = new Response(
+          new ReadableStream(
+            {
+              pull(controller) {
+                if (phase === "pull") elapsed = 111;
+                controller.enqueue(bytes("[]"));
+                controller.close();
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+        );
+        if (phase === "parse")
+          parse = vi.spyOn(JSON, "parse").mockImplementation((...args) => {
+            const value = originalParse(...args);
+            elapsed = 111;
+            return value;
+          });
+        if (phase === "headers") {
+          const entries = response.headers.entries.bind(response.headers);
+          vi.spyOn(response.headers, "entries").mockImplementation(() => {
+            elapsed = 111;
+            return entries();
+          });
+        }
+        const f = setup(
+          () => {
+            if (phase === "fetch") elapsed = 111;
+            return response;
+          },
+          { timeoutMs: 10 },
+        );
+        await NodeAssert.rejects(f.read(request), /read-timeout/);
+        assert.equal(f.calls[0][1].signal.aborted, true);
+      } finally {
+        parse?.mockRestore();
+        clock.mockRestore();
+      }
+    },
+  );
+
   it("does not report completeness until the stream closes", async () => {
     let controller;
     const f = setup(

@@ -320,6 +320,10 @@ Only GET requests to supported resources beneath that repository on
 `https://api.github.com` are constructed. Only positive integer page/per_page
 queries are accepted. The caller configures a bounded decoded-body size (8 MiB
 default, 64 MiB maximum) and timeout (30 seconds default, 5 minutes maximum).
+An abort timer remains active for asynchronous waits. Monotonic deadline checks
+also run after fetch, around stream reads, after joining/decoding/parsing, and
+immediately before returning. Synchronous work cannot be preempted by a timer,
+but work that exceeds the deadline cannot return complete evidence afterward.
 Actual Response status and headers, including Link, are preserved. The transport
 never follows Link itself; existing pagination validation constructs subsequent
 requests. It rejects normalized objects pretending to be Response instances.
@@ -328,9 +332,14 @@ requests. It rejects normalized objects pretending to be Response instances.
 UTF-8 decoding plus requested JSON parsing succeeded. It does not mean HTTP
 success: 403/404/429 remain those statuses. Partial responses, interrupted streams,
 oversize bodies, invalid UTF-8/JSON and identity Content-Length mismatches throw
-fixed reasons without exposing upstream errors or credentials. For content-encoded
-responses, the injected fetch must correctly decode and reject truncated wire
-bodies; wire Content-Length cannot be compared with decoded byte length. A clean
+fixed reasons without exposing upstream errors or credentials. Content-Encoding
+tokens are trimmed and case-normalized; supported tokens are identity, gzip,
+deflate and br. Missing encoding or only identity tokens requires an exact
+Content-Length match. For content-encoded responses, the injected fetch must
+correctly decode and reject truncated wire bodies. `maxBytes` always bounds the
+decoded stream, not the declared compressed wire length; no independent wire-byte
+cap is claimed. A compressed wire length larger than maxBytes does not reject an
+otherwise bounded decoded body. A clean
 EOF without a declared length cannot establish an application's semantic
 completeness, so this is a transport guarantee, not an attestation.
 

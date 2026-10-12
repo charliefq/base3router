@@ -66,6 +66,13 @@ export function createHttpReadTransport({
       url.searchParams.set(key, String(value));
     }
     const controller = new AbortController();
+    const deadline = performance.now() + timeoutMs;
+    const checkDeadline = () => {
+      if (performance.now() >= deadline) {
+        controller.abort();
+        fail("read-timeout");
+      }
+    };
     let reader;
     let response;
     let timer;
@@ -86,6 +93,7 @@ export function createHttpReadTransport({
         }),
         timeout,
       ]);
+      checkDeadline();
       if (!(response instanceof Response)) fail("not-a-response");
       // A fetch implementation that already followed a redirect violates this capability.
       if (
@@ -98,16 +106,24 @@ export function createHttpReadTransport({
       if (response.status === 206 || response.headers.has("content-range"))
         fail("partial-response-rejected");
       if (!response.body || response.bodyUsed) fail("body-unavailable");
+      const encoding = response.headers.get("content-encoding");
+      const codings =
+        encoding === null ? [] : encoding.split(",").map((token) => token.trim().toLowerCase());
+      if (!codings.every((coding) => ["identity", "gzip", "deflate", "br"].includes(coding)))
+        fail("unsupported-content-encoding");
+      const identity = codings.every((coding) => coding === "identity");
       const length = response.headers.get("content-length");
       if (length !== null && !/^\d+$/.test(length)) fail("invalid-content-length");
       const declared = length === null ? null : Number(length);
-      if (declared !== null && (!Number.isSafeInteger(declared) || declared > maxBytes))
-        fail("body-too-large");
+      if (declared !== null && !Number.isSafeInteger(declared)) fail("invalid-content-length");
+      if (identity && declared !== null && declared > maxBytes) fail("body-too-large");
       reader = response.body.getReader();
       const chunks = [];
       let bytes = 0;
       while (true) {
+        checkDeadline();
         const { done, value } = await Promise.race([reader.read(), timeout]);
+        checkDeadline();
         if (done) break;
         if (!(value instanceof Uint8Array)) fail("invalid-body-chunk");
         bytes += value.byteLength;
@@ -115,15 +131,14 @@ export function createHttpReadTransport({
         chunks.push(value);
       }
       // Fetch may decode content-encoding; wire Content-Length then describes other bytes.
-      const encoding = response.headers.get("content-encoding");
-      if ((!encoding || encoding === "identity") && declared !== null && bytes !== declared)
-        fail("body-length-mismatch");
+      if (identity && declared !== null && bytes !== declared) fail("body-length-mismatch");
       const joined = new Uint8Array(bytes);
       let offset = 0;
       for (const chunk of chunks) {
         joined.set(chunk, offset);
         offset += chunk.byteLength;
       }
+      checkDeadline();
       let data;
       try {
         const body = new TextDecoder("utf-8", { fatal: true }).decode(joined);
@@ -131,12 +146,15 @@ export function createHttpReadTransport({
       } catch {
         fail("invalid-response-body");
       }
-      return {
+      checkDeadline();
+      const result = {
         status: response.status,
         headers: Object.fromEntries(response.headers.entries()),
         complete: true,
         data,
       };
+      checkDeadline();
+      return result;
     } catch (error) {
       // Never expose fetch errors, URLs, response bodies or supplied authorization headers.
       const reasons = new Set([
@@ -150,6 +168,7 @@ export function createHttpReadTransport({
         "invalid-body-chunk",
         "body-length-mismatch",
         "invalid-response-body",
+        "unsupported-content-encoding",
       ]);
       // eslint-disable-next-line preserve-caught-error -- Upstream causes can contain credentials; expose only fixed reasons.
       throw new Error(reasons.has(error?.message) ? error.message : "http-read-failed");
