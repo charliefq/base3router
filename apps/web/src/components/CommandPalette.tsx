@@ -554,6 +554,15 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         });
         return;
       }
+      if (command === "agents.open" || command === "tasks.open") {
+        if (event.isComposing) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.repeat) return;
+        setOpen(false);
+        void navigate({ to: command === "agents.open" ? "/agents" : "/tasks" });
+        return;
+      }
       if (command === "usage.open") {
         event.preventDefault();
         event.stopPropagation();
@@ -2222,6 +2231,7 @@ function OpenCommandPaletteDialog(props: {
     value: "action:agents",
     searchTerms: ["agents", "agent", "providers", "collaboration"],
     title: "Open agents",
+    shortcutCommand: "agents.open",
     icon: <BotIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/agents" });
@@ -2233,6 +2243,7 @@ function OpenCommandPaletteDialog(props: {
     value: "action:tasks",
     searchTerms: ["tasks", "task", "delegation", "collaboration"],
     title: "Open tasks",
+    shortcutCommand: "tasks.open",
     icon: <ListChecksIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/tasks" });

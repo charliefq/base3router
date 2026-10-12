@@ -407,3 +407,16 @@ describe("KeybindingsSettings.logic", () => {
     ).toEqual(["Chat: New Local"]);
   });
 });
+
+it("offers named collaboration navigation commands without default bindings", () => {
+  const options = buildKeybindingCommandOptions(DEFAULT_RESOLVED_KEYBINDINGS);
+  expect(options).toContain("agents.open");
+  expect(options).toContain("tasks.open");
+  expect(commandLabel("agents.open")).toBe("Agents: Open");
+  expect(commandLabel("tasks.open")).toBe("Tasks: Open");
+  expect(
+    DEFAULT_RESOLVED_KEYBINDINGS.some(
+      (binding) => binding.command === "agents.open" || binding.command === "tasks.open",
+    ),
+  ).toBe(false);
+});

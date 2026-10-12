@@ -320,3 +320,19 @@ it.effect("drops unknown fields in resolved keybinding rules", () =>
     }),
   ),
 );
+
+it.effect("accepts collaboration navigation and existing configurations", () =>
+  Effect.gen(function* () {
+    const input = [
+      { key: "mod+j", command: "terminal.toggle" },
+      { key: "ctrl+alt+a", command: "agents.open", when: "!terminalFocus" },
+      { key: "ctrl+alt+t", command: "tasks.open", when: "!previewFocus" },
+    ] as const;
+    const config = yield* decode(KeybindingsConfig, input);
+    assert.deepEqual(config, input);
+    assert.deepEqual(
+      yield* decode(KeybindingsConfig, [{ key: "mod+j", command: "terminal.toggle" }]),
+      input.slice(0, 1),
+    );
+  }),
+);
