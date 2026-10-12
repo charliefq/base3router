@@ -1,0 +1,280 @@
+import { act } from "react";
+import { create, type ReactTestRenderer } from "react-test-renderer";
+import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import type { CommandPaletteActionItem, CommandPaletteSubmenuItem } from "./CommandPalette.logic";
+
+const mocks = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  operation: vi.fn(),
+  open: null as null | ((detail: { query?: string }) => void),
+  theme: {
+    theme: "default",
+    themeHalves: { light: "default", dark: "default" },
+    resolvedTheme: "dark",
+    appearanceMode: "dark",
+    setAppearanceMode: vi.fn(),
+    setTheme: vi.fn(),
+    setThemeHalf: vi.fn(),
+  },
+}));
+vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => mocks.navigate,
+  useLocation: ({ select }: { select: (value: { pathname: string }) => unknown }) =>
+    select({ pathname: "/" }),
+  useParams: ({ select }: { select: (value: object) => unknown }) => select({}),
+}));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => [] }));
+vi.mock("../commandPaletteBus", () => ({
+  onOpenCommandPalette: (callback: typeof mocks.open) => {
+    mocks.open = callback;
+    return () => {
+      mocks.open = null;
+    };
+  },
+}));
+vi.mock("../hooks/useTheme", () => ({ useTheme: () => mocks.theme }));
+vi.mock("../hooks/useCustomThemes", () => ({ useCustomThemes: () => [] }));
+vi.mock("../hooks/useEnvironmentTheme", () => ({ useEnvironmentThemeDefinitions: () => [] }));
+vi.mock("../hooks/useSettings", () => ({
+  useClientSettings: () => ({
+    sidebarProjectSortOrder: "manual",
+    sidebarThreadSortOrder: "newest",
+    sidebarProjectGrouping: "none",
+  }),
+}));
+vi.mock("../hooks/useHandleNewThread", () => ({
+  useHandleNewThread: () => ({
+    activeThread: null,
+    activeDraftThread: null,
+    defaultProjectRef: null,
+    handleNewThread: mocks.operation,
+  }),
+}));
+vi.mock("../hooks/useOpenPanelPullRequestUrl", () => ({ useOpenPanelPullRequestUrl: () => null }));
+vi.mock("../hooks/useScratchProject", () => ({
+  useScratchProject: () => ({
+    scratchEnvironmentId: () => null,
+    scratchWorkspaceRootFor: () => null,
+    startScratchThread: mocks.operation,
+  }),
+}));
+vi.mock("../hooks/useNewProject", () => ({ useNewProject: () => mocks.operation }));
+vi.mock("../connection/useDesktopLocalBootstraps", () => ({ useDesktopLocalBootstraps: () => [] }));
+vi.mock("../state/environments", () => ({
+  useEnvironments: () => ({ environments: [] }),
+  usePrimaryEnvironmentId: () => null,
+}));
+vi.mock("../state/entities", () => ({
+  useProjects: () => [],
+  useThreadShells: () => [],
+  useServerConfigs: () => new Map(),
+  waitForProject: vi.fn(),
+}));
+vi.mock("../state/queries", () => ({ useThreadSearch: () => ({ matches: [], isPending: false }) }));
+vi.mock("../state/query", () => ({
+  useEnvironmentQuery: () => ({ data: null, isPending: false, error: null, refresh: vi.fn() }),
+}));
+vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => mocks.operation }));
+vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => mocks.operation }));
+vi.mock("../state/filesystem", () => ({ filesystemEnvironment: { browse: vi.fn() } }));
+vi.mock("../state/projects", () => ({ projectEnvironment: { create: "create" } }));
+vi.mock("../state/threads", () => ({ threadEnvironment: { stopSession: "stop" } }));
+vi.mock("../state/sourceControl", () => ({
+  sourceControlEnvironment: {
+    repository: "repository",
+    cloneRepository: "clone",
+    startProjectClone: "start",
+    discovery: vi.fn(),
+  },
+}));
+vi.mock("../state/server", () => ({
+  serverEnvironment: { refreshProviders: "refresh" },
+  primaryServerKeybindingsAtom: "keys",
+  primaryServerProvidersAtom: "providers",
+}));
+vi.mock("../uiStateStore", () => ({
+  useUiStateStore: () => [],
+  legacyProjectCwdPreferenceKey: (value: string) => value,
+}));
+vi.mock("../rightPanelStore", () => ({
+  useRightPanelStore: () => false,
+  selectActiveRightPanel: () => null,
+  PULL_REQUESTS_PANEL_REF: null,
+}));
+vi.mock("../terminalUiStateStore", () => ({
+  useTerminalUiStateStore: () => false,
+  selectThreadTerminalUiState: () => ({ terminalOpen: false }),
+}));
+vi.mock("./settings/useAvailableSettingsSearchItems", () => ({
+  useAvailableSettingsSearchItems: () => [],
+}));
+vi.mock("./files/ProjectFilePicker", () => ({ ProjectFilePicker: () => null }));
+vi.mock("./search/ProjectContentSearchDialog", () => ({ ProjectContentSearchDialog: () => null }));
+vi.mock("./pullRequest/LinkPullRequestDialog", () => ({ openLinkPullRequestDialog: vi.fn() }));
+vi.mock("./ui/toast", () => ({
+  toastManager: { add: vi.fn() },
+  stackedThreadToast: (value: unknown) => value,
+}));
+vi.mock("./ui/command", async () => {
+  const React = await import("react");
+  type Item = CommandPaletteActionItem | CommandPaletteSubmenuItem;
+  const Items = React.createContext<ReadonlyArray<Item>>([]);
+  const Dialog = React.createContext(false);
+  const Input = React.createContext<{ value: string; onValueChange: (value: string) => void }>({
+    value: "",
+    onValueChange: () => {},
+  });
+  const wrapper = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
+  return {
+    CommandDialog: ({ open, children }: { open: boolean; children: React.ReactNode }) => (
+      <Dialog.Provider value={open}>{children}</Dialog.Provider>
+    ),
+    CommandDialogPopup: ({ children }: { children: React.ReactNode }) =>
+      React.useContext(Dialog) ? <div>{children}</div> : null,
+    Command: ({
+      value,
+      onValueChange,
+      children,
+    }: {
+      value: string;
+      onValueChange: (value: string) => void;
+      children: React.ReactNode;
+    }) => {
+      const input = React.useMemo(() => ({ value, onValueChange }), [value, onValueChange]);
+      return <Input.Provider value={input}>{children}</Input.Provider>;
+    },
+    CommandInput: ({ onKeyDown }: { onKeyDown: (event: unknown) => void }) => {
+      const input = React.useContext(Input);
+      return (
+        <input
+          value={input.value}
+          onChange={(event) => input.onValueChange(event.target.value)}
+          onKeyDown={onKeyDown}
+        />
+      );
+    },
+    CommandGroup: ({
+      items,
+      children,
+    }: {
+      items: ReadonlyArray<Item>;
+      children: React.ReactNode;
+    }) => <Items.Provider value={items}>{children}</Items.Provider>,
+    CommandCollection: ({ children }: { children: (item: Item) => React.ReactNode }) =>
+      React.useContext(Items).map(children),
+    CommandItem: ({
+      value,
+      onClick,
+      children,
+    }: {
+      value: string;
+      onClick: () => void;
+      children: React.ReactNode;
+    }) => (
+      <button value={value} onClick={onClick}>
+        {children}
+      </button>
+    ),
+    CommandGroupLabel: wrapper,
+    CommandList: wrapper,
+    CommandShortcut: wrapper,
+    CommandPanel: wrapper,
+    CommandFooter: wrapper,
+    CommandFooterAction: wrapper,
+  };
+});
+import { CommandPalette } from "./CommandPalette";
+
+let renderer: ReactTestRenderer;
+const open = async (query = "") => {
+  await act(async () => mocks.open!({ query }));
+};
+const search = async (query: string) => {
+  await act(async () =>
+    renderer.root.findByType("input").props.onChange({ target: { value: query } }),
+  );
+};
+const rows = () =>
+  renderer.root.findAllByType("button").filter((row) => typeof row.props.value === "string");
+const values = () => rows().map((row) => row.props.value);
+beforeEach(async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("navigator", { platform: "Linux" });
+  vi.stubGlobal("window", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+  mocks.navigate.mockReset().mockResolvedValue(undefined);
+  mocks.operation.mockReset();
+  await act(async () => {
+    renderer = create(
+      <CommandPalette>
+        <span>App</span>
+      </CommandPalette>,
+    );
+  });
+});
+afterEach(async () => {
+  await act(async () => renderer?.unmount());
+  vi.unstubAllGlobals();
+});
+
+it.each([
+  ["agent", "action:agents"],
+  ["providers", "action:agents"],
+  ["task", "action:tasks"],
+  ["delegation", "action:tasks"],
+])("searches %s and selects the existing route", async (query, value) => {
+  await open();
+  await search(query);
+  expect(values()).toContain(value);
+  const row = rows().find((item) => item.props.value === value)!;
+  await act(async () => row.props.onClick());
+  expect(mocks.navigate).toHaveBeenCalledWith({
+    to: value === "action:agents" ? "/agents" : "/tasks",
+  });
+  expect(renderer.root.findAllByType("input")).toHaveLength(0);
+  expect(mocks.operation).not.toHaveBeenCalled();
+});
+it("offers one of each in Actions, supports action-only search and preserves existing navigation", async () => {
+  await open();
+  expect(values().filter((value) => value === "action:agents")).toHaveLength(1);
+  expect(values().filter((value) => value === "action:tasks")).toHaveLength(1);
+  await search("> collaboration");
+  expect(values().sort()).toEqual(["action:agents", "action:tasks"]);
+  await search("> usage");
+  await act(async () =>
+    rows()
+      .find((row) => row.props.value === "action:usage")!
+      .props.onClick(),
+  );
+  expect(mocks.navigate).toHaveBeenCalledWith({ to: "/usage" });
+  expect(renderer.root.findAllByType("input")).toHaveLength(0);
+  await open("settings");
+  await act(async () =>
+    rows()
+      .find((row) => row.props.value === "action:settings")!
+      .props.onClick(),
+  );
+  expect(mocks.navigate).toHaveBeenLastCalledWith({ to: "/settings" });
+  expect(renderer.root.findAllByType("input")).toHaveLength(0);
+});
+
+it.each([
+  ["agents", "/agents"],
+  ["tasks", "/tasks"],
+])("closes before %s navigation finishes", async (query, route) => {
+  let finish!: () => void;
+  mocks.navigate.mockReturnValueOnce(
+    new Promise<void>((resolve) => {
+      finish = resolve;
+    }),
+  );
+  await open(query);
+  await act(async () =>
+    rows()
+      .find((row) => row.props.value === `action:${query}`)!
+      .props.onClick(),
+  );
+  expect(mocks.navigate).toHaveBeenCalledWith({ to: route });
+  expect(renderer.root.findAllByType("input")).toHaveLength(0);
+  await act(async () => finish());
+  expect(mocks.operation).not.toHaveBeenCalled();
+});

@@ -45,6 +45,8 @@ import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
+  BotIcon,
+  ListChecksIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
   ChevronRightIcon,
@@ -2214,6 +2216,28 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:agents",
+    searchTerms: ["agents", "agent", "providers", "collaboration"],
+    title: "Open agents",
+    icon: <BotIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/agents" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:tasks",
+    searchTerms: ["tasks", "task", "delegation", "collaboration"],
+    title: "Open tasks",
+    icon: <ListChecksIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/tasks" });
+    },
+  });
 
   actionItems.push({
     kind: "action",

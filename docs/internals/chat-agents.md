@@ -79,7 +79,7 @@ frozen bound is spent. Collaboration execution stays `DENY`, and Grokbot stays
   of the mounted-page project selection and repeat-click guards.
 - An ActionGate tool plan for executable delegation. Until that exists, the
   chat gate stays `DENY`.
-- Mobile navigation, the command palette, and keybinding aliases.
+- Mobile navigation and keybinding aliases.
 - A provider remaining-budget ceiling. One offline turn can report past the
   frozen cap. The next start is refused after that report. Spend remains
   unknown, and a real paid pilot is not authorized.
