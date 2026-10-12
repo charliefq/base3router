@@ -19,7 +19,7 @@ import {
   SYNTHETIC_FIXTURE_PRICE_LABEL,
   TASK_CONTRACT_HUMAN_DECISION,
   type OrchestrationV2AppThread,
-  type TaskContract,
+  TaskContract,
   type TaskContractDecision,
   type TaskContractFields,
 } from "@t3tools/contracts";
@@ -44,6 +44,9 @@ const StoredTaskPayload = Schema.Struct({
   ),
 });
 
+const decodeStoredTaskPayload = Schema.decodeUnknownOption(StoredTaskPayload);
+const decodeTaskContract = Schema.decodeUnknownOption(TaskContract);
+
 export interface PersistedTaskState {
   readonly governance: "chat" | "required";
   readonly contract: TaskContract | null;
@@ -54,10 +57,12 @@ export interface PersistedTaskState {
 }
 
 export function taskStateFromUnknown(threadId: string, payload: unknown): PersistedTaskState {
-  const parsed = Schema.decodeUnknownOption(StoredTaskPayload)(payload);
+  const parsed = decodeStoredTaskPayload(payload);
   if (parsed._tag === "None") {
     return {
-      governance: "chat",
+      // A corrupt persisted task must not silently become an ungoverned chat.
+      // Historical chats still decode successfully with absent optional fields.
+      governance: "required",
       contract: null,
       phase: "active",
       acceptedRevision: null,
@@ -69,25 +74,9 @@ export function taskStateFromUnknown(threadId: string, payload: unknown): Persis
   const contractOption =
     value.taskContract === undefined || value.taskContract === null
       ? null
-      : Schema.decodeUnknownOption(
-          Schema.Struct({
-            revision: Schema.Number,
-            goal: Schema.String,
-            redirect: Schema.String,
-            acceptance: Schema.String,
-            brake: Schema.Struct({
-              maxProviderStarts: Schema.Number,
-              stopConditions: Schema.String,
-              maxTokens: Schema.optional(Schema.Number),
-              maxCostUsd: Schema.optional(Schema.Number),
-              deadlineAt: Schema.optional(Schema.String),
-            }),
-          }),
-        )(value.taskContract);
+      : decodeTaskContract(value.taskContract);
   const contract =
-    contractOption !== null && contractOption._tag === "Some"
-      ? (contractOption.value as TaskContract)
-      : null;
+    contractOption !== null && contractOption._tag === "Some" ? contractOption.value : null;
   return {
     governance,
     contract,

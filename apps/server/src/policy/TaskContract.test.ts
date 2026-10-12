@@ -206,6 +206,45 @@ it.effect("an incomplete governed task starts zero providers", () =>
   }).pipe(Effect.provide(gateLayer)),
 );
 
+const invalidPersistedContracts = [
+  ...(["goal", "redirect", "acceptance", "brake"] as const).map((field) => ({
+    name: `missing ${field}`,
+    payload: { taskContract: { ...contract, [field]: undefined } },
+  })),
+  ...(["goal", "redirect", "acceptance"] as const).map((field) => ({
+    name: `blank ${field}`,
+    payload: { taskContract: { ...contract, [field]: "  " } },
+  })),
+  {
+    name: "blank brake stop conditions",
+    payload: { taskContract: { ...contract, brake: { ...fields.brake, stopConditions: " " } } },
+  },
+  {
+    name: "fractional brake start budget",
+    payload: { taskContract: { ...contract, brake: { ...fields.brake, maxProviderStarts: 1.5 } } },
+  },
+  { name: "invalid revision", payload: { taskContract: { ...contract, revision: 0 } } },
+  { name: "corrupt phase", payload: { taskContractPhase: "broken" } },
+  { name: "corrupt lineage", payload: { lineage: false } },
+  { name: "corrupt governance", payload: { taskGovernance: "broken" } },
+];
+
+it.effect.each(invalidPersistedContracts)(
+  "denies persisted $name before any execution permission is created",
+  ({ payload }) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* insertThread(sql, "thread-invalid", payloadFor("thread-invalid", payload));
+      const denied = yield* Effect.flip(
+        dispatchMessage("thread-invalid", "invalid-1", "message-invalid"),
+      );
+      expect(denied.reason).toBe("task-contract");
+      for (const table of ["leases", "grants", "admissions", "attempts"] as const) {
+        expect(yield* countTable(sql, table)).toBe(0);
+      }
+    }).pipe(Effect.provide(gateLayer)),
+);
+
 it.effect("a complete contract admits one governed start", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
