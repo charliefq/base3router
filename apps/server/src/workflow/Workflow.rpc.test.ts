@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  WorkflowOperationError,
   MessageId,
   ProjectId,
   ProviderDriverKind,
@@ -12,6 +13,8 @@ import {
 } from "@t3tools/contracts";
 import { assert, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeOS from "node:os";
 
@@ -27,6 +30,7 @@ import {
   type WorkflowRecordCommand,
 } from "./Workflow.ts";
 
+const isWorkflowOperationError = Schema.is(WorkflowOperationError);
 const projectId = ProjectId.make("project-1");
 const environmentId = EnvironmentId.make("environment-1");
 const at = "2026-09-28T00:00:00.000Z";
@@ -166,6 +170,7 @@ memoryLayer("workflow human decisions", (it) => {
           },
           noopDispatch,
         );
+        let launchCount = 0;
         const result = yield* Effect.exit(
           dispatchWorkflowStage(
             {
@@ -182,11 +187,21 @@ memoryLayer("workflow human decisions", (it) => {
               environmentId,
               providers: [provider(true)],
               environmentDefaultModelSelection: null,
-              launch: () => Effect.die("stale attempt must not launch"),
+              launch: () =>
+                Effect.sync(() => {
+                  launchCount++;
+                  return { sequence: 1 };
+                }),
             },
           ),
         );
+        assert.equal(launchCount, 0);
         assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") {
+          const error = Cause.squash(result.cause);
+          if (!isWorkflowOperationError(error)) throw error;
+          assert.equal(error.message, "Stage preview is stale.");
+        }
       }),
   );
   it.effect("rolls back stage projection when its command ledger write fails", () =>

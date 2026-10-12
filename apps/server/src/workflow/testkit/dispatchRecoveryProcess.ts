@@ -10,9 +10,12 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  TurnId,
+  WorkflowOperationError,
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Cause from "effect/Cause";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -36,18 +39,29 @@ import * as GitWorkflow from "../../git/GitWorkflowService.ts";
 import * as TextGeneration from "../../textGeneration/TextGeneration.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { makeProviderRegistryLayer } from "../../provider/testUtils/providerRegistryMock.ts";
-import { BUILTIN_WORKFLOW_TEMPLATES } from "../Builtins.ts";
+import { BUILTIN_AGENT_PROFILES, BUILTIN_WORKFLOW_TEMPLATES } from "../Builtins.ts";
 import { initialWorkflowRun } from "../Policy.ts";
 import { projectWorkflowEvent } from "../Projection.ts";
-import { dispatchWorkflowStage, workflowCatalogForProject } from "../Workflow.ts";
+import {
+  dispatchWorkflowStage,
+  performWorkflowAction,
+  workflowCatalogForProject,
+} from "../Workflow.ts";
 
 const [directory, phase] = process.argv.slice(2);
 if (
   !directory ||
   !phase ||
-  !["crash", "recover", "wrong-route", "old-attempt", "wrong-dispatch", "ledger-failure"].includes(
-    phase,
-  )
+  ![
+    "crash",
+    "recover",
+    "wrong-route",
+    "future-attempt",
+    "wrong-dispatch",
+    "ledger-failure",
+    "revise",
+    "superseded-attempt",
+  ].includes(phase)
 )
   throw new Error("invalid-test-input");
 const canonical = NodeFS.realpathSync(directory);
@@ -139,6 +153,7 @@ const launchLayer = ThreadLaunch.layer.pipe(
   Layer.provide(Layer.mergeAll(external, threads, receipts, IdAllocator.layer)),
 );
 const runtime = Layer.mergeAll(database, receipts, threads, launchLayer);
+const isWorkflowOperationError = Schema.is(WorkflowOperationError);
 const encodeReport = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 const program = Effect.gen(function* () {
@@ -173,6 +188,65 @@ const program = Effect.gen(function* () {
     yield* sql`CREATE TEMP TRIGGER fail_stage_ledger BEFORE INSERT ON base3_workflow_commands
     WHEN NEW.command_id = 'workflow-dispatch-recovery-dispatch'
     BEGIN SELECT RAISE(ABORT, 'injected-ledger-failure'); END`;
+  if (phase === "revise") {
+    const cursors = yield* sql<{ lastSequence: number }>`SELECT last_sequence AS "lastSequence"
+      FROM projection_workflow_cursors WHERE project_id = ${projectId}`;
+    const profile = BUILTIN_AGENT_PROFILES[0]!;
+    // Fixture artifact only: the production decision path advances the attempt.
+    // This is not evidence of a native/provider turn completing.
+    yield* projectWorkflowEvent({
+      sequence: cursors[0]!.lastSequence + 1,
+      type: "workflow.recorded",
+      commandId: "fixture-artifact",
+      payload: {
+        projectId,
+        mutation: {
+          type: "artifact.propose",
+          artifact: {
+            id: "revision-artifact",
+            runId: "recovery-run",
+            stageId: "discovery",
+            attempt: 1,
+            kind: "opportunity_brief",
+            sourceTurnId: TurnId.make("fixture-turn"),
+            profileId: profile.id,
+            profileVersion: profile.version,
+            sections: profile.requiredOutputSections.map((label) => ({
+              label,
+              content: "Unknown",
+              missing: true,
+            })),
+            missingSections: [...profile.requiredOutputSections],
+            extractionVersion: 1,
+            redacted: false,
+            status: "proposed",
+            createdAt: at,
+            acceptedAt: null,
+          },
+        },
+      },
+    });
+    const revised = yield* performWorkflowAction(
+      {
+        type: "decision.record",
+        projectId,
+        commandId: "request-revision",
+        decisionId: "revision",
+        runId: "recovery-run",
+        stageId: "discovery",
+        attempt: 1,
+        artifactId: "revision-artifact",
+        value: "request_revision",
+      },
+      () => Effect.succeed({ sequence: 1 }),
+    );
+    const report = yield* encodeReport({
+      pid: process.pid,
+      latestAttempt: revised.runs[0]?.attempts.at(-1)?.attempt,
+    });
+    NodeFS.writeFileSync(NodePath.join(directory, `${phase}.json`), report);
+    process.exit(0);
+  }
   const target = {
     instanceId: phase === "wrong-route" ? ProviderInstanceId.make("other-fake") : instanceId,
     model: "fake-model",
@@ -183,7 +257,7 @@ const program = Effect.gen(function* () {
     projectId,
     runId: "recovery-run",
     stageId: "discovery",
-    attempt: phase === "old-attempt" ? 2 : 1,
+    attempt: phase === "future-attempt" ? 2 : 1,
     dispatchId,
     target,
     additionalInstruction: "",
@@ -231,6 +305,16 @@ const program = Effect.gen(function* () {
   const report = yield* encodeReport({
     pid: process.pid,
     result: result._tag,
+    error:
+      result._tag === "Failure"
+        ? (() => {
+            const error = Cause.squash(result.cause);
+            return isWorkflowOperationError(error)
+              ? { tag: error._tag, message: error.message }
+              : null;
+          })()
+        : null,
+    latestAttempt: catalog.runs[0]?.attempts.at(-1)?.attempt,
     receipt: Option.getOrNull(receipt),
     stage: catalog.runs[0]?.attempts[0],
     nativeThreadRefs: projection?.providerThreads.map((thread) => thread.nativeThreadRef) ?? [],

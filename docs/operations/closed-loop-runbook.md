@@ -468,6 +468,10 @@ Launch receipt replay checks the original committed creation event's project,
 provider instance and model before a stage can adopt the launch.
 An earlier attempt cannot replay a matching dispatch after revision creates a
 new attempt; the stale check precedes the existing-binding shortcut.
+Tests distinguish a future-attempt mismatch (stored 1, requested 2) from a
+superseded attempt (a production revision persisted 2, requested 1 in another
+process). The latter requires the typed stale error and zero launch entries;
+an arbitrary failure or a launch sentinel is insufficient.
 
 External services are fake; preparation is held and the provider effect worker
 is disabled. Tests distinguish launch-function re-entry from provider calls:

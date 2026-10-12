@@ -46,6 +46,8 @@ const run = (directory: string, phase: string) =>
 const report = (directory: string, phase: string) =>
   JSON.parse(NodeFS.readFileSync(NodePath.join(directory, `${phase}.json`), "utf8")) as {
     result: string;
+    error: { tag: string; message: string } | null;
+    latestAttempt: number;
     receipt: { commandId: string; threadId: string; status: string };
     stage: { destinationThreadId: string | null };
     nativeThreadRefs: Array<unknown>;
@@ -71,6 +73,11 @@ function inspect(directory: string) {
           )
           .get()?.count,
       ),
+      attempts: db
+        .prepare(
+          "SELECT attempt, attempt_json FROM projection_workflow_stage_attempts WHERE stage_id = 'discovery' ORDER BY attempt",
+        )
+        .all(),
       stage: JSON.parse(
         String(
           db
@@ -141,12 +148,12 @@ it("recovers after a real stage-ledger failure with no partial projection or ext
   assert.deepEqual(after.receipts, before.receipts);
 });
 
-it("rejects conflicting route, dispatch identity and stale attempt after recovery", async () => {
+it("rejects conflicting route, dispatch identity and future attempt after recovery", async () => {
   const directory = fixture();
   await run(directory, "crash");
   await run(directory, "recover");
   const before = inspect(directory);
-  for (const phase of ["wrong-route", "wrong-dispatch", "old-attempt"]) {
+  for (const phase of ["wrong-route", "wrong-dispatch", "future-attempt"]) {
     await run(directory, phase);
     assert.equal(report(directory, phase).result, "Failure");
     assert.deepEqual(inspect(directory), before);
@@ -161,5 +168,34 @@ it("rejects a changed provider route while the launch receipt exists but the sta
   const before = inspect(directory);
   await run(directory, "wrong-route");
   assert.equal(report(directory, "wrong-route").result, "Failure");
+  assert.deepEqual(inspect(directory), before);
+});
+
+it("rejects a superseded attempt after a revision is persisted by another process, without entering launch", async () => {
+  const directory = fixture();
+  await run(directory, "crash");
+  await run(directory, "recover");
+  const revision = await run(directory, "revise");
+  assert.equal(report(directory, "revise").latestAttempt, 2);
+  const before = inspect(directory);
+  assert.deepEqual(
+    before.attempts.map((row) => row.attempt),
+    [1, 2],
+  );
+  const launchesBefore = calls(directory).filter((call) => call.event === "launch.enter").length;
+  const stale = await run(directory, "superseded-attempt");
+  assert.notEqual(stale.pid, revision.pid);
+  const rejected = report(directory, "superseded-attempt");
+  assert.equal(rejected.latestAttempt, 2);
+  assert.equal(rejected.result, "Failure");
+  assert.deepEqual(rejected.error, {
+    tag: "WorkflowOperationError",
+    message: "Stage preview is stale.",
+  });
+  assert.equal(
+    calls(directory).filter((call) => call.event === "launch.enter").length - launchesBefore,
+    0,
+  );
+  assert.equal(calls(directory).filter((call) => call.event === "provider.openSession").length, 0);
   assert.deepEqual(inspect(directory), before);
 });
