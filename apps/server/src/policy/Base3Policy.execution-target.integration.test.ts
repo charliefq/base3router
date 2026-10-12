@@ -177,15 +177,80 @@ function makeAdapter(
 }
 
 it.live.each([
-  { mode: "auto", queued: false },
-  { mode: "manual", queued: false },
-  { mode: "auto", queued: true },
+  { name: "auto", mode: "auto", queued: false, sameTarget: false, omitted: false, options: false },
+  {
+    name: "manual",
+    mode: "manual",
+    queued: false,
+    sameTarget: false,
+    omitted: false,
+    options: false,
+  },
+  {
+    name: "queued auto",
+    mode: "auto",
+    queued: true,
+    sameTarget: false,
+    omitted: false,
+    options: false,
+  },
+  {
+    name: "manual options",
+    mode: "manual",
+    queued: false,
+    sameTarget: false,
+    omitted: false,
+    options: true,
+  },
+  {
+    name: "auto same target options",
+    mode: "auto",
+    queued: false,
+    sameTarget: true,
+    omitted: false,
+    options: true,
+  },
+  {
+    name: "manual inherited options",
+    mode: "manual",
+    queued: false,
+    sameTarget: false,
+    omitted: true,
+    options: true,
+  },
+  {
+    name: "auto inherited same target options",
+    mode: "auto",
+    queued: false,
+    sameTarget: true,
+    omitted: true,
+    options: true,
+  },
+  {
+    name: "auto changed target drops options",
+    mode: "auto",
+    queued: false,
+    sameTarget: false,
+    omitted: false,
+    options: true,
+  },
 ] as const)(
-  "server-bound $mode (queued: $queued) preserves target, grant and replay",
-  ({ mode, queued }) =>
+  "server-bound $name preserves target, options, grant and replay",
+  ({ name, mode, queued, sameTarget, omitted, options }) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const cwd = yield* checkpointWorkspace(`bound-target-${mode}`);
+        const cwd = yield* checkpointWorkspace(`bound-target-${name}`);
+        const sourceSelection: ModelSelection = {
+          ...(sameTarget ? a : b),
+          ...(options
+            ? {
+                options: [
+                  { id: "reasoningEffort", value: "high" },
+                  { id: "serviceTier", value: "fast" },
+                ],
+              }
+            : {}),
+        };
         const started = yield* Ref.make<ReadonlyArray<ModelSelection>>([]);
         const database = SqlitePersistenceMemory;
         const runtime = Layer.mergeAll(
@@ -194,7 +259,7 @@ it.live.each([
             getProviders: Effect.succeed([provider, { ...provider, instanceId: b.instanceId }]),
           }),
           makeOrchestratorV2ReplayLayerWithRegistry(
-            { name: `bound-target-${mode}` },
+            { name: `bound-target-${name}` },
             ProviderAdapterRegistry.makeLayer([
               makeAdapter(started, a.instanceId),
               makeAdapter(started, b.instanceId),
@@ -217,7 +282,7 @@ it.live.each([
             threadId,
             projectId,
             title: "Routing fixture",
-            modelSelection: b,
+            modelSelection: sourceSelection,
             runtimeMode: "full-access",
             interactionMode: "default",
             branch: null,
@@ -232,7 +297,7 @@ it.live.each([
             messageId: MessageId.make(`message:${mode}`),
             text: "Inspect this fixture.",
             attachments: [],
-            modelSelection: b,
+            ...(omitted ? {} : { modelSelection: sourceSelection }),
             routingMode: mode,
             dispatchMode: {
               type: queued ? ("queue_after_active" as const) : ("start_immediately" as const),
@@ -265,8 +330,12 @@ it.live.each([
             yield* Fiber.join(completed);
             yield* worker.drain();
           }
-          const expected = mode === "auto" ? a : b;
-          assert.deepEqual(command.modelSelection, b, "the client input is never mutated");
+          const expected = mode === "auto" && !sameTarget ? a : sourceSelection;
+          assert.deepEqual(
+            command.modelSelection,
+            omitted ? undefined : sourceSelection,
+            "the client input is never mutated",
+          );
           assert.deepEqual(yield* Ref.get(started), queued ? [] : [expected]);
           const projection = yield* orchestrator.getThreadProjection(threadId);
           const run = projection.runs.find(
@@ -280,7 +349,7 @@ it.live.each([
           const route = yield* decodeRoute(routes[0]?.binding ?? "{}");
           assert.deepEqual(
             { instanceId: route.target.instanceId, model: route.target.model },
-            expected,
+            { instanceId: expected.instanceId, model: expected.model },
           );
           const grants = yield* sql<{
             hash: string;
@@ -292,15 +361,27 @@ it.live.each([
               model: expected.model,
               instanceId: expected.instanceId,
               attachmentIds: [],
+              ...(expected.options === undefined ? {} : { options: expected.options }),
             }),
           );
-          if (mode === "auto") {
+          if (mode === "auto" && !sameTarget) {
             const staleTarget = yield* Effect.flip(
               authorizeDispatch(command).pipe(
                 Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
               ),
             );
             assert.equal(staleTarget.reason, "argument-mismatch");
+          }
+          if (expected.options !== undefined) {
+            const changed = yield* Effect.flip(
+              authorizeDispatch({
+                ...command,
+                modelSelection: { ...expected, options: [{ id: "reasoningEffort", value: "low" }] },
+              }).pipe(
+                Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
+              ),
+            );
+            assert.equal(changed.reason, "argument-mismatch");
           }
           const replay = yield* orchestrator.dispatch(command);
           if (!queued) yield* worker.drain();
