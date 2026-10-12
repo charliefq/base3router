@@ -24,6 +24,11 @@ import { primaryServerProvidersAtom } from "../../state/server";
 import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { WorkspacePageContainer } from "../WorkspacePageContainer";
+import { Alert, AlertDescription } from "../ui/alert";
+import { Badge } from "../ui/badge";
+import { ScrollArea } from "../ui/scroll-area";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 
 const loadSnapshot = () =>
   runPrimaryHttp(
@@ -219,110 +224,210 @@ export function AgentsPage() {
   };
 
   const grokbot = snapshot?.agents.find((agent) => agent.id === "grokbot");
+  const visibleNotice =
+    notice?.environmentId === environmentId && notice.projectId === selectedProjectId
+      ? notice.message
+      : null;
   return (
     <SidebarInset>
       <WorkspacePageHeader electron={isElectron}>
-        <h1>Agents</h1>
+        <h1 className="text-sm font-medium">Agents</h1>
       </WorkspacePageHeader>
-      <div>
-        {error ? <p>{error}</p> : null}
-        {notice &&
-        notice.environmentId === environmentId &&
-        notice.projectId === selectedProjectId ? (
-          <p>{notice.message}</p>
-        ) : null}
-        {!environmentId ? <p>No primary environment is connected.</p> : null}
-        {projects.length === 0 ? (
-          <p>No project is open on this environment. An agent thread needs a real project.</p>
-        ) : null}
-        {projects.length > 1 ? (
-          <label>
-            Project
-            <select
-              disabled={opening}
-              value={projectId ?? ""}
-              onChange={(event) => setProjectId(event.target.value || null)}
-            >
-              <option value="">Select a project</option>
-              {projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.title}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        {snapshot ? (
-          <>
-            <p>Real Grokbot: {snapshot.realGrokbot}</p>
-            <ul>
-              {snapshot.grokbotIntegration.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          </>
-        ) : (
-          <p>Reading the agent directory.</p>
-        )}
-        <ul>
-          {grokbot ? (
-            <li>
-              <Button aria-pressed={false} disabled size="sm" variant="ghost">
-                {grokbot.displayName}
-              </Button>
-              <p>
-                {grokbot.origin} · {grokbot.role} · {connectionLabel(grokbot, undefined)} ·{" "}
-                {grokbot.availability}
+      <div className="min-h-0 flex-1">
+        <ScrollArea radius="none">
+          <WorkspacePageContainer width="wide">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+              <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
+                Internal providers and external agents. Open a conversation in its project; opening
+                a conversation does not start execution.
               </p>
-              <p>Grokbot is NOT_CONNECTED. No chat was opened.</p>
-            </li>
-          ) : null}
-          {providers.map((provider) => {
-            const bound = snapshot?.agents.find(
-              (agent) => agent.id === provider.instanceId && agent.projectId === selectedProjectId,
-            );
-            const ready = providerExecutable(provider);
-            const tasks =
-              snapshot?.tasks.filter(
-                (task) =>
-                  task.state !== "completed" &&
-                  task.projectId === selectedProjectId &&
-                  (task.assigneeAgentId === provider.instanceId ||
-                    task.ownerAgentId === provider.instanceId),
-              ) ?? [];
-            return (
-              <li key={provider.instanceId}>
-                <Button
-                  disabled={opening || pending || !snapshot || !ready || !selectedProject}
-                  onClick={() => {
-                    void openAgent(provider.instanceId);
-                  }}
-                  size="sm"
-                  variant="ghost"
-                >
-                  {provider.displayName ?? provider.driver}
-                </Button>
-                <p>
-                  internal · provider · {connectionLabel(bound, provider)} ·{" "}
-                  {bound?.availability ?? (ready ? "unknown" : "offline")}
-                </p>
-                <p>
-                  {ready
-                    ? provider.models.map((model) => model.slug).join(", ") || "No model"
-                    : "This provider is not ready. No conversation was fabricated."}
-                </p>
-                {tasks.length > 0 ? (
-                  <p>{tasks.map((task) => task.title).join(", ")}</p>
-                ) : (
-                  <p>No open tasks.</p>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-        {providers.length === 0 ? (
-          <p>No provider is configured. A provider CLI is not an employee.</p>
-        ) : null}
+              {projects.length > 1 ? (
+                <div className="flex w-full flex-col gap-2 sm:w-64 sm:shrink-0">
+                  <label htmlFor="agents-project" className="text-sm font-medium">
+                    Project
+                  </label>
+                  <Select
+                    disabled={opening}
+                    value={projectId ?? ""}
+                    items={[
+                      { value: "", label: "Select a project" },
+                      ...projects.map((project) => ({ value: project.id, label: project.title })),
+                    ]}
+                    onValueChange={(value) => setProjectId(value || null)}
+                  >
+                    <SelectTrigger id="agents-project">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectPopup>
+                      <SelectItem value="">Select a project</SelectItem>
+                      {projects.map((project) => (
+                        <SelectItem key={project.id} value={project.id}>
+                          {project.title}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                </div>
+              ) : selectedProject ? (
+                <div className="text-sm text-muted-foreground">
+                  Project:{" "}
+                  <span className="font-medium text-foreground">{selectedProject.title}</span>
+                </div>
+              ) : null}
+            </div>
+            {error ? (
+              <Alert variant="error">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            ) : null}
+            {visibleNotice ? (
+              <Alert variant="warning">
+                <AlertDescription>{visibleNotice}</AlertDescription>
+              </Alert>
+            ) : null}
+            {!environmentId ? (
+              <Alert variant="info">
+                <AlertDescription>No primary environment is connected.</AlertDescription>
+              </Alert>
+            ) : projects.length === 0 ? (
+              <Alert variant="info">
+                <AlertDescription>
+                  No project is open on this environment. An agent thread needs a real project.
+                </AlertDescription>
+              </Alert>
+            ) : !selectedProject ? (
+              <Alert variant="info">
+                <AlertDescription>
+                  Select a project to open or recover its agent conversations.
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            {environmentId && !snapshot && !error ? (
+              <p role="status" className="text-sm text-muted-foreground">
+                Reading the agent directory.
+              </p>
+            ) : null}
+            <ul aria-label="Agent directory" className="grid min-w-0 gap-4 md:grid-cols-2">
+              {grokbot ? (
+                <li className="min-w-0 rounded-xl border border-border/60 bg-card/40 p-5 shadow-xs/5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <h2 className="wrap-anywhere text-base font-medium">{grokbot.displayName}</h2>
+                      <p className="text-xs text-muted-foreground">
+                        {grokbot.origin} · {grokbot.role}
+                      </p>
+                    </div>
+                    <Badge variant="secondary">{connectionLabel(grokbot, undefined)}</Badge>
+                  </div>
+                  <div className="mt-4 space-y-3 text-sm leading-relaxed">
+                    <p className="text-muted-foreground">Availability: {grokbot.availability}</p>
+                    <p className="wrap-anywhere text-muted-foreground">
+                      Capabilities:{" "}
+                      {grokbot.capabilities.join(", ") || "No advertised capabilities."}
+                    </p>
+                    <p>Grokbot is NOT_CONNECTED. No chat was opened.</p>
+                    {snapshot?.grokbotIntegration.length ? (
+                      <details className="text-muted-foreground">
+                        <summary className="cursor-pointer text-foreground">
+                          Connection requirements
+                        </summary>
+                        <ul className="mt-2 list-disc space-y-1 pl-5">
+                          {snapshot.grokbotIntegration.map((item) => (
+                            <li key={item} className="wrap-anywhere">
+                              {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    ) : null}
+                    <Button aria-pressed={false} disabled size="sm" variant="outline">
+                      Open conversation
+                    </Button>
+                  </div>
+                </li>
+              ) : null}
+              {providers.map((provider) => {
+                const bound = snapshot?.agents.find(
+                  (agent) =>
+                    agent.id === provider.instanceId && agent.projectId === selectedProjectId,
+                );
+                const ready = providerExecutable(provider);
+                const tasks =
+                  snapshot?.tasks.filter(
+                    (task) =>
+                      task.state !== "completed" &&
+                      task.projectId === selectedProjectId &&
+                      (task.assigneeAgentId === provider.instanceId ||
+                        task.ownerAgentId === provider.instanceId),
+                  ) ?? [];
+                return (
+                  <li
+                    key={provider.instanceId}
+                    className="min-w-0 rounded-xl border border-border/60 bg-card/40 p-5 shadow-xs/5"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0 space-y-1">
+                        <h2 className="wrap-anywhere text-base font-medium">
+                          {provider.displayName ?? provider.driver}
+                        </h2>
+                        <p className="text-xs text-muted-foreground">internal · provider</p>
+                      </div>
+                      <Badge variant="secondary">{connectionLabel(bound, provider)}</Badge>
+                    </div>
+                    <div className="mt-4 space-y-3 text-sm leading-relaxed">
+                      <p className="text-muted-foreground">
+                        Availability: {bound?.availability ?? (ready ? "unknown" : "offline")}
+                      </p>
+                      <p className="wrap-anywhere text-muted-foreground">
+                        Capabilities:{" "}
+                        {bound?.capabilities.join(", ") || "No advertised capabilities."}
+                      </p>
+                      <p className="wrap-anywhere">
+                        {ready
+                          ? provider.models.map((model) => model.slug).join(", ") || "No model"
+                          : "This provider is not ready. No conversation was fabricated."}
+                      </p>
+                      <div className="space-y-1 border-t border-border/50 pt-3">
+                        <h3 className="text-xs font-medium text-muted-foreground">Current tasks</h3>
+                        {tasks.length ? (
+                          <ul className="space-y-1">
+                            {tasks.map((task) => (
+                              <li key={`${task.projectId}:${task.id}`} className="wrap-anywhere">
+                                {task.title}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-muted-foreground">
+                            {selectedProject
+                              ? "No open tasks."
+                              : "Select a project to view its tasks."}
+                          </p>
+                        )}
+                      </div>
+                      <Button
+                        disabled={opening || pending || !snapshot || !ready || !selectedProject}
+                        onClick={() => {
+                          void openAgent(provider.instanceId);
+                        }}
+                        size="sm"
+                        variant="outline"
+                        aria-label={`Open ${provider.displayName ?? provider.driver} conversation`}
+                      >
+                        Open conversation
+                      </Button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+            {providers.length === 0 && snapshot ? (
+              <div className="rounded-xl border border-dashed border-border p-6 text-sm leading-relaxed text-muted-foreground">
+                No provider is configured. A provider CLI is not an employee.
+              </div>
+            ) : null}
+          </WorkspacePageContainer>
+        </ScrollArea>
       </div>
     </SidebarInset>
   );
@@ -345,39 +450,90 @@ export function TasksPage() {
   return (
     <SidebarInset>
       <WorkspacePageHeader electron={isElectron}>
-        <h1>Tasks</h1>
+        <h1 className="text-sm font-medium">Tasks</h1>
       </WorkspacePageHeader>
-      <div>
-        {error ? <p>{error}</p> : null}
-        {tasks.length === 0 ? (
-          <p>No cross-agent tasks yet.</p>
-        ) : (
-          <ul>
-            {tasks.map((task) => (
-              <li key={`${task.projectId}:${task.id}`}>
-                <Button
-                  disabled={!task.threadId || !environmentId}
-                  onClick={() => openTask(task)}
-                  size="sm"
-                  variant="ghost"
-                >
-                  {task.title}
-                </Button>
-                <p>
-                  {task.state} · owner {task.ownerAgentId} · assignee {task.assigneeAgentId}
-                </p>
-                <p>{task.waitReason ?? "No wait."}</p>
-                <p>Acceptance: {task.acceptance}</p>
-                <p>Gate {task.gateDecision}. This task does not grant execution.</p>
-                <p>
-                  {task.threadId
-                    ? "Opening this task returns to its project thread."
-                    : "This task has no project thread."}
-                </p>
-              </li>
-            ))}
-          </ul>
-        )}
+      <div className="min-h-0 flex-1">
+        <ScrollArea radius="none">
+          <WorkspacePageContainer width="wide">
+            <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
+              Cross-agent work, its owners and acceptance criteria. Return to a task's conversation
+              to inspect its evidence; opening a task does not grant execution.
+            </p>
+            {error ? (
+              <Alert variant="error">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            ) : null}
+            {!environmentId ? (
+              <Alert variant="info">
+                <AlertDescription>No primary environment is connected.</AlertDescription>
+              </Alert>
+            ) : !snapshot && !error ? (
+              <p role="status" className="text-sm text-muted-foreground">
+                Reading cross-agent tasks.
+              </p>
+            ) : snapshot && tasks.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-border p-6 text-sm text-muted-foreground">
+                No cross-agent tasks yet.
+              </div>
+            ) : null}
+            {tasks.length > 0 ? (
+              <ul aria-label="Cross-agent tasks" className="space-y-4">
+                {tasks.map((task) => (
+                  <li
+                    key={`${task.projectId}:${task.id}`}
+                    className="min-w-0 rounded-xl border border-border/60 bg-card/40 p-5 shadow-xs/5"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <h2 className="min-w-0 wrap-anywhere text-base font-medium">{task.title}</h2>
+                      <Badge variant="secondary">{task.state}</Badge>
+                    </div>
+                    <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
+                      <div className="min-w-0 space-y-1">
+                        <dt className="text-xs text-muted-foreground">Owner</dt>
+                        <dd className="wrap-anywhere">{task.ownerAgentId}</dd>
+                      </div>
+                      <div className="min-w-0 space-y-1">
+                        <dt className="text-xs text-muted-foreground">Assignee</dt>
+                        <dd className="wrap-anywhere">{task.assigneeAgentId}</dd>
+                      </div>
+                      <div className="min-w-0 space-y-1">
+                        <dt className="text-xs text-muted-foreground">Wait reason</dt>
+                        <dd className="wrap-anywhere leading-relaxed">
+                          {task.waitReason ?? "No wait."}
+                        </dd>
+                      </div>
+                      <div className="min-w-0 space-y-1">
+                        <dt className="text-xs text-muted-foreground">Acceptance</dt>
+                        <dd className="wrap-anywhere leading-relaxed">{task.acceptance}</dd>
+                      </div>
+                    </dl>
+                    <div className="mt-4 flex flex-col gap-3 border-t border-border/50 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="space-y-1 text-xs leading-relaxed text-muted-foreground">
+                        <p>Gate {task.gateDecision}. This task does not grant execution.</p>
+                        <p>
+                          {task.threadId
+                            ? "Opening this task returns to its project thread."
+                            : "This task has no project thread."}
+                        </p>
+                      </div>
+                      <div className="shrink-0">
+                        <Button
+                          disabled={!task.threadId || !environmentId}
+                          onClick={() => openTask(task)}
+                          size="sm"
+                          variant="outline"
+                        >
+                          Open conversation
+                        </Button>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </WorkspacePageContainer>
+        </ScrollArea>
       </div>
     </SidebarInset>
   );

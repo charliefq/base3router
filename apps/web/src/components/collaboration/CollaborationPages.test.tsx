@@ -66,8 +66,21 @@ vi.mock("../../environments/primary/httpClient", async () => {
 vi.mock("../ui/button", () => ({ Button: "button" }));
 vi.mock("../ui/sidebar", () => ({ SidebarInset: "main" }));
 vi.mock("../WorkspacePageHeader", () => ({ WorkspacePageHeader: "header" }));
+vi.mock("../WorkspacePageContainer", () => ({ WorkspacePageContainer: "div" }));
+vi.mock("../ui/badge", () => ({ Badge: "span" }));
+vi.mock("../ui/alert", () => ({ Alert: "div", AlertDescription: "p" }));
+vi.mock("../ui/scroll-area", () => ({ ScrollArea: "div" }));
+vi.mock("../ui/select", () => ({
+  Select: ({ onValueChange, ...props }: { onValueChange: (value: string) => void }) => (
+    <select {...props} onChange={(event) => onValueChange(event.target.value)} />
+  ),
+  SelectTrigger: "div",
+  SelectValue: "span",
+  SelectPopup: "div",
+  SelectItem: "option",
+}));
 
-import { AgentsPage } from "./CollaborationPages";
+import { AgentsPage, TasksPage } from "./CollaborationPages";
 
 let renderer: ReactTestRenderer;
 const deferred = <T,>() => {
@@ -78,7 +91,9 @@ const deferred = <T,>() => {
   return { promise, resolve };
 };
 const button = () =>
-  renderer.root.findAllByType("button").find((node) => node.children.includes("Codex"))!;
+  renderer.root
+    .findAllByType("button")
+    .find((node) => node.props["aria-label"] === "Open Codex conversation")!;
 const click = async () => {
   await act(async () => {
     button().props.onClick();
@@ -287,5 +302,58 @@ describe("Agents server conversation recovery", () => {
     await select("project-b");
     await click();
     expect(state.recover).toHaveBeenCalledWith({ projectId: "project-b", providerId: "codex" });
+  });
+});
+
+describe("Tasks loading and conversation access", () => {
+  it("keeps loading distinct from a confirmed empty task list", async () => {
+    const reading = deferred<CollaborationSnapshot>();
+    state.load.mockReturnValueOnce(reading.promise);
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    expect(text()).toContain("Reading cross-agent tasks.");
+    expect(text()).not.toContain("No cross-agent tasks yet.");
+    await act(async () => reading.resolve(state.snapshot));
+    expect(text()).toContain("No cross-agent tasks yet.");
+    expect(text()).not.toContain("Reading cross-agent tasks.");
+  });
+  it("returns a blocked task to its conversation without a command or execution grant", async () => {
+    state.snapshot = {
+      ...state.snapshot,
+      tasks: [
+        {
+          id: "blocked-task",
+          title: "Inspect evidence",
+          projectId: "project-a",
+          threadId: "bound-thread",
+          state: "blocked",
+          ownerAgentId: "owner",
+          assigneeAgentId: "codex",
+          waitReason: "Permission denied",
+          acceptance: "Inspect the result",
+          gateDecision: "DENY",
+          correlationId: "task-correlation",
+          revision: 1,
+          pendingClarificationId: null,
+        },
+      ],
+    };
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    expect(text()).toContain("DENY");
+    const open = renderer.root
+      .findAllByType("button")
+      .find((node) => node.children.includes("Open conversation"))!;
+    expect(open.props.disabled).toBe(false);
+    await act(async () => open.props.onClick());
+    expect(state.navigate).toHaveBeenCalledWith({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: "environment-a", threadId: "bound-thread" },
+    });
+    expect(state.bind).not.toHaveBeenCalled();
+    expect(state.recover).not.toHaveBeenCalled();
+    expect(state.create).not.toHaveBeenCalled();
   });
 });
