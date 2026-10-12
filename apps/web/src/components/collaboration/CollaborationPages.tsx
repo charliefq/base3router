@@ -1,15 +1,17 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  CommandId,
   isProviderAvailable,
   isProviderTextGenerationCapable,
   type CollaborationAgent,
   type CollaborationCommand,
   type CollaborationSnapshot,
   type CollaborationTask,
+  type EnvironmentId,
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import { PrimaryEnvironmentHttpClient } from "../../environments/primary/httpClient";
@@ -39,40 +41,67 @@ const sendCommand = (payload: CollaborationCommand) =>
     ),
   );
 
-function useCollaboration() {
-  const [snapshot, setSnapshot] = useState<CollaborationSnapshot | null>(null);
+function useCollaboration(environmentId: EnvironmentId | null) {
+  const [loaded, setLoaded] = useState<{
+    environmentId: EnvironmentId;
+    snapshot: CollaborationSnapshot;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-
-  const reload = useCallback(async () => {
-    try {
-      setSnapshot(await loadSnapshot());
-      setError(null);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The agent directory could not be read.");
-    }
-  }, []);
+  const currentEnvironment = useRef(environmentId);
+  useLayoutEffect(() => {
+    currentEnvironment.current = environmentId;
+    return () => {
+      currentEnvironment.current = null;
+    };
+  }, [environmentId]);
 
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    if (!environmentId) return;
+    let active = true;
+    void loadSnapshot().then(
+      (snapshot) => {
+        if (!active) return;
+        setLoaded({ environmentId, snapshot });
+        setError(null);
+      },
+      (cause) => {
+        if (!active) return;
+        setError(cause instanceof Error ? cause.message : "The agent directory could not be read.");
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [environmentId]);
 
-  const submit = useCallback(async (command: CollaborationCommand) => {
-    setPending(true);
-    try {
-      const result = await sendCommand(command);
-      setSnapshot(result.snapshot);
-      setError(result.outcome === "rejected" ? result.detail : null);
-      return result;
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The command was not recorded.");
-      return null;
-    } finally {
-      setPending(false);
-    }
-  }, []);
+  const submit = useCallback(
+    async (command: CollaborationCommand) => {
+      setPending(true);
+      try {
+        const result = await sendCommand(command);
+        if (environmentId && currentEnvironment.current === environmentId) {
+          setLoaded({ environmentId, snapshot: result.snapshot });
+          setError(result.outcome === "rejected" ? result.detail : null);
+        }
+        return result;
+      } catch (cause) {
+        if (currentEnvironment.current === environmentId)
+          setError(cause instanceof Error ? cause.message : "The command was not recorded.");
+        return null;
+      } finally {
+        setPending(false);
+      }
+    },
+    [environmentId],
+  );
 
-  return { snapshot, error, pending, submit };
+  return {
+    snapshot: loaded?.environmentId === environmentId ? loaded.snapshot : null,
+    error,
+    pending,
+    submit,
+  };
 }
 
 const providerExecutable = (provider: ServerProvider) =>
@@ -99,11 +128,34 @@ export function AgentsPage() {
   const providers = useAtomValue(primaryServerProvidersAtom);
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
-  const { snapshot, error, pending, submit } = useCollaboration();
+  const { snapshot, error, pending, submit } = useCollaboration(environmentId);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
+  const openingRef = useRef(false);
+  // Retain request identity after an uncertain response. Retrying the operation must
+  // recover the same create/bind receipts, not allocate another project thread.
+  const openings = useRef(
+    new Map<
+      string,
+      {
+        request: Parameters<typeof createThread>[0];
+        binding: CollaborationCommand;
+        created: boolean;
+        bound: boolean;
+      }
+    >(),
+  );
   const selectedProject =
     projects.length === 1 ? projects[0] : projects.find((project) => project.id === projectId);
+  const selectedProjectId = selectedProject?.id;
+  const context = useRef({ environmentId, projectId: selectedProjectId, mounted: true });
+  useLayoutEffect(() => {
+    context.current = { environmentId, projectId: selectedProjectId, mounted: true };
+    return () => {
+      context.current.mounted = false;
+    };
+  }, [context, environmentId, selectedProjectId]);
 
   const openThread = (threadId: string) => {
     if (!environmentId) return;
@@ -114,8 +166,17 @@ export function AgentsPage() {
   };
 
   const openAgent = async (agentId: string) => {
+    // A ref closes the same-render double-click window before React updates disabled.
+    if (openingRef.current || !snapshot || !environmentId || !selectedProject) return;
+    setNotice(null);
     const bound = snapshot?.agents.find((agent) => agent.id === agentId);
     if (agentId === "grokbot" || bound?.origin === "external") {
+      return;
+    }
+    if (bound && bound.projectId !== selectedProject.id) {
+      setNotice(
+        "This agent is linked to a different project. Select that project to open its conversation.",
+      );
       return;
     }
     if (bound?.threadId) {
@@ -127,34 +188,84 @@ export function AgentsPage() {
     if (!environmentId || !selectedProject) return;
     const model = provider.models.find((item) => item.isDefault) ?? provider.models[0];
     if (!model) return;
-    const threadId = newThreadId();
-    const created = await createThread({
-      environmentId,
-      input: {
-        threadId,
-        projectId: selectedProject.id,
-        title: `Chat with ${provider.displayName ?? provider.driver}`,
-        modelSelection: { instanceId: provider.instanceId, model: model.slug },
-        runtimeMode: "approval-required",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-      },
-    });
-    if (created._tag === "Failure") {
-      setNotice("The project thread was not created.");
+    const key = JSON.stringify([environmentId, agentId]);
+    let operation = openings.current.get(key);
+    if (operation && operation.request.input.projectId !== selectedProject.id) {
+      setNotice(
+        "This agent has an unfinished or linked conversation in a different project. Select that project to continue.",
+      );
       return;
     }
-    const linked = await submit({
-      type: "thread.bind",
-      commandId: randomUUID(),
-      projectId: selectedProject.id,
-      threadId,
-      agentId: provider.instanceId,
-      title: `Chat with ${provider.displayName ?? provider.driver}`,
-    });
-    if (!linked || linked.outcome === "rejected") return;
-    openThread(threadId);
+    if (!operation) {
+      const threadId = newThreadId();
+      const title = `Chat with ${provider.displayName ?? provider.driver}`;
+      operation = {
+        request: {
+          environmentId,
+          input: {
+            commandId: CommandId.make(randomUUID()),
+            threadId,
+            projectId: selectedProject.id,
+            title,
+            modelSelection: { instanceId: provider.instanceId, model: model.slug },
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+          },
+        },
+        binding: {
+          type: "thread.bind",
+          commandId: randomUUID(),
+          projectId: selectedProject.id,
+          threadId,
+          agentId: provider.instanceId,
+          title,
+        },
+        created: false,
+        bound: false,
+      };
+      openings.current.set(key, operation);
+    }
+    openingRef.current = true;
+    setOpening(true);
+    try {
+      if (!operation.created) {
+        const created = await createThread(operation.request);
+        if (created._tag === "Failure") {
+          setNotice(
+            "The thread creation could not be confirmed. Retry to recover the same conversation.",
+          );
+          return;
+        }
+        operation.created = true;
+      }
+      if (!context.current.mounted || context.current.environmentId !== environmentId) return;
+      if (!operation.bound) {
+        const linked = await submit(operation.binding);
+        if (!linked || linked.outcome === "rejected") {
+          setNotice(
+            "The conversation was created but could not be linked. Retry in this project to link the same conversation.",
+          );
+          return;
+        }
+        operation.bound = true;
+      }
+      if (
+        context.current.mounted &&
+        context.current.environmentId === environmentId &&
+        context.current.projectId === selectedProject.id
+      ) {
+        openThread(operation.request.input.threadId);
+      }
+    } catch {
+      setNotice(
+        "The conversation could not be confirmed. Retry in this project to recover the same request.",
+      );
+    } finally {
+      openingRef.current = false;
+      if (context.current.mounted) setOpening(false);
+    }
   };
 
   const grokbot = snapshot?.agents.find((agent) => agent.id === "grokbot");
@@ -174,6 +285,7 @@ export function AgentsPage() {
           <label>
             Project
             <select
+              disabled={opening}
               value={projectId ?? ""}
               onChange={(event) => setProjectId(event.target.value || null)}
             >
@@ -224,7 +336,7 @@ export function AgentsPage() {
             return (
               <li key={provider.instanceId}>
                 <Button
-                  disabled={pending || !ready || (!bound?.threadId && !selectedProject)}
+                  disabled={opening || pending || !snapshot || !ready || !selectedProject}
                   onClick={() => {
                     void openAgent(provider.instanceId);
                   }}
@@ -262,7 +374,7 @@ export function AgentsPage() {
 export function TasksPage() {
   const navigate = useNavigate();
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
-  const { snapshot, error } = useCollaboration();
+  const { snapshot, error } = useCollaboration(environmentId);
   const tasks = snapshot?.tasks ?? [];
 
   const openTask = (task: CollaborationTask) => {
