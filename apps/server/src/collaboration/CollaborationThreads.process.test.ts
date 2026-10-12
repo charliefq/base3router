@@ -4,6 +4,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
+import * as Schema from "effect/Schema";
 import type { CollaborationCommandResult, CollaborationSnapshot } from "@t3tools/contracts";
 import { afterEach, expect, it } from "vite-plus/test";
 const directories: string[] = [];
@@ -153,5 +154,46 @@ it("runs independent HTTP requests through production scope checks and ignores p
   expect(r.http.otherSnapshot.tasks).toEqual([]);
   expect(r.http.otherSnapshot.messages).toEqual([]);
   expect(r.counts).toEqual({ threads: 1, bindings: 1, runs: 0, messages: 0 });
+  noExecution(r);
+});
+
+const encodeTarget = Schema.encodeSync(Schema.fromJsonString(Schema.String));
+it("refuses the first open when another project already occupies its deterministic canonical correlation", async () => {
+  const prediction = fixture();
+  await run(prediction, "seed-b");
+  const target = report(prediction, "seed-b").principalA.tasks[0]!.threadId!;
+  const dir = fixture();
+  NodeFS.writeFileSync(NodePath.join(dir, "collision-target.json"), encodeTarget(target));
+  await run(dir, "collision");
+  const r = report(dir, "collision");
+  expect(r.results.map((result) => result.outcome)).toEqual(["rejected", "rejected"]);
+  expect(r.counts.threads).toBe(1);
+  expect(r.counts.bindings).toBe(1);
+  expect(
+    r.principalA.agents.some((agent) => agent.projectId === "project-b" && agent.threadId !== null),
+  ).toBe(false);
+  expect(
+    r.principalA.tasks.find((task) => task.correlationId === `thread:${target}`)?.projectId,
+  ).toBe("project-a");
+  noExecution(r);
+});
+
+it("invalidates legacy inconsistent agent links on authoritative reads and recovery", async () => {
+  const prediction = fixture();
+  await run(prediction, "seed-b");
+  const target = report(prediction, "seed-b").principalA.tasks[0]!.threadId!;
+  const dir = fixture();
+  NodeFS.writeFileSync(NodePath.join(dir, "collision-target.json"), encodeTarget(target));
+  await run(dir, "legacy-collision");
+  const r = report(dir, "legacy-collision");
+  expect(r.results.map((result) => result.outcome)).toEqual(["rejected", "rejected"]);
+  expect(r.counts.threads).toBe(2);
+  expect(r.counts.bindings).toBe(2);
+  expect(r.principalA.agents.find((agent) => agent.projectId === "project-b")?.threadId).toBe(null);
+  expect(
+    r.principalA.tasks
+      .filter((task) => task.correlationId === `thread:${target}`)
+      .every((task) => task.threadId === null),
+  ).toBe(true);
   noExecution(r);
 });
