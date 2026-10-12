@@ -454,3 +454,31 @@ with B3R-05F's retention and rollback limits. No production dispatch lookup,
 provider authorization, live execution or cloud-task resume capability is wired
 or verified. Add `scripts/ops-executor-recovery.test.mjs` to the six-suite command
 above. Independent review is required before selecting further integration work.
+
+## B3R-05I production dispatch persistence recovery
+
+`Workflow.processRecovery.test.ts` opens a temporary file database through the
+production SQLite layer, CommandReceiptStore, orchestrator and ThreadLaunch.
+One Node process exits after accepted launch/message receipts but before the
+Workflow stage write. Only after observing that exit does another process reopen
+the same database and replay the same dispatch/command IDs. Further recovery
+preserves one thread, message, run and stage binding. A SQLite trigger separately
+tests a failed stage ledger insert: projection and ledger must roll back together.
+Launch receipt replay checks the original committed creation event's project,
+provider instance and model before a stage can adopt the launch.
+An earlier attempt cannot replay a matching dispatch after revision creates a
+new attempt; the stale check precedes the existing-binding shortcut.
+Tests distinguish a future-attempt mismatch (stored 1, requested 2) from a
+superseded attempt (a production revision persisted 2, requested 1 in another
+process). The latter requires the typed stale error and zero launch entries;
+an arbitrary failure or a launch sentinel is insufficient.
+
+External services are fake; preparation is held and the provider effect worker
+is disabled. Tests distinguish launch-function re-entry from provider calls:
+two launch entries recover the application receipt with zero provider opens.
+Missing native references stay unknown. This proves application-process/database
+recovery, not provider-process recovery, a native start, host-loss durability or
+a cloud-task bridge. The caller must retain the original dispatch/command IDs;
+this is not a new distributed claim protocol for alternate IDs. No live database,
+slot, credentials or provider are involved. Independent review still precedes
+production integration.

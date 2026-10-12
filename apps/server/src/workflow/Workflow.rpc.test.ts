@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  WorkflowOperationError,
   MessageId,
   ProjectId,
   ProviderDriverKind,
@@ -12,6 +13,8 @@ import {
 } from "@t3tools/contracts";
 import { assert, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeOS from "node:os";
 
@@ -27,6 +30,7 @@ import {
   type WorkflowRecordCommand,
 } from "./Workflow.ts";
 
+const isWorkflowOperationError = Schema.is(WorkflowOperationError);
 const projectId = ProjectId.make("project-1");
 const environmentId = EnvironmentId.make("environment-1");
 const at = "2026-09-28T00:00:00.000Z";
@@ -94,7 +98,7 @@ const insertProject = Effect.fn("workflow.rpc.insertProject")(function* () {
   yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at) VALUES (${projectId}, 'Project', '/tmp/workflow-rpc', '[]', ${at}, ${at})`;
 });
 
-const seedBuildGate = Effect.fn("workflow.rpc.seedBuildGate")(function* () {
+const seedBuildGate = Effect.fn("workflow.rpc.seedBuildGate")(function* (dispatchId?: string) {
   yield* projectWorkflowEvent(
     event(1, {
       type: "run.start",
@@ -114,8 +118,8 @@ const seedBuildGate = Effect.fn("workflow.rpc.seedBuildGate")(function* () {
       runId: "run-1",
       stageId: "discovery",
       attempt: 1,
-      threadId: ThreadId.make("thread-1"),
-      messageId: MessageId.make("message-1"),
+      threadId: ThreadId.make(dispatchId ? `workflow-${dispatchId}` : "thread-1"),
+      messageId: MessageId.make(dispatchId ? `workflow-message-${dispatchId}` : "message-1"),
       routeBinding: route,
       at,
     }),
@@ -145,6 +149,114 @@ const seedBuildGate = Effect.fn("workflow.rpc.seedBuildGate")(function* () {
 const memoryLayer = it.layer(NodeSqliteClient.layer({ filename: ":memory:" }));
 
 memoryLayer("workflow human decisions", (it) => {
+  it.effect(
+    "rejects a prior attempt's matching dispatch after a revision advances the attempt",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations({ toMigrationInclusive: 56 });
+        yield* insertProject();
+        yield* seedBuildGate("old-dispatch");
+        yield* performWorkflowAction(
+          {
+            type: "decision.record",
+            projectId,
+            commandId: "revise-gate",
+            decisionId: "revision",
+            runId: "run-1",
+            stageId: "build_gate",
+            attempt: 1,
+            artifactId: null,
+            value: "request_revision",
+          },
+          noopDispatch,
+        );
+        let launchCount = 0;
+        const result = yield* Effect.exit(
+          dispatchWorkflowStage(
+            {
+              environmentId,
+              projectId,
+              runId: "run-1",
+              stageId: "discovery",
+              attempt: 1,
+              dispatchId: "old-dispatch",
+              target: route.target,
+              additionalInstruction: "",
+            },
+            {
+              environmentId,
+              providers: [provider(true)],
+              environmentDefaultModelSelection: null,
+              launch: () =>
+                Effect.sync(() => {
+                  launchCount++;
+                  return { sequence: 1 };
+                }),
+            },
+          ),
+        );
+        assert.equal(launchCount, 0);
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") {
+          const error = Cause.squash(result.cause);
+          if (!isWorkflowOperationError(error)) throw error;
+          assert.equal(error.message, "Stage preview is stale.");
+        }
+      }),
+  );
+  it.effect("rolls back stage projection when its command ledger write fails", () =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 56 });
+      yield* insertProject();
+      yield* seedBuildGate();
+      yield* performWorkflowAction(
+        {
+          type: "decision.record",
+          projectId,
+          commandId: "approve-atomic",
+          decisionId: "decision-atomic",
+          runId: "run-1",
+          stageId: "build_gate",
+          attempt: 1,
+          artifactId: null,
+          value: "approve",
+        },
+        noopDispatch,
+      );
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`CREATE TEMP TRIGGER reject_stage_receipt BEFORE INSERT ON base3_workflow_commands
+        WHEN NEW.command_id = 'workflow-dispatch-atomic'
+        BEGIN SELECT RAISE(ABORT, 'injected-ledger-failure'); END`;
+      const result = yield* Effect.exit(
+        dispatchWorkflowStage(
+          {
+            environmentId,
+            projectId,
+            runId: "run-1",
+            stageId: "architecture",
+            attempt: 1,
+            dispatchId: "atomic",
+            target: route.target,
+            additionalInstruction: "",
+          },
+          {
+            environmentId,
+            providers: [provider(true)],
+            environmentDefaultModelSelection: null,
+            launch: () => Effect.succeed({ sequence: 1 }),
+          },
+        ),
+      );
+      assert.equal(result._tag, "Failure");
+      const catalog = yield* workflowCatalogForProject(projectId);
+      assert.equal(
+        catalog.runs[0]?.attempts.find((attempt) => attempt.stageId === "architecture")
+          ?.destinationThreadId,
+        null,
+      );
+      yield* sql`DROP TRIGGER reject_stage_receipt`;
+    }),
+  );
   it.effect("shows a pending human gate and advances only after approve", () =>
     Effect.gen(function* () {
       yield* runMigrations({ toMigrationInclusive: 56 });

@@ -1444,6 +1444,41 @@ it.effect("rejects a server-allocated launch replay with a mismatching thread id
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect.each(["project", "instance", "model"] as const)(
+  "rejects a launch receipt replay with changed %s identity",
+  (changed) => {
+    const harness = makeHarness({ runSetup: () => Effect.never });
+    return Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const input = launchInput({
+        command: "command:launch:bound-identity",
+        thread: "thread:launch:bound-identity",
+        message: "Keep the original launch binding",
+      });
+      yield* launches.launch(input);
+      const replay = yield* Effect.exit(
+        launches.launch({
+          ...input,
+          projectId: changed === "project" ? otherProjectId : input.projectId,
+          modelSelection: {
+            instanceId:
+              changed === "instance"
+                ? ProviderInstanceId.make("different-provider")
+                : modelSelection.instanceId,
+            model: changed === "model" ? "different-model" : modelSelection.model,
+          },
+        }),
+      );
+      assert.equal(replay._tag, "Failure");
+      if (replay._tag === "Failure")
+        assert.include(String(replay.cause), "Launch identity changed");
+      const original = yield* launches.launch(input);
+      assert.equal(original.projection.messages.length, 1);
+      assert.equal(original.projection.runs.length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
 it.effect("rejects a server-allocated launch receipt from another project", () => {
   const harness = makeHarness();
   return Effect.gen(function* () {
