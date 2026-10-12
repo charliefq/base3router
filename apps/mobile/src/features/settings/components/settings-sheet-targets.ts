@@ -1,4 +1,6 @@
 export type SettingsSheetTarget =
+  | "SettingsCollaborationAgents"
+  | "SettingsCollaborationTasks"
   | "SettingsEnvironments"
   | "SettingsNotifications"
   | "SettingsThreads"

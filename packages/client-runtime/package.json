@@ -155,6 +155,10 @@
       "types": "./src/state/governance.ts",
       "default": "./src/state/governance.ts"
     },
+    "./state/collaboration": {
+      "types": "./src/state/collaboration.ts",
+      "default": "./src/state/collaboration.ts"
+    },
     "./state/workflow": {
       "types": "./src/state/workflow.ts",
       "default": "./src/state/workflow.ts"

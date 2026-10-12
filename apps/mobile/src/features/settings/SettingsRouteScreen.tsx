@@ -153,6 +153,18 @@ function SettingsIndexSections() {
         ) : null}
       </SettingsSection>
 
+      <SettingsSection title="Collaboration">
+        <SettingsRow
+          icon="person.2"
+          label="Collaboration agents"
+          target="SettingsCollaborationAgents"
+        />
+        <SettingsRow
+          icon="list.number"
+          label="Collaboration tasks"
+          target="SettingsCollaborationTasks"
+        />
+      </SettingsSection>
       <SettingsSection title="Automations">
         <SettingsRow icon="clock" label="Scheduled tasks" target="SettingsScheduledTasks" />
       </SettingsSection>
