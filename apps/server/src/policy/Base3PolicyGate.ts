@@ -8,7 +8,7 @@ import {
   defaultConcurrencyBudgetPolicy,
   EnvironmentId,
   MessageId,
-  type ModelSelection,
+  ModelSelection,
   ProviderInstanceId,
   type ServerProvider,
   ThreadId,
@@ -18,6 +18,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ActionGateService } from "../actionGate/ActionGateService.ts";
@@ -92,11 +93,16 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
+const decodeModelSelection = Schema.decodeEffect(Schema.fromJsonString(ModelSelection));
+
 const messageArguments = (command: DispatchPolicyCommand) => ({
   text: command.text ?? "",
   model: command.modelSelection?.model ?? null,
   instanceId: command.modelSelection?.instanceId ?? null,
   attachmentIds: (command.attachments ?? []).map((attachment) => attachment.id ?? ""),
+  ...(command.modelSelection?.options === undefined
+    ? {}
+    : { options: command.modelSelection.options }),
 });
 
 const isContinuation = (command: DispatchPolicyCommand): boolean =>
@@ -467,22 +473,26 @@ const bindRoute = (input: {
           Effect.map((current) => current.defaultModelSelection),
           Effect.orElseSucceed(() => null),
         );
-    const threadRows = yield* input.sql<{
-      readonly instanceId: string | null;
-      readonly model: string | null;
-    }>`
-      SELECT
-        json_extract(payload_json, '$.modelSelection.instanceId') AS "instanceId",
-        json_extract(payload_json, '$.modelSelection.model') AS "model"
+    const threadRows = yield* input.sql<{ readonly selection: string | null }>`
+      SELECT json_extract(payload_json, '$.modelSelection') AS selection
       FROM orchestration_v2_projection_threads
       WHERE thread_id = ${input.command.threadId}
       LIMIT 1
-    `.pipe(
-      Effect.orElseSucceed(
-        () => [] as { readonly instanceId: string | null; readonly model: string | null }[],
-      ),
-    );
-    const threadModel = decodeModel(threadRows[0]?.instanceId, threadRows[0]?.model);
+    `.pipe(Effect.orElseSucceed(() => [] as { readonly selection: string | null }[]));
+    const storedSelection = threadRows[0]?.selection;
+    const threadModel =
+      storedSelection == null
+        ? null
+        : yield* decodeModelSelection(storedSelection).pipe(
+            Effect.mapError(
+              () =>
+                new Base3PolicyDeniedError({
+                  reason: "binding",
+                  commandType: input.command.type,
+                  detail: "Stored model selection is invalid.",
+                }),
+            ),
+          );
     const preferred = input.command.modelSelection ?? threadModel ?? undefined;
     const turn: DispatcherTurnStartCommand = {
       type: "thread.turn.start",
@@ -544,20 +554,10 @@ const bindRoute = (input: {
           }),
       ),
     );
-    return binding;
+    return (
+      bound.modelSelection ?? { instanceId: binding.target.instanceId, model: binding.target.model }
+    );
   });
-
-function decodeModel(
-  instanceId: string | null | undefined,
-  model: string | null | undefined,
-): ModelSelection | null {
-  if (instanceId === null || instanceId === undefined || instanceId.length === 0) return null;
-  if (model === null || model === undefined || model.length === 0) return null;
-  return {
-    instanceId: ProviderInstanceId.make(instanceId),
-    model,
-  };
-}
 
 const continuationGrantId = (command: DispatchPolicyCommand): string | null => {
   if (command.scheduledTaskId !== undefined) return `grant:schedule:${command.scheduledTaskId}`;
@@ -576,8 +576,10 @@ const continuationGrantId = (command: DispatchPolicyCommand): string | null => {
   return null;
 };
 
-export const authorizeDispatch = (
-  input: DispatchPolicyCommand | { readonly type: string; readonly commandId: string },
+export const authorizeDispatch = <
+  Command extends DispatchPolicyCommand | { readonly type: string; readonly commandId: string },
+>(
+  input: Command,
 ) => {
   const command = input as DispatchPolicyCommand;
   return Effect.gen(function* () {
@@ -731,7 +733,16 @@ export const authorizeDispatch = (
     }
     if (command.type === "message.dispatch") {
       const catalog = yield* providersForBind;
-      yield* bindRoute({ sql, command, providers: catalog, environmentId: env });
+      const modelSelection = yield* bindRoute({
+        sql,
+        command,
+        providers: catalog,
+        environmentId: env,
+      });
+      const effectiveCommand = {
+        ...input,
+        modelSelection,
+      };
       const taskState = yield* loadTaskState(sql, command.threadId ?? "");
       yield* reserveGovernedStart({
         sql,
@@ -753,7 +764,7 @@ export const authorizeDispatch = (
         });
       }
       const hash = argumentHash({
-        ...messageArguments(command),
+        ...messageArguments({ ...command, modelSelection: effectiveCommand.modelSelection }),
         ...contractGrantFields(taskState.governance === "required" ? taskState.contract : null),
       });
       yield* insertGrant({
@@ -785,7 +796,7 @@ export const authorizeDispatch = (
         });
       }
       yield* recordAttempt(sql, command, "message");
-      return;
+      return effectiveCommand;
     }
     if (
       operation.kind === "queue-resume" ||

@@ -9173,7 +9173,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       "orchestration_v2.command_type": command.type,
       "orchestration_v2.thread_id": commandThreadId(command),
     });
-    yield* authorizeDispatch(command).pipe(mapDispatchError(command));
+    // Plan runs and provider effects from the server-bound target, not the client preference.
+    const authorizedCommand = yield* authorizeDispatch(command).pipe(mapDispatchError(command));
+    command = authorizedCommand ?? command;
 
     const events = yield* Ref.make<Array<OrchestrationV2DomainEvent>>([]);
     const effects = yield* Ref.make<Array<PendingOrchestrationEffectV2>>([]);
