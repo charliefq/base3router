@@ -453,3 +453,22 @@ describe("collaboration", () => {
     expect(rehearsal.snapshot.agents.map((agent) => agent.id)).toEqual(["grokbot"]);
   });
 });
+
+it("refuses a thread correlation already occupied by another agent's task", () => {
+  const occupied = foldCollaborationState([
+    bind,
+    seal({ ...delegate("DENY"), commandId: "occupied", correlationId: "thread:new-thread" }),
+  ]);
+  const result = applyCollaboration(
+    occupied,
+    seal({
+      ...bind,
+      commandId: "other-bind",
+      agentId: "other-provider",
+      displayName: "Other",
+      threadId: "new-thread",
+    }),
+  );
+  expect(result).toMatchObject({ outcome: "rejected", code: "identity-conflict" });
+  expect(result.snapshot.agents.some((agent) => agent.id === "other-provider")).toBe(false);
+});

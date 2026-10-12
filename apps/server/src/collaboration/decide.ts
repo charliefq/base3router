@@ -239,7 +239,8 @@ const bindThread = (
     current &&
     (current.displayName !== displayName ||
       current.origin !== "internal" ||
-      current.projectId !== projectId)
+      current.projectId !== projectId ||
+      current.threadId !== threadId)
   ) {
     return rejected(state, "identity-conflict", "That agent id already names someone else.");
   }
@@ -259,6 +260,18 @@ const bindThread = (
   const correlationId = `thread:${threadId}`;
   const existing = state.tasks.find((task) => task.correlationId === correlationId);
   if (existing) {
+    if (
+      existing.ownerAgentId !== principalId ||
+      existing.assigneeAgentId !== agent.id ||
+      existing.projectId !== projectId ||
+      existing.threadId !== threadId ||
+      existing.id !== `task:${correlationId}`
+    )
+      return rejected(
+        state,
+        "identity-conflict",
+        "That thread correlation belongs to a different task.",
+      );
     return applied(
       remember(state, command.commandId, { agents }),
       "That thread is already linked.",
