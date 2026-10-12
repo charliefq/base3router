@@ -284,3 +284,62 @@ it("does not show an old environment error in the newly selected context", async
   expect(text()).not.toContain("Provider A");
   expect(mocks.navigate).not.toHaveBeenCalled();
 });
+
+it.each(["archive", "removal", "provider change"])(
+  "rejects an old callback after same-context thread %s",
+  async (change) => {
+    await click("Read / retry collaboration");
+    const oldOpen = button("Open Provider A").props.onPress;
+    if (change === "removal") mocks.threads = [];
+    if (change === "archive")
+      mocks.threads = mocks.threads.map((thread) => ({
+        ...thread,
+        archivedAt: "2026-01-01T00:00:00Z",
+      }));
+    if (change === "provider change")
+      mocks.threads = mocks.threads.map((thread) => ({
+        ...thread,
+        modelSelection: { instanceId: "provider-b" },
+      }));
+    await update();
+    await act(async () => oldOpen());
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(button("Open Provider A").props.disabled).toBe(true);
+  },
+);
+
+it.each([false, true])(
+  "rejects an old callback after refresh removes its row (tasks=%s)",
+  async (mode) => {
+    tasks = mode;
+    await update();
+    await click("Read / retry collaboration");
+    const oldOpen = button(mode ? "Open Task A" : "Open Provider A").props.onPress;
+    mocks.read.mockResolvedValueOnce({ ...snapshot(), agents: [], tasks: [] });
+    await click("Read / retry collaboration");
+    await act(async () => oldOpen());
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(text()).toContain("No collaboration records");
+  },
+);
+
+it.each([false, true])(
+  "invalidates the old row after rebinding and allows the new valid row (tasks=%s)",
+  async (mode) => {
+    tasks = mode;
+    await update();
+    await click("Read / retry collaboration");
+    const oldOpen = button(mode ? "Open Task A" : "Open Provider A").props.onPress;
+    mocks.threads = [...mocks.threads, { ...mocks.threads[0]!, id: "thread-b" }];
+    mocks.read.mockResolvedValueOnce({
+      ...snapshot(),
+      agents: snapshot().agents.map((agent) => ({ ...agent, threadId: "thread-b" })),
+      tasks: snapshot().tasks.map((task) => ({ ...task, threadId: "thread-b" })),
+    });
+    await click("Read / retry collaboration");
+    await act(async () => oldOpen());
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    await click(mode ? "Open Task A" : "Open Provider A");
+    expect(mocks.navigate).toHaveBeenCalledWith(mocks.threads[1]);
+  },
+);

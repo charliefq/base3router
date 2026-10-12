@@ -1,7 +1,7 @@
 import { RegistryContext } from "@effect/atom-react";
 import type { CollaborationSnapshot, EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { useContext, useLayoutEffect, useRef, useState } from "react";
+import { useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
@@ -114,6 +114,12 @@ function CollaborationRecords(props: {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const request = useRef({ generation: 0, pending: false, mounted: false });
+  // Native events may retain a callback from a previous committed view.
+  const viewToken = useMemo(() => ({ snapshot, threads, pending }), [snapshot, threads, pending]);
+  const currentView = useRef<typeof viewToken | null>(viewToken);
+  useLayoutEffect(() => {
+    currentView.current = viewToken;
+  });
   useLayoutEffect(() => {
     request.current.mounted = true;
     return () => {
@@ -123,6 +129,7 @@ function CollaborationRecords(props: {
   }, []);
   const load = async () => {
     if (request.current.pending) return;
+    currentView.current = null;
     request.current.pending = true;
     const generation = ++request.current.generation;
     setPending(true);
@@ -198,7 +205,13 @@ function CollaborationRecords(props: {
               accessibilityLabel={`Open ${row.title}`}
               disabled={!canOpen}
               onPress={() => {
-                if (!request.current.mounted || request.current.pending || !canOpen || !thread)
+                if (
+                  !request.current.mounted ||
+                  request.current.pending ||
+                  currentView.current !== viewToken ||
+                  !canOpen ||
+                  !thread
+                )
                   return;
                 selectThread(thread);
               }}
