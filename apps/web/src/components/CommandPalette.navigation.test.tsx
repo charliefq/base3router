@@ -1,3 +1,10 @@
+import { KeybindingsConfig, type ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import {
+  compileResolvedKeybindingsConfig,
+  DEFAULT_RESOLVED_KEYBINDINGS,
+  mergeWithDefaultKeybindings,
+} from "@t3tools/shared/keybindings";
+import * as Schema from "effect/Schema";
 import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -5,6 +12,7 @@ import type { CommandPaletteActionItem, CommandPaletteSubmenuItem } from "./Comm
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  keybindings: [] as ResolvedKeybindingsConfig,
   operation: vi.fn(),
   open: null as null | ((detail: { query?: string }) => void),
   theme: {
@@ -23,7 +31,9 @@ vi.mock("@tanstack/react-router", () => ({
     select({ pathname: "/" }),
   useParams: ({ select }: { select: (value: object) => unknown }) => select({}),
 }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => [] }));
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: (atom: string) => (atom === "keys" ? mocks.keybindings : []),
+}));
 vi.mock("../commandPaletteBus", () => ({
   onOpenCommandPalette: (callback: typeof mocks.open) => {
     mocks.open = callback;
@@ -185,7 +195,37 @@ vi.mock("./ui/command", async () => {
 });
 import { CommandPalette } from "./CommandPalette";
 
+const decodeConfig = Schema.decodeUnknownSync(Schema.fromJsonString(KeybindingsConfig));
 let renderer: ReactTestRenderer;
+let keyboard: EventTarget;
+class FocusElement {
+  readonly isConnected = true;
+  readonly tagName = "div";
+  constructor(readonly owner: "drawer" | "preview") {}
+  closest(selector: string) {
+    return this.owner === "drawer" && selector === "[data-terminal-owner]"
+      ? { dataset: { terminalOwner: "drawer" } }
+      : this.owner === "preview" && selector === "[data-preview-panel-mode]"
+        ? this
+        : null;
+  }
+}
+const press = async (key: string, overrides: Readonly<Record<string, unknown>> = {}) => {
+  const event = Object.assign(new Event("keydown", { cancelable: true }), {
+    key,
+    ctrlKey: true,
+    altKey: true,
+    shiftKey: false,
+    metaKey: false,
+    repeat: false,
+    isComposing: false,
+    ...overrides,
+  });
+  await act(async () => {
+    keyboard.dispatchEvent(event);
+  });
+  return event;
+};
 const open = async (query = "") => {
   await act(async () => mocks.open!({ query }));
 };
@@ -200,7 +240,11 @@ const values = () => rows().map((row) => row.props.value);
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("navigator", { platform: "Linux" });
-  vi.stubGlobal("window", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+  keyboard = new EventTarget();
+  vi.stubGlobal("window", keyboard);
+  vi.stubGlobal("HTMLElement", FocusElement);
+  vi.stubGlobal("document", { activeElement: null });
+  mocks.keybindings = DEFAULT_RESOLVED_KEYBINDINGS;
   mocks.navigate.mockReset().mockResolvedValue(undefined);
   mocks.operation.mockReset();
   await act(async () => {
@@ -276,5 +320,97 @@ it.each([
   expect(mocks.navigate).toHaveBeenCalledWith({ to: route });
   expect(renderer.root.findAllByType("input")).toHaveLength(0);
   await act(async () => finish());
+  expect(mocks.operation).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["a", "/agents"],
+  ["t", "/tasks"],
+] as const)(
+  "dispatches a decoded custom %s chord through the existing navigation and closes first",
+  async (key, route) => {
+    mocks.keybindings = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig(
+        decodeConfig(
+          '[{"key":"ctrl+alt+a","command":"agents.open","when":"!terminalFocus && !previewFocus"},{"key":"ctrl+alt+t","command":"tasks.open","when":"!terminalFocus && !previewFocus"}]',
+        ),
+      ),
+    );
+    await act(async () =>
+      renderer.update(
+        <CommandPalette>
+          <span>App</span>
+        </CommandPalette>,
+      ),
+    );
+    let finish!: () => void;
+    mocks.navigate.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    await open();
+    const event = await press(key);
+    expect(event.defaultPrevented).toBe(true);
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: route });
+    expect(renderer.root.findAllByType("input")).toHaveLength(0);
+    expect(mocks.operation).not.toHaveBeenCalled();
+    await act(async () => finish());
+  },
+);
+it("honors customized focus conditions, repeat, composition and already consumed events", async () => {
+  mocks.keybindings = compileResolvedKeybindingsConfig(
+    decodeConfig(
+      '[{"key":"ctrl+alt+a","command":"agents.open","when":"!terminalFocus && !previewFocus"}]',
+    ),
+  );
+  await act(async () =>
+    renderer.update(
+      <CommandPalette>
+        <span>App</span>
+      </CommandPalette>,
+    ),
+  );
+  for (const owner of ["drawer", "preview"] as const) {
+    vi.stubGlobal("document", { activeElement: new FocusElement(owner) });
+    expect((await press("a")).defaultPrevented).toBe(false);
+  }
+  vi.stubGlobal("document", { activeElement: null });
+  await press("a", { repeat: true });
+  await press("a", { isComposing: true });
+  const consumed = Object.assign(new Event("keydown", { cancelable: true }), {
+    key: "a",
+    ctrlKey: true,
+    altKey: true,
+  });
+  consumed.preventDefault();
+  await act(async () => {
+    keyboard.dispatchEvent(consumed);
+  });
+  expect(mocks.navigate).not.toHaveBeenCalled();
+  expect(mocks.operation).not.toHaveBeenCalled();
+  await press("a");
+  expect(mocks.navigate).toHaveBeenCalledTimes(1);
+});
+it("preserves legacy default palette navigation and leaves new navigation unbound by default", async () => {
+  expect(
+    DEFAULT_RESOLVED_KEYBINDINGS.some(
+      (binding) => binding.command === "agents.open" || binding.command === "tasks.open",
+    ),
+  ).toBe(false);
+  await press("k", { altKey: false });
+  expect(renderer.root.findAllByType("input")).toHaveLength(1);
+  await search("tasks");
+  await act(async () =>
+    rows()
+      .find((row) => row.props.value === "action:tasks")!
+      .props.onClick(),
+  );
+  expect(mocks.navigate).toHaveBeenCalledWith({ to: "/tasks" });
+  expect(renderer.root.findAllByType("input")).toHaveLength(0);
+  mocks.navigate.mockClear();
+  await press("a");
+  await press("t");
+  expect(mocks.navigate).not.toHaveBeenCalled();
   expect(mocks.operation).not.toHaveBeenCalled();
 });

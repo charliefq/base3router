@@ -58,6 +58,41 @@ const readKeybindingsConfig = (configPath: string) =>
   });
 
 it.layer(NodeServices.layer)("keybindings", (it) => {
+  it.effect(
+    "loads custom collaboration navigation while retaining old bindings and adding no new defaults",
+    () =>
+      Effect.gen(function* () {
+        const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+        const configured: readonly KeybindingRule[] = [
+          { key: "mod+shift+t", command: "terminal.toggle" },
+          { key: "ctrl+alt+a", command: "agents.open", when: "!terminalFocus" },
+          { key: "ctrl+alt+t", command: "tasks.open", when: "!previewFocus" },
+        ];
+        yield* writeKeybindingsConfig(keybindingsConfigPath, configured);
+        const service = yield* Keybindings.Keybindings;
+        yield* service.syncDefaultKeybindingsOnStartup;
+        const state = yield* service.loadConfigState;
+        assert.isTrue(state.keybindings.some((binding) => binding.command === "agents.open"));
+        assert.isTrue(state.keybindings.some((binding) => binding.command === "tasks.open"));
+        const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+        assert.deepEqual(
+          persisted.find((rule) => rule.command === "terminal.toggle"),
+          configured[0],
+        );
+        assert.deepEqual(
+          persisted.filter(
+            (rule) => rule.command === "agents.open" || rule.command === "tasks.open",
+          ),
+          configured.slice(1),
+        );
+        assert.isFalse(
+          Keybindings.DEFAULT_KEYBINDINGS.some(
+            (rule) => rule.command === "agents.open" || rule.command === "tasks.open",
+          ),
+        );
+      }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect("parses shortcuts including plus key", () =>
     Effect.sync(() => {
       assert.deepEqual(Keybindings.parseKeybindingShortcut("mod+j"), {
