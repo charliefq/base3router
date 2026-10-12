@@ -118,7 +118,7 @@ beforeEach(() => {
   state.navigate.mockReset();
 });
 afterEach(async () => {
-  await act(() => renderer?.unmount());
+  await act(async () => renderer?.unmount());
   vi.unstubAllGlobals();
 });
 const mount = async () => {
@@ -127,7 +127,7 @@ const mount = async () => {
   });
 };
 const select = async (value: string) => {
-  await act(() => renderer.root.findByType("select").props.onChange({ target: { value } }));
+  await act(async () => renderer.root.findByType("select").props.onChange({ target: { value } }));
 };
 
 describe("Agents project thread interaction", () => {
@@ -181,18 +181,18 @@ describe("Agents project thread interaction", () => {
     state.create.mockReturnValue(creation.promise);
     state.bind.mockReturnValue(binding.promise);
     await mount();
-    await act(() => {
+    await act(async () => {
       const onClick = button().props.onClick;
       onClick();
       onClick();
     });
     expect(state.create).toHaveBeenCalledTimes(1);
     expect(button().props.disabled).toBe(true);
-    await act(() => creation.resolve({ _tag: "Success" }));
+    await act(async () => creation.resolve({ _tag: "Success" }));
     await click();
     expect(state.create).toHaveBeenCalledTimes(1);
     expect(state.bind).toHaveBeenCalledTimes(1);
-    await act(() => binding.resolve(bindResult(state.bind.mock.calls[0]![0])));
+    await act(async () => binding.resolve(bindResult(state.bind.mock.calls[0]![0])));
     expect(state.navigate).toHaveBeenCalledTimes(1);
     expect(button().props.disabled).toBe(false);
   });
@@ -242,7 +242,7 @@ describe("Agents project thread interaction", () => {
     await click();
     expect(button().props.disabled).toBe(true);
     expect(state.create).not.toHaveBeenCalled();
-    await act(() => loaded.resolve(state.snapshot));
+    await act(async () => loaded.resolve(state.snapshot));
     await click();
     expect(state.create).toHaveBeenCalledTimes(1);
   });
@@ -265,13 +265,13 @@ describe("Agents project thread interaction", () => {
     await click();
     state.environmentId = "environment-b";
     state.projects = [{ id: "project-b", title: "B", environmentId: "environment-b" }];
-    await act(() => renderer.update(<AgentsPage />));
-    await act(() => creation.resolve({ _tag: "Success" }));
+    await act(async () => renderer.update(<AgentsPage />));
+    await act(async () => creation.resolve({ _tag: "Success" }));
     expect(state.bind).not.toHaveBeenCalled();
     expect(state.navigate).not.toHaveBeenCalled();
     state.environmentId = "environment-a";
     state.projects = [{ id: "project-a", title: "A", environmentId: "environment-a" }];
-    await act(() => renderer.update(<AgentsPage />));
+    await act(async () => renderer.update(<AgentsPage />));
     await click();
     expect(state.create).toHaveBeenCalledTimes(1);
     expect(state.bind.mock.calls[0]![0].threadId).toBe(
@@ -299,8 +299,8 @@ describe("Agents project thread interaction", () => {
     await mount();
     await click();
     state.projects = [{ id: "project-b", title: "B", environmentId: "environment-a" }];
-    await act(() => renderer.update(<AgentsPage />));
-    await act(() => binding.resolve(bindResult(state.bind.mock.calls[0]![0])));
+    await act(async () => renderer.update(<AgentsPage />));
+    await act(async () => binding.resolve(bindResult(state.bind.mock.calls[0]![0])));
     expect(state.navigate).not.toHaveBeenCalled();
     await click();
     expect(state.create).toHaveBeenCalledTimes(1);
@@ -312,8 +312,8 @@ describe("Agents project thread interaction", () => {
     state.create.mockReturnValueOnce(creation.promise);
     await mount();
     await click();
-    await act(() => renderer.unmount());
-    await act(() => creation.resolve({ _tag: "Success" }));
+    await act(async () => renderer.unmount());
+    await act(async () => creation.resolve({ _tag: "Success" }));
     expect(state.bind).not.toHaveBeenCalled();
     expect(state.navigate).not.toHaveBeenCalled();
   });
@@ -328,8 +328,8 @@ describe("Agents project thread interaction", () => {
     expect(renderer.root.findByType("select").props.disabled).toBe(true);
     // Simulate a selection changed by an external update, beyond normal disabled UI interaction.
     state.projects = state.projects.filter((project) => project.id === "project-b");
-    await act(() => renderer.update(<AgentsPage />));
-    await act(() => creation.resolve({ _tag: "Success" }));
+    await act(async () => renderer.update(<AgentsPage />));
+    await act(async () => creation.resolve({ _tag: "Success" }));
     expect(state.bind.mock.calls[0]![0].projectId).toBe("project-a");
     expect(state.navigate).not.toHaveBeenCalled();
     await click();
