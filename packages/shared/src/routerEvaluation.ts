@@ -209,6 +209,24 @@ export const calculateEvaluationMetrics = (
     .map((record) => record.cost.estimatedUsd)
     .filter((value) => value.status === "known")
     .map((value) => value.value);
+  // Failed, cancelled, and timed-out executions may still incur charges.
+  // These are terminal-turn observations, not aggregated end-to-end task costs.
+  const terminalReportedCost = records
+    .map((record) => record.cost.reportedUsd)
+    .filter((value) => value.status === "known")
+    .map((value) => value.value);
+  const completeReportedCost = records.length > 0 && terminalReportedCost.length === records.length;
+  const terminalCostMetric = metric({
+    id: "reported_cost_per_terminal_turn_usd",
+    numerator: completeReportedCost
+      ? terminalReportedCost.reduce((total, value) => total + value, 0)
+      : 0,
+    denominator: completeReportedCost ? records.length : 0,
+    sampleCount: terminalReportedCost.length,
+    minSample: HYBRID_MIN_SAMPLE_MEDIAN,
+    unit: "usd",
+    provenance: "observed",
+  });
   const withFeedback = records.filter((record) => record.evidence.explicitFeedback.length > 0);
   const positive = withFeedback.filter((record) =>
     record.evidence.explicitFeedback.some((entry) => EXPLICIT_POSITIVE_FEEDBACK.has(entry.kind)),
@@ -326,6 +344,19 @@ export const calculateEvaluationMetrics = (
       minSample: HYBRID_MIN_SAMPLE_MEDIAN,
       unit: "usd",
       provenance: "estimated",
+    }),
+    {
+      ...terminalCostMetric,
+      status: completeReportedCost ? terminalCostMetric.status : "unknown",
+    },
+    metric({
+      id: "reported_cost_coverage_rate",
+      numerator: terminalReportedCost.length,
+      denominator: records.length,
+      sampleCount: records.length,
+      minSample: HYBRID_MIN_SAMPLE_RATE,
+      unit: "rate",
+      provenance: "observed",
     }),
     metric({
       id: "explicit_positive_feedback_rate",
