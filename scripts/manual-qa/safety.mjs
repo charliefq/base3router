@@ -20,9 +20,14 @@ export function qaPaths(repoArgument, baseArgument) {
 
 export function qaEnvironment(repo, base, inherited = process.env) {
   // Do not read local configuration or attempt to override its secret values.
-  for (const name of [".env", ".env.local"])
-    if (NodeFS.existsSync(NodePath.join(repo, name)))
-      throw Error("QA requires a candidate without repository env files; no values read.");
+  for (const directory of [
+    repo,
+    NodePath.join(repo, "apps/web"),
+    NodePath.join(repo, "apps/server"),
+  ])
+    for (const name of [".env", ".env.local", ".env.development", ".env.development.local"])
+      if (NodeFS.existsSync(NodePath.join(directory, name)))
+        throw Error("QA requires a candidate without development env files; no values read.");
   const env = Object.fromEntries(
     Object.entries(inherited).filter(
       ([key]) =>

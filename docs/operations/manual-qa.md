@@ -61,11 +61,11 @@ T3 preview/device 工具缺失，所以 AUTOMATED_QA_BLOCKED；技能禁止替�
 
 优先在第二终端运行 `node "$qa_tool_dir/scripts/manual-qa/start.mjs" "$qa_candidate" --stop`：校验记录的 dev-runner PID 和该 QA 路径后，只向其独立 process group 发 SIGTERM。Ctrl+C 也使用同一停止逻辑；停止后确认 health 无法连接，再用 start 重启。只删除确认属于此 QA 的 .t3/qa-* 目录。不要释放 generation 41，不 merge/release，不调用 Cursor，不更改付费、凭证或 live 配置。
 
-安全边界：base 必须是规范仓库路径下 `.t3` 的单层 `qa-*` 子目录；拒绝符号链接。启动会验证完整禁用的真实 provider map、唯一 fixture 的精确 driver/config 路径及可信脚本内容。已记录进程或进程组仍存活时拒绝重复启动，保留日志和所有权记录。QA 子进程过滤应用、OTEL、Clerk、Vite 等环境配置，保留平台代理与认证保护变量；固定 loopback、禁用 share/Tailscale/analytics。存在根 `.env`/`.env.local` 时拒绝启动，不读取值；请使用没有这些文件的隔离候选，不删除真实配置。`start.mjs [repo] [base] --stop` 支持省略 base（默认 `.t3/qa-ac0-local`），自定义 base 时必须在停止命令中提供同一 base。
+安全边界：base 必须是规范仓库路径下 `.t3` 的单层 `qa-*` 子目录；拒绝符号链接。启动会验证完整禁用的真实 provider map、唯一 fixture 的精确 driver/config 路径及可信脚本内容。已记录进程或进程组仍存活时拒绝重复启动，保留日志和所有权记录。QA 子进程过滤应用、OTEL、Clerk、Vite 等环境配置，保留平台代理与认证保护变量；固定 loopback、禁用 share/Tailscale/analytics。根目录或 apps/web、apps/server 存在 `.env`、`.env.local`、`.env.development`、`.env.development.local` 时拒绝启动，不读取值；请使用没有这些文件的隔离候选，不删除真实配置。`start.mjs [repo] [base] --stop` 支持省略 base（默认 `.t3/qa-ac0-local`），自定义 base 时必须在停止命令中提供同一 base。
 
 候选服务会在写 settings 时省略默认禁用的 pi/antigravity 和旧式 fixture config.enabled；严格 start 会拒绝这份非完整配置。停止并核实端口关闭后，可显式运行 `node "$qa_tool_dir/scripts/manual-qa/prepare.mjs" "$qa_candidate" /同一/qa-base --restore-settings`，仅恢复已核实省略的 QA 默认，再启动。该操作拒绝活跃进程组、其它缺失 provider、未知字段、真实 provider 启用、fixture driver/path/content 漂移；保留项目、线程和 keybindings。自定义 base 和默认 base 均支持。
 
-回归命令（工具目录执行）：`node --test scripts/manual-qa/safety.test.mjs`。实际启动回归仅对精确 ac0、已装依赖且默认 `.t3/qa-ac0-local` 尚不存在的独立候选运行：`B3R_QA_REPO=/absolute/candidate node --test scripts/manual-qa/live.test.mjs`；会创建并保留 disposable QA 状态，测试后停止自己的进程组。不要为重跑而覆盖已有状态。
+回归命令（工具目录执行）：`vp test scripts/manual-qa/safety.test.mjs`。实际启动回归仅对精确 ac0、已装依赖且默认 `.t3/qa-ac0-local` 尚不存在的独立候选运行：`B3R_QA_REPO=/absolute/candidate node --test scripts/manual-qa/live-regression.mjs`；会创建并保留 disposable QA 状态，测试后停止自己的进程组。不要为重跑而覆盖已有状态。
 
 本次云端实测：5 组安全回归通过；1 组实际生命周期回归通过，分别注入 host 0.0.0.0 / ::、Tailscale true、relay 与三类 OTLP 地址和非秘密 headers/token。后端只监听 127.0.0.1，环境校验通过，本地外部请求 sentinel 命中 0；重复启动保留日志/进程记录，省略 base 的 --stop 成功，恢复配置后重启成功，最终进程组和 QA 端口关闭。不是 Browser/Device 验收。
 

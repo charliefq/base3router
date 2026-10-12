@@ -1,4 +1,4 @@
-import * as NodeTest from "node:test";
+import { test, afterAll } from "vite-plus/test";
 import * as NodeAssert from "node:assert/strict";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -39,20 +39,17 @@ const fixture = () => ({
 });
 const write = (settings) => NodeFS.writeFileSync(settingsPath, JSON.stringify(settings));
 
-NodeTest.test(
-  "single direct canonical child; nested external symlink rejected before writes",
-  () => {
-    NodeAssert.deepEqual(qaPaths(repo, base), { repo, base });
-    const external = NodePath.join(tmp, "external");
-    NodeFS.mkdirSync(external);
-    NodeFS.symlinkSync(external, NodePath.join(repo, ".t3/qa-parent"));
-    NodeAssert.throws(() => qaPaths(repo, NodePath.join(repo, ".t3/qa-parent/child")));
-    NodeAssert.deepEqual(NodeFS.readdirSync(external), []);
-    NodeFS.symlinkSync(external, NodePath.join(repo, ".t3/qa-link"));
-    NodeAssert.throws(() => qaPaths(repo, NodePath.join(repo, ".t3/qa-link")));
-  },
-);
-NodeTest.test("QA child strips product/telemetry config and preserves platform guards", () => {
+test("single direct canonical child; nested external symlink rejected before writes", () => {
+  NodeAssert.deepEqual(qaPaths(repo, base), { repo, base });
+  const external = NodePath.join(tmp, "external");
+  NodeFS.mkdirSync(external);
+  NodeFS.symlinkSync(external, NodePath.join(repo, ".t3/qa-parent"));
+  NodeAssert.throws(() => qaPaths(repo, NodePath.join(repo, ".t3/qa-parent/child")));
+  NodeAssert.deepEqual(NodeFS.readdirSync(external), []);
+  NodeFS.symlinkSync(external, NodePath.join(repo, ".t3/qa-link"));
+  NodeAssert.throws(() => qaPaths(repo, NodePath.join(repo, ".t3/qa-link")));
+});
+test("QA child strips product/telemetry config and preserves platform guards", () => {
   const env = qaEnvironment(repo, base, {
     T3CODE_HOST: "::",
     T3CODE_TAILSCALE_SERVE: "true",
@@ -80,13 +77,14 @@ NodeTest.test("QA child strips product/telemetry config and preserves platform g
   NodeAssert.equal(env.NODE_EXTRA_CA_CERTS, "platform-ca");
   NodeAssert.equal(env.PLATFORM_AUTH_GUARD, "guard");
   NodeAssert.equal(env.HOME, "original-home");
-  for (const name of [".env", ".env.local"]) {
+  NodeFS.mkdirSync(NodePath.join(repo, "apps/web"), { recursive: true });
+  for (const name of [".env", ".env.local", "apps/web/.env.development.local"]) {
     NodeFS.writeFileSync(NodePath.join(repo, name), "QA-NONSECRET");
     NodeAssert.throws(() => qaEnvironment(repo, base));
     NodeFS.unlinkSync(NodePath.join(repo, name));
   }
 });
-NodeTest.test("complete disabled providers and exact fixture content; drift fails closed", () => {
+test("complete disabled providers and exact fixture content; drift fails closed", () => {
   write(fixture());
   validateFixture(base, trusted);
   const mutations = [
@@ -117,7 +115,7 @@ NodeTest.test("complete disabled providers and exact fixture content; drift fail
   NodeFS.unlinkSync(peer);
   NodeFS.copyFileSync(trusted, peer);
 });
-NodeTest.test("explicit restoration accepts only known serialized defaults", () => {
+test("explicit restoration accepts only known serialized defaults", () => {
   const s = fixture();
   delete s.providers.pi;
   delete s.providers.antigravity;
@@ -130,8 +128,8 @@ NodeTest.test("explicit restoration accepts only known serialized defaults", () 
   write(s);
   NodeAssert.throws(() => validateFixture(base, trusted, true));
 });
-NodeTest.test("live ownership detected without killing processes", () => {
+test("live ownership detected without killing processes", () => {
   NodeAssert.equal(hasLiveOwnership(process.pid), true);
   NodeAssert.throws(() => hasLiveOwnership(1));
 });
-NodeTest.test.after(() => NodeFS.rmSync(tmp, { recursive: true, force: true }));
+afterAll(() => NodeFS.rmSync(tmp, { recursive: true, force: true }));

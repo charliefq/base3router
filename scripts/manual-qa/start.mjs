@@ -35,7 +35,10 @@ const stopPid = async (pid) => {
     console.log("Recorded launcher is no longer present; no process stopped.");
     return;
   }
-  if (!command.includes("scripts/dev-runner.ts dev --home-dir") || !command.includes(base))
+  if (
+    !command.includes("scripts/dev-runner.ts dev --home-dir") ||
+    !command.includes("--home-dir " + base + " --auto-bootstrap-project-from-cwd=false")
+  )
     throw Error("PID ownership mismatch; no process stopped.");
   if (NodeProcess.platform === "win32")
     throw Error("Use the captured PID with the local Windows process supervisor; no broad kill.");
