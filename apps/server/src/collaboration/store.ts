@@ -49,10 +49,7 @@ const projectFor = (
   return projects.size === 1 ? [...projects][0] : undefined;
 };
 
-export const scopedSnapshot = (
-  commands: ReadonlyArray<CollaborationCommand>,
-  principalId: string,
-) => {
+const scopedSnapshot = (commands: ReadonlyArray<CollaborationCommand>, principalId: string) => {
   const owned = ownedCommands(commands, principalId);
   const projects = new Set(owned.map((command) => projectFor(owned, command)).filter(Boolean));
   const empty = foldCollaboration([]);

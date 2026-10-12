@@ -47,7 +47,7 @@ export class CollaborationThreads extends Context.Service<
 >()("t3/collaboration/CollaborationThreads") {}
 
 // No client-provided id can choose another principal's receipt or thread.
-export const collaborationThreadIdentity = (
+const collaborationThreadIdentity = (
   environmentId: string,
   principalId: string,
   projectId: string,
