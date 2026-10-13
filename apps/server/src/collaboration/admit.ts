@@ -56,6 +56,8 @@ export const sealCollaborationCommand = (
   if (!principalId) {
     return productRefusal("The authenticated principal is missing.");
   }
+  if (command.type === "task.enroll")
+    return productRefusal("Task enrollment is owned by successful server governed creation.");
   if (
     command.type === "scenario.rehearse" ||
     command.type === "transport.simulate" ||

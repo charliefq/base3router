@@ -21,6 +21,8 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { enrollGovernedTask } from "../collaboration/store.ts";
+
 import { replayAndBufferProjectedLiveEvents } from "./LiveStreamBudget.ts";
 import type { UnsequencedProjectEvent } from "../persistence/Services/OrchestrationEventStore.ts";
 import { projectDomainEventForWire } from "./WireProjection.ts";
@@ -121,6 +123,7 @@ export interface EventSinkV2Shape {
     readonly commandId: CommandId;
     readonly threadId: ThreadId;
     readonly commandType: string;
+    readonly governedTaskOwner?: string;
     readonly acceptedAt: DateTime.Utc;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
@@ -506,6 +509,22 @@ const baseLayer: Layer.Layer<
             return { ...existing, committed: false as const, cancelledEffectIds: [] };
           }
 
+          if (input.commandType === "thread.create" || input.governedTaskOwner !== undefined) {
+            const existing =
+              yield* sql`SELECT thread_id FROM orchestration_v2_projection_threads WHERE thread_id=${input.threadId}`;
+            const enrollment = yield* sql`SELECT command_id FROM collaboration_commands
+              WHERE json_extract(payload_json,'$.type')='task.enroll'
+                AND json_extract(payload_json,'$.threadId')=${input.threadId} LIMIT 1`;
+            if (
+              input.commandType !== "thread.create" ||
+              enrollment.length > 0 ||
+              (existing.length > 0 && input.governedTaskOwner !== undefined)
+            )
+              return yield* new EventSinkWriteError({
+                commandId: input.commandId,
+                eventCount: input.events.length,
+              });
+          }
           const normalized = yield* normalizeEvents(input.events);
           const storedEvents = yield* eventStore.append({
             commandId: input.commandId,
@@ -518,6 +537,12 @@ const baseLayer: Layer.Layer<
             );
           }
           yield* applyStoredEvents(storedEvents);
+          if (input.governedTaskOwner !== undefined)
+            yield* enrollGovernedTask(sql, {
+              principalId: input.governedTaskOwner,
+              threadId: input.threadId,
+              creationCommandId: input.commandId,
+            });
           yield* effectOutbox.enqueue(input.effects);
           const receipt: CommandReceiptStore.CommandReceiptV2 = {
             commandId: input.commandId,

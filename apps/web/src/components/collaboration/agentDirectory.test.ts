@@ -164,3 +164,19 @@ describe("agent directory continuity", () => {
     expect(directory([reserved], { ...snapshot, agents: [external] })).toEqual([]);
   });
 });
+
+it("associates two governed tasks without moving the provider's canonical conversation", () => {
+  const enrolled = ["task-one", "task-two"].map((threadId) => ({
+    ...task,
+    id: `task:governed:thread:${threadId}`,
+    correlationId: `governed:thread:${threadId}`,
+    threadId,
+  }));
+  const input = { ...snapshot, tasks: enrolled };
+  const row = directory([provider], input)[0]!;
+  expect(row.saved?.threadId).toBe("thread-a");
+  expect(row.tasks.map((item) => item.threadId)).toEqual(["task-one", "task-two"]);
+  expect(directory([provider], { ...input, agents: [] })[0]?.saved).toBeUndefined();
+  expect(directory([provider], input, "project-b")[0]?.tasks).toEqual([]);
+  expect(directory([provider], input, "project-a", "environment-b")).toEqual([]);
+});
