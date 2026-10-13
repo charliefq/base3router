@@ -594,9 +594,14 @@ const baseLayer: Layer.Layer<
                 });
             }
             if (existing.receipt.commandType === "thread.create") {
-              if (input.creationCommand !== undefined)
+              if (input.creationCommand !== undefined) {
+                if (
+                  input.creationCommand.commandId !== input.commandId ||
+                  input.creationCommand.threadId !== input.threadId
+                )
+                  return yield* refuse();
                 yield* verifyReviewedCreateReplay(sql, input.creationCommand);
-              else {
+              } else {
                 const original = existing.storedEvents.find(
                   (stored) => stored.event.type === "thread.created",
                 );

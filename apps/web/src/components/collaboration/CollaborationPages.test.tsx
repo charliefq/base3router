@@ -1690,6 +1690,7 @@ const loadAgentsCreationFixture = async () =>
   )) as {
     withAgentsTaskCreationFixture: (
       check: (fixture: {
+        sql: SqlClientForFixture.SqlClient;
         dispatch: (
           command: OrchestrationV2Command,
         ) => EffectForFixture.Effect<OrchestrationV2DispatchCommandResult, Error>;
@@ -1886,6 +1887,86 @@ it("creates two actual owned tasks from Agents, reloads exact enrollment and use
     ),
   );
 }, 60_000);
+
+it.each(["malformed-cache", "storage-read-throws", "absent-task"] as const)(
+  "keeps Agents creation fail closed for %s recovery",
+  async (mode) => {
+    const records = creationStorage();
+    const writes = vi.fn();
+    if (mode === "malformed-cache") records.set("t3:agents-governed-creation:v1", "{not-json");
+    if (mode === "storage-read-throws")
+      vi.stubGlobal("sessionStorage", {
+        getItem: () => {
+          throw new Error("Fixture read failed");
+        },
+        setItem: writes,
+      });
+    const module = await loadAgentsCreationFixture();
+    await EffectForFixture.runPromise(
+      module.withAgentsTaskCreationFixture((f) =>
+        EffectForFixture.promise(async () => {
+          state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+          state.readProjection.mockImplementation(
+            async ({ input }: { input: { threadId: string } }) => ({
+              _tag: "Success",
+              value: await EffectForFixture.runPromise(
+                f.orchestrator.getThreadProjection(input.threadId),
+              ),
+            }),
+          );
+          state.create.mockResolvedValue({
+            _tag: "Failure",
+            cause: "Fixture request lost before dispatch",
+          });
+          await mount();
+          await creationClick("New task", true);
+          if (mode !== "absent-task") {
+            expect(text()).toMatch(/could not be read|storage is unavailable/);
+            expect(creationButton("Review new task")).toBeUndefined();
+            expect(state.create).not.toHaveBeenCalled();
+            expect(state.readProjection).not.toHaveBeenCalled();
+            expect(writes).not.toHaveBeenCalled();
+            if (mode === "malformed-cache") expect([...records.values()]).toEqual(["{not-json"]);
+          } else {
+            await fillCreation();
+            await creationClick("Review new task");
+            await creationClick("Create task", true);
+            const command = state.create.mock.calls[0]![0].input as Extract<
+              OrchestrationV2Command,
+              { type: "thread.create" }
+            >;
+            expect(
+              await EffectForFixture.runPromise(
+                f.sql`SELECT command_id FROM orchestration_command_receipts WHERE command_id=${command.commandId}`,
+              ),
+            ).toHaveLength(0);
+            for (let read = 0; read < 2; read++) {
+              await creationClick("Recover task creation", true);
+              expect(text()).toContain("uncertain");
+              expect(creationButton("New task")!.props.disabled).toBe(true);
+              expect(creationButton("Open created conversation")).toBeUndefined();
+              expect(decodeCreationStorage([...records.values()][0]!)).toMatchObject({
+                status: "uncertain",
+                command: { commandId: command.commandId, threadId: command.threadId },
+              });
+            }
+            expect(state.create).toHaveBeenCalledTimes(1);
+            expect(state.readProjection).toHaveBeenCalledTimes(2);
+          }
+          expect((await EffectForFixture.runPromise(f.readSnapshot())).tasks).toHaveLength(0);
+          expect(state.navigate).not.toHaveBeenCalled();
+          expect(await EffectForFixture.runPromise(f.noExecution())).toEqual({
+            runs: 0,
+            grants: 0,
+            outbox: 0,
+            messages: 0,
+          });
+        }),
+      ),
+    );
+  },
+  60_000,
+);
 
 it.each([
   "lost-response",

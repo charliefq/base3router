@@ -54,6 +54,58 @@ it.live(
 );
 
 it.live.each([
+  "nonexistent/both",
+  "nonexistent/command",
+  "nonexistent/thread",
+  "existing/both",
+  "existing/command",
+  "existing/thread",
+] as const)("rejects substituted %s nested creation receipt identities", (mode) =>
+  withAgentsTaskCreationFixture((f) =>
+    Effect.gen(function* () {
+      const [kind, changed] = mode.split("/");
+      const a = agentsCreationCommand("receipt-a");
+      const original = yield* f.dispatch(a);
+      const { taskCreationReview: _review, ...b } = agentsCreationCommand("receipt-b");
+      if (kind === "existing") yield* f.dispatch(b);
+      const { PolicyExecutionContext } = yield* Effect.promise(
+        () => import("../policy/executionContext.ts"),
+      );
+      const substituted = {
+        ...b,
+        commandId: changed === "thread" ? a.commandId : b.commandId,
+        threadId: changed === "command" ? a.threadId : b.threadId,
+      };
+      assert.isTrue(
+        Exit.isFailure(
+          yield* Effect.exit(
+            f.eventSink
+              .commitCommand({
+                commandId: a.commandId,
+                threadId: a.threadId,
+                commandType: "thread.create",
+                creationCommand: substituted,
+                acceptedAt: yield* DateTime.now,
+                events: original.storedEvents.map((e) => e.event),
+                effects: [],
+              })
+              .pipe(Effect.provideService(PolicyExecutionContext, agentsCreationActor)),
+          ),
+        ),
+        `${kind} ${changed} identity substitution must reject`,
+      );
+      assert.strictEqual((yield* f.dispatch(a)).sequence, original.sequence);
+      assert.deepStrictEqual(yield* f.noExecution(), {
+        runs: 0,
+        grants: 0,
+        outbox: 0,
+        messages: 0,
+      });
+    }),
+  ),
+);
+
+it.live.each([
   "read-only",
   "wrong-environment",
   "missing-provider",
