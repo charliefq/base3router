@@ -3,6 +3,7 @@ import {
   COLLABORATION_RESULT_PREVIEW_MAX_CHARS,
   type CollaborationTaskResultReadout,
   OrchestrationV2ProviderFailure,
+  OrchestrationV2ExecutionNode,
   OrchestrationV2TurnItemStatus,
   type CollaborationSnapshot,
   type CollaborationTaskContractReadout,
@@ -310,6 +311,7 @@ const resultItemFields = {
   parentItemId: Schema.NullOr(Schema.String),
   ordinal: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
   status: OrchestrationV2TurnItemStatus,
+  startedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
   completedAt: Schema.NullOr(Schema.String),
   updatedAt: Schema.String,
 };
@@ -327,6 +329,21 @@ const StoredResultItem = Schema.Union([
     retry: Schema.optionalKey(Schema.Unknown),
   }),
 ]);
+const StoredResultNode = Schema.Struct({
+  id: OrchestrationV2ExecutionNode.fields.id,
+  threadId: OrchestrationV2ExecutionNode.fields.threadId,
+  runId: OrchestrationV2ExecutionNode.fields.runId,
+  parentNodeId: OrchestrationV2ExecutionNode.fields.parentNodeId,
+  rootNodeId: OrchestrationV2ExecutionNode.fields.rootNodeId,
+  kind: OrchestrationV2ExecutionNode.fields.kind,
+  status: OrchestrationV2ExecutionNode.fields.status,
+  providerThreadId: OrchestrationV2ExecutionNode.fields.providerThreadId,
+  providerTurnId: OrchestrationV2ExecutionNode.fields.providerTurnId,
+  startedAt: Schema.NullOr(Schema.String),
+  completedAt: Schema.NullOr(Schema.String),
+});
+const decodeResultNode = Schema.decodeUnknownOption(Schema.fromJsonString(StoredResultNode));
+
 const decodeResultAttempt = Schema.decodeUnknownOption(Schema.fromJsonString(StoredResultAttempt));
 const decodeResultThread = Schema.decodeUnknownOption(Schema.fromJsonString(StoredResultThread));
 const decodeResultTurn = Schema.decodeUnknownOption(Schema.fromJsonString(StoredResultTurn));
@@ -522,7 +539,7 @@ const readResultEvidence = (
                 payload_json: string;
               }>`
               SELECT turn_item_id, thread_id, run_id, node_id, provider_thread_id, provider_turn_id, parent_item_id, ordinal, type, status, updated_at, payload_json
-              FROM orchestration_v2_projection_turn_items WHERE thread_id=${threadId} AND run_id=${run.id} AND node_id=${run.rootNodeId}
+              FROM orchestration_v2_projection_turn_items WHERE thread_id=${threadId} AND run_id=${run.id}
                 AND provider_thread_id=${run.providerThreadId} AND provider_turn_id=${turn.id} AND parent_item_id IS NULL AND type='assistant_message'
               ORDER BY ordinal DESC, turn_item_id DESC LIMIT 1
             `
@@ -554,7 +571,7 @@ const readResultEvidence = (
           item.id !== itemRow.turn_item_id ||
           item.threadId !== threadId ||
           item.runId !== run.id ||
-          item.nodeId !== run.rootNodeId ||
+          item.nodeId !== itemRow.node_id ||
           item.providerThreadId !== run.providerThreadId ||
           item.providerTurnId !== turn.id ||
           item.parentItemId !== null ||
@@ -568,6 +585,88 @@ const readResultEvidence = (
           Date.parse(item.completedAt) < Date.parse(turn.startedAt!)
         )
           return { ...correlated, content: unknownResult("invalid_result_item") };
+        if (item.type === "assistant_message") {
+          // Select the newest candidate first. A bad node must never uncover an older answer.
+          if (item.nodeId === null || item.nodeId === run.rootNodeId)
+            return { ...correlated, content: unknownResult("invalid_assistant_node") };
+          const readNode = (nodeId: string | null) =>
+            Effect.gen(function* () {
+              const nodes = yield* sql<{
+                node_id: string;
+                thread_id: string;
+                run_id: string | null;
+                parent_node_id: string | null;
+                root_node_id: string;
+                kind: string;
+                status: string;
+                provider_thread_id: string | null;
+                provider_turn_id: string | null;
+                started_at: string | null;
+                completed_at: string | null;
+                payload_json: string;
+              }>`
+              SELECT node_id,thread_id,run_id,parent_node_id,root_node_id,kind,status,provider_thread_id,provider_turn_id,started_at,completed_at,payload_json
+              FROM orchestration_v2_projection_nodes WHERE node_id=${nodeId} AND thread_id=${threadId} AND run_id=${run.id} LIMIT 1
+            `;
+              const row = nodes[0];
+              const parsed = row ? decodeResultNode(row.payload_json) : null;
+              if (!row || parsed?._tag !== "Some") return null;
+              const node = parsed.value;
+              if (
+                node.id !== row.node_id ||
+                node.threadId !== threadId ||
+                node.runId !== run.id ||
+                node.parentNodeId !== row.parent_node_id ||
+                node.rootNodeId !== row.root_node_id ||
+                node.kind !== row.kind ||
+                node.status !== row.status ||
+                node.providerThreadId !== row.provider_thread_id ||
+                node.providerTurnId !== row.provider_turn_id ||
+                node.startedAt !== row.started_at ||
+                node.completedAt !== row.completed_at ||
+                node.startedAt === null ||
+                node.completedAt === null ||
+                !Number.isFinite(Date.parse(node.startedAt)) ||
+                !Number.isFinite(Date.parse(node.completedAt)) ||
+                Date.parse(node.startedAt) > Date.parse(node.completedAt)
+              )
+                return null;
+              return node;
+            });
+          const node = yield* readNode(item.nodeId);
+          const root = yield* readNode(run.rootNodeId);
+          if (
+            !node ||
+            !root ||
+            node.kind !== "assistant_message" ||
+            node.status !== "completed" ||
+            node.rootNodeId !== run.rootNodeId ||
+            node.parentNodeId !== run.rootNodeId ||
+            node.providerThreadId !== run.providerThreadId ||
+            node.providerTurnId !== turn.id ||
+            root.id !== run.rootNodeId ||
+            root.kind !== "root_turn" ||
+            root.status !== "completed" ||
+            root.rootNodeId !== root.id ||
+            root.parentNodeId !== null ||
+            // Captured root records may legitimately omit provider links; child links may not.
+            (root.providerThreadId !== null && root.providerThreadId !== run.providerThreadId) ||
+            (root.providerTurnId !== null && root.providerTurnId !== turn.id)
+          )
+            return { ...correlated, content: unknownResult("invalid_assistant_node") };
+          if (
+            item.startedAt == null ||
+            !Number.isFinite(Date.parse(item.startedAt)) ||
+            Date.parse(item.startedAt) !== Date.parse(node.startedAt!) ||
+            Date.parse(item.completedAt) !== Date.parse(node.completedAt!) ||
+            Date.parse(item.updatedAt) < Date.parse(item.completedAt) ||
+            Date.parse(node.startedAt!) < Date.parse(turn.startedAt!) ||
+            Date.parse(node.completedAt!) > Date.parse(turn.completedAt!) ||
+            Date.parse(node.startedAt!) < Date.parse(root.startedAt!) ||
+            Date.parse(node.completedAt!) > Date.parse(root.completedAt!)
+          )
+            return { ...correlated, content: unknownResult("invalid_assistant_node_times") };
+        }
         if (
           item.type === "assistant_message" &&
           run.status === "completed" &&
@@ -584,6 +683,7 @@ const readResultEvidence = (
           run.status === "failed" &&
           item.status === "failed" &&
           item.id === terminalFailureId &&
+          item.nodeId === run.rootNodeId &&
           item.retry === undefined
         ) {
           const preview = resultPreview(item.failure.message);

@@ -9,6 +9,8 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import {
   ProviderInstanceId,
   ProviderDriverKind,
+  OrchestrationV2ExecutionNode,
+  OrchestrationV2TurnItem,
   CollaborationTask,
   CollaborationSnapshot,
   type CollaborationCommand,
@@ -115,6 +117,12 @@ const click = async () => {
 };
 const encodeEvidence = SchemaForFixture.encodeSync(
   SchemaForFixture.fromJsonString(SchemaForFixture.Unknown),
+);
+const validateNodeFixture = SchemaForFixture.decodeUnknownEffect(
+  SchemaForFixture.fromJsonString(SchemaForFixture.toCodecJson(OrchestrationV2ExecutionNode)),
+);
+const validateItemFixture = SchemaForFixture.decodeUnknownEffect(
+  SchemaForFixture.fromJsonString(SchemaForFixture.toCodecJson(OrchestrationV2TurnItem)),
 );
 const text = () => JSON.stringify(renderer.toJSON());
 const bindResult = (command: CollaborationCommand) => {
@@ -1160,9 +1168,14 @@ it.each(["manual", "auto"] as const)(
   },
 );
 
-it.each(["output", "failure"] as const)(
-  "renders strictly correlated SQLite %s result with bounded plain text and unchanged acceptance",
-  async (kind) => {
+it.each([
+  { kind: "output", driver: "codex" },
+  { kind: "output", driver: "claude" },
+  { kind: "failure", driver: "codex" },
+] as const)(
+  "renders $driver producer-shaped SQLite $kind evidence with bounded plain text and unchanged acceptance",
+  async ({ kind, driver }) => {
+    state.providers = state.providers.map((provider) => ({ ...provider, driver }));
     const mode = "manual" as const;
     const fixtureStore = (await import(
       /* @vite-ignore */ new URL("../../../../server/src/collaboration/store.ts", import.meta.url)
@@ -1237,7 +1250,7 @@ it.each(["output", "failure"] as const)(
             catalog: [
               {
                 ...target,
-                driver: ProviderDriverKind.make("codex"),
+                driver: ProviderDriverKind.make(driver),
                 isDefault: true,
                 capabilities: ["code"],
                 availabilityReasons: [],
@@ -1247,7 +1260,7 @@ it.each(["output", "failure"] as const)(
           const binding = {
             policyVersion: "dispatcher.phase-1a.v1",
             target,
-            driver: "codex",
+            driver,
             modelFamily: "gpt",
             fallbackIndex: 0,
             source: "explicit",
@@ -1298,6 +1311,7 @@ it.each(["output", "failure"] as const)(
           yield* sql`ALTER TABLE orchestration_v2_projection_provider_threads ADD COLUMN driver TEXT`;
           yield* sql`ALTER TABLE orchestration_v2_projection_provider_turns ADD COLUMN completed_at TEXT`;
           yield* sql`CREATE TABLE orchestration_v2_projection_turn_items (turn_item_id TEXT PRIMARY KEY,thread_id TEXT,run_id TEXT,node_id TEXT,provider_thread_id TEXT,provider_turn_id TEXT,parent_item_id TEXT,ordinal INTEGER,type TEXT,status TEXT,updated_at TEXT,payload_json TEXT)`;
+          yield* sql`CREATE TABLE orchestration_v2_projection_nodes (node_id TEXT PRIMARY KEY,thread_id TEXT,run_id TEXT,parent_node_id TEXT,root_node_id TEXT,kind TEXT,status TEXT,provider_thread_id TEXT,provider_turn_id TEXT,started_at TEXT,completed_at TEXT,payload_json TEXT)`;
           state.load.mockImplementation(() =>
             EffectForFixture.runPromise(fixtureSnapshot(sql, "fixture-owner")),
           );
@@ -1326,13 +1340,48 @@ it.each(["output", "failure"] as const)(
               "SQLite latest output <script>neverExecute()</script> " + "x".repeat(3000);
             const itemId =
               kind === "output"
-                ? "assistant-result-1"
+                ? `turn-item:provider:${driver}:native-item:assistant-result-1`
                 : "turn-item:provider:codex:native-item:terminal-failure%3Aturn-1";
+            const nodeId =
+              kind === "output"
+                ? `node:provider:${driver}:native-item:assistant-result-1`
+                : "node-1";
+            const nativeItemRef = { driver, nativeId: "assistant-result-1", strength: "strong" };
+            const rootNode = {
+              id: "node-1",
+              threadId: "fixture-thread",
+              runId: "run-1",
+              parentNodeId: null,
+              rootNodeId: "node-1",
+              kind: "root_turn",
+              status,
+              countsForRun: true,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              runtimeRequestId: null,
+              checkpointScopeId: null,
+              startedAt: turn.startedAt,
+              completedAt,
+            };
+            const messageNode = {
+              ...rootNode,
+              id: nodeId,
+              parentNodeId: "node-1",
+              kind: "assistant_message",
+              countsForRun: false,
+              providerThreadId: "provider-thread-1",
+              providerTurnId: "turn-1",
+              nativeItemRef,
+            };
             const item = {
               id: itemId,
               threadId: "fixture-thread",
               runId: "run-1",
-              nodeId: "node-1",
+              nodeId,
+              nativeItemRef: kind === "output" ? nativeItemRef : null,
+              title: null,
+              startedAt: turn.startedAt,
               providerThreadId: "provider-thread-1",
               providerTurnId: "turn-1",
               parentItemId: null,
@@ -1341,7 +1390,12 @@ it.each(["output", "failure"] as const)(
               completedAt,
               updatedAt: completedAt,
               ...(kind === "output"
-                ? { type: "assistant_message", text: previewText, streaming: false }
+                ? {
+                    type: "assistant_message",
+                    messageId: `message:provider:${driver}:native-item:assistant-result-1`,
+                    text: previewText,
+                    streaming: false,
+                  }
                 : {
                     type: "error",
                     failure: {
@@ -1356,9 +1410,16 @@ it.each(["output", "failure"] as const)(
               EffectForFixture.gen(function* () {
                 yield* sql`UPDATE orchestration_v2_projection_runs SET status=${status},payload_json=${encodeEvidence({ ...run, status })}`;
                 yield* sql`UPDATE orchestration_v2_projection_run_attempts SET root_node_id='node-1',provider_thread_id='provider-thread-1',provider_turn_id='turn-1',status=${status},payload_json=${encodeEvidence({ ...attempt, status })}`;
-                yield* sql`UPDATE orchestration_v2_projection_provider_threads SET driver='codex',payload_json=${encodeEvidence({ ...providerThread, driver: "codex" })}`;
+                yield* sql`UPDATE orchestration_v2_projection_provider_threads SET driver=${driver},payload_json=${encodeEvidence({ ...providerThread, driver })}`;
                 yield* sql`INSERT INTO orchestration_v2_projection_provider_turns VALUES ('turn-1','fixture-thread','provider-thread-1','attempt-1','node-1',${status},${turn.startedAt},${encodeEvidence({ ...turn, status, completedAt })},${completedAt})`;
-                yield* sql`INSERT INTO orchestration_v2_projection_turn_items VALUES (${itemId},'fixture-thread','run-1','node-1','provider-thread-1','turn-1',NULL,1,${item.type},${status},${completedAt},${encodeEvidence(item)})`;
+                yield* validateNodeFixture(encodeEvidence(rootNode));
+                yield* sql`INSERT INTO orchestration_v2_projection_nodes VALUES (${rootNode.id},'fixture-thread','run-1',NULL,'node-1','root_turn',${status},NULL,NULL,${rootNode.startedAt},${completedAt},${encodeEvidence(rootNode)})`;
+                if (kind === "output") {
+                  yield* validateNodeFixture(encodeEvidence(messageNode));
+                  yield* validateItemFixture(encodeEvidence(item));
+                  yield* sql`INSERT INTO orchestration_v2_projection_nodes VALUES (${nodeId},'fixture-thread','run-1','node-1','node-1','assistant_message','completed','provider-thread-1','turn-1',${turn.startedAt},${completedAt},${encodeEvidence(messageNode)})`;
+                }
+                yield* sql`INSERT INTO orchestration_v2_projection_turn_items VALUES (${itemId},'fixture-thread','run-1',${nodeId},'provider-thread-1','turn-1',NULL,1,${item.type},${status},${completedAt},${encodeEvidence(item)})`;
               }),
             );
             expect(text()).toContain("SQLite persisted goal");
