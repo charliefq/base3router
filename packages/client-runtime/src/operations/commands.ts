@@ -4,6 +4,8 @@ import {
   type TaskContractReviewInput,
   type TaskContractReviewReference,
   type TaskContractBrake,
+  type TaskContractFields,
+  type AgentsTaskCreationReview,
   CommandId,
   CheckpointId,
   CheckpointScopeId,
@@ -77,6 +79,9 @@ export interface CreateThreadInput extends CommandMetadata {
   readonly interactionMode: ProviderInteractionMode;
   readonly branch: string | null;
   readonly worktreePath: string | null;
+  readonly taskGovernance?: "chat" | "required" | undefined;
+  readonly taskContract?: TaskContractFields | undefined;
+  readonly taskCreationReview?: AgentsTaskCreationReview;
 }
 
 export interface ThreadCommandInput extends CommandMetadata {
@@ -273,6 +278,9 @@ const dispatch = (command: OrchestrationV2Command) =>
 const getProjection = (threadId: ThreadId) =>
   request(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, { threadId });
 
+export const readThreadProjection = (input: { readonly threadId: ThreadId }) =>
+  getProjection(input.threadId);
+
 const supportsServerResolvedCommandContext = Effect.fn(
   "EnvironmentCommands.supportsServerResolvedCommandContext",
 )(function* () {
@@ -407,6 +415,11 @@ export const createThread = Effect.fn("EnvironmentCommands.createThread")(functi
     interactionMode: input.interactionMode,
     branch: input.branch,
     worktreePath: input.worktreePath,
+    ...(input.taskGovernance === undefined ? {} : { taskGovernance: input.taskGovernance }),
+    ...(input.taskContract === undefined ? {} : { taskContract: input.taskContract }),
+    ...(input.taskCreationReview === undefined
+      ? {}
+      : { taskCreationReview: input.taskCreationReview }),
   });
 });
 

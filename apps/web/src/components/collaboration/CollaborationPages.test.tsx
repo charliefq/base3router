@@ -18,6 +18,12 @@ import {
   CollaborationTask,
   CollaborationSnapshot,
   type CollaborationCommand,
+  OrchestrationV2Command,
+  type OrchestrationV2ThreadProjection,
+  type OrchestrationV2DispatchCommandResult,
+  type CollaborationCommandResult,
+  type TaskContractReviewInput,
+  type TaskContractReviewState,
 } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -50,6 +56,7 @@ const state = vi.hoisted(() => ({
   navigate: vi.fn(),
   reviewRead: vi.fn(),
   reviewDecide: vi.fn(),
+  readProjection: vi.fn(),
 }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: string) => (atom === "environment" ? state.environmentId : state.providers),
@@ -63,6 +70,7 @@ vi.mock("../../state/threads", () => ({
     create: "create",
     readTaskReview: "review-read",
     decideTaskContract: "review-decide",
+    readProjection: "read-projection",
   },
 }));
 vi.mock("../../state/use-atom-command", () => ({
@@ -71,7 +79,9 @@ vi.mock("../../state/use-atom-command", () => ({
       ? state.reviewRead
       : command === "review-decide"
         ? state.reviewDecide
-        : state.create,
+        : command === "read-projection"
+          ? state.readProjection
+          : state.create,
 }));
 vi.mock("../../env", () => ({ isElectron: false }));
 vi.mock("../../lib/utils", () => {
@@ -115,9 +125,12 @@ vi.mock("../ui/alert-dialog", () => ({
   AlertDialogHeader: "div",
   AlertDialogFooter: "div",
   AlertDialogTitle: "h2",
-  AlertDialogDescription: "p",
+  AlertDialogDescription: ({ children }: { children: import("react").ReactNode }) => (
+    <div>{children}</div>
+  ),
 }));
 vi.mock("../ui/button", () => ({ Button: "button" }));
+vi.mock("../ui/input", () => ({ Input: "input" }));
 vi.mock("../ui/textarea", () => ({ Textarea: "textarea" }));
 vi.mock("../ui/sidebar", () => ({ SidebarInset: "main" }));
 vi.mock("../WorkspacePageHeader", () => ({ WorkspacePageHeader: "header" }));
@@ -157,6 +170,10 @@ const click = async () => {
   });
 };
 const encodeEvidence = SchemaForFixture.encodeSync(
+  SchemaForFixture.fromJsonString(SchemaForFixture.Unknown),
+);
+const decodeCreationReviewCommand = SchemaForFixture.decodeUnknownSync(OrchestrationV2Command);
+const decodeCreationStorage = SchemaForFixture.decodeUnknownSync(
   SchemaForFixture.fromJsonString(SchemaForFixture.Unknown),
 );
 const validateNodeFixture = SchemaForFixture.decodeUnknownEffect(
@@ -212,6 +229,7 @@ beforeEach(() => {
   state.navigate.mockReset();
   state.reviewRead.mockReset();
   state.reviewDecide.mockReset();
+  state.readProjection.mockReset();
 });
 afterEach(async () => {
   await act(async () => renderer?.unmount());
@@ -1661,6 +1679,555 @@ it.each([
   ).toBe(reason === "invalid_thread_link");
   expect(state.bind).not.toHaveBeenCalled();
   expect(state.recover).not.toHaveBeenCalled();
+});
+
+const loadAgentsCreationFixture = async () =>
+  (await import(
+    /* @vite-ignore */ new URL(
+      "../../../../server/src/collaboration/testkit/agentsTaskCreationFixture.ts",
+      import.meta.url,
+    ).href
+  )) as {
+    withAgentsTaskCreationFixture: (
+      check: (fixture: {
+        dispatch: (
+          command: OrchestrationV2Command,
+        ) => EffectForFixture.Effect<OrchestrationV2DispatchCommandResult, Error>;
+        readSnapshot: () => EffectForFixture.Effect<CollaborationSnapshot, Error>;
+        readReview: (
+          input: TaskContractReviewInput,
+        ) => EffectForFixture.Effect<TaskContractReviewState, Error>;
+        orchestrator: {
+          getThreadProjection: (
+            id: string,
+          ) => EffectForFixture.Effect<OrchestrationV2ThreadProjection, Error>;
+        };
+        openCanonical: () => EffectForFixture.Effect<CollaborationCommandResult, Error>;
+        noExecution: () => EffectForFixture.Effect<
+          { runs: number; grants: number; outbox: number; messages: number },
+          Error
+        >;
+      }) => EffectForFixture.Effect<void, Error>,
+    ) => EffectForFixture.Effect<void, Error>;
+  };
+const creationStorage = () => {
+  const records = new Map<string, string>();
+  vi.stubGlobal("sessionStorage", {
+    getItem: (key: string) => records.get(key) ?? null,
+    setItem: (key: string, value: string) => records.set(key, value),
+  });
+  return records;
+};
+const creationButton = (name: string) =>
+  renderer.root.findAllByType("button").find((b) => b.children.includes(name));
+const creationClick = async (name: string, repeat = false) => {
+  await act(async () => {
+    const click = creationButton(name)!.props.onClick;
+    click();
+    if (repeat) click();
+  });
+};
+const fillCreation = async (title = "Reviewed parser task") => {
+  for (const [label, value] of Object.entries({
+    "Task title": title,
+    Goal: "Fix parser",
+    Redirect: "Ask before expanding scope",
+    Acceptance: "Parser regression passes",
+    "Provider start limit": "2",
+    "Stop conditions": "Scope changed",
+    "Optional token cap": "900",
+    "Optional reported cost cap (USD)": "0.1",
+    "Optional UTC deadline": "2026-10-14T00:00:00Z",
+  }))
+    await act(async () =>
+      renderer.root.findByProps({ "aria-label": label }).props.onChange({ target: { value } }),
+    );
+};
+
+it("creates two actual owned tasks from Agents, reloads exact enrollment and uses separate paused revision controls", async () => {
+  creationStorage();
+  const module = await loadAgentsCreationFixture();
+  await EffectForFixture.runPromise(
+    module.withAgentsTaskCreationFixture((f) =>
+      EffectForFixture.promise(async () => {
+        const canonical = await EffectForFixture.runPromise(f.openCanonical());
+        const canonicalId = canonical.snapshot.agents.find((a) => a.id === "codex")!.threadId;
+        state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+        state.create.mockImplementation(async ({ input }: { input: OrchestrationV2Command }) => ({
+          _tag: "Success",
+          value: await EffectForFixture.runPromise(f.dispatch(input)),
+        }));
+        state.readProjection.mockImplementation(
+          async ({ input }: { input: { threadId: string } }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(
+              f.orchestrator.getThreadProjection(input.threadId),
+            ),
+          }),
+        );
+        await mount();
+        const created: string[] = [];
+        for (const title of ["Reviewed parser task", "Reviewed docs task"]) {
+          await creationClick("New task", true);
+          expect(creationButton("Open conversation")!.props.disabled).toBe(true);
+          await fillCreation(title);
+          await creationClick("Review new task", true);
+          expect(text()).toContain("environment-a");
+          expect(text()).toContain("fake-model");
+          expect(text()).toContain("approval-required/default");
+          await creationClick("Create task", true);
+          expect(text()).toContain("durably recorded");
+          const command = state.create.mock.calls.at(-1)![0].input as Extract<
+            OrchestrationV2Command,
+            { type: "thread.create" }
+          >;
+          created.push(command.threadId);
+          expect(command.taskContract?.brake).toEqual({
+            maxProviderStarts: 2,
+            stopConditions: "Scope changed",
+            maxTokens: 900,
+            maxCostUsd: 0.1,
+            deadlineAt: "2026-10-14T00:00:00Z",
+          });
+          await creationClick("Open created conversation");
+          expect(state.navigate).toHaveBeenLastCalledWith({
+            to: "/$environmentId/$threadId",
+            params: { environmentId: "environment-a", threadId: command.threadId },
+          });
+        }
+        expect(state.create).toHaveBeenCalledTimes(2);
+        expect(new Set(created).size).toBe(2);
+        const snapshot = await EffectForFixture.runPromise(f.readSnapshot());
+        expect(snapshot.tasks.filter((t) => created.includes(t.threadId!))).toHaveLength(2);
+        expect(snapshot.agents.find((a) => a.id === "codex")?.threadId).toBe(canonicalId);
+        state.reviewRead.mockImplementation(
+          async ({ input }: { input: TaskContractReviewInput }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(f.readReview(input)),
+          }),
+        );
+        state.reviewDecide.mockImplementation(
+          async ({
+            input,
+          }: {
+            input: {
+              action: "set" | "redirect" | "resume";
+              threadId: string;
+              revision?: number;
+              expectedRevision?: number;
+              goal?: string;
+              redirect?: string;
+              acceptance?: string;
+              brake?: unknown;
+              reviewTask: unknown;
+            };
+          }) => {
+            const command = decodeCreationReviewCommand({
+              ...input,
+              type: `thread.task-contract.${input.action}`,
+              commandId: CommandId.make(`creation-review:${state.reviewDecide.mock.calls.length}`),
+            });
+            return {
+              _tag: "Success",
+              value: await EffectForFixture.runPromise(f.dispatch(command)),
+            };
+          },
+        );
+        await act(async () => renderer.unmount());
+        await act(async () => {
+          renderer = create(<TasksPage />);
+        });
+        const card = () =>
+          renderer.root
+            .findAllByType("li")
+            .find((node) =>
+              node.findAllByType("h2").some((h) => h.children.includes("Reviewed parser task")),
+            )!;
+        await act(async () =>
+          card().findByProps({ "data-task-contract-redirect-action": "" }).props.onClick(),
+        );
+        await creationClick("Confirm decision");
+        await act(async () =>
+          card()
+            .findAllByType("button")
+            .find((b) => b.children.includes("Revise paused instructions"))!
+            .props.onClick(),
+        );
+        await act(async () =>
+          renderer.root
+            .findByProps({ "aria-label": "goal instruction" })
+            .props.onChange({ target: { value: "Reviewed revised parser" } }),
+        );
+        await creationClick("Preview instruction changes");
+        await creationClick("Save new revision");
+        expect(
+          (await EffectForFixture.runPromise(f.orchestrator.getThreadProjection(created[0]!)))
+            .thread.taskContractPhase,
+        ).toBe("redirected");
+        await act(async () =>
+          card().findByProps({ "data-task-contract-resume": "" }).props.onClick(),
+        );
+        await creationClick("Confirm decision");
+        const final = await EffectForFixture.runPromise(
+          f.orchestrator.getThreadProjection(created[0]!),
+        );
+        expect(final.thread.taskContract).toMatchObject({
+          revision: 2,
+          goal: "Reviewed revised parser",
+        });
+        expect(final.thread.taskContractPhase).toBe("active");
+        expect(await EffectForFixture.runPromise(f.noExecution())).toEqual({
+          runs: 0,
+          grants: 0,
+          outbox: 0,
+          messages: 0,
+        });
+      }),
+    ),
+  );
+}, 60_000);
+
+it.each([
+  "lost-response",
+  "lost-rejection",
+  "reconcile-before-failure",
+  "reconcile-before-rejection",
+  "unmount",
+  "environment-roundtrip",
+  "project-roundtrip",
+  "late-read-after-new-draft",
+  "recover-read-environment",
+  "recover-read-unmount",
+  "confirmed-reload",
+  "project-selector-reload",
+] as const)(
+  "recovers actual Agents creation identity without duplicate mutation across %s",
+  async (mode) => {
+    const storage = creationStorage();
+    const module = await loadAgentsCreationFixture();
+    await EffectForFixture.runPromise(
+      module.withAgentsTaskCreationFixture((f) =>
+        EffectForFixture.promise(async () => {
+          state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+          state.readProjection.mockImplementation(
+            async ({ input }: { input: { threadId: string } }) => ({
+              _tag: "Success",
+              value: await EffectForFixture.runPromise(
+                f.orchestrator.getThreadProjection(input.threadId),
+              ),
+            }),
+          );
+          const reply = deferred<void>();
+          state.create.mockImplementation(async ({ input }: { input: OrchestrationV2Command }) => {
+            const value = await EffectForFixture.runPromise(f.dispatch(input));
+            await reply.promise;
+            return mode === "late-read-after-new-draft"
+              ? { _tag: "Success", value }
+              : { _tag: "Failure", cause: "Lost committed reply" };
+          });
+          if (mode === "project-selector-reload")
+            state.projects = [
+              { id: "project-a", title: "A", environmentId: "environment-a" },
+              { id: "project-b", title: "B", environmentId: "environment-a" },
+            ];
+          await mount();
+          if (mode === "project-selector-reload") await select("project-a");
+          await creationClick("New task", true);
+          await fillCreation();
+          await creationClick("Review new task", true);
+          await creationClick("Create task", true);
+          expect(state.create).toHaveBeenCalledTimes(1);
+          const command = state.create.mock.calls[0]![0].input as Extract<
+            OrchestrationV2Command,
+            { type: "thread.create" }
+          >;
+          expect(storage.size).toBe(1);
+          expect(decodeCreationStorage([...storage.values()][0]!)).toMatchObject({
+            command: { commandId: command.commandId },
+          });
+          expect(creationButton("New task")!.props.disabled).toBe(true);
+          expect(state.navigate).not.toHaveBeenCalled();
+          if (mode === "lost-response" || mode === "lost-rejection") {
+            await act(async () => {
+              if (mode === "lost-rejection") reply.reject(new Error("Lost response"));
+              else reply.resolve();
+            });
+            expect(text()).toContain("uncertain");
+          }
+          if (mode === "unmount" || mode === "project-selector-reload") {
+            await act(async () => renderer.unmount());
+            await mount();
+            expect(text()).toContain("uncertain");
+            if (mode === "project-selector-reload") {
+              expect(renderer.root.findByType("select").props.disabled).toBe(false);
+              await select("project-a");
+            }
+          }
+          if (mode === "environment-roundtrip") {
+            state.environmentId = "environment-b";
+            await act(async () => renderer.update(<AgentsPage />));
+            expect(creationButton("Recover task creation")!.props.disabled).toBe(true);
+            expect(text()).toContain("Return to the original environment");
+            state.environmentId = "environment-a";
+            await act(async () => renderer.update(<AgentsPage />));
+          }
+          if (mode === "project-roundtrip") {
+            state.projects = [{ id: "project-b", title: "B", environmentId: "environment-a" }];
+            await act(async () => renderer.update(<AgentsPage />));
+            expect(creationButton("Recover task creation")!.props.disabled).toBe(true);
+            state.projects = [{ id: "project-a", title: "A", environmentId: "environment-a" }];
+            await act(async () => renderer.update(<AgentsPage />));
+          }
+          if (mode.startsWith("recover-read-")) {
+            const pendingRead = deferred<{
+              _tag: "Success";
+              value: OrchestrationV2ThreadProjection;
+            }>();
+            state.readProjection.mockImplementationOnce(() => pendingRead.promise);
+            await creationClick("Recover task creation", true);
+            if (mode === "recover-read-unmount") {
+              await act(async () => renderer.unmount());
+              await mount();
+            } else {
+              state.environmentId = "environment-b";
+              await act(async () => renderer.update(<AgentsPage />));
+              state.environmentId = "environment-a";
+              await act(async () => renderer.update(<AgentsPage />));
+            }
+            expect(creationButton("Recover task creation")!.props.disabled).toBe(false);
+            await creationClick("Recover task creation");
+            await act(async () =>
+              pendingRead.resolve({
+                _tag: "Success",
+                value: await EffectForFixture.runPromise(
+                  f.orchestrator.getThreadProjection(command.threadId),
+                ),
+              }),
+            );
+          } else await creationClick("Recover task creation", true);
+          expect(text()).toContain("durably recorded");
+          expect(decodeCreationStorage([...storage.values()][0]!)).toMatchObject({
+            status: "confirmed",
+          });
+          if (mode === "confirmed-reload") {
+            await act(async () => renderer.unmount());
+            await mount();
+            expect(creationButton("New task")!.props.disabled).toBe(true);
+            expect(creationButton("Open created conversation")).toBeUndefined();
+            await creationClick("Recover task creation");
+            expect(text()).toContain("durably recorded");
+          }
+          expect(state.create).toHaveBeenCalledTimes(1);
+          if (mode === "late-read-after-new-draft") {
+            await creationClick("New task");
+            await fillCreation("New independent draft");
+          }
+          if (!mode.startsWith("lost-")) {
+            await act(async () => {
+              if (mode === "reconcile-before-rejection") reply.reject(new Error("Late failure"));
+              else reply.resolve();
+            });
+            expect(text()).not.toContain("outcome is uncertain");
+            expect(state.create).toHaveBeenCalledTimes(1);
+            if (mode === "late-read-after-new-draft") {
+              expect(renderer.root.findByProps({ "aria-label": "Task title" }).props.value).toBe(
+                "New independent draft",
+              );
+              expect(creationButton("Open conversation")!.props.disabled).toBe(true);
+              await creationClick("Cancel new task");
+            }
+          }
+          await creationClick("Open created conversation");
+          expect(state.navigate).toHaveBeenCalledWith({
+            to: "/$environmentId/$threadId",
+            params: { environmentId: "environment-a", threadId: command.threadId },
+          });
+          expect(
+            (await EffectForFixture.runPromise(f.readSnapshot())).tasks.filter(
+              (t) => t.threadId === command.threadId,
+            ),
+          ).toHaveLength(1);
+          expect(await EffectForFixture.runPromise(f.noExecution())).toEqual({
+            runs: 0,
+            grants: 0,
+            outbox: 0,
+            messages: 0,
+          });
+        }),
+      ),
+    );
+  },
+  60_000,
+);
+
+it.each([
+  "cancel",
+  "close",
+  "invalid",
+  "stale-provider",
+  "stale-project",
+  "storage-failure",
+  "old-callback",
+  "old-confirmation",
+] as const)(
+  "does not create an Agents task for %s",
+  async (mode) => {
+    creationStorage();
+    const module = await loadAgentsCreationFixture();
+    await EffectForFixture.runPromise(
+      module.withAgentsTaskCreationFixture((f) =>
+        EffectForFixture.promise(async () => {
+          state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+          state.create.mockImplementation(async ({ input }: { input: OrchestrationV2Command }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(f.dispatch(input)),
+          }));
+          await mount();
+          const staleNew = creationButton("New task")!.props.onClick;
+          await creationClick("New task", true);
+          const oldCancel = creationButton("Cancel new task")!.props.onClick;
+          if (mode === "invalid") {
+            expect(creationButton("Review new task")!.props.disabled).toBe(true);
+            await fillCreation();
+            for (const [label, value] of [
+              ["Provider start limit", "0"],
+              ["Optional token cap", "2.5"],
+              ["Optional reported cost cap (USD)", "-1"],
+              ["Optional UTC deadline", "later"],
+            ]) {
+              await act(async () =>
+                renderer.root
+                  .findByProps({ "aria-label": label })
+                  .props.onChange({ target: { value } }),
+              );
+              expect(creationButton("Review new task")!.props.disabled).toBe(true);
+            }
+            await creationClick("Cancel new task");
+          } else if (mode === "old-callback") {
+            await creationClick("Cancel new task");
+            await creationClick("New task");
+            await fillCreation("Preserve newer draft");
+            await act(async () => oldCancel());
+            expect(renderer.root.findByProps({ "aria-label": "Task title" }).props.value).toBe(
+              "Preserve newer draft",
+            );
+            expect(creationButton("Open conversation")!.props.disabled).toBe(true);
+            await creationClick("Cancel new task");
+          } else {
+            await fillCreation();
+            await creationClick("Review new task");
+            const oldConfirm = creationButton("Create task")!.props.onClick;
+            if (mode === "old-confirmation") {
+              const oldClose = renderer.root.findByProps({ "data-review-dialog": "" }).props
+                .onClose;
+              await creationClick("Back to task draft");
+              await fillCreation("Updated explicitly reviewed draft");
+              await creationClick("Review new task");
+              await act(async () => {
+                oldConfirm();
+                oldClose();
+              });
+              expect(creationButton("Create task")).toBeDefined();
+              expect(text()).toContain("Updated explicitly reviewed draft");
+              await creationClick("Back to task draft");
+              await creationClick("Cancel new task");
+            }
+            if (mode === "cancel") {
+              await creationClick("Back to task draft");
+              await creationClick("Cancel new task");
+            }
+            if (mode === "close") {
+              await act(async () =>
+                renderer.root.findByProps({ "data-review-dialog": "" }).props.onClose(),
+              );
+              expect(renderer.root.findByProps({ "aria-label": "Task title" }).props.value).toBe(
+                "Reviewed parser task",
+              );
+              await creationClick("Cancel new task");
+            }
+            if (mode === "stale-provider") {
+              state.providers = state.providers.map((p) => ({ ...p, enabled: false }));
+              await act(async () => renderer.update(<AgentsPage />));
+              await act(async () => oldConfirm());
+            }
+            if (mode === "stale-project") {
+              state.projects = [{ id: "project-b", title: "B", environmentId: "environment-a" }];
+              await act(async () => renderer.update(<AgentsPage />));
+              await act(async () => {
+                oldConfirm();
+                staleNew();
+              });
+            }
+            if (mode === "storage-failure") {
+              vi.stubGlobal("sessionStorage", {
+                getItem: () => null,
+                setItem: () => {
+                  throw new Error("Fixture storage failed");
+                },
+              });
+              await creationClick("Create task");
+              expect(text()).toContain("No task was sent");
+              await creationClick("Cancel new task");
+            }
+          }
+          expect(state.create).not.toHaveBeenCalled();
+          expect((await EffectForFixture.runPromise(f.readSnapshot())).tasks).toHaveLength(0);
+          expect(state.navigate).not.toHaveBeenCalled();
+          expect(await EffectForFixture.runPromise(f.noExecution())).toEqual({
+            runs: 0,
+            grants: 0,
+            outbox: 0,
+            messages: 0,
+          });
+        }),
+      ),
+    );
+  },
+  60_000,
+);
+
+it("offers New task alongside canonical conversation on an actual governed Agents snapshot", async () => {
+  const module = (await import(
+    /* @vite-ignore */ new URL(
+      "../../../../server/src/collaboration/testkit/governedEnrollmentFixture.ts",
+      import.meta.url,
+    ).href
+  )) as {
+    withGovernedEnrollmentFixture: (
+      check: (fixture: {
+        readSnapshot: () => EffectForFixture.Effect<CollaborationSnapshot, Error>;
+        noExecution: () => EffectForFixture.Effect<
+          { runs: number; grants: number; outbox: number },
+          Error
+        >;
+      }) => EffectForFixture.Effect<void, Error>,
+    ) => EffectForFixture.Effect<void, Error>;
+  };
+  await EffectForFixture.runPromise(
+    module.withGovernedEnrollmentFixture((fixture) =>
+      EffectForFixture.promise(async () => {
+        state.load.mockImplementation(() => EffectForFixture.runPromise(fixture.readSnapshot()));
+        await act(async () => {
+          renderer = create(<AgentsPage />);
+        });
+        const provider = renderer.root.findByProps({ "data-agent-id": "codex" });
+        expect(
+          provider
+            .findAllByType("button")
+            .some((button) => button.children.includes("Open conversation")),
+        ).toBe(true);
+        expect(
+          provider.findAllByType("button").some((button) => button.children.includes("New task")),
+        ).toBe(true);
+        expect(state.create).not.toHaveBeenCalled();
+        expect(await EffectForFixture.runPromise(fixture.noExecution())).toEqual({
+          runs: 0,
+          grants: 0,
+          outbox: 0,
+        });
+      }),
+    ),
+  );
 });
 
 it("renders two normal governed creations, refreshes/reopens and navigates each exact task without dispatch", async () => {

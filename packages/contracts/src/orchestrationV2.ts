@@ -9,6 +9,7 @@ import {
   CheckpointRef,
   CheckpointScopeId,
   CommandId,
+  EnvironmentId,
   ContextHandoffId,
   ContextTransferId,
   EventId,
@@ -90,6 +91,13 @@ export const OrchestrationV2CreationSource = Schema.Literals([
   "server",
 ]);
 export type OrchestrationV2CreationSource = typeof OrchestrationV2CreationSource.Type;
+
+export const AgentsTaskCreationReview = Schema.Struct({
+  environmentId: EnvironmentId,
+  projectId: ProjectId,
+  modelSelection: ModelSelection,
+});
+export type AgentsTaskCreationReview = typeof AgentsTaskCreationReview.Type;
 
 export const OrchestrationV2ThreadHistoryOrigin = Schema.Literals(["native", "v1_import"]);
 export type OrchestrationV2ThreadHistoryOrigin = typeof OrchestrationV2ThreadHistoryOrigin.Type;
@@ -449,6 +457,15 @@ export const OrchestrationV2AppThread = Schema.Struct({
   taskContractPhase: Schema.optional(TaskContractPhase),
   taskAcceptedRevision: Schema.optional(Schema.NullOr(PositiveInt)),
   taskDecisions: Schema.optional(Schema.Array(TaskContractDecision)),
+  agentsTaskCreation: Schema.optional(
+    Schema.Struct({
+      commandId: CommandId,
+      actorId: TrimmedNonEmptyString,
+      review: AgentsTaskCreationReview,
+      title: TrimmedNonEmptyString,
+      taskContract: TaskContractFields,
+    }),
+  ),
 });
 export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
 
@@ -2481,7 +2498,15 @@ export const OrchestrationV2Command = Schema.Union([
     ),
     taskGovernance: Schema.optional(Schema.Literals(["chat", "required"])),
     taskContract: Schema.optional(TaskContractFields),
-  }),
+    taskCreationReview: Schema.optionalKey(AgentsTaskCreationReview),
+  }).check(
+    Schema.makeFilter(
+      (command) =>
+        command.taskCreationReview === undefined ||
+        (command.taskGovernance === "required" && command.taskContract !== undefined) ||
+        "Reviewed Agents creation requires governance and a complete contract.",
+    ),
+  ),
   Schema.Struct({
     type: Schema.Literal("thread.archive"),
     commandId: CommandId,

@@ -43,6 +43,7 @@ import {
   archiveThread,
   cancelQueuedRun,
   createProject,
+  createThread,
   dismissThreadUserInput,
   editQueuedRun,
   forkThreadFromRun,
@@ -158,6 +159,47 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
 });
 
 describe("V2 environment commands", () => {
+  it.effect("forwards a reviewed governed root contract with stable creation identity", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      const input = {
+        commandId: CommandId.make("agents-create-command"),
+        threadId: ThreadId.make("agents-create-thread"),
+        projectId: ProjectId.make("project-1"),
+        title: "Parser task",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "fake-model" },
+        runtimeMode: "approval-required" as const,
+        interactionMode: "default" as const,
+        branch: null,
+        worktreePath: null,
+        taskGovernance: "required" as const,
+        taskContract: {
+          goal: "Fix parser",
+          redirect: "Ask before expanding scope",
+          acceptance: "Parser regression passes",
+          brake: {
+            maxProviderStarts: 2,
+            stopConditions: "Scope changed",
+            maxTokens: 900,
+            maxCostUsd: 0.1,
+            deadlineAt: "2026-10-14T00:00:00Z",
+          },
+        },
+        taskCreationReview: {
+          environmentId: EnvironmentId.make("environment-1"),
+          projectId: ProjectId.make("project-1"),
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "fake-model" },
+        },
+      };
+      yield* createThread(input).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      );
+      expect(commands).toEqual([
+        { type: "thread.create", createdBy: "user", creationSource: "web", ...input },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
   it.effect("routes projects through the event-sourced project transport", () =>
     Effect.gen(function* () {
       const projects: ProjectMutation[] = [];

@@ -16,6 +16,24 @@ explicit choice. A ready provider opens or reuses a persisted orchestration
 thread in that project and the existing composer. Tasks returns to that same
 thread. Grokbot stays `NOT_CONNECTED` and does not open a chat.
 
+A ready internal provider also offers **New task** for the selected project.
+Supply a title, Goal, Redirect, Acceptance and an explicit provider-start limit
+and stop conditions. Token, reported-cost and UTC deadline bounds are optional;
+omitting them does not mean unlimited budget. Review the complete contract and
+environment/project/provider/model before confirming. Creation records one
+distinct owned task with revision 1 and approval-required permissions; it sends
+no message, starts no provider work and grants no execution. Open its confirmed
+conversation or find the same task in Tasks. Pausing, revising instructions and
+resuming remain separate decisions.
+
+If a response is lost, **Recover task creation** reads the original identity;
+it does not resend creation or allocate another task. An unresolved attempt is
+retained in this browser session across navigation and reload. Return to its
+original environment and project to reconcile. If no owned persisted task can
+be confirmed, creation stays blocked: absence alone does not prove the original
+request could not commit. Restoring recovery storage or obtaining authoritative
+receipt evidence is required before a new identity can be allocated.
+
 The HTTP command is sealed with the authenticated principal. Client `actor`
 and `fromAgentId` are discarded. The project must exist, and a thread bind
 must name a thread already stored in that project. The provider identity is

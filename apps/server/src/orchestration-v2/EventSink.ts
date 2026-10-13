@@ -25,6 +25,11 @@ import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import {
+  validateReviewedCreate,
+  verifyReviewedCreateReplay,
+  reviewedCreateMatchesThread,
+} from "../collaboration/governedCreation.ts";
 
 import * as OwnedChat from "../collaboration/ownedChat.ts";
 import {
@@ -147,6 +152,7 @@ export interface EventSinkV2Shape {
     readonly ordinaryRootOwner?: string;
     readonly contractSetActor?: string;
     readonly reviewedSet?: Extract<OrchestrationV2Command, { type: "thread.task-contract.set" }>;
+    readonly creationCommand?: Extract<OrchestrationV2Command, { type: "thread.create" }>;
     readonly taskContractDecision?: {
       readonly action: TaskContractReviewAction;
       readonly revision: number;
@@ -588,6 +594,18 @@ const baseLayer: Layer.Layer<
                 });
             }
             if (existing.receipt.commandType === "thread.create") {
+              if (input.creationCommand !== undefined)
+                yield* verifyReviewedCreateReplay(sql, input.creationCommand);
+              else {
+                const original = existing.storedEvents.find(
+                  (stored) => stored.event.type === "thread.created",
+                );
+                if (
+                  original?.event.type === "thread.created" &&
+                  original.event.payload.agentsTaskCreation !== undefined
+                )
+                  return yield* refuse();
+              }
               const rows = yield* sql<{
                 payload_json: string;
               }>`SELECT payload_json FROM collaboration_commands WHERE command_id=${`task:enroll:${existing.receipt.commandId}`} LIMIT 1`;
@@ -639,6 +657,39 @@ const baseLayer: Layer.Layer<
               });
           }
           const context = yield* PolicyExecutionContext;
+          if (input.commandType === "thread.create") {
+            const created = input.events.find((event) => event.type === "thread.created");
+            const reviewed = input.creationCommand?.taskCreationReview !== undefined;
+            if (
+              created?.type === "thread.created" &&
+              (reviewed || created.payload.agentsTaskCreation !== undefined)
+            ) {
+              if (
+                !input.creationCommand ||
+                input.creationCommand.threadId !== input.threadId ||
+                input.creationCommand.commandId !== input.commandId
+              )
+                return yield* new EventSinkWriteError({
+                  commandId: input.commandId,
+                  eventCount: input.events.length,
+                });
+              const proof = yield* validateReviewedCreate(sql, input.creationCommand);
+              if (
+                proof === undefined ||
+                input.events.length !== 1 ||
+                input.effects.length !== 0 ||
+                !reviewedCreateMatchesThread(input.creationCommand, created.payload) ||
+                context.kind !== "session" ||
+                input.governedTaskOwner !== context.actorId ||
+                created.payload.agentsTaskCreation?.actorId !== proof.actorId ||
+                created.payload.agentsTaskCreation?.commandId !== proof.commandId
+              )
+                return yield* new EventSinkWriteError({
+                  commandId: input.commandId,
+                  eventCount: input.events.length,
+                });
+            }
+          }
           if (
             input.contractSetActor !== undefined &&
             (input.commandType !== "thread.task-contract.set" ||

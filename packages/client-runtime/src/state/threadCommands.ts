@@ -80,6 +80,7 @@ import {
   snoozeThread,
   decideTaskContract,
   readTaskReview,
+  readThreadProjection,
   readTaskUsage,
   startThreadTurn,
   stopThreadSession,
@@ -152,6 +153,12 @@ export function createThreadEnvironmentAtoms<R, E>(
       execute: (input: CreateThreadInput) => createThread(input),
       scheduler,
       concurrency,
+    }),
+    readProjection: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:read-projection",
+      execute: readThreadProjection,
+      scheduler,
+      concurrency: { mode: "parallel" },
     }),
     delete: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:delete",
