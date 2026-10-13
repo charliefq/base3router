@@ -1,8 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
-  isProviderAvailable,
-  isProviderTextGenerationCapable,
-  type CollaborationAgent,
   type CollaborationCommand,
   type CollaborationCommandResult,
   type CollaborationOpenThreadInput,
@@ -10,11 +7,12 @@ import {
   type CollaborationTask,
   type CollaborationTaskRoutingReadout,
   type EnvironmentId,
-  type ServerProvider,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
+
+import { buildAgentDirectory, providerExecutable } from "./agentDirectory";
 
 import { PrimaryEnvironmentHttpClient } from "../../environments/primary/httpClient";
 import { isElectron } from "../../env";
@@ -232,24 +230,6 @@ function useCollaboration(environmentId: EnvironmentId | null) {
   };
 }
 
-const providerExecutable = (provider: ServerProvider) =>
-  provider.installed &&
-  provider.enabled &&
-  provider.status === "ready" &&
-  isProviderAvailable(provider) &&
-  isProviderTextGenerationCapable(provider) &&
-  provider.models.length > 0;
-
-function connectionLabel(
-  agent: CollaborationAgent | undefined,
-  provider: ServerProvider | undefined,
-) {
-  if (!provider && agent?.origin === "external") return "NOT_CONNECTED";
-  if (!provider) return agent?.availability ?? "unknown";
-  if (!providerExecutable(provider)) return provider.status;
-  return agent?.availability ?? "unknown";
-}
-
 export function AgentsPage() {
   const navigate = useNavigate();
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
@@ -267,13 +247,13 @@ export function AgentsPage() {
   const selectedProject =
     projects.length === 1 ? projects[0] : projects.find((project) => project.id === projectId);
   const selectedProjectId = selectedProject?.id;
-  const context = useRef({ environmentId, projectId: selectedProjectId, mounted: true });
+  const context = useRef({ environmentId, projectId: selectedProjectId, mounted: true, providers });
   useLayoutEffect(() => {
-    context.current = { environmentId, projectId: selectedProjectId, mounted: true };
+    context.current = { environmentId, projectId: selectedProjectId, mounted: true, providers };
     return () => {
       context.current.mounted = false;
     };
-  }, [context, environmentId, selectedProjectId]);
+  }, [context, environmentId, selectedProjectId, providers]);
 
   const openThread = (threadId: string) => {
     if (!environmentId) return;
@@ -304,7 +284,7 @@ export function AgentsPage() {
       (agent) => agent.id === agentId && agent.projectId === selectedProject.id,
     );
     if (agentId === "grokbot" || bound?.origin === "external") return;
-    const provider = providers.find((item) => item.instanceId === agentId);
+    const provider = context.current.providers.find((item) => item.instanceId === agentId);
     if (!provider || !providerExecutable(provider)) return;
     openingRef.current = true;
     setOpening(true);
@@ -327,7 +307,10 @@ export function AgentsPage() {
       if (
         context.current.mounted &&
         context.current.environmentId === environmentId &&
-        context.current.projectId === selectedProject.id
+        context.current.projectId === selectedProject.id &&
+        context.current.providers.some(
+          (item) => item.instanceId === agentId && providerExecutable(item),
+        )
       )
         openThread(threadId);
     } catch {
@@ -340,6 +323,11 @@ export function AgentsPage() {
     }
   };
 
+  const directory = buildAgentDirectory({
+    environmentId,
+    projectId: selectedProjectId ?? null,
+    source: { environmentId, providers, snapshot },
+  });
   const grokbot = snapshot?.agents.find((agent) => agent.id === "grokbot");
   const visibleNotice =
     notice?.environmentId === environmentId && notice.projectId === selectedProjectId
@@ -434,7 +422,7 @@ export function AgentsPage() {
                         {grokbot.origin} · {grokbot.role}
                       </p>
                     </div>
-                    <Badge variant="secondary">{connectionLabel(grokbot, undefined)}</Badge>
+                    <Badge variant="secondary">NOT_CONNECTED</Badge>
                   </div>
                   <div className="mt-4 space-y-3 text-sm leading-relaxed">
                     <p className="text-muted-foreground">Availability: {grokbot.availability}</p>
@@ -463,61 +451,61 @@ export function AgentsPage() {
                   </div>
                 </li>
               ) : null}
-              {providers.map((provider) => {
-                const bound = snapshot?.agents.find(
-                  (agent) =>
-                    agent.id === provider.instanceId && agent.projectId === selectedProjectId,
-                );
-                const ready = providerExecutable(provider);
-                const tasks =
-                  snapshot?.tasks.filter(
-                    (task) =>
-                      task.state !== "completed" &&
-                      task.projectId === selectedProjectId &&
-                      (task.assigneeAgentId === provider.instanceId ||
-                        task.ownerAgentId === provider.instanceId),
-                  ) ?? [];
+              {directory.map((entry) => {
+                const { provider, saved: bound, tasks } = entry;
+                const ready = entry.readiness === "ready";
                 return (
                   <li
-                    key={provider.instanceId}
+                    key={entry.id}
+                    data-agent-id={entry.id}
                     className="min-w-0 rounded-xl border border-border/60 bg-card/40 p-5 shadow-xs/5"
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0 space-y-1">
-                        <h2 className="wrap-anywhere text-base font-medium">
-                          {provider.displayName ?? provider.driver}
-                        </h2>
+                        <h2 className="wrap-anywhere text-base font-medium">{entry.displayName}</h2>
                         <p className="text-xs text-muted-foreground">internal · provider</p>
                       </div>
-                      <Badge variant="secondary">{connectionLabel(bound, provider)}</Badge>
+                      <Badge variant="secondary">
+                        {ready ? "Provider ready" : "Provider unavailable"}
+                      </Badge>
                     </div>
                     <div className="mt-4 space-y-3 text-sm leading-relaxed">
                       <p className="text-muted-foreground">
-                        Availability: {bound?.availability ?? (ready ? "unknown" : "offline")}
+                        Provider readiness: {ready ? "ready" : "unavailable"}
                       </p>
+                      <p className="text-xs text-muted-foreground">
+                        Saved ledger availability: {bound?.availability ?? "not recorded"}. Ledger
+                        state does not confirm provider execution or owner acceptance.
+                      </p>
+                      {!provider ? (
+                        <p className="text-muted-foreground">
+                          Provider configuration is missing. The saved identity and task records
+                          remain available.
+                        </p>
+                      ) : null}
                       <p className="wrap-anywhere text-muted-foreground">
                         Capabilities:{" "}
                         {bound?.capabilities.join(", ") || "No advertised capabilities."}
                       </p>
                       <p className="wrap-anywhere">
                         {ready
-                          ? provider.models.map((model) => model.slug).join(", ") || "No model"
+                          ? provider?.models.map((model) => model.slug).join(", ") || "No model"
                           : "This provider is not ready. No conversation was fabricated."}
                       </p>
                       <div className="space-y-1 border-t border-border/50 pt-3">
-                        <h3 className="text-xs font-medium text-muted-foreground">Current tasks</h3>
+                        <h3 className="text-xs font-medium text-muted-foreground">Task ledger</h3>
                         {tasks.length ? (
                           <ul className="space-y-1">
                             {tasks.map((task) => (
                               <li key={`${task.projectId}:${task.id}`} className="wrap-anywhere">
-                                {task.title}
+                                {task.title} — ledger {task.state}
                               </li>
                             ))}
                           </ul>
                         ) : (
                           <p className="text-muted-foreground">
                             {selectedProject
-                              ? "No open tasks."
+                              ? "No recorded tasks."
                               : "Select a project to view its tasks."}
                           </p>
                         )}
@@ -525,11 +513,11 @@ export function AgentsPage() {
                       <Button
                         disabled={opening || pending || !snapshot || !ready || !selectedProject}
                         onClick={() => {
-                          void openAgent(provider.instanceId);
+                          void openAgent(entry.id);
                         }}
                         size="sm"
                         variant="outline"
-                        aria-label={`Open ${provider.displayName ?? provider.driver} conversation`}
+                        aria-label={`Open ${entry.displayName} conversation`}
                       >
                         Open conversation
                       </Button>

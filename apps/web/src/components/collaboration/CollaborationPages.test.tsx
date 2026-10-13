@@ -136,7 +136,9 @@ const bindResult = (command: CollaborationCommand) => {
   };
   return { outcome: "applied", snapshot: state.snapshot, gateDecision: "DENY" };
 };
+const configuredProviders = state.providers;
 beforeEach(() => {
+  state.providers = [...configuredProviders];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   state.environmentId = "environment-a";
   state.projects = [{ id: "project-a", title: "A", environmentId: "environment-a" }];
@@ -319,6 +321,207 @@ describe("Agents server conversation recovery", () => {
     await select("project-b");
     await click();
     expect(state.recover).toHaveBeenCalledWith({ projectId: "project-b", providerId: "codex" });
+  });
+});
+
+const savedAgentFixture = (projectId = "project-a", displayName = "Saved Codex") => ({
+  id: "codex",
+  displayName,
+  origin: "internal" as const,
+  role: "provider",
+  capabilities: ["fixture"],
+  connection: "NOT_CONNECTED" as const,
+  availability: "working" as const,
+  projectId,
+  threadId: `thread:${projectId}`,
+});
+const agentTaskFixture = (
+  projectId = "project-a",
+  taskState: "running" | "completed" = "running",
+) =>
+  SchemaForFixture.decodeSync(CollaborationTask)({
+    id: `task:${projectId}:${taskState}`,
+    title: `${projectId} ${taskState} evidence`,
+    ownerAgentId: "owner",
+    assigneeAgentId: "codex",
+    projectId,
+    state: taskState,
+    waitReason: null,
+    acceptance: "Owner inspects",
+    threadId: `thread:${projectId}`,
+    correlationId: "fixture-message",
+    revision: 1,
+    pendingClarificationId: null,
+    gateDecision: "DENY",
+  });
+const agentCard = () => renderer.root.findByProps({ "data-agent-id": "codex" });
+const agentAction = () => agentCard().findByType("button");
+
+describe("Agents saved identity continuity", () => {
+  it("keeps a removed provider's saved card and tasks, then restores one card without writes", async () => {
+    state.snapshot = {
+      ...state.snapshot,
+      agents: [savedAgentFixture()],
+      tasks: [
+        agentTaskFixture(),
+        agentTaskFixture("project-a", "completed"),
+        agentTaskFixture("project-b"),
+      ],
+    };
+    await mount();
+    const priorAction = agentAction().props.onClick;
+    state.providers = [];
+    await act(async () => renderer.update(<AgentsPage />));
+    expect(text()).toContain("Saved Codex");
+    expect(text()).toContain("Provider configuration is missing");
+    expect(text()).toContain("project-a running evidence");
+    expect(text()).toContain("project-a completed evidence");
+    expect(text()).not.toContain("project-b running evidence");
+    expect(agentAction().props.disabled).toBe(true);
+    // Both the unavailable button and an earlier ready callback must use current readiness.
+    await act(async () => {
+      agentAction().props.onClick();
+      priorAction();
+    });
+    expect(state.recover).not.toHaveBeenCalled();
+    expect(state.bind).not.toHaveBeenCalled();
+    expect(state.create).not.toHaveBeenCalled();
+    expect(state.navigate).not.toHaveBeenCalled();
+    state.providers = [...configuredProviders];
+    await act(async () => renderer.update(<AgentsPage />));
+    expect(renderer.root.findAllByProps({ "data-agent-id": "codex" })).toHaveLength(1);
+    expect(text()).toContain("Saved Codex");
+    expect(text()).toContain("Provider ready");
+    expect(text()).not.toContain("Provider configuration is missing");
+    expect(agentAction().props.disabled).toBe(false);
+    expect(state.recover).not.toHaveBeenCalled();
+  });
+
+  it("does not navigate an in-flight recovery after the provider becomes unavailable", async () => {
+    state.snapshot = {
+      ...state.snapshot,
+      agents: [savedAgentFixture()],
+      tasks: [agentTaskFixture()],
+    };
+    const response = deferred<ReturnType<typeof bindResult>>();
+    state.recover.mockReturnValueOnce(response.promise);
+    await mount();
+    await act(async () => agentAction().props.onClick());
+    expect(state.recover).toHaveBeenCalledTimes(1);
+    state.providers = [];
+    await act(async () => renderer.update(<AgentsPage />));
+    await act(async () =>
+      response.resolve(
+        bindResult({
+          type: "thread.bind",
+          commandId: "server",
+          projectId: "project-a",
+          threadId: "recovered",
+        }),
+      ),
+    );
+    expect(state.navigate).not.toHaveBeenCalled();
+    expect(state.recover).toHaveBeenCalledTimes(1);
+    expect(agentAction().props.disabled).toBe(true);
+    expect(text()).toContain("Provider configuration is missing");
+  });
+
+  it.each(["running", "completed"] as const)(
+    "keeps unavailable readiness distinct from historical %s ledger",
+    async (taskState) => {
+      state.providers = configuredProviders.map((provider) => ({ ...provider, enabled: false }));
+      state.snapshot = {
+        ...state.snapshot,
+        agents: [savedAgentFixture()],
+        tasks: [agentTaskFixture("project-a", taskState)],
+      };
+      await mount();
+      expect(text()).toContain("Provider unavailable");
+      expect(text()).toContain("Saved ledger availability:");
+      expect(text()).toContain(`project-a ${taskState} evidence`);
+      expect(text()).toContain(
+        "Ledger state does not confirm provider execution or owner acceptance.",
+      );
+      expect(agentAction().props.disabled).toBe(true);
+      await act(async () => agentAction().props.onClick());
+      expect(state.recover).not.toHaveBeenCalled();
+      expect(state.bind).not.toHaveBeenCalled();
+      expect(state.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it("changes project associations without retaining another project's saved identity", async () => {
+    state.providers = [];
+    state.projects.push({ id: "project-b", title: "B", environmentId: "environment-a" });
+    state.snapshot = {
+      ...state.snapshot,
+      agents: [savedAgentFixture(), savedAgentFixture("project-b", "Project B Codex")],
+      tasks: [agentTaskFixture(), agentTaskFixture("project-b")],
+    };
+    await mount();
+    expect(text()).not.toContain("Saved Codex");
+    await select("project-a");
+    expect(text()).toContain("Saved Codex");
+    expect(text()).toContain("project-a running evidence");
+    expect(text()).not.toContain("Project B Codex");
+    await select("project-b");
+    expect(text()).toContain("Project B Codex");
+    expect(text()).toContain("project-b running evidence");
+    expect(text()).not.toContain("Saved Codex");
+    expect(text()).not.toContain("project-a running evidence");
+    expect(state.recover).not.toHaveBeenCalled();
+  });
+
+  it("clears old environment rows before a same-project/id replacement snapshot arrives", async () => {
+    state.providers = [];
+    state.snapshot = {
+      ...state.snapshot,
+      agents: [savedAgentFixture()],
+      tasks: [agentTaskFixture()],
+    };
+    await mount();
+    expect(text()).toContain("Saved Codex");
+    const next = deferred<CollaborationSnapshot>();
+    state.load.mockReturnValueOnce(next.promise);
+    state.environmentId = "environment-b";
+    state.projects = [{ id: "project-a", title: "A elsewhere", environmentId: "environment-b" }];
+    await act(async () => renderer.update(<AgentsPage />));
+    expect(text()).not.toContain("Saved Codex");
+    expect(text()).not.toContain("project-a running evidence");
+    await act(async () =>
+      next.resolve({
+        ...state.snapshot,
+        agents: [savedAgentFixture("project-a", "Environment B Codex")],
+        tasks: [],
+      }),
+    );
+    expect(text()).toContain("Environment B Codex");
+    expect(text()).not.toContain("Saved Codex");
+    expect(state.recover).not.toHaveBeenCalled();
+  });
+
+  it("keeps Grokbot external and NOT_CONNECTED even if provider configuration reuses its id", async () => {
+    state.providers = [{ ...configuredProviders[0]!, instanceId: "grokbot" }];
+    state.snapshot = {
+      ...state.snapshot,
+      agents: [
+        {
+          ...savedAgentFixture(),
+          id: "grokbot",
+          displayName: "Grokbot",
+          origin: "external",
+          projectId: null,
+          threadId: null,
+        },
+      ],
+      tasks: [],
+    };
+    await mount();
+    expect(text()).toContain("NOT_CONNECTED");
+    expect(renderer.root.findAllByProps({ "data-agent-id": "grokbot" })).toHaveLength(0);
+    expect(renderer.root.findAllByType("button")).toHaveLength(1);
+    expect(renderer.root.findByType("button").props.disabled).toBe(true);
+    expect(state.recover).not.toHaveBeenCalled();
   });
 });
 
