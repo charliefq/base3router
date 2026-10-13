@@ -1,4 +1,6 @@
 import { assert, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
+import * as ModelRouter from "@t3tools/shared/modelRouter";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   AuthOrchestrationOperateScope,
@@ -12,6 +14,8 @@ import {
   ProviderTurnId,
   ThreadId,
   ModelSelection,
+  ModelRouterConstraints,
+  OrchestrationV2Command,
   type OrchestrationV2ProviderThread,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -36,7 +40,7 @@ import type {
 } from "../orchestration-v2/ProviderAdapter.ts";
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "../orchestration-v2/testkit/ReplayFixtureWorkspace.ts";
-import { argumentHash, authorizeDispatch } from "./Base3PolicyGate.ts";
+import { argumentHash, authorizeDispatch, Base3PolicyDeniedError } from "./Base3PolicyGate.ts";
 import { PolicyExecutionContext } from "./executionContext.ts";
 const instanceId = ProviderInstanceId.make("fake-routing-provider");
 const driver = ProviderDriverKind.make("codex");
@@ -48,6 +52,10 @@ const b: ModelSelection = {
 const capabilities = CodexProviderCapabilitiesV2;
 const encodeModelSelection = Schema.encodeEffect(Schema.fromJsonString(ModelSelection));
 const decodeRoute = Schema.decodeEffect(Schema.fromJsonString(DispatcherTaskRouteBinding));
+const isDispatchError = Schema.is(Orchestrator.OrchestratorDispatchError);
+const isPolicyDenied = Schema.is(Base3PolicyDeniedError);
+const decodeCommand = Schema.decodeEffect(OrchestrationV2Command);
+const decodeUnknownCommand = Schema.decodeUnknownSync(OrchestrationV2Command);
 const session = {
   kind: "session" as const,
   actorId: "routing-user",
@@ -176,7 +184,19 @@ function makeAdapter(
   };
 }
 
-it.live.each([
+interface BoundTargetScenario {
+  readonly name: string;
+  readonly mode: "auto" | "manual";
+  readonly queued: boolean;
+  readonly sameTarget: boolean;
+  readonly omitted: boolean;
+  readonly options: boolean;
+  readonly constraints?: ModelRouterConstraints;
+  readonly unknownEstimates?: boolean;
+  readonly denied?: boolean;
+}
+
+const scenarios: ReadonlyArray<BoundTargetScenario> = [
   { name: "auto", mode: "auto", queued: false, sameTarget: false, omitted: false, options: false },
   {
     name: "manual",
@@ -234,9 +254,74 @@ it.live.each([
     omitted: false,
     options: true,
   },
-] as const)(
+  ...[
+    { name: "auto cost limit", mode: "auto", constraints: { maxCostUsd: 0.1 } },
+    { name: "auto latency limit", mode: "auto", constraints: { maxLatencyMs: 0.1 } },
+    { name: "auto both limits", mode: "auto", constraints: { maxCostUsd: 0.1, maxLatencyMs: 0.1 } },
+    {
+      name: "queued auto cost limit",
+      mode: "auto",
+      constraints: { maxCostUsd: 0.1 },
+      queued: true,
+    },
+    {
+      name: "manual equality",
+      mode: "manual",
+      constraints: { maxCostUsd: 0.1, maxLatencyMs: 0.1 },
+    },
+    {
+      name: "manual cost exceeded",
+      mode: "manual",
+      constraints: { maxCostUsd: 0.05 },
+      denied: true,
+    },
+    {
+      name: "manual latency exceeded",
+      mode: "manual",
+      constraints: { maxLatencyMs: 0.09 },
+      denied: true,
+    },
+    {
+      name: "auto cost unknown",
+      mode: "auto",
+      constraints: { maxCostUsd: 1 },
+      unknownEstimates: true,
+      denied: true,
+    },
+    {
+      name: "auto latency unknown",
+      mode: "auto",
+      constraints: { maxLatencyMs: 1000 },
+      unknownEstimates: true,
+      denied: true,
+    },
+    {
+      name: "manual cost unknown",
+      mode: "manual",
+      constraints: { maxCostUsd: 1 },
+      unknownEstimates: true,
+      denied: true,
+    },
+    {
+      name: "manual latency unknown",
+      mode: "manual",
+      constraints: { maxLatencyMs: 1000 },
+      unknownEstimates: true,
+      denied: true,
+    },
+  ].map((row): BoundTargetScenario => ({
+    queued: false,
+    sameTarget: false,
+    omitted: false,
+    options: false,
+    ...row,
+    mode: row.mode as "auto" | "manual",
+  })),
+];
+
+it.live.each(scenarios)(
   "server-bound $name preserves target, options, grant and replay",
-  ({ name, mode, queued, sameTarget, omitted, options }) =>
+  ({ name, mode, queued, sameTarget, omitted, options, constraints, unknownEstimates, denied }) =>
     Effect.scoped(
       Effect.gen(function* () {
         const cwd = yield* checkpointWorkspace(`bound-target-${name}`);
@@ -251,12 +336,68 @@ it.live.each([
               }
             : {}),
         };
+        // FIXTURE estimates only: production provider snapshots have no declared metrics.
+        // Keep the real catalog builder/router; inject known estimates at this test seam.
+        if (constraints !== undefined && !unknownEstimates) {
+          const buildCatalog = ModelRouter.modelRouterCatalogFromProviders;
+          const estimates = new Map([
+            [
+              `${a.instanceId}\u0000${a.model}`,
+              {
+                quality: { status: "known" as const, value: 1 },
+                costUsd: { status: "known" as const, value: 0.2 },
+                latencyMs: { status: "known" as const, value: 0.2 },
+              },
+            ],
+            [
+              `${b.instanceId}\u0000${b.model}`,
+              {
+                quality: { status: "known" as const, value: 0 },
+                costUsd: { status: "known" as const, value: 0.1 },
+                latencyMs: { status: "known" as const, value: 0.1 },
+              },
+            ],
+          ]);
+          yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              vi
+                .spyOn(ModelRouter, "modelRouterCatalogFromProviders")
+                .mockImplementation((providers, capabilities) =>
+                  buildCatalog(providers, capabilities, estimates),
+                ),
+            ),
+            (spy) => Effect.sync(() => spy.mockRestore()),
+          );
+        }
+        const fixtureProviders =
+          constraints === undefined
+            ? [provider, { ...provider, instanceId: b.instanceId }]
+            : [
+                { ...provider, models: provider.models.filter((model) => model.slug === a.model) },
+                {
+                  ...provider,
+                  instanceId: b.instanceId,
+                  models: provider.models.filter((model) => model.slug === b.model),
+                },
+              ];
+        if (constraints !== undefined && !unknownEstimates && mode === "auto") {
+          const unconstrained = ModelRouter.routeModel({
+            mode: "auto",
+            catalog: ModelRouter.modelRouterCatalogFromProviders(fixtureProviders),
+            preferredTargets: [a],
+          });
+          assert.deepEqual(
+            unconstrained.selected?.target,
+            a,
+            "same fixture estimates prefer a without limits",
+          );
+        }
         const started = yield* Ref.make<ReadonlyArray<ModelSelection>>([]);
         const database = SqlitePersistenceMemory;
         const runtime = Layer.mergeAll(
           database,
           Layer.mock(ProviderRegistry)({
-            getProviders: Effect.succeed([provider, { ...provider, instanceId: b.instanceId }]),
+            getProviders: Effect.succeed(fixtureProviders),
           }),
           makeOrchestratorV2ReplayLayerWithRegistry(
             { name: `bound-target-${name}` },
@@ -299,12 +440,45 @@ it.live.each([
             attachments: [],
             ...(omitted ? {} : { modelSelection: sourceSelection }),
             routingMode: mode,
+            ...(constraints === undefined ? {} : { modelRouteConstraints: constraints }),
             dispatchMode: {
               type: queued ? ("queue_after_active" as const) : ("start_immediately" as const),
             },
             createdBy: "user" as const,
             creationSource: "web" as const,
           };
+          const decoded = yield* decodeCommand(command);
+          assert.equal(decoded.type, "message.dispatch");
+          if (decoded.type !== "message.dispatch") return;
+          assert.deepEqual(
+            decoded.modelRouteConstraints,
+            constraints,
+            "wire decode retains exact constraints",
+          );
+          if (denied) {
+            const error = yield* Effect.flip(orchestrator.dispatch(decoded));
+            assert.isTrue(isDispatchError(error));
+            if (!isDispatchError(error)) return;
+            assert.isTrue(isPolicyDenied(error.cause));
+            if (!isPolicyDenied(error.cause)) return;
+            assert.equal(error.cause.reason, "binding");
+            assert.include(error.cause.message, "Route");
+            assert.deepEqual(yield* Ref.get(started), []);
+            assert.deepEqual((yield* orchestrator.getThreadProjection(threadId)).runs, []);
+            const effects = yield* sql<{
+              count: number;
+            }>`SELECT count(*) AS count FROM orchestration_v2_effect_outbox WHERE command_id=${command.commandId}`;
+            const grants = yield* sql<{
+              count: number;
+            }>`SELECT count(*) AS count FROM base3_execution_grants WHERE message_id=${command.messageId}`;
+            const routes = yield* sql<{
+              count: number;
+            }>`SELECT count(*) AS count FROM projection_dispatcher_task_routes WHERE message_id=${command.messageId}`;
+            assert.equal(effects[0]?.count, 0);
+            assert.equal(grants[0]?.count, 0);
+            assert.equal(routes[0]?.count, 0);
+            return;
+          }
           if (queued) {
             yield* orchestrator.dispatch({
               ...command,
@@ -324,13 +498,14 @@ it.live.each([
                 Stream.runDrain,
                 Effect.forkScoped,
               );
-          const receipt = yield* orchestrator.dispatch(command);
+          const receipt = yield* orchestrator.dispatch(decoded);
           if (completed !== null) {
             yield* worker.drain();
             yield* Fiber.join(completed);
             yield* worker.drain();
           }
-          const expected = mode === "auto" && !sameTarget ? a : sourceSelection;
+          const expected =
+            constraints !== undefined ? b : mode === "auto" && !sameTarget ? a : sourceSelection;
           assert.deepEqual(
             command.modelSelection,
             omitted ? undefined : sourceSelection,
@@ -362,9 +537,10 @@ it.live.each([
               instanceId: expected.instanceId,
               attachmentIds: [],
               ...(expected.options === undefined ? {} : { options: expected.options }),
+              ...(constraints === undefined ? {} : { modelRouteConstraints: constraints }),
             }),
           );
-          if (mode === "auto" && !sameTarget) {
+          if (constraints === undefined && mode === "auto" && !sameTarget) {
             const staleTarget = yield* Effect.flip(
               authorizeDispatch(command).pipe(
                 Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
@@ -383,7 +559,69 @@ it.live.each([
             );
             assert.equal(changed.reason, "argument-mismatch");
           }
-          const replay = yield* orchestrator.dispatch(command);
+          if (constraints !== undefined) {
+            assert.deepEqual(route.modelRoute?.selected?.target, {
+              instanceId: expected.instanceId,
+              model: expected.model,
+            });
+            assert.deepEqual(
+              route.modelRoute?.executed?.target,
+              route.modelRoute?.selected?.target,
+            );
+            if (mode === "auto") {
+              const excluded = route.modelRoute?.candidates.find(
+                (candidate) =>
+                  candidate.target.instanceId === a.instanceId &&
+                  candidate.target.model === a.model,
+              );
+              assert.equal(excluded?.eligible, false);
+              if (constraints.maxCostUsd !== undefined)
+                assert.include([...(excluded?.reasonCodes ?? [])], "ESTIMATED_COST_LIMIT_EXCEEDED");
+              if (constraints.maxLatencyMs !== undefined)
+                assert.include(
+                  [...(excluded?.reasonCodes ?? [])],
+                  "ESTIMATED_LATENCY_LIMIT_EXCEEDED",
+                );
+            }
+            const effective = { ...decoded, modelSelection: expected };
+            yield* authorizeDispatch(effective).pipe(
+              Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
+            );
+            for (const replacement of [
+              undefined,
+              {},
+              { maxCostUsd: 10 },
+              { maxLatencyMs: 10000 },
+            ]) {
+              const changed = yield* Effect.flip(
+                authorizeDispatch({ ...effective, modelRouteConstraints: replacement }).pipe(
+                  Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
+                ),
+              );
+              assert.equal(changed.reason, "argument-mismatch");
+            }
+            const changedTarget = yield* Effect.flip(
+              authorizeDispatch({ ...effective, modelSelection: a }).pipe(
+                Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
+              ),
+            );
+            assert.equal(changedTarget.reason, "argument-mismatch");
+            const changedIdentity = yield* Effect.flip(
+              orchestrator.dispatch({
+                ...decoded,
+                commandId: CommandId.make(`changed:${mode}`),
+                modelRouteConstraints: undefined,
+                modelSelection: a,
+                routingMode: "manual",
+              }),
+            );
+            assert.isTrue(isDispatchError(changedIdentity));
+            if (!isDispatchError(changedIdentity)) return;
+            assert.isTrue(isPolicyDenied(changedIdentity.cause));
+            if (!isPolicyDenied(changedIdentity.cause)) return;
+            assert.equal(changedIdentity.cause.reason, "binding-immutable");
+          }
+          const replay = yield* orchestrator.dispatch(decoded);
           if (!queued) yield* worker.drain();
           assert.equal(replay.sequence, receipt.sequence);
           assert.deepEqual(yield* Ref.get(started), queued ? [] : [expected]);
@@ -391,7 +629,59 @@ it.live.each([
             binding: string;
           }>`SELECT binding_json AS binding FROM projection_dispatcher_task_routes WHERE thread_id=${threadId} AND message_id=${command.messageId}`;
           assert.deepEqual(after, routes);
+          const afterGrants = yield* sql<{
+            hash: string;
+          }>`SELECT argument_hash AS hash FROM base3_execution_grants WHERE grant_id=${`grant:message:${threadId}:${command.messageId}`}`;
+          assert.deepEqual(afterGrants, grants);
+          if (queued) {
+            const finished = yield* orchestrator.streamDomainEvents.pipe(
+              Stream.filter(
+                (event) => event.type === "run.updated" && event.payload.status === "completed",
+              ),
+              Stream.take(2),
+              Stream.runDrain,
+              Effect.forkScoped,
+            );
+            yield* EffectWorker.runDaemonWithOptions({ concurrency: 1 }).pipe(Effect.forkScoped);
+            yield* Fiber.join(finished);
+            yield* worker.drain();
+            assert.deepEqual(yield* Ref.get(started), [sourceSelection, expected]);
+            const finalRun = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+              (candidate) => candidate.userMessageId === command.messageId,
+            );
+            assert.equal(finalRun?.status, "completed");
+            assert.deepEqual(finalRun?.modelSelection, expected);
+            const queuedReplay = yield* orchestrator.dispatch(decoded);
+            yield* worker.drain();
+            assert.equal(queuedReplay.sequence, receipt.sequence);
+            assert.deepEqual(yield* Ref.get(started), [sourceSelection, expected]);
+          }
         }).pipe(Effect.provide(runtime), Effect.provideService(PolicyExecutionContext, session));
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it("decodes finite non-negative dispatch limits and rejects invalid numeric values", () => {
+  const command = {
+    type: "message.dispatch",
+    commandId: "limits-schema",
+    threadId: "limits-schema",
+    messageId: "limits-schema",
+    text: "Fixture only",
+    attachments: [],
+    dispatchMode: { type: "start_immediately" },
+    createdBy: "user",
+    creationSource: "web",
+  };
+  for (const key of ["maxCostUsd", "maxLatencyMs"]) {
+    for (const value of [-1, Infinity, NaN, "1"]) {
+      assert.throws(() =>
+        decodeUnknownCommand({ ...command, modelRouteConstraints: { [key]: value } }),
+      );
+    }
+  }
+  const limits = { maxCostUsd: 0, maxLatencyMs: 0 };
+  const decoded = decodeUnknownCommand({ ...command, modelRouteConstraints: limits });
+  assert.equal(decoded.type, "message.dispatch");
+  if (decoded.type === "message.dispatch") assert.deepEqual(decoded.modelRouteConstraints, limits);
+});

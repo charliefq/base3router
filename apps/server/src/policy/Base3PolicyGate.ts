@@ -9,6 +9,7 @@ import {
   EnvironmentId,
   MessageId,
   ModelSelection,
+  type ModelRouterConstraints,
   ProviderInstanceId,
   type ServerProvider,
   ThreadId,
@@ -64,6 +65,7 @@ export interface DispatchPolicyCommand {
   readonly text?: string;
   readonly modelSelection?: ModelSelection;
   readonly routingMode?: "auto" | "manual";
+  readonly modelRouteConstraints?: ModelRouterConstraints;
   readonly scheduledTaskId?: string;
   readonly usageLimitContinuationOfRunId?: string;
   readonly manualContinuationOfRunId?: string;
@@ -103,6 +105,9 @@ const messageArguments = (command: DispatchPolicyCommand) => ({
   ...(command.modelSelection?.options === undefined
     ? {}
     : { options: command.modelSelection.options }),
+  ...(command.modelRouteConstraints === undefined
+    ? {}
+    : { modelRouteConstraints: command.modelRouteConstraints }),
 });
 
 const isContinuation = (command: DispatchPolicyCommand): boolean =>
@@ -502,6 +507,9 @@ const bindRoute = (input: {
         text: input.command.text ?? "",
       },
       routingMode,
+      ...(input.command.modelRouteConstraints === undefined
+        ? {}
+        : { modelRouteConstraints: input.command.modelRouteConstraints }),
       ...(preferred === undefined ? {} : { modelSelection: preferred }),
     };
     const bound = yield* bindDispatcherTurnStartCommand(turn, {
@@ -521,6 +529,19 @@ const bindRoute = (input: {
           }),
       ),
     );
+    // Dispatcher may preserve a legacy explicit Manual binding without a
+    // selected router decision. Such a binding cannot prove a hard limit passed.
+    const constraints = input.command.modelRouteConstraints;
+    if (
+      (constraints?.maxCostUsd !== undefined || constraints?.maxLatencyMs !== undefined) &&
+      bound.routeBinding?.modelRoute?.selected == null
+    ) {
+      return yield* deny(
+        input.command.type,
+        "binding",
+        "Manual Route could not satisfy the supplied estimated cost or latency limits.",
+      );
+    }
     let binding = bound.routeBinding;
     if (binding === undefined && routingMode === "manual" && preferred !== undefined) {
       const provider = input.providers.find(

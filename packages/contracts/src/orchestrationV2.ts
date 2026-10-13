@@ -46,6 +46,7 @@ import {
   OrchestrationGetTurnDiffResult,
 } from "./checkpointDiff.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { ModelRouterConstraints } from "./modelRouter.ts";
 import {
   ThreadLinkedPullRequest,
   ThreadPullRequestLink,
@@ -2685,6 +2686,7 @@ export const OrchestrationV2Command = Schema.Union([
      * Auto-switch. Protocol 2 only; this is not a protocol 1 field.
      */
     routingMode: Schema.optional(Schema.Literals(["auto", "manual"])),
+    modelRouteConstraints: Schema.optional(ModelRouterConstraints),
     sourcePlanRef: Schema.optional(Schema.Struct({ threadId: ThreadId, planId: PlanId })),
     restartContinuationOfRunId: Schema.optional(RunId),
     usageLimitContinuationOfRunId: Schema.optional(RunId),
