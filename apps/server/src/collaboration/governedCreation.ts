@@ -284,8 +284,9 @@ export const readAgentsCreationStatus = Effect.fn("governedCreation.readStatus")
           status: string;
           accepted_at: string;
           result_sequence: number;
+          error: string | null;
         }>`
-        SELECT aggregate_kind,aggregate_id,command_type,status,accepted_at,result_sequence
+        SELECT aggregate_kind,aggregate_id,command_type,status,accepted_at,result_sequence,error
         FROM orchestration_command_receipts WHERE command_id=${command.commandId}`;
         const receipt = receipts.length === 1 ? receipts[0] : undefined;
         if (
@@ -306,12 +307,15 @@ export const readAgentsCreationStatus = Effect.fn("governedCreation.readStatus")
         FROM agents_task_creation_rejections WHERE command_id=${command.commandId}`;
         const events = yield* sql<{
           sequence: number;
-        }>`SELECT sequence FROM orchestration_events WHERE command_id=${command.commandId}`;
+          occurred_at: string;
+        }>`SELECT sequence,occurred_at FROM orchestration_events WHERE command_id=${command.commandId}`;
         if (receipt.status === "accepted") {
           if (
             proofs.length !== 0 ||
             events.length !== 1 ||
-            events[0]!.sequence !== receipt.result_sequence
+            events[0]!.sequence !== receipt.result_sequence ||
+            events[0]!.occurred_at !== receipt.accepted_at ||
+            receipt.error !== null
           )
             return { status: "unknown" as const };
           const verified = yield* verifyReviewedCreateReplay(sql, command).pipe(

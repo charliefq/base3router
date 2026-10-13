@@ -24,6 +24,7 @@ import { PolicyExecutionContext } from "../../policy/executionContext.ts";
 import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
+import type * as CommandReceiptStore from "../../orchestration-v2/CommandReceiptStore.ts";
 import * as EventSink from "../../orchestration-v2/EventSink.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectStore from "../../orchestration-v2/ProjectStore.ts";
@@ -98,6 +99,12 @@ type Fixture = {
     command: OrchestrationV2Command,
     actor?: typeof agentsCreationActor,
   ) => ReturnType<Orchestrator.OrchestratorV2["Service"]["dispatch"]>;
+  reject: (
+    command: Extract<OrchestrationV2Command, { type: "thread.create" }>,
+  ) => ReturnType<EventSink.EventSinkV2["Service"]["commitRejectedCommand"]>;
+  commitCreation: (
+    input: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0],
+  ) => ReturnType<EventSink.EventSinkV2["Service"]["commitCommand"]>;
   readStatus: (
     command: OrchestrationV2Command,
     actor?: typeof agentsCreationActor,
@@ -114,7 +121,15 @@ type Fixture = {
 };
 export const withAgentsTaskCreationFixture = <E>(
   check: (fixture: Fixture) => Effect.Effect<void, E>,
-  options: { readonly dbPath?: string } = {},
+  options: {
+    readonly dbPath?: string;
+    readonly decorateEventSink?: (
+      service: EventSink.EventSinkV2["Service"],
+    ) => EventSink.EventSinkV2["Service"];
+    readonly decorateCommandReceipts?: (
+      service: CommandReceiptStore.CommandReceiptStoreV2["Service"],
+    ) => CommandReceiptStore.CommandReceiptStoreV2["Service"];
+  } = {},
 ) => {
   let providers: ReadonlyArray<ServerProvider> = [agentsCreationProvider];
   let providerReadCount = 0;
@@ -135,7 +150,14 @@ export const withAgentsTaskCreationFixture = <E>(
   const orchestrator = makeOrchestratorV2ReplayLayerWithRegistry(
     { name: "agents-task-creation" },
     ProviderAdapterRegistry.makeLayer([]),
-    { databaseLayer: database, runEffectWorker: false },
+    {
+      databaseLayer: database,
+      runEffectWorker: false,
+      ...(options.decorateEventSink ? { decorateEventSink: options.decorateEventSink } : {}),
+      ...(options.decorateCommandReceipts
+        ? { decorateCommandReceipts: options.decorateCommandReceipts }
+        : {}),
+    },
   );
   const dependencies = Layer.mergeAll(
     database,
@@ -178,6 +200,19 @@ export const withAgentsTaskCreationFixture = <E>(
           service
             .dispatch(command)
             .pipe(Effect.provideService(PolicyExecutionContext, actor), Effect.provide(context)),
+        reject: (command) =>
+          Effect.gen(function* () {
+            return yield* eventSink.commitRejectedCommand({
+              commandId: command.commandId,
+              threadId: command.threadId,
+              commandType: command.type,
+              creationCommand: command,
+              rejectedAt: yield* DateTime.now,
+              error: "Controlled fixture rejection",
+            });
+          }).pipe(actorContext, Effect.provide(context)),
+        commitCreation: (input) =>
+          eventSink.commitCommand(input).pipe(actorContext, Effect.provide(context)),
         readStatus: (command, actor = agentsCreationActor) =>
           service
             .getAgentsCreationStatus({ command })

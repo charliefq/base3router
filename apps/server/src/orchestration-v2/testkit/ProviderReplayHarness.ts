@@ -253,6 +253,12 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
       SqlClient.SqlClient,
       MigrationError | PlatformError.PlatformError | SqlError
     >;
+    readonly decorateEventSink?: (
+      service: EventSink.EventSinkV2["Service"],
+    ) => EventSink.EventSinkV2["Service"];
+    readonly decorateCommandReceipts?: (
+      service: CommandReceiptStore.CommandReceiptStoreV2["Service"],
+    ) => CommandReceiptStore.CommandReceiptStoreV2["Service"];
     readonly runEffectWorker?: boolean;
     // Start continuation runs for provider wake turns, as the live runtime does.
     // Off by default: most fixtures record no wake turn.
@@ -288,18 +294,32 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
       ? {}
       : { continueThreadsAfterServerUpdate: options.continueThreadsAfterServerUpdate }),
   }).pipe(Layer.orDie);
+  const receiptLayer =
+    options.decorateCommandReceipts === undefined
+      ? CommandReceiptStore.layer
+      : Layer.effect(
+          CommandReceiptStore.CommandReceiptStoreV2,
+          Effect.map(CommandReceiptStore.CommandReceiptStoreV2, options.decorateCommandReceipts),
+        ).pipe(Layer.provide(CommandReceiptStore.layer));
+  const sinkLayer =
+    options.decorateEventSink === undefined
+      ? EventSink.layerFromStores
+      : Layer.effect(
+          EventSink.EventSinkV2,
+          Effect.map(EventSink.EventSinkV2, options.decorateEventSink),
+        ).pipe(Layer.provide(EventSink.layerFromStores));
   const storesLayer = Layer.mergeAll(
     EventStore.layer,
     ProjectionStore.layer,
     ProjectStore.layer,
-    CommandReceiptStore.layer,
+    receiptLayer,
     EffectOutbox.layer,
     TurnItemPositionStore.layer,
   ).pipe(Layer.provide(databaseLayer));
-  const eventSinkProvided = EventSink.layerFromStores.pipe(
+  const eventSinkProvided = sinkLayer.pipe(
     Layer.provide(Layer.mergeAll(storesLayer, databaseLayer)),
   );
-  const commandReceiptStoreProvided = CommandReceiptStore.layer.pipe(Layer.provide(databaseLayer));
+  const commandReceiptStoreProvided = receiptLayer.pipe(Layer.provide(databaseLayer));
   const providerEventIngestorProvided = ProviderEventIngestor.layer.pipe(
     Layer.provide(Layer.mergeAll(storesLayer, eventSinkProvided, IdAllocator.layer)),
   );
