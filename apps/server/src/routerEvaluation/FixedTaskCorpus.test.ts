@@ -37,6 +37,115 @@ const measurements = (count: number): ReadonlyArray<FixedTaskMeasurement> =>
   }));
 
 describe("fixed Model Router corpus", () => {
+  it.each([
+    {
+      limits: { maxCostUsd: 0.15 },
+      expected: target("code"),
+      reasons: {
+        code: [],
+        context: ["ESTIMATED_COST_LIMIT_EXCEEDED"],
+        vision: ["ESTIMATED_COST_LIMIT_EXCEEDED"],
+      },
+    },
+    {
+      limits: { maxLatencyMs: 25 },
+      expected: target("context"),
+      reasons: {
+        code: ["ESTIMATED_LATENCY_LIMIT_EXCEEDED"],
+        context: [],
+        vision: ["ESTIMATED_LATENCY_LIMIT_EXCEEDED"],
+      },
+    },
+    {
+      limits: { maxCostUsd: 0.15, maxLatencyMs: 25 },
+      expected: null,
+      reasons: {
+        code: ["ESTIMATED_LATENCY_LIMIT_EXCEEDED"],
+        context: ["ESTIMATED_COST_LIMIT_EXCEEDED"],
+        vision: ["ESTIMATED_COST_LIMIT_EXCEEDED", "ESTIMATED_LATENCY_LIMIT_EXCEEDED"],
+      },
+    },
+    {
+      limits: { maxCostUsd: 0 },
+      expected: null,
+      reasons: {
+        code: ["ESTIMATED_COST_LIMIT_EXCEEDED"],
+        context: ["ESTIMATED_COST_LIMIT_EXCEEDED"],
+        vision: ["ESTIMATED_COST_LIMIT_EXCEEDED"],
+      },
+    },
+  ])("preserves numeric limits $limits in canonical inputs, hashes and router outcomes", (row) => {
+    const base = FIXED_TASK_CORPUS.cases[0]!;
+    const corpus: FixedTaskCorpus = {
+      id: "fixture-numeric-limits",
+      version: "1",
+      cases: [
+        {
+          ...base,
+          id: "numeric-limits",
+          expected: row.expected,
+          input: {
+            ...base.input,
+            constraints: {
+              ...base.input.constraints,
+              ...row.limits,
+              allowedModels: ["vision", "context", "code"],
+            },
+          },
+        },
+      ],
+    };
+    const report = runFixedTaskCorpus(corpus);
+    const item = report.cases[0]!;
+    expect(item.input.constraints?.maxCostUsd).toBe(row.limits.maxCostUsd);
+    expect(item.input.constraints?.maxLatencyMs).toBe(row.limits.maxLatencyMs);
+    expect(item.selected).toEqual(row.expected);
+    expect(item.selectionCorrect).toBe(true);
+    expect(item.decision).toEqual(routeModel(item.input));
+    const expectedReasons: Readonly<Record<string, ReadonlyArray<string>>> = row.reasons;
+    expect(Object.keys(expectedReasons).toSorted()).toEqual(
+      item.decision.candidates.map((candidate) => candidate.target.model).toSorted(),
+    );
+    for (const candidate of item.decision.candidates) {
+      const reasons = expectedReasons[candidate.target.model]!;
+      expect(candidate.eligible).toBe(reasons.length === 0);
+      expect(candidate.reasonCodes).toEqual(reasons);
+    }
+    const reordered: FixedTaskCorpus = {
+      ...corpus,
+      cases: corpus.cases.map((task) => ({
+        ...task,
+        input: {
+          ...task.input,
+          catalog: task.input.catalog.toReversed(),
+          constraints: { ...task.input.constraints, allowedModels: ["code", "context", "vision"] },
+        },
+      })),
+    };
+    expect(runFixedTaskCorpus(reordered)).toEqual(report);
+    expect(runFixedTaskCorpus(corpus)).toEqual(report);
+    expect(fixedTaskCorpusHash(reordered)).toBe(fixedTaskCorpusHash(corpus));
+    const changed = {
+      ...corpus,
+      cases: corpus.cases.map((task) => ({
+        ...task,
+        input: {
+          ...task.input,
+          constraints: {
+            ...task.input.constraints,
+            ...(row.limits.maxCostUsd !== undefined
+              ? { maxCostUsd: row.limits.maxCostUsd + 0.001 }
+              : { maxLatencyMs: row.limits.maxLatencyMs! + 0.001 }),
+          },
+        },
+      })),
+    };
+    expect(fixedTaskCorpusHash(changed)).not.toBe(fixedTaskCorpusHash(corpus));
+    expect(fixedTaskCorpusHash(FIXED_TASK_CORPUS)).toBe(
+      "799b40b9e62363b8ac95c854e22cca13b172d9cd17a7d4b24c9b535ec54b6798",
+    );
+  });
+
   it("covers seven frozen task dimensions using the existing router and honest unknown actuals", () => {
     const report = runFixedTaskCorpus(FIXED_TASK_CORPUS);
     expect(report.cases).toHaveLength(7);
