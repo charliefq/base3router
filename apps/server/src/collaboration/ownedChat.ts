@@ -14,6 +14,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
+import { modelSelectionsEqual } from "@t3tools/shared/model";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -163,11 +164,12 @@ const receiptMatches = Effect.fn("ownedChat.receiptMatches")(function* (
 const selectionMatches = Effect.fn("ownedChat.selectionMatches")(function* (
   sql: SqlClient.SqlClient,
   thread: OrchestrationV2AppThreadJson,
+  throughSequence?: number,
 ) {
   const rows = yield* sql<{
     payload_json: string;
     metadata_json: string;
-  }>`SELECT payload_json,metadata_json FROM orchestration_events WHERE aggregate_kind='thread' AND application_event_version=2 AND stream_id=${thread.id} AND event_type IN ('thread.created','thread.provider-switched','thread.model-selection-updated') ORDER BY sequence DESC LIMIT 1`;
+  }>`SELECT payload_json,metadata_json FROM orchestration_events WHERE aggregate_kind='thread' AND application_event_version=2 AND stream_id=${thread.id} AND event_type IN ('thread.created','thread.provider-switched','thread.model-selection-updated') AND (${throughSequence ?? null} IS NULL OR sequence<=${throughSequence ?? null}) ORDER BY sequence DESC LIMIT 1`;
   const row = rows[0];
   const payload = row === undefined ? undefined : decodeThread(row.payload_json);
   const metadata = row === undefined ? undefined : decodeMetadata(row.metadata_json);
@@ -180,6 +182,7 @@ const selectionMatches = Effect.fn("ownedChat.selectionMatches")(function* (
     DateTime.toEpochMillis(payload.value.createdAt) === DateTime.toEpochMillis(thread.createdAt) &&
     payload.value.providerInstanceId === thread.providerInstanceId &&
     payload.value.modelSelection.instanceId === thread.providerInstanceId &&
+    modelSelectionsEqual(payload.value.modelSelection, thread.modelSelection) &&
     (metadata.value.providerInstanceId === undefined ||
       metadata.value.providerInstanceId === thread.providerInstanceId)
   );
@@ -449,6 +452,7 @@ export const verifyUpgrade = Effect.fn("ownedChat.verifyUpgrade")(function* (
     decision?.kind === "set" &&
     decision.actorId === origin.value.ownerId &&
     decision.revision === payload.value.taskContract.revision &&
+    (yield* selectionMatches(sql, payload.value, Number(row.sequence))) &&
     (yield* receiptMatches(
       sql,
       enrollment.upgradeCommandId,

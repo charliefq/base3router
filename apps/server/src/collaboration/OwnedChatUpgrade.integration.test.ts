@@ -684,3 +684,95 @@ it.live(
       }),
     ),
 );
+
+it.live.each([
+  { afterUpgrade: false, field: "model" },
+  { afterUpgrade: false, field: "options" },
+  { afterUpgrade: true, field: "model" },
+  { afterUpgrade: true, field: "options" },
+])("checks complete same-provider selection evidence for %j", ({ afterUpgrade, field }) =>
+  scoped(({ sql, orchestrator }) =>
+    Effect.gen(function* () {
+      yield* dispatch(orchestrator, create("owned"));
+      if (afterUpgrade) yield* dispatch(orchestrator, upgrade("owned"));
+      if (field === "model")
+        yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.modelSelection.model','unattested-model') WHERE thread_id='owned'`;
+      else
+        yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.modelSelection.options',json('[{"id":"unattested-option","value":true}]')) WHERE thread_id='owned'`;
+      if (afterUpgrade) {
+        const task = (yield* readCollaborationSnapshot(sql, actor.actorId)).tasks[0]!;
+        assert.equal(
+          task.threadId,
+          null,
+          "same-provider selection tampering must invalidate the task link",
+        );
+        assert.equal(task.contractReadout?.status, "unavailable");
+        assert.equal(task.resultReadout?.status, "unavailable");
+      } else {
+        const result = yield* dispatch(orchestrator, upgrade("owned"));
+        assert.deepEqual(result.taskEnrollment, {
+          status: "not-enrolled",
+          reason: "origin-invalid",
+        });
+        assert.equal((yield* readCollaborationSnapshot(sql, actor.actorId)).tasks.length, 0);
+        assert.equal(
+          (yield* orchestrator.getThreadProjection(ThreadId.make("owned"))).thread.taskContract
+            ?.revision,
+          1,
+        );
+      }
+    }),
+  ),
+);
+
+it.live.each([false, true])(
+  "preserves equivalent options and optional empty options=%s in complete selection attestation",
+  (empty) =>
+    scoped(({ sql, orchestrator }) =>
+      Effect.gen(function* () {
+        const options = empty
+          ? []
+          : [
+              { id: "alpha", value: "a" },
+              { id: "beta", value: true },
+            ];
+        yield* dispatch(orchestrator, {
+          ...create("owned"),
+          modelSelection: { ...selection, options },
+        });
+        if (empty)
+          yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_remove(payload_json,'$.modelSelection.options') WHERE thread_id='owned'`;
+        else
+          yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.modelSelection.options',json('[{"id":"beta","value":true},{"id":"alpha","value":"a"}]')) WHERE thread_id='owned'`;
+        const result = yield* dispatch(orchestrator, upgrade("owned"));
+        assert.equal(result.taskEnrollment?.status, "enrolled");
+        const task = (yield* readCollaborationSnapshot(sql, actor.actorId)).tasks[0]!;
+        assert.equal(task.threadId, "owned");
+        assert.equal(task.contractReadout?.status, "available");
+      }),
+    ),
+);
+
+it.live.each(["model", "options"] as const)(
+  "rejects inconsistent complete selection in the exact upgrade event: %s",
+  (field) =>
+    scoped(({ sql, orchestrator }) =>
+      Effect.gen(function* () {
+        yield* dispatch(orchestrator, create("owned"));
+        yield* dispatch(orchestrator, upgrade("owned"));
+        if (field === "model")
+          yield* sql`UPDATE orchestration_events SET payload_json=json_set(payload_json,'$.modelSelection.model','unattested-model') WHERE command_id='upgrade:owned'`;
+        else
+          yield* sql`UPDATE orchestration_events SET payload_json=json_set(payload_json,'$.modelSelection.options',json('[{"id":"unattested-option","value":true}]')) WHERE command_id='upgrade:owned'`;
+        const task = (yield* readCollaborationSnapshot(sql, actor.actorId)).tasks[0]!;
+        assert.equal(
+          task.threadId,
+          null,
+          "the upgrade selection must match its own committed selection boundary",
+        );
+        assert.equal(task.contractReadout?.status, "unavailable");
+        assert.equal(task.routingReadout?.status, "unavailable");
+        assert.equal(task.resultReadout?.status, "unavailable");
+      }),
+    ),
+);
