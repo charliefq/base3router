@@ -1,5 +1,7 @@
 import {
   CollaborationCommand,
+  type OrchestrationV2Command,
+  TaskContractBrake,
   AuthOrchestrationOperateScope,
   type CollaborationTask,
   type TaskContractReviewInput,
@@ -1220,6 +1222,9 @@ const reviewFacts = Effect.fn("collaboration.reviewFacts")(function* (
     phase: thread.taskContractPhase,
     acceptedRevision,
     actions,
+    canEditInstructions:
+      thread.taskContractPhase === "redirected" &&
+      acceptedRevision !== thread.taskContract.revision,
     reference: {
       environmentId,
       taskId: task.id,
@@ -1263,6 +1268,7 @@ export const readCollaborationSnapshot = (
                 reference: facts.reference,
                 revision: facts.contract.revision,
                 actions: facts.actions,
+                canEditInstructions: facts.canEditInstructions === true,
               },
             }
           : task;
@@ -1441,7 +1447,7 @@ export const validateTaskDecision = Effect.fn("collaboration.validateTaskDecisio
     readonly reviewTask?: TaskContractReviewReference;
   } & (
     | { readonly action: TaskContractReviewAction; readonly revision: number }
-    | { readonly action: "set" }
+    | { readonly action: "set"; readonly expectedRevision?: number }
   ),
 ) {
   const context = yield* reviewContext;
@@ -1449,7 +1455,24 @@ export const validateTaskDecision = Effect.fn("collaboration.validateTaskDecisio
   const commands = yield* readCommands(sql);
   const ownerId = sealedTaskOwner(commands, input.threadId);
   const current = yield* decisionRoot(sql, commands, context.actorId, input.threadId, input.action);
-  if (input.action === "set") return;
+  if (input.action === "set") {
+    if (input.expectedRevision === undefined && input.reviewTask === undefined) return;
+    if (input.expectedRevision === undefined || input.reviewTask === undefined)
+      return yield* new TaskReviewDeniedError({ reason: "incomplete-reviewed-set" });
+    const facts = yield* readTaskReview(sql, {
+      ...input.reviewTask,
+      threadId: input.threadId,
+      revision: input.expectedRevision,
+    });
+    if (
+      facts.status !== "available" ||
+      facts.canEditInstructions !== true ||
+      facts.reference.threadUpdatedAt !== input.reviewTask.threadUpdatedAt ||
+      facts.reference.threadSequence !== input.reviewTask.threadSequence
+    )
+      return yield* new TaskReviewDeniedError({ reason: "stale-paused-instruction-review" });
+    return;
+  }
   if (!input.reviewTask) {
     if (ownerId === null && current.rootOwner === null) return;
     if (
@@ -1653,6 +1676,8 @@ export const submitCollaborationCommand = (
     }),
   );
 
+const sameReviewBrake = Schema.toEquivalence(TaskContractBrake);
+
 export const verifyTaskDecisionReplay = Effect.fn("collaboration.verifyTaskDecisionReplay")(
   function* (
     sql: SqlClient.SqlClient,
@@ -1660,6 +1685,7 @@ export const verifyTaskDecisionReplay = Effect.fn("collaboration.verifyTaskDecis
       readonly commandId: string;
       readonly threadId: string;
       readonly reviewTask?: TaskContractReviewReference;
+      readonly reviewedSet?: Extract<OrchestrationV2Command, { type: "thread.task-contract.set" }>;
     } & (
       | { readonly action: TaskContractReviewAction; readonly revision: number }
       | { readonly action: "set" }
@@ -1681,7 +1707,7 @@ export const verifyTaskDecisionReplay = Effect.fn("collaboration.verifyTaskDecis
     )
       return yield* deny();
     const stored = decision.reviewTask;
-    const incoming = input.reviewTask;
+    const incoming = input.action === "set" ? input.reviewedSet?.reviewTask : input.reviewTask;
     if (
       (stored === undefined) !== (incoming === undefined) ||
       (stored &&
@@ -1693,6 +1719,32 @@ export const verifyTaskDecisionReplay = Effect.fn("collaboration.verifyTaskDecis
           stored.threadSequence !== incoming.threadSequence))
     )
       return yield* deny();
+    if (input.action === "set") {
+      const command = input.reviewedSet;
+      if (
+        decision.expectedRevision !== command?.expectedRevision ||
+        (decision.expectedRevision === undefined) !== (stored === undefined)
+      )
+        return yield* deny();
+      if (stored !== undefined) {
+        const original = decoded?._tag === "Some" ? decoded.value : undefined;
+        if (
+          !command ||
+          command.commandId !== input.commandId ||
+          command.threadId !== input.threadId ||
+          !original?.taskContract ||
+          original.taskContractPhase !== "redirected" ||
+          original.taskAcceptedRevision !== null ||
+          decision.revision !== original.taskContract.revision ||
+          decision.revision !== command.expectedRevision! + 1 ||
+          command.goal.trim() !== original.taskContract.goal ||
+          command.redirect.trim() !== original.taskContract.redirect ||
+          command.acceptance.trim() !== original.taskContract.acceptance ||
+          !sameReviewBrake(command.brake, original.taskContract.brake)
+        )
+          return yield* deny();
+      }
+    }
     const commands = yield* readCommands(sql);
     const currentRoot = yield* decisionRoot(
       sql,

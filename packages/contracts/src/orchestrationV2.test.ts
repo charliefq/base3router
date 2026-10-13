@@ -1323,3 +1323,73 @@ it("keeps reviewed decision references through persisted JSON while accepting le
   });
   expect(legacy.taskDecisions?.[0]).not.toHaveProperty("reviewTask");
 });
+
+it("pairs reviewed set preconditions and preserves expected revision in stored decision JSON", () => {
+  const reference = {
+    environmentId: "environment-a",
+    taskId: "task-a",
+    projectId: "project-a",
+    threadUpdatedAt: "2026-10-13T00:00:00.000Z",
+    threadSequence: 3,
+  };
+  const base = {
+    type: "thread.task-contract.set",
+    commandId: "instruction-set",
+    threadId: "thread-a",
+    goal: "Revised goal",
+    redirect: "Ask owner",
+    acceptance: "Owner review",
+    brake: {
+      maxProviderStarts: 2,
+      stopConditions: "Scope changed",
+      maxTokens: 100,
+      maxCostUsd: 1,
+      deadlineAt: "2030-01-01T00:00:00.000Z",
+    },
+  };
+  expect(decodeOrchestrationV2Command(base)).toEqual(base);
+  expect(() => decodeOrchestrationV2Command({ ...base, expectedRevision: 1 })).toThrow();
+  expect(() => decodeOrchestrationV2Command({ ...base, reviewTask: reference })).toThrow();
+  expect(
+    decodeOrchestrationV2Command({ ...base, expectedRevision: 1, reviewTask: reference }),
+  ).toEqual({ ...base, expectedRevision: 1, reviewTask: reference });
+  expect(() =>
+    decodeOrchestrationV2Command({
+      ...base,
+      brake: undefined,
+      expectedRevision: 1,
+      reviewTask: reference,
+    }),
+  ).toThrow();
+  const decoded = decodeReviewThreadJson({
+    id: "thread-a",
+    projectId: "project-a",
+    title: "Review",
+    createdBy: "user",
+    creationSource: "web",
+    providerInstanceId: "codex",
+    modelSelection: { instanceId: "codex", model: "fake-model" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    activeProviderThreadId: null,
+    lineage: { rootThreadId: "thread-a", parentThreadId: null, relationshipToParent: null },
+    forkedFrom: null,
+    createdAt: "2026-10-13T00:00:00.000Z",
+    updatedAt: "2026-10-13T00:00:00.000Z",
+    archivedAt: null,
+    deletedAt: null,
+    taskDecisions: [
+      {
+        actorId: "owner",
+        kind: "set",
+        revision: 2,
+        at: "2026-10-13T00:00:00.000Z",
+        reviewTask: reference,
+        expectedRevision: 1,
+      },
+    ],
+  });
+  expect(decoded.taskDecisions?.[0]).toMatchObject({ expectedRevision: 1, reviewTask: reference });
+});

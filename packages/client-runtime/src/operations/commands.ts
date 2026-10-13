@@ -3,6 +3,7 @@ import {
   type ThreadLinkedPullRequest,
   type TaskContractReviewInput,
   type TaskContractReviewReference,
+  type TaskContractBrake,
   CommandId,
   CheckpointId,
   CheckpointScopeId,
@@ -613,6 +614,8 @@ export const setThreadRuntimeMode = Effect.fn("EnvironmentCommands.setThreadRunt
 );
 
 export interface DecideTaskContractInput extends CommandMetadata {
+  readonly expectedRevision?: number;
+  readonly brake?: TaskContractBrake;
   readonly reviewTask?: TaskContractReviewReference;
   readonly threadId: ThreadId;
   readonly action: "set" | "accept" | "redirect" | "resume";
@@ -636,10 +639,12 @@ export const decideTaskContract = Effect.fn("EnvironmentCommands.decideTaskContr
       goal: input.goal ?? "",
       redirect: input.redirect ?? "",
       acceptance: input.acceptance ?? "",
-      brake: {
+      brake: input.brake ?? {
         maxProviderStarts: input.maxProviderStarts ?? 0,
         stopConditions: input.stopConditions ?? "",
       },
+      ...(input.expectedRevision === undefined ? {} : { expectedRevision: input.expectedRevision }),
+      ...(input.reviewTask === undefined ? {} : { reviewTask: input.reviewTask }),
     });
   }
   return yield* dispatch({

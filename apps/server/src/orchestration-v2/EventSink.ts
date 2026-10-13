@@ -1,5 +1,6 @@
 import {
   CommandId,
+  type OrchestrationV2Command,
   CollaborationCommand,
   type TaskEnrollmentOutcome,
   type TaskContractReviewReference,
@@ -145,6 +146,7 @@ export interface EventSinkV2Shape {
     readonly governedTaskOwner?: string;
     readonly ordinaryRootOwner?: string;
     readonly contractSetActor?: string;
+    readonly reviewedSet?: Extract<OrchestrationV2Command, { type: "thread.task-contract.set" }>;
     readonly taskContractDecision?: {
       readonly action: TaskContractReviewAction;
       readonly revision: number;
@@ -563,6 +565,7 @@ const baseLayer: Layer.Layer<
                 commandId: input.commandId,
                 threadId: input.threadId,
                 action: "set",
+                ...(input.reviewedSet === undefined ? {} : { reviewedSet: input.reviewedSet }),
               });
             let taskEnrollment: TaskEnrollmentOutcome | undefined;
             if (
@@ -647,7 +650,16 @@ const baseLayer: Layer.Layer<
               eventCount: input.events.length,
             });
           if (input.commandType === "thread.task-contract.set")
-            yield* validateTaskDecision(sql, { threadId: input.threadId, action: "set" });
+            yield* validateTaskDecision(sql, {
+              threadId: input.threadId,
+              action: "set",
+              ...(input.reviewedSet?.expectedRevision === undefined
+                ? {}
+                : { expectedRevision: input.reviewedSet.expectedRevision }),
+              ...(input.reviewedSet?.reviewTask === undefined
+                ? {}
+                : { reviewTask: input.reviewedSet.reviewTask }),
+            });
           const upgrade =
             input.contractSetActor === undefined
               ? undefined
@@ -689,11 +701,29 @@ const baseLayer: Layer.Layer<
                 commandId: input.commandId,
                 eventCount: input.events.length,
               });
+            const plannedSet = event.payload.taskDecisions?.at(-1);
+            if (
+              input.reviewedSet === undefined &&
+              (plannedSet?.reviewTask !== undefined || plannedSet?.expectedRevision !== undefined)
+            )
+              return yield* new EventSinkWriteError({
+                commandId: input.commandId,
+                eventCount: input.events.length,
+              });
+            if (
+              input.reviewedSet !== undefined &&
+              (input.reviewedSet.commandId !== input.commandId ||
+                input.reviewedSet.threadId !== input.threadId)
+            )
+              return yield* new EventSinkWriteError({
+                commandId: input.commandId,
+                eventCount: input.events.length,
+              });
             const next = nextTaskContractThread({
               thread: current,
               actorId: context.actorId,
               now: event.occurredAt,
-              command: {
+              command: input.reviewedSet ?? {
                 type: "thread.task-contract.set",
                 goal: event.payload.taskContract.goal,
                 redirect: event.payload.taskContract.redirect,
