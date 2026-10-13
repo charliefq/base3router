@@ -37,9 +37,9 @@ const createTable = Effect.gen(function* () {
   `;
   yield* sql`CREATE TABLE orchestration_v2_projection_threads (
     thread_id TEXT PRIMARY KEY, project_id TEXT, provider_instance_id TEXT,
-    archived_at TEXT, deleted_at TEXT
+    archived_at TEXT, deleted_at TEXT, payload_json TEXT NOT NULL DEFAULT '{}'
   )`;
-  yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES ('thread-1', 'project-a', 'provider-codex', NULL, NULL)`;
+  yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, provider_instance_id, archived_at, deleted_at) VALUES ('thread-1', 'project-a', 'provider-codex', NULL, NULL)`;
   return sql;
 });
 
@@ -155,7 +155,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const sql = yield* createTable;
-      yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES
+      yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, provider_instance_id, archived_at, deleted_at) VALUES
       ('thread-b', 'project-b', 'provider-codex', NULL, NULL),
       ('thread-2', 'project-a', 'provider-codex', NULL, NULL)`;
       const bind = {
@@ -256,7 +256,7 @@ it.effect(
 it.effect("refuses cross-project task identity reuse and masks ambiguous legacy messages", () =>
   Effect.gen(function* () {
     const sql = yield* createTable;
-    yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES ('thread-b', 'project-b', 'provider-codex', NULL, NULL)`;
+    yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, provider_instance_id, archived_at, deleted_at) VALUES ('thread-b', 'project-b', 'provider-codex', NULL, NULL)`;
     const bind = {
       type: "thread.bind" as const,
       commandId: "bind-a",
@@ -309,7 +309,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const sql = yield* createTable;
-      yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES ('thread-b', 'project-b', 'provider-codex', NULL, NULL)`;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, provider_instance_id, archived_at, deleted_at) VALUES ('thread-b', 'project-b', 'provider-codex', NULL, NULL)`;
       const bind = {
         type: "thread.bind" as const,
         commandId: "bind-a",
@@ -356,5 +356,114 @@ it.effect(
       const replay = yield* submitCollaborationCommand(sql, other);
       assert.equal(replay.outcome, "rejected");
       assert.equal(replay.idempotent, false);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect(
+  "reads only the linked principal's persisted contract and its latest revision/phase",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* createTable;
+      const bind = {
+        type: "thread.bind" as const,
+        commandId: "contract-bind",
+        projectId: "project-a",
+        threadId: "thread-1",
+        agentId: "provider-codex",
+        displayName: "Codex",
+        origin: "internal" as const,
+        capabilities: ["gpt"],
+        admissionSource: "server" as const,
+        admittedBy: "principal-owner",
+      };
+      yield* submitCollaborationCommand(sql, bind, { allowNewBinding: true });
+      const encode = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+      const contract = {
+        revision: 1,
+        goal: "Persisted goal, not task title",
+        redirect: "Ask the owner before scope changes",
+        acceptance: "Review the stored artifact",
+        brake: {
+          maxProviderStarts: 2,
+          stopConditions: "Stop on missing input",
+          maxTokens: 1200,
+          maxCostUsd: 0.2,
+          deadlineAt: "2026-10-14T00:00:00Z",
+        },
+      };
+      yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=${yield* encode({ taskGovernance: "required", taskContract: contract, taskContractPhase: "active", taskAcceptedRevision: null })} WHERE thread_id='thread-1'`;
+      const first = yield* readCollaborationSnapshot(sql, "principal-owner");
+      assert.deepEqual(first.tasks[0]?.contractReadout, {
+        status: "available",
+        contract,
+        phase: "active",
+        acceptedRevision: null,
+      });
+      assert.equal(first.tasks[0]?.state, "blocked");
+      assert.equal(first.tasks[0]?.gateDecision, "DENY");
+      const revised = { ...contract, revision: 2, goal: "Revised persisted goal" };
+      yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=${yield* encode({ taskGovernance: "required", taskContract: revised, taskContractPhase: "redirected", taskAcceptedRevision: 1 })} WHERE thread_id='thread-1'`;
+      assert.deepEqual(
+        (yield* readCollaborationSnapshot(sql, "principal-owner")).tasks[0]?.contractReadout,
+        { status: "available", contract: revised, phase: "redirected", acceptedRevision: 1 },
+      );
+      assert.equal((yield* readCollaborationSnapshot(sql, "other-principal")).tasks.length, 0);
+      yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=${yield* encode({ taskContract: contract })} WHERE thread_id='thread-1'`;
+      assert.deepEqual(
+        (yield* readCollaborationSnapshot(sql, "principal-owner")).tasks[0]?.contractReadout,
+        { status: "available", contract, phase: null, acceptedRevision: null },
+      );
+      const states = [
+        { payload: {}, reason: "ordinary_chat" },
+        {
+          payload: {
+            taskGovernance: "required",
+            taskContract: contract,
+            projectId: "foreign-project",
+          },
+          reason: "invalid_contract",
+        },
+        {
+          payload: {
+            taskGovernance: "required",
+            taskContract: contract,
+            taskContractPhase: "unknown",
+          },
+          reason: "invalid_contract",
+        },
+        { payload: { taskGovernance: "required", taskContract: null }, reason: "missing_contract" },
+        {
+          payload: { taskGovernance: "required", taskContract: { ...contract, goal: "" } },
+          reason: "invalid_contract",
+        },
+        {
+          payload: { taskGovernance: "required", taskContract: { ...contract, brake: undefined } },
+          reason: "invalid_contract",
+        },
+      ] as const;
+      for (const { payload, reason } of states) {
+        yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=${yield* encode(payload)} WHERE thread_id='thread-1'`;
+        assert.deepEqual(
+          (yield* readCollaborationSnapshot(sql, "principal-owner")).tasks[0]?.contractReadout,
+          { status: "unavailable", reason },
+        );
+      }
+      yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json='invalid JSON' WHERE thread_id='thread-1'`;
+      assert.deepEqual(
+        (yield* readCollaborationSnapshot(sql, "principal-owner")).tasks[0]?.contractReadout,
+        { status: "unavailable", reason: "invalid_contract" },
+      );
+      yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=${yield* encode({ taskGovernance: "required", taskContract: contract })}, project_id='foreign-project' WHERE thread_id='thread-1'`;
+      const wrongProject = (yield* readCollaborationSnapshot(sql, "principal-owner")).tasks[0];
+      assert.equal(wrongProject?.threadId, null);
+      assert.deepEqual(wrongProject?.contractReadout, {
+        status: "unavailable",
+        reason: "invalid_thread_link",
+      });
+      yield* sql`UPDATE orchestration_v2_projection_threads SET project_id='project-a', archived_at='2026-10-13' WHERE thread_id='thread-1'`;
+      assert.deepEqual(
+        (yield* readCollaborationSnapshot(sql, "principal-owner")).tasks[0]?.contractReadout,
+        { status: "unavailable", reason: "invalid_thread_link" },
+      );
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

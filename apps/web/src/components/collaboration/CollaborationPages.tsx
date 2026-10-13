@@ -23,6 +23,7 @@ import { useProjects } from "../../state/entities";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
+import { TaskContractReadout } from "../chat/TaskContractPanel";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { Alert, AlertDescription } from "../ui/alert";
@@ -106,7 +107,22 @@ function useCollaboration(environmentId: EnvironmentId | null) {
     [environmentId],
   );
 
+  const refresh = async () => {
+    if (!environmentId || currentEnvironment.current !== environmentId) return;
+    try {
+      const snapshot = await loadSnapshot();
+      if (currentEnvironment.current === environmentId) {
+        setLoaded({ environmentId, snapshot });
+        setError(null);
+      }
+    } catch (cause) {
+      if (currentEnvironment.current === environmentId)
+        setError(cause instanceof Error ? cause.message : "The task directory could not be read.");
+    }
+  };
+
   return {
+    refresh,
     snapshot: loaded?.environmentId === environmentId ? loaded.snapshot : null,
     error,
     pending,
@@ -436,7 +452,8 @@ export function AgentsPage() {
 export function TasksPage() {
   const navigate = useNavigate();
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
-  const { snapshot, error } = useCollaboration(environmentId);
+  const { snapshot, error, refresh } = useCollaboration(environmentId);
+  const [refreshing, setRefreshing] = useState(false);
   const tasks = snapshot?.tasks ?? [];
 
   const openTask = (task: CollaborationTask) => {
@@ -459,6 +476,19 @@ export function TasksPage() {
               Cross-agent work, its owners and acceptance criteria. Return to a task's conversation
               to inspect its evidence; opening a task does not grant execution.
             </p>
+            <div>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!environmentId || refreshing}
+                onClick={() => {
+                  setRefreshing(true);
+                  void refresh().finally(() => setRefreshing(false));
+                }}
+              >
+                {refreshing ? "Refreshing tasks…" : "Refresh tasks"}
+              </Button>
+            </div>
             {error ? (
               <Alert variant="error">
                 <AlertDescription>{error}</AlertDescription>
@@ -504,10 +534,64 @@ export function TasksPage() {
                         </dd>
                       </div>
                       <div className="min-w-0 space-y-1">
-                        <dt className="text-xs text-muted-foreground">Acceptance</dt>
+                        <dt className="text-xs text-muted-foreground">Task note</dt>
                         <dd className="wrap-anywhere leading-relaxed">{task.acceptance}</dd>
                       </div>
                     </dl>
+                    <div className="mt-4 space-y-2">
+                      {task.contractReadout?.status === "available" ? (
+                        <>
+                          <TaskContractReadout
+                            goal={task.contractReadout.contract.goal}
+                            redirect={task.contractReadout.contract.redirect}
+                            acceptance={task.contractReadout.contract.acceptance}
+                            maxProviderStarts={
+                              task.contractReadout.contract.brake.maxProviderStarts
+                            }
+                            stopConditions={task.contractReadout.contract.brake.stopConditions}
+                            revision={task.contractReadout.contract.revision}
+                            phase={task.contractReadout.phase ?? "phase not persisted"}
+                            acceptedRevision={task.contractReadout.acceptedRevision}
+                          />
+                          <dl className="space-y-1 text-xs text-muted-foreground">
+                            {task.contractReadout.contract.brake.maxTokens !== undefined ? (
+                              <div>
+                                <dt>Declared token cap</dt>
+                                <dd>{task.contractReadout.contract.brake.maxTokens}</dd>
+                              </div>
+                            ) : null}
+                            {task.contractReadout.contract.brake.maxCostUsd !== undefined ? (
+                              <div>
+                                <dt>Declared cost cap (USD)</dt>
+                                <dd>{task.contractReadout.contract.brake.maxCostUsd}</dd>
+                              </div>
+                            ) : null}
+                            {task.contractReadout.contract.brake.deadlineAt !== undefined ? (
+                              <div>
+                                <dt>Declared deadline</dt>
+                                <dd>{task.contractReadout.contract.brake.deadlineAt}</dd>
+                              </div>
+                            ) : null}
+                          </dl>
+                          <p className="text-xs text-muted-foreground">
+                            Stop conditions are recorded for human review; this card does not
+                            enforce natural-language conditions.
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">
+                          {task.contractReadout === undefined
+                            ? "Persisted contract readout is unavailable in this snapshot."
+                            : task.contractReadout.reason === "ordinary_chat"
+                              ? "Ordinary chat has no persisted task contract."
+                              : task.contractReadout.reason === "missing_contract"
+                                ? "The governed thread has no complete persisted contract."
+                                : task.contractReadout.reason === "invalid_contract"
+                                  ? "The stored contract is incomplete or unreadable; its fields cannot be confirmed."
+                                  : "No valid linked conversation is available to read a persisted contract."}
+                        </p>
+                      )}
+                    </div>
                     <div className="mt-4 flex flex-col gap-3 border-t border-border/50 pt-4 sm:flex-row sm:items-center sm:justify-between">
                       <div className="space-y-1 text-xs leading-relaxed text-muted-foreground">
                         <p>Gate {task.gateDecision}. This task does not grant execution.</p>

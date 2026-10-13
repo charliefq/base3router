@@ -1,6 +1,15 @@
+import * as EffectForFixture from "effect/Effect";
+import * as SchemaForFixture from "effect/Schema";
+import * as SqlClientForFixture from "effect/unstable/sql/SqlClient";
+import type { SqlError } from "effect/unstable/sql/SqlError";
+import * as SqliteForFixture from "@t3tools/shared/nodeSqliteClient";
 import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
-import type { CollaborationCommand, CollaborationSnapshot } from "@t3tools/contracts";
+import {
+  CollaborationTask,
+  CollaborationSnapshot,
+  type CollaborationCommand,
+} from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
@@ -356,4 +365,181 @@ describe("Tasks loading and conversation access", () => {
     expect(state.recover).not.toHaveBeenCalled();
     expect(state.create).not.toHaveBeenCalled();
   });
+});
+
+it("renders the persisted SQLite contract through the server snapshot and refreshes its latest revision without dispatch", async () => {
+  const fixtureStore = (await import(
+    /* @vite-ignore */ new URL("../../../../server/src/collaboration/store.ts", import.meta.url)
+      .href
+  )) as {
+    readCollaborationSnapshot: (
+      sql: SqlClientForFixture.SqlClient,
+      principal: string,
+    ) => EffectForFixture.Effect<unknown, SchemaForFixture.SchemaError | SqlError>;
+    submitCollaborationCommand: (
+      sql: SqlClientForFixture.SqlClient,
+      command: CollaborationCommand,
+      options: { allowNewBinding: boolean },
+    ) => EffectForFixture.Effect<unknown, SchemaForFixture.SchemaError | SqlError>;
+  };
+  const fixtureSnapshot = (sql: SqlClientForFixture.SqlClient, principal: string) =>
+    fixtureStore
+      .readCollaborationSnapshot(sql, principal)
+      .pipe(EffectForFixture.flatMap(SchemaForFixture.decodeUnknownEffect(CollaborationSnapshot)));
+  const fixtureSubmit = fixtureStore.submitCollaborationCommand;
+  await EffectForFixture.runPromise(
+    EffectForFixture.scoped(
+      EffectForFixture.gen(function* () {
+        const sql = yield* SqlClientForFixture.SqlClient;
+        yield* sql`CREATE TABLE collaboration_commands (command_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL UNIQUE,payload_json TEXT NOT NULL,created_at TEXT NOT NULL)`;
+        yield* sql`CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT PRIMARY KEY,project_id TEXT,provider_instance_id TEXT,archived_at TEXT,deleted_at TEXT,payload_json TEXT NOT NULL)`;
+        yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES ('fixture-thread','project-a','codex',NULL,NULL,'{}')`;
+        yield* fixtureSubmit(
+          sql,
+          {
+            type: "thread.bind",
+            commandId: "fixture-bind",
+            projectId: "project-a",
+            threadId: "fixture-thread",
+            agentId: "codex",
+            displayName: "Codex",
+            origin: "internal",
+            capabilities: [],
+            admissionSource: "server",
+            admittedBy: "fixture-owner",
+          },
+          { allowNewBinding: true },
+        );
+        const encode = SchemaForFixture.encodeEffect(
+          SchemaForFixture.fromJsonString(SchemaForFixture.Unknown),
+        );
+        const contract = {
+          revision: 1,
+          goal: "SQLite persisted goal",
+          redirect: "Ask before widening scope",
+          acceptance: "Owner inspects persisted result",
+          brake: {
+            maxProviderStarts: 2,
+            stopConditions: "Stop on missing input",
+            maxTokens: 900,
+            maxCostUsd: 0.1,
+            deadlineAt: "2026-10-14T00:00:00Z",
+          },
+        };
+        yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=${yield* encode({ taskGovernance: "required", taskContract: contract, taskContractPhase: "active", taskAcceptedRevision: null })}`;
+        state.load.mockImplementation(() =>
+          EffectForFixture.runPromise(fixtureSnapshot(sql, "fixture-owner")),
+        );
+        yield* EffectForFixture.promise(async () => {
+          await act(async () => {
+            renderer = create(<TasksPage />);
+          });
+          expect(text()).toContain("SQLite persisted goal");
+          expect(text()).toContain("Ask before widening scope");
+          expect(text()).toContain("Owner inspects persisted result");
+          expect(text()).toContain("Stop on missing input");
+          expect(text()).toContain("900");
+          expect(text()).toContain("0.1");
+          expect(
+            renderer.root.findAllByProps({ "data-task-contract-phase": "active" }),
+          ).toHaveLength(1);
+          const updated = { ...contract, revision: 2, goal: "Latest persisted goal" };
+          await EffectForFixture.runPromise(
+            sql`UPDATE orchestration_v2_projection_threads SET payload_json=${await EffectForFixture.runPromise(encode({ taskGovernance: "required", taskContract: updated, taskContractPhase: "redirected", taskAcceptedRevision: null }))}`,
+          );
+          await act(async () => {
+            renderer.root
+              .findAllByType("button")
+              .find((node) => node.children.includes("Refresh tasks"))!
+              .props.onClick();
+          });
+          expect(text()).toContain("Latest persisted goal");
+          expect(text()).not.toContain("SQLite persisted goal");
+          expect(
+            renderer.root.findAllByProps({ "data-task-contract-phase": "redirected" }),
+          ).toHaveLength(1);
+          expect(renderer.root.findAllByProps({ "data-task-contract-accept": "" })).toHaveLength(0);
+          expect(
+            renderer.root.findAllByProps({ "data-task-contract-redirect-action": "" }),
+          ).toHaveLength(0);
+          await act(async () => {
+            renderer.root
+              .findAllByType("button")
+              .find((node) => node.children.includes("Open conversation"))!
+              .props.onClick();
+          });
+          expect(state.navigate).toHaveBeenCalledWith({
+            to: "/$environmentId/$threadId",
+            params: { environmentId: "environment-a", threadId: "fixture-thread" },
+          });
+          expect(state.bind).not.toHaveBeenCalled();
+          expect(state.recover).not.toHaveBeenCalled();
+          expect(state.create).not.toHaveBeenCalled();
+          await act(async () => renderer.unmount());
+        });
+      }),
+    ).pipe(EffectForFixture.provide(SqliteForFixture.layer({ filename: ":memory:" }))),
+  );
+});
+
+it.each([
+  { reason: undefined, message: "Persisted contract readout is unavailable in this snapshot." },
+  { reason: "ordinary_chat", message: "Ordinary chat has no persisted task contract." },
+  {
+    reason: "missing_contract",
+    message: "The governed thread has no complete persisted contract.",
+  },
+  {
+    reason: "invalid_contract",
+    message: "The stored contract is incomplete or unreadable; its fields cannot be confirmed.",
+  },
+  {
+    reason: "invalid_thread_link",
+    message: "No valid linked conversation is available to read a persisted contract.",
+  },
+] as const)("does not fabricate contract fields for $reason", async ({ reason, message }) => {
+  const task = {
+    id: "legacy",
+    title: "Title must not become Goal",
+    ownerAgentId: "owner",
+    assigneeAgentId: "codex",
+    projectId: "project-a",
+    state: "blocked" as const,
+    waitReason: null,
+    acceptance: "Legacy task note, not contract acceptance",
+    threadId: reason === "invalid_thread_link" ? null : "linked",
+    correlationId: "legacy",
+    revision: 1,
+    pendingClarificationId: null,
+    gateDecision: "DENY" as const,
+    ...(reason === undefined
+      ? {}
+      : { contractReadout: { status: "unavailable" as const, reason } }),
+  };
+  state.snapshot = SchemaForFixture.decodeSync(CollaborationSnapshot)({
+    ...state.snapshot,
+    tasks: [task],
+  });
+  const { contractReadout: _projection, ...oldTaskFields } = CollaborationTask.fields;
+  const oldCodec = SchemaForFixture.Struct({
+    ...CollaborationSnapshot.fields,
+    tasks: SchemaForFixture.Array(SchemaForFixture.Struct(oldTaskFields)),
+  });
+  const old = SchemaForFixture.decodeSync(oldCodec)(state.snapshot);
+  expect("contractReadout" in old.tasks[0]!).toBe(false);
+  await act(async () => {
+    renderer = create(<TasksPage />);
+  });
+  expect(text()).toContain(message);
+  expect(renderer.root.findAllByProps({ "data-task-contract-goal-text": "" })).toHaveLength(0);
+  expect(renderer.root.findAllByProps({ "data-task-contract-acceptance-text": "" })).toHaveLength(
+    0,
+  );
+  expect(
+    renderer.root
+      .findAllByType("button")
+      .find((node) => node.children.includes("Open conversation"))!.props.disabled,
+  ).toBe(reason === "invalid_thread_link");
+  expect(state.bind).not.toHaveBeenCalled();
+  expect(state.recover).not.toHaveBeenCalled();
 });
