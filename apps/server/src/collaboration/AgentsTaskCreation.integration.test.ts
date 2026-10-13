@@ -7,7 +7,8 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DateTime from "effect/DateTime";
-import { EnvironmentId } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+import { OrchestrationV2Command, EnvironmentId } from "@t3tools/contracts";
 import {
   agentsCreationCommand,
   agentsCreationProvider,
@@ -601,6 +602,10 @@ it.live.each(["time", "error"] as const)(
     ),
 );
 
+const decodeRaceCreationProof = Schema.decodeUnknownSync(
+  Schema.fromJsonString(OrchestrationV2Command),
+);
+
 it.live.each([
   "accepted/same",
   "accepted/different",
@@ -611,7 +616,8 @@ it.live.each([
   (mode) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const [winner, kind] = mode.split("/");
+        const winner = mode.startsWith("accepted/") ? "accepted" : "rejected";
+        const kind = mode.endsWith("/same") ? "same" : "different";
         const a = agentsCreationCommand(`boundary-${mode.replace("/", "-")}`);
         const b =
           kind === "same"
@@ -671,7 +677,7 @@ it.live.each([
               assert.strictEqual(proofs.length, winner === "rejected" ? 1 : 0);
               if (winner === "rejected") {
                 assert.strictEqual(proofs[0]!.actor_id, agentsCreationActor.actorId);
-                assert.deepStrictEqual(JSON.parse(proofs[0]!.command_json), b);
+                assert.deepStrictEqual(decodeRaceCreationProof(proofs[0]!.command_json), b);
               }
               assert.strictEqual(
                 (yield* f.sql`SELECT sequence FROM orchestration_events WHERE command_id=${a.commandId}`)
