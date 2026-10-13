@@ -354,8 +354,14 @@ const agentTaskFixture = (
     pendingClarificationId: null,
     gateDecision: "DENY",
   });
-const agentCard = () => renderer.root.findByProps({ "data-agent-id": "codex" });
-const agentAction = () => agentCard().findByType("button");
+const agentAction = () =>
+  renderer.root
+    .findAllByType("button")
+    .find(
+      (node) =>
+        typeof node.props["aria-label"] === "string" &&
+        node.props["aria-label"].startsWith("Open "),
+    )!;
 
 describe("Agents saved identity continuity", () => {
   it("keeps a removed provider's saved card and tasks, then restores one card without writes", async () => {
