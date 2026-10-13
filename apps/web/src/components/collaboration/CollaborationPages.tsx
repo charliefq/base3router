@@ -8,6 +8,7 @@ import {
   type CollaborationOpenThreadInput,
   type CollaborationSnapshot,
   type CollaborationTask,
+  type CollaborationTaskRoutingReadout,
   type EnvironmentId,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -30,6 +31,101 @@ import { Alert, AlertDescription } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { ScrollArea } from "../ui/scroll-area";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+
+const routingUnknownReason = (reason: string | null) => {
+  switch (reason) {
+    case "route_only":
+      return "No correlated runtime run is recorded.";
+    case "missing_attempt":
+      return "No active run attempt is recorded.";
+    case "missing_provider_turn":
+      return "No matching provider turn is recorded.";
+    case "provider_turn_pending":
+      return "The matching provider turn is still pending.";
+    case "provider_turn_not_started":
+      return "The matching provider turn has no valid start evidence.";
+    default:
+      return "Persisted evidence is missing or inconsistent.";
+  }
+};
+
+function TaskRoutingReadout({ readout }: { readout: CollaborationTaskRoutingReadout | undefined }) {
+  return (
+    <div className="mt-4 space-y-2 rounded-lg border border-border/50 p-3">
+      <h3 className="text-sm font-medium">Routing evidence</h3>
+      {readout?.status === "available" ? (
+        <>
+          <dl className="space-y-2 text-sm">
+            <div>
+              <dt>Mode</dt>
+              <dd>
+                {readout.mode === null
+                  ? "Mode not recorded"
+                  : readout.mode === "auto"
+                    ? "Auto"
+                    : "Manual"}
+              </dd>
+            </div>
+            <div>
+              <dt>Selected model</dt>
+              <dd>
+                {readout.selected
+                  ? `${readout.selected.model} (${readout.selected.instanceId})`
+                  : "Unknown — no valid route for this message"}
+              </dd>
+            </div>
+            <div>
+              <dt>Routing source</dt>
+              <dd>{readout.source ?? "Unknown"}</dd>
+            </div>
+            <div>
+              <dt>Routing reason</dt>
+              <dd>
+                {readout.explanation ??
+                  (readout.reasons.length ? readout.reasons.join(", ") : "Not recorded")}
+              </dd>
+            </div>
+            <div>
+              <dt>Runtime model (configured)</dt>
+              <dd>
+                {readout.configuredModel
+                  ? `${readout.configuredModel.model} (${readout.configuredModel.instanceId})`
+                  : "Unknown"}
+              </dd>
+            </div>
+          </dl>
+          <p className="text-xs text-muted-foreground">
+            The configured runtime model is not provider-attested.
+          </p>
+          <p className="text-sm">
+            Execution evidence:{" "}
+            {readout.execution.status === "observed" ? "Provider-turn start recorded" : "Unknown"}
+          </p>
+          {readout.execution.status === "observed" ? (
+            <p className="break-all text-xs text-muted-foreground">
+              Turn {readout.execution.providerTurnId}; status {readout.execution.providerStatus};
+              started {readout.execution.startedAt}.
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              {routingUnknownReason(readout.execution.reason)}
+            </p>
+          )}
+          <p className="break-all text-xs text-muted-foreground">
+            Message {readout.messageId}; run {readout.runId ?? "not recorded"}.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Terminal execution is not owner acceptance.
+          </p>
+        </>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Routing evidence is unavailable; no valid persisted dispatch evidence can be confirmed.
+        </p>
+      )}
+    </div>
+  );
+}
 
 const loadSnapshot = () =>
   runPrimaryHttp(
@@ -605,6 +701,7 @@ export function TasksPage() {
                         </p>
                       )}
                     </div>
+                    <TaskRoutingReadout readout={task.routingReadout} />
                     <div className="mt-4 flex flex-col gap-3 border-t border-border/50 pt-4 sm:flex-row sm:items-center sm:justify-between">
                       <div className="space-y-1 text-xs leading-relaxed text-muted-foreground">
                         <p>Gate {task.gateDecision}. This task does not grant execution.</p>

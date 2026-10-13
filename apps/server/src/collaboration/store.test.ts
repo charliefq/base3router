@@ -1,4 +1,10 @@
-import { CollaborationCommand } from "@t3tools/contracts";
+import {
+  CollaborationCommand,
+  CollaborationSnapshot,
+  ProviderInstanceId,
+  ProviderDriverKind,
+} from "@t3tools/contracts";
+import { routeModel } from "@t3tools/shared/modelRouter";
 import * as Schema from "effect/Schema";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -42,6 +48,197 @@ const createTable = Effect.gen(function* () {
   yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, provider_instance_id, archived_at, deleted_at) VALUES ('thread-1', 'project-a', 'provider-codex', NULL, NULL)`;
   return sql;
 });
+
+const encodeEvidence = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+const routingFixture = Effect.gen(function* () {
+  const sql = yield* createTable;
+  yield* sql`CREATE TABLE projection_dispatcher_task_routes (thread_id TEXT, message_id TEXT, binding_json TEXT, created_at TEXT)`;
+  yield* sql`CREATE TABLE orchestration_v2_projection_runs (run_id TEXT, thread_id TEXT, ordinal INTEGER, provider_instance_id TEXT, status TEXT, payload_json TEXT)`;
+  yield* sql`CREATE TABLE orchestration_v2_projection_run_attempts (attempt_id TEXT, thread_id TEXT, run_id TEXT, provider_instance_id TEXT, payload_json TEXT)`;
+  yield* sql`CREATE TABLE orchestration_v2_projection_provider_threads (provider_thread_id TEXT, thread_id TEXT, provider_instance_id TEXT, payload_json TEXT)`;
+  yield* sql`CREATE TABLE orchestration_v2_projection_provider_turns (provider_turn_id TEXT, thread_id TEXT, provider_thread_id TEXT, run_attempt_id TEXT, node_id TEXT, status TEXT, started_at TEXT, payload_json TEXT)`;
+  const bind = sealCollaborationCommand(
+    {
+      type: "thread.bind",
+      commandId: "routing-bind",
+      projectId: "project-a",
+      threadId: "thread-1",
+      agentId: "provider-codex",
+    },
+    facts,
+  );
+  assert.equal(bind.outcome, "sealed");
+  if (bind.outcome !== "sealed") throw new Error("Fixture admission failed");
+  yield* submitCollaborationCommand(sql, bind.command, { allowNewBinding: true });
+  const decision = routeModel({
+    mode: "auto",
+    catalog: [
+      {
+        instanceId: ProviderInstanceId.make("provider-codex"),
+        driver: ProviderDriverKind.make("codex"),
+        model: "selected-A",
+        isDefault: true,
+        capabilities: ["code"],
+        availabilityReasons: [],
+      },
+    ],
+  });
+  const binding = {
+    policyVersion: "dispatcher.phase-1a.v1",
+    target: { instanceId: "provider-codex", model: "selected-A" },
+    driver: "codex",
+    modelFamily: "gpt",
+    fallbackIndex: 0,
+    source: "explicit",
+    gate: { decision: "ALLOW", reasonCodes: ["ACTION_ALLOWED"] },
+    modelRoute: { ...decision, executed: decision.selected, executionStatus: "bound" },
+  };
+  const run = {
+    id: "run-1",
+    threadId: "thread-1",
+    ordinal: 1,
+    providerInstanceId: "provider-codex",
+    modelSelection: { instanceId: "provider-codex", model: "configured-B" },
+    userMessageId: "message-1",
+    activeAttemptId: "attempt-1",
+    rootNodeId: "node-1",
+    providerThreadId: "provider-thread-1",
+    status: "running",
+  };
+  const attempt = {
+    id: "attempt-1",
+    runId: "run-1",
+    rootNodeId: "node-1",
+    providerInstanceId: "provider-codex",
+    providerThreadId: "provider-thread-1",
+    providerTurnId: "turn-1",
+  };
+  const providerThread = {
+    id: "provider-thread-1",
+    appThreadId: "thread-1",
+    providerInstanceId: "provider-codex",
+  };
+  const turn = {
+    id: "turn-1",
+    providerThreadId: "provider-thread-1",
+    nodeId: "node-1",
+    runAttemptId: "attempt-1",
+    status: "running",
+    startedAt: "2026-10-13T00:00:00Z",
+  };
+  yield* sql`INSERT INTO projection_dispatcher_task_routes VALUES ('thread-1','message-1',${encodeEvidence(binding)},'2026-10-13T00:00:00Z')`;
+  yield* sql`INSERT INTO orchestration_v2_projection_runs VALUES ('run-1','thread-1',1,'provider-codex','running',${encodeEvidence(run)})`;
+  yield* sql`INSERT INTO orchestration_v2_projection_run_attempts VALUES ('attempt-1','thread-1','run-1','provider-codex',${encodeEvidence(attempt)})`;
+  yield* sql`INSERT INTO orchestration_v2_projection_provider_threads VALUES ('provider-thread-1','thread-1','provider-codex',${encodeEvidence(providerThread)})`;
+  const read = () =>
+    readCollaborationSnapshot(sql, facts.principalId).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(CollaborationSnapshot)),
+      Effect.map((snapshot) => snapshot.tasks[0]?.routingReadout),
+    );
+  const insertTurn = () =>
+    sql`INSERT INTO orchestration_v2_projection_provider_turns VALUES ('turn-1','thread-1','provider-thread-1','attempt-1','node-1','running',${turn.startedAt},${encodeEvidence(turn)})`;
+  return { sql, binding, run, attempt, turn, read, insertTurn };
+});
+
+it.effect(
+  "separates immutable selection, configured runtime and matching provider-turn start",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* routingFixture;
+      const bound = yield* f.read();
+      assert.equal(bound?.status, "available");
+      if (bound?.status !== "available") return;
+      assert.equal(bound.selected?.model, "selected-A");
+      assert.equal(bound.configuredModel?.model, "configured-B");
+      assert.equal(bound.mode, "auto");
+      assert.equal(bound.execution.status, "unknown");
+      assert.equal(bound.execution.reason, "missing_provider_turn");
+      yield* f.insertTurn();
+      const observed = yield* f.read();
+      assert.equal(observed?.status === "available" && observed.execution.status, "observed");
+      assert.equal(observed?.status === "available" && observed.execution.providerTurnId, "turn-1");
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect(
+  "does not borrow an older route for the newest run and supports route-only legacy binding",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* routingFixture;
+      yield* f.sql`INSERT INTO orchestration_v2_projection_runs VALUES ('run-2','thread-1',2,'provider-codex','running',${encodeEvidence({ ...f.run, id: "run-2", ordinal: 2, userMessageId: "message-2", activeAttemptId: null })})`;
+      const latest = yield* f.read();
+      assert.equal(latest?.status === "available" && latest.selected, null);
+      assert.equal(latest?.status === "available" && latest.messageId, "message-2");
+      assert.equal(
+        latest?.status === "available" && latest.selectionUnknownReason,
+        "route_missing",
+      );
+      yield* f.sql`DELETE FROM orchestration_v2_projection_runs`;
+      const { modelRoute: _modelRoute, ...legacy } = f.binding;
+      yield* f.sql`UPDATE projection_dispatcher_task_routes SET binding_json=${encodeEvidence(legacy)}`;
+      const only = yield* f.read();
+      assert.equal(only?.status === "available" && only.selected?.model, "selected-A");
+      assert.equal(only?.status === "available" && only.mode, null);
+      assert.equal(only?.status === "available" && only.execution.reason, "route_only");
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect.each([
+  "pending",
+  "unstarted",
+  "unrelated",
+  "cross-thread",
+  "invalid-json",
+  "wrong-provider",
+  "wrong-run",
+])("rejects %s execution evidence", (scenario) =>
+  Effect.gen(function* () {
+    const f = yield* routingFixture;
+    yield* f.insertTurn();
+    if (scenario === "pending")
+      yield* f.sql`UPDATE orchestration_v2_projection_provider_turns SET status='pending',payload_json=${encodeEvidence({ ...f.turn, status: "pending" })}`;
+    if (scenario === "unstarted")
+      yield* f.sql`UPDATE orchestration_v2_projection_provider_turns SET started_at=NULL,payload_json=${encodeEvidence({ ...f.turn, startedAt: null })}`;
+    if (scenario === "unrelated")
+      yield* f.sql`UPDATE orchestration_v2_projection_provider_turns SET run_attempt_id='another-attempt',payload_json=${encodeEvidence({ ...f.turn, runAttemptId: "another-attempt" })}`;
+    if (scenario === "cross-thread")
+      yield* f.sql`UPDATE orchestration_v2_projection_provider_turns SET thread_id='foreign-thread'`;
+    if (scenario === "invalid-json")
+      yield* f.sql`UPDATE orchestration_v2_projection_provider_turns SET payload_json='{secret-unreadable'`;
+    if (scenario === "wrong-provider")
+      yield* f.sql`UPDATE orchestration_v2_projection_provider_threads SET provider_instance_id='foreign-provider'`;
+    if (scenario === "wrong-run")
+      yield* f.sql`UPDATE orchestration_v2_projection_run_attempts SET payload_json=${encodeEvidence({ ...f.attempt, runId: "foreign-run" })}`;
+    const result = yield* f.read();
+    assert.equal(result?.status === "available" && result.execution.status, "unknown");
+    assert.equal(result?.status === "available" && result.execution.providerTurnId, null);
+    assert.isFalse(encodeEvidence(result).includes("secret-unreadable"));
+    assert.isFalse(encodeEvidence(result).includes("foreign"));
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect("rejects malformed and foreign identity before evidence disclosure", () =>
+  Effect.gen(function* () {
+    const f = yield* routingFixture;
+    assert.equal((yield* readCollaborationSnapshot(f.sql, "other-owner")).tasks.length, 0);
+    yield* f.sql`UPDATE orchestration_v2_projection_threads SET project_id='foreign-project'`;
+    assert.deepEqual(yield* f.read(), { status: "unavailable", reason: "invalid_thread_link" });
+    yield* f.sql`UPDATE orchestration_v2_projection_threads SET project_id='project-a',payload_json='{broken'`;
+    assert.deepEqual(yield* f.read(), { status: "unavailable", reason: "invalid_thread_evidence" });
+    yield* f.sql`UPDATE orchestration_v2_projection_threads SET payload_json='{}'`;
+    yield* f.sql`UPDATE orchestration_v2_projection_runs SET payload_json='{broken'`;
+    assert.deepEqual(yield* f.read(), { status: "unavailable", reason: "invalid_run" });
+    yield* f.sql`UPDATE orchestration_v2_projection_runs SET payload_json=${encodeEvidence(f.run)}`;
+    yield* f.sql`UPDATE orchestration_v2_projection_runs SET payload_json=${encodeEvidence({ ...f.run, modelSelection: { instanceId: "foreign-provider", model: "secret-model" } })}`;
+    assert.deepEqual(yield* f.read(), { status: "unavailable", reason: "invalid_run" });
+    yield* f.sql`UPDATE orchestration_v2_projection_runs SET payload_json=${encodeEvidence(f.run)}`;
+    yield* f.sql`UPDATE projection_dispatcher_task_routes SET binding_json='{broken'`;
+    const route = yield* f.read();
+    assert.equal(route?.status === "available" && route.selected, null);
+    assert.equal(route?.status === "available" && route.selectionUnknownReason, "route_invalid");
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
 
 layer("collaboration store", (it) => {
   it.effect("persists a linked thread and drops unsealed or refused commands", () =>

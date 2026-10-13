@@ -5,6 +5,8 @@
 import * as Schema from "effect/Schema";
 
 import { TaskContract, TaskContractPhase } from "./taskContract.ts";
+import { ModelRouterMode, ModelRouterTarget } from "./modelRouter.ts";
+import { ModelSelection } from "./modelSelection.ts";
 import { PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const CollaborationConnection = Schema.Literals(["NOT_CONNECTED", "SIMULATED"]);
@@ -79,6 +81,50 @@ export const CollaborationTaskContractReadout = Schema.Union([
 ]);
 export type CollaborationTaskContractReadout = typeof CollaborationTaskContractReadout.Type;
 
+/** Persisted dispatch facts; a configured model is not provider-attested execution. */
+export const CollaborationTaskRoutingReadout = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("unavailable"),
+    reason: Schema.String,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("available"),
+    threadId: TrimmedNonEmptyString,
+    messageId: TrimmedNonEmptyString,
+    runId: Schema.NullOr(TrimmedNonEmptyString),
+    mode: Schema.NullOr(ModelRouterMode),
+    selected: Schema.NullOr(ModelRouterTarget),
+    source: Schema.NullOr(Schema.String),
+    reasons: Schema.Array(Schema.String),
+    explanation: Schema.NullOr(Schema.String),
+    selectionUnknownReason: Schema.NullOr(Schema.String),
+    configuredModel: Schema.NullOr(ModelSelection),
+    execution: Schema.Union([
+      Schema.Struct({
+        status: Schema.Literal("unknown"),
+        reason: Schema.String,
+        providerTurnId: Schema.Null,
+        providerStatus: Schema.Null,
+        startedAt: Schema.Null,
+      }),
+      Schema.Struct({
+        status: Schema.Literal("observed"),
+        reason: Schema.Null,
+        providerTurnId: TrimmedNonEmptyString,
+        providerStatus: Schema.Literals([
+          "running",
+          "completed",
+          "interrupted",
+          "failed",
+          "cancelled",
+        ]),
+        startedAt: TrimmedNonEmptyString,
+      }),
+    ]),
+  }),
+]);
+export type CollaborationTaskRoutingReadout = typeof CollaborationTaskRoutingReadout.Type;
+
 export const CollaborationTask = Schema.Struct({
   id: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
@@ -94,6 +140,7 @@ export const CollaborationTask = Schema.Struct({
   pendingClarificationId: Schema.NullOr(TrimmedNonEmptyString),
   gateDecision: CollaborationGateDecision,
   contractReadout: Schema.optionalKey(CollaborationTaskContractReadout),
+  routingReadout: Schema.optionalKey(CollaborationTaskRoutingReadout),
 });
 export type CollaborationTask = typeof CollaborationTask.Type;
 
