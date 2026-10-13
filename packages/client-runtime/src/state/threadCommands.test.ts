@@ -83,6 +83,7 @@ const SNAPSHOT: OrchestrationV2ShellSnapshot = {
 
 const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* () {
   const projectionRequests: ThreadId[] = [];
+  const statusRequests: OrchestrationV2Command[] = [];
   const requests = yield* Queue.unbounded<{
     command: OrchestrationV2Command;
     reply: Deferred.Deferred<{ sequence: number }, Error>;
@@ -92,6 +93,15 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* () {
     session: yield* SubscriptionRef.make(
       Option.some({
         client: {
+          [ORCHESTRATION_V2_WS_METHODS.getAgentsCreationStatus]: ({
+            command,
+          }: {
+            command: OrchestrationV2Command;
+          }) =>
+            Effect.sync(() => {
+              statusRequests.push(command);
+              return { status: "unknown" };
+            }),
           [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: (input: { threadId: ThreadId }) =>
             Effect.sync(() => {
               projectionRequests.push(input.threadId);
@@ -128,7 +138,15 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* () {
   yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
   const visibleAtom = commands.snapshotAtom(ENVIRONMENT_ID);
   registry.mount(visibleAtom);
-  return { registry, commands, snapshotAtom, visibleAtom, requests, projectionRequests };
+  return {
+    registry,
+    commands,
+    snapshotAtom,
+    visibleAtom,
+    requests,
+    projectionRequests,
+    statusRequests,
+  };
 });
 
 describe("remote thread lifecycle commands", () => {
@@ -145,6 +163,18 @@ describe("remote thread lifecycle commands", () => {
               threadId: THREAD_ID,
               projectId: ProjectId.make("project"),
               title: "Task",
+              taskGovernance: "required",
+              taskContract: {
+                goal: "Fix",
+                redirect: "Ask",
+                acceptance: "Test",
+                brake: { maxProviderStarts: 1, stopConditions: "Stop" },
+              },
+              taskCreationReview: {
+                environmentId: ENVIRONMENT_ID,
+                projectId: ProjectId.make("project"),
+                modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+              },
               modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
               runtimeMode: "approval-required",
               interactionMode: "default",
@@ -161,6 +191,17 @@ describe("remote thread lifecycle commands", () => {
           ).pipe(Effect.timeout("2 seconds"));
           expect(read._tag).toBe("Success");
           expect(h.projectionRequests).toEqual([THREAD_ID]);
+          if (pending.command.type !== "thread.create") throw new Error("Expected create");
+          const originalCommand = pending.command;
+          const status = yield* Effect.promise(() =>
+            h.commands.readCreationStatus.run(h.registry, {
+              environmentId: ENVIRONMENT_ID,
+              input: { command: originalCommand },
+            }),
+          ).pipe(Effect.timeout("2 seconds"));
+          expect(status).toMatchObject({ _tag: "Success", value: { status: "unknown" } });
+          expect(h.statusRequests).toEqual([pending.command]);
+          expect(yield* Queue.size(h.requests)).toBe(0);
           yield* Deferred.succeed(pending.reply, { sequence: 1 });
           expect((yield* Effect.promise(() => creation))._tag).toBe("Success");
         }),

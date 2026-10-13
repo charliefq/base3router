@@ -1393,3 +1393,54 @@ it("pairs reviewed set preconditions and preserves expected revision in stored d
   });
   expect(decoded.taskDecisions?.[0]).toMatchObject({ expectedRevision: 1, reviewTask: reference });
 });
+
+const decodeAgentsCreationStatusInput = Schema.decodeUnknownSync(
+  OrchestrationV2RpcSchemas.getAgentsCreationStatus.input,
+);
+const decodeAgentsCreationStatusOutput = Schema.decodeUnknownSync(
+  OrchestrationV2RpcSchemas.getAgentsCreationStatus.output,
+);
+
+it("restricts creation-status reads to the full original reviewed creation intent", () => {
+  const command = {
+    type: "thread.create",
+    commandId: "original",
+    threadId: "root",
+    projectId: "project",
+    title: "Task",
+    modelSelection: { instanceId: "codex", model: "fake" },
+    runtimeMode: "approval-required",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    createdBy: "user",
+    creationSource: "web",
+    taskGovernance: "required",
+    taskContract: {
+      goal: "Fix",
+      redirect: "Ask",
+      acceptance: "Test",
+      brake: { maxProviderStarts: 1, stopConditions: "Stop" },
+    },
+    taskCreationReview: {
+      environmentId: "env",
+      projectId: "project",
+      modelSelection: { instanceId: "codex", model: "fake" },
+    },
+  };
+  const decode = decodeAgentsCreationStatusInput;
+  expect(decode({ command })).toEqual({ command });
+  for (const invalid of [
+    { ...command, taskCreationReview: undefined },
+    { ...command, taskContract: undefined },
+    { ...command, taskGovernance: "legacy" },
+    { type: "thread.delete", commandId: "original", threadId: "root" },
+  ])
+    expect(() => decode({ command: invalid })).toThrow();
+  for (const status of ["committed", "rejected", "unknown", "unavailable"])
+    expect(
+      decodeAgentsCreationStatusOutput({
+        status,
+      }),
+    ).toEqual({ status });
+});

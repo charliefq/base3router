@@ -1,8 +1,14 @@
 import { assert, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import type * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DateTime from "effect/DateTime";
-import { EnvironmentId } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+import { OrchestrationV2Command, EnvironmentId } from "@t3tools/contracts";
 import {
   agentsCreationCommand,
   agentsCreationProvider,
@@ -335,6 +341,7 @@ it.live(
         });
         f.setProviders([]);
         assert.strictEqual((yield* f.dispatch(command)).sequence, receipt.sequence);
+        assert.deepStrictEqual(yield* f.readStatus(command), { status: "committed" });
         assert.strictEqual(
           (yield* f.orchestrator.getThreadProjection(command.threadId)).thread.taskContract
             ?.revision,
@@ -346,6 +353,408 @@ it.live(
           outbox: 0,
           messages: 0,
         });
+      }),
+    ),
+);
+
+it.live("reads committed and future rejected creation outcomes without mutating or replaying", () =>
+  withAgentsTaskCreationFixture((f) =>
+    Effect.gen(function* () {
+      const committed = agentsCreationCommand("status-committed");
+      assert.deepStrictEqual(yield* f.readStatus(committed), { status: "unknown" });
+      yield* f.dispatch(committed);
+      assert.deepStrictEqual(yield* f.readStatus(committed), { status: "committed" });
+      const rejected = agentsCreationCommand("status-rejected");
+      f.setProviders([]);
+      assert.isTrue(Exit.isFailure(yield* Effect.exit(f.dispatch(rejected))));
+      const changesBefore = yield* f.sql<{ n: number }>`SELECT total_changes() AS n`;
+      for (let i = 0; i < 2; i++)
+        assert.deepStrictEqual(yield* f.readStatus(rejected), { status: "rejected" });
+      assert.deepStrictEqual(yield* f.sql`SELECT total_changes() AS n`, changesBefore);
+      assert.deepStrictEqual(yield* f.readStatus(committed), { status: "committed" });
+      assert.deepStrictEqual(yield* f.noExecution(), {
+        runs: 0,
+        grants: 0,
+        outbox: 0,
+        messages: 0,
+      });
+      assert.strictEqual((yield* f.readSnapshot()).tasks.length, 1);
+    }),
+  ),
+);
+
+it.live.each([
+  "actor",
+  "readonly",
+  "missing-session",
+  "expired",
+  "environment",
+  "project",
+  "thread",
+  "command",
+  "title",
+  "contract",
+  "model",
+  "review",
+] as const)("does not disclose/unlock creation rejection to %s mismatch", (mode) =>
+  withAgentsTaskCreationFixture((f) =>
+    Effect.gen(function* () {
+      const command = agentsCreationCommand("isolated-rejection");
+      f.setProviders([]);
+      yield* Effect.exit(f.dispatch(command));
+      let query = command;
+      let actor: typeof agentsCreationActor & { expiresAt?: string } = agentsCreationActor;
+      if (mode === "actor") actor = { ...actor, actorId: "foreign" };
+      if (mode === "readonly") actor = { ...actor, scopes: ["orchestration:read"] };
+      if (mode === "missing-session") actor = { ...actor, sessionId: "" };
+      if (mode === "expired") actor = { ...actor, expiresAt: "2000-01-01T00:00:00Z" };
+      if (mode === "environment") f.setEnvironment("foreign");
+      if (mode === "project")
+        query = {
+          ...command,
+          projectId:
+            agentsCreationCommand("x").projectId === command.projectId
+              ? ("project-b" as typeof command.projectId)
+              : command.projectId,
+        };
+      if (mode === "thread")
+        query = { ...command, threadId: agentsCreationCommand("other").threadId };
+      if (mode === "command")
+        query = { ...command, commandId: agentsCreationCommand("other").commandId };
+      if (mode === "title") query = { ...command, title: "Other" };
+      if (mode === "contract")
+        query = { ...command, taskContract: { ...command.taskContract!, goal: "Other" } };
+      if (mode === "model")
+        query = { ...command, modelSelection: { ...command.modelSelection, model: "other" } };
+      if (mode === "review")
+        query = {
+          ...command,
+          taskCreationReview: {
+            ...command.taskCreationReview!,
+            projectId: "project-b" as typeof command.projectId,
+          },
+        };
+      const before = yield* f.sql`SELECT total_changes() AS n`;
+      const status = yield* f.readStatus(query, actor);
+      assert.deepStrictEqual(status, {
+        status:
+          mode === "readonly" || mode === "missing-session" || mode === "expired"
+            ? "unavailable"
+            : "unknown",
+      });
+      assert.deepStrictEqual(yield* f.sql`SELECT total_changes() AS n`, before);
+    }),
+  ),
+);
+
+it.live.each([
+  "accepted-first",
+  "rejected-first",
+  "same-thread-collision",
+  "different-thread-collision",
+  "legacy",
+  "rollback",
+  "corrupt-proof",
+  "conflicting-event",
+  "read-unavailable",
+] as const)("keeps first-writer creation finality through %s", (mode) =>
+  withAgentsTaskCreationFixture((f) =>
+    Effect.gen(function* () {
+      const a = agentsCreationCommand("first-writer-a");
+      const b = { ...agentsCreationCommand("first-writer-b"), commandId: a.commandId };
+      if (mode === "accepted-first") {
+        yield* f.dispatch(a);
+        f.setProviders([]);
+        yield* Effect.exit(f.dispatch(b));
+        assert.deepStrictEqual(yield* f.readStatus(a), { status: "committed" });
+        assert.deepStrictEqual(yield* f.readStatus(b), { status: "unknown" });
+        assert.strictEqual((yield* f.sql`SELECT * FROM agents_task_creation_rejections`).length, 0);
+      } else if (mode === "legacy") {
+        yield* f.eventSink.commitRejectedCommand({
+          commandId: a.commandId,
+          threadId: a.threadId,
+          commandType: a.type,
+          rejectedAt: yield* DateTime.now,
+          error: "foreign legacy error",
+        });
+        f.setProviders([]);
+        yield* Effect.exit(f.dispatch(a));
+        assert.deepStrictEqual(yield* f.readStatus(a), { status: "unknown" });
+        assert.strictEqual((yield* f.sql`SELECT * FROM agents_task_creation_rejections`).length, 0);
+      } else if (mode === "rollback") {
+        yield* f.sql`CREATE TRIGGER reject_proof_fault BEFORE INSERT ON agents_task_creation_rejections BEGIN SELECT RAISE(ABORT,'fixture proof fault'); END`;
+        f.setProviders([]);
+        yield* Effect.exit(f.dispatch(a));
+        assert.strictEqual(
+          (yield* f.sql`SELECT * FROM orchestration_command_receipts WHERE command_id=${a.commandId}`)
+            .length,
+          0,
+        );
+        assert.deepStrictEqual(yield* f.readStatus(a), { status: "unknown" });
+      } else if (mode === "same-thread-collision" || mode === "different-thread-collision") {
+        yield* f.dispatch(a);
+        const other = {
+          ...agentsCreationCommand("collision"),
+          ...(mode === "same-thread-collision"
+            ? { threadId: a.threadId }
+            : { commandId: a.commandId }),
+        };
+        f.setProviders([]);
+        yield* Effect.exit(f.dispatch(other));
+        assert.deepStrictEqual(yield* f.readStatus(other), {
+          status: mode === "same-thread-collision" ? "rejected" : "unknown",
+        });
+        assert.deepStrictEqual(yield* f.readStatus(a), { status: "committed" });
+      } else {
+        f.setProviders([]);
+        yield* Effect.exit(f.dispatch(a));
+        f.setProviders([agentsCreationProvider]);
+        yield* Effect.exit(f.dispatch(a));
+        yield* Effect.exit(f.dispatch(b));
+        assert.strictEqual((yield* f.readSnapshot()).tasks.length, 0);
+        assert.deepStrictEqual(yield* f.readStatus(a), { status: "rejected" });
+        assert.deepStrictEqual(yield* f.readStatus(b), { status: "unknown" });
+        if (mode === "corrupt-proof")
+          yield* f.sql`UPDATE agents_task_creation_rejections SET command_json='{}' WHERE command_id=${a.commandId}`;
+        if (mode === "conflicting-event") {
+          const other = agentsCreationCommand("contradiction");
+          yield* f.dispatch(other);
+          yield* f.sql`UPDATE orchestration_events SET command_id=${a.commandId} WHERE command_id=${other.commandId}`;
+        }
+        if (mode === "read-unavailable") yield* f.sql`DROP TABLE agents_task_creation_rejections`;
+        if (mode !== "rejected-first")
+          assert.deepStrictEqual(yield* f.readStatus(a), {
+            status: mode === "read-unavailable" ? "unavailable" : "unknown",
+          });
+      }
+      assert.deepStrictEqual(yield* f.noExecution(), {
+        runs: 0,
+        grants: 0,
+        outbox: 0,
+        messages: 0,
+      });
+    }),
+  ),
+);
+
+it.live(
+  "recovers only bound durable evidence after closing and reopening a disposable service",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "b3r-receipt-restart-" });
+        const command = agentsCreationCommand("restarted-rejected");
+        const committed = agentsCreationCommand("restarted-committed");
+        yield* withAgentsTaskCreationFixture(
+          (f) =>
+            Effect.gen(function* () {
+              yield* f.dispatch(committed);
+              f.setProviders([]);
+              yield* Effect.exit(f.dispatch(command));
+              assert.deepStrictEqual(yield* f.readStatus(command), { status: "rejected" });
+            }),
+          { dbPath: `${dir}/fixture.sqlite` },
+        );
+        yield* withAgentsTaskCreationFixture(
+          (f) =>
+            Effect.gen(function* () {
+              const before = yield* f.sql`SELECT total_changes() AS n`;
+              assert.deepStrictEqual(yield* f.readStatus(command), { status: "rejected" });
+              assert.deepStrictEqual(yield* f.readStatus(committed), { status: "committed" });
+              assert.deepStrictEqual(yield* f.sql`SELECT total_changes() AS n`, before);
+              assert.deepStrictEqual(yield* f.noExecution(), {
+                runs: 0,
+                grants: 0,
+                outbox: 0,
+                messages: 0,
+              });
+            }),
+          { dbPath: `${dir}/fixture.sqlite` },
+        );
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live.each(["time", "error"] as const)(
+  "keeps contradictory accepted receipt %s metadata unknown",
+  (mode) =>
+    withAgentsTaskCreationFixture((f) =>
+      Effect.gen(function* () {
+        const command = agentsCreationCommand(`accepted-corrupt-${mode}`);
+        yield* f.dispatch(command);
+        assert.deepStrictEqual(yield* f.readStatus(command), { status: "committed" });
+        if (mode === "time")
+          yield* f.sql`UPDATE orchestration_command_receipts SET accepted_at='not-a-timestamp' WHERE command_id=${command.commandId}`;
+        else
+          yield* f.sql`UPDATE orchestration_command_receipts SET error='private contradictory error' WHERE command_id=${command.commandId}`;
+        const before = yield* f.sql`SELECT total_changes() AS n`;
+        assert.deepStrictEqual(yield* f.readStatus(command), { status: "unknown" });
+        assert.deepStrictEqual(yield* f.sql`SELECT total_changes() AS n`, before);
+        assert.strictEqual((yield* f.readSnapshot()).tasks.length, 1);
+        assert.deepStrictEqual(yield* f.noExecution(), {
+          runs: 0,
+          grants: 0,
+          outbox: 0,
+          messages: 0,
+        });
+      }),
+    ),
+);
+
+const decodeRaceCreationProof = Schema.decodeUnknownSync(
+  Schema.fromJsonString(OrchestrationV2Command),
+);
+
+it.live.each([
+  "accepted/same",
+  "accepted/different",
+  "rejected/same",
+  "rejected/different",
+] as const)(
+  "resolves actual EventSink reservation/commit race with %s winner and preserves replay",
+  (mode) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const winner = mode.startsWith("accepted/") ? "accepted" : "rejected";
+        const kind = mode.endsWith("/same") ? "same" : "different";
+        const a = agentsCreationCommand(`boundary-${mode.replace("/", "-")}`);
+        const b =
+          kind === "same"
+            ? a
+            : { ...agentsCreationCommand(`${a.threadId}-other`), commandId: a.commandId };
+        const planned = yield* Deferred.make<void>();
+        const allowAccept = yield* Deferred.make<void>();
+        const reserved = yield* Deferred.make<void>();
+        const releaseWinner = yield* Deferred.make<void>();
+        const acceptEntered = yield* Deferred.make<void>();
+        const rejectEntered = yield* Deferred.make<void>();
+        const inserts: Array<{ status: string; won: boolean }> = [];
+        let plan: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0] | undefined;
+        yield* withAgentsTaskCreationFixture(
+          (f) =>
+            Effect.gen(function* () {
+              const accepted = yield* f.dispatch(a).pipe(Effect.exit, Effect.forkChild);
+              yield* Deferred.await(planned);
+              // Both contenders enter the real EventSink, while the winner still owns its SQL transaction.
+              const beginReject = f.reject(b).pipe(Effect.forkChild);
+              if (winner === "accepted") {
+                yield* Deferred.succeed(allowAccept, undefined);
+                yield* Deferred.await(reserved);
+                const rejection = yield* beginReject;
+                yield* Deferred.await(rejectEntered);
+                yield* Deferred.succeed(releaseWinner, undefined);
+                const acceptedResult = yield* Fiber.join(accepted);
+                const rejectionResult = yield* Fiber.join(rejection);
+                assert.isTrue(Exit.isSuccess(acceptedResult));
+                assert.strictEqual(rejectionResult.status, "accepted");
+              } else {
+                const rejection = yield* beginReject;
+                yield* Deferred.await(reserved);
+                yield* Deferred.succeed(allowAccept, undefined);
+                yield* Deferred.await(acceptEntered);
+                yield* Deferred.succeed(releaseWinner, undefined);
+                const rejectionResult = yield* Fiber.join(rejection);
+                const acceptedResult = yield* Fiber.join(accepted);
+                assert.strictEqual(rejectionResult.status, "rejected");
+                assert.isTrue(Exit.isFailure(acceptedResult));
+              }
+              assert.deepStrictEqual(inserts, [
+                { status: winner, won: true },
+                { status: winner === "accepted" ? "rejected" : "accepted", won: false },
+              ]);
+              const receipts = yield* f.sql<{
+                status: string;
+                aggregate_id: string;
+              }>`SELECT status,aggregate_id FROM orchestration_command_receipts WHERE command_id=${a.commandId}`;
+              assert.deepStrictEqual(receipts, [
+                { status: winner, aggregate_id: winner === "accepted" ? a.threadId : b.threadId },
+              ]);
+              const proofs = yield* f.sql<{
+                actor_id: string;
+                command_json: string;
+              }>`SELECT actor_id,command_json FROM agents_task_creation_rejections WHERE command_id=${a.commandId}`;
+              assert.strictEqual(proofs.length, winner === "rejected" ? 1 : 0);
+              if (winner === "rejected") {
+                assert.strictEqual(proofs[0]!.actor_id, agentsCreationActor.actorId);
+                assert.deepStrictEqual(decodeRaceCreationProof(proofs[0]!.command_json), b);
+              }
+              assert.strictEqual(
+                (yield* f.sql`SELECT sequence FROM orchestration_events WHERE command_id=${a.commandId}`)
+                  .length,
+                winner === "accepted" ? 1 : 0,
+              );
+              assert.strictEqual(
+                (yield* f.sql`SELECT thread_id FROM orchestration_v2_projection_threads`).length,
+                winner === "accepted" ? 1 : 0,
+              );
+              assert.strictEqual(
+                (yield* f.readSnapshot()).tasks.length,
+                winner === "accepted" ? 1 : 0,
+              );
+              assert.deepStrictEqual(yield* f.readStatus(winner === "accepted" ? a : b), {
+                status: winner === "accepted" ? "committed" : "rejected",
+              });
+              if (kind === "different")
+                assert.deepStrictEqual(yield* f.readStatus(winner === "accepted" ? b : a), {
+                  status: "unknown",
+                });
+              const before = yield* f.sql`SELECT total_changes() AS n`;
+              if (winner === "accepted") {
+                assert.isDefined(plan);
+                const replay = yield* f.commitCreation(plan!);
+                assert.isFalse(replay.committed);
+                assert.strictEqual(replay.receipt.status, "accepted");
+                yield* f.dispatch(a);
+              } else {
+                assert.strictEqual((yield* f.reject(b)).status, "rejected");
+                assert.isTrue(Exit.isFailure(yield* Effect.exit(f.dispatch(b))));
+              }
+              assert.deepStrictEqual(yield* f.sql`SELECT total_changes() AS n`, before);
+              assert.deepStrictEqual(yield* f.noExecution(), {
+                runs: 0,
+                grants: 0,
+                outbox: 0,
+                messages: 0,
+              });
+            }),
+          {
+            decorateEventSink: (service) => ({
+              ...service,
+              commitCommand: (input) =>
+                Effect.gen(function* () {
+                  if (input.commandId === a.commandId) {
+                    plan = input;
+                    yield* Deferred.succeed(planned, undefined);
+                    yield* Deferred.await(allowAccept);
+                    yield* Deferred.succeed(acceptEntered, undefined);
+                  }
+                  return yield* service.commitCommand(input);
+                }),
+              commitRejectedCommand: (input) =>
+                Effect.gen(function* () {
+                  if (input.commandId === a.commandId)
+                    yield* Deferred.succeed(rejectEntered, undefined);
+                  return yield* service.commitRejectedCommand(input);
+                }),
+            }),
+            decorateCommandReceipts: (service) => ({
+              ...service,
+              insertIfAbsent: (receipt) =>
+                Effect.gen(function* () {
+                  const won = yield* service.insertIfAbsent(receipt);
+                  if (receipt.commandId === a.commandId) {
+                    inserts.push({ status: receipt.status, won });
+                    if (won && receipt.status === winner) {
+                      yield* Deferred.succeed(reserved, undefined);
+                      yield* Deferred.await(releaseWinner);
+                    }
+                  }
+                  return won;
+                }),
+            }),
+          },
+        );
       }),
     ),
 );

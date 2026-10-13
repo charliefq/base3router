@@ -3,13 +3,13 @@ import * as Schema from "effect/Schema";
 
 const STORAGE_KEY = "t3:agents-governed-creation:v1";
 const Attempt = Schema.Struct({
-  status: Schema.Literals(["pending", "uncertain", "confirmed"]),
+  status: Schema.Literals(["pending", "uncertain", "confirmed", "rejected"]),
   command: OrchestrationV2Command,
 });
 const decode = Schema.decodeUnknownOption(Schema.fromJsonString(Attempt));
 const encode = Schema.encodeSync(Schema.fromJsonString(Attempt));
 export type AgentsCreationAttempt = {
-  readonly status: "pending" | "uncertain" | "confirmed";
+  readonly status: "pending" | "uncertain" | "confirmed" | "rejected";
   readonly command: Extract<OrchestrationV2Command, { type: "thread.create" }>;
 };
 export function readAgentsCreationAttempt(): {

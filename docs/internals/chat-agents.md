@@ -29,10 +29,12 @@ resuming remain separate decisions.
 If a response is lost, **Recover task creation** reads the original identity;
 it does not resend creation or allocate another task. An unresolved attempt is
 retained in this browser session across navigation and reload. Return to its
-original environment and project to reconcile. If no owned persisted task can
-be confirmed, creation stays blocked: absence alone does not prove the original
-request could not commit. Restoring recovery storage or obtaining authoritative
-receipt evidence is required before a new identity can be allocated.
+original environment and project to reconcile. A fresh authenticated receipt read can confirm the owned committed task or
+prove rejection of a future reviewed attempt. Only after that proof may you
+separately choose New task, review and confirm a new draft. A rejected attempt
+does not mean its thread is empty. Missing or legacy unbound receipts remain
+unknown and block creation; cached outcomes must be revalidated after reload or
+context changes.
 
 The HTTP command is sealed with the authenticated principal. Client `actor`
 and `fromAgentId` are discarded. The project must exist, and a thread bind

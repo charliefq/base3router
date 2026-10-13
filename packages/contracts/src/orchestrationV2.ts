@@ -2990,6 +2990,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getThreadProjection: "orchestration.getThreadProjection",
   getTaskUsage: "orchestration.getTaskUsage",
   getTaskReview: "orchestration.getTaskReview",
+  getAgentsCreationStatus: "orchestration.getAgentsCreationStatus",
   getTaskUsageCohort: "orchestration.getTaskUsageCohort",
   getWorkflowScript: "orchestration.getWorkflowScript",
   launchThread: "orchestration.launchThread",
@@ -3357,6 +3358,21 @@ export const OrchestrationV2RpcSchemas = {
     output: OrchestrationV2ThreadProjection,
   },
   getTaskReview: { input: TaskContractReviewInput, output: TaskContractReviewState },
+  getAgentsCreationStatus: {
+    input: Schema.Struct({
+      command: OrchestrationV2Command.members[0].check(
+        Schema.makeFilter(
+          (c) =>
+            c.taskCreationReview !== undefined &&
+            c.taskContract !== undefined &&
+            c.taskGovernance === "required",
+        ),
+      ),
+    }),
+    output: Schema.Struct({
+      status: Schema.Literals(["committed", "rejected", "unknown", "unavailable"]),
+    }),
+  },
   getTaskUsage: {
     input: Schema.Struct({ threadId: ThreadId }),
     output: TaskUsageSummary,

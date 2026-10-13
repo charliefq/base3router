@@ -1,14 +1,15 @@
 import {
   AgentsTaskCreationReview,
+  OrchestrationV2Command,
   AuthOrchestrationOperateScope,
   OrchestrationV2AppThreadJson,
   TaskContractFields,
   ModelSelection,
   isProviderAvailable,
   isProviderTextGenerationCapable,
-  type OrchestrationV2Command,
   type OrchestrationV2AppThread,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -66,10 +67,15 @@ export class AgentsTaskCreationDenied extends Schema.TaggedError<AgentsTaskCreat
 ) {}
 const principal = Effect.gen(function* () {
   const context = yield* PolicyExecutionContext;
+  const now = yield* DateTime.now;
   if (
     context.kind !== "session" ||
     !context.actorId.trim() ||
-    !context.scopes.includes(AuthOrchestrationOperateScope)
+    !context.sessionId.trim() ||
+    !context.scopes.includes(AuthOrchestrationOperateScope) ||
+    (context.expiresAt !== undefined &&
+      (!Number.isFinite(Date.parse(context.expiresAt)) ||
+        Date.parse(context.expiresAt) <= DateTime.toEpochMillis(now)))
   )
     return yield* new AgentsTaskCreationDenied({
       reason: "Authenticated operate authority is required.",
@@ -225,4 +231,118 @@ export const verifyReviewedCreateReplay = Effect.fn("governedCreation.verifyRevi
     });
     if (facts.status !== "available") return yield* refuse();
   },
+);
+
+const encodeCommand = Schema.encodeSync(Schema.fromJsonString(OrchestrationV2Command.members[0]));
+const decodeCommand = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2Command.members[0]),
+);
+const sameCommand = Schema.toEquivalence(OrchestrationV2Command.members[0]);
+
+/** Only the winning rejection transaction calls this. No legacy receipt gains ownership. */
+export const persistReviewedCreateRejection = Effect.fn("governedCreation.persistRejection")(
+  function* (
+    sql: SqlClient.SqlClient,
+    command: Create,
+    rejectedAt: string,
+    resultSequence: number,
+  ) {
+    if (
+      !command.taskCreationReview ||
+      !command.taskContract ||
+      command.taskGovernance !== "required"
+    )
+      return;
+    const actor = yield* principal.pipe(Effect.option);
+    const environment = yield* Effect.serviceOption(ServerEnvironment);
+    if (Option.isNone(actor) || Option.isNone(environment)) return;
+    const environmentId = yield* environment.value.getEnvironmentId;
+    if (environmentId !== command.taskCreationReview.environmentId) return;
+    yield* sql`INSERT INTO agents_task_creation_rejections
+      (command_id,actor_id,environment_id,command_json,rejected_at,result_sequence)
+      VALUES (${command.commandId},${actor.value},${environmentId},${encodeCommand(command)},${rejectedAt},${resultSequence})`;
+  },
+);
+
+/** Absence and unbound legacy receipts say nothing about an attempt's outcome. */
+export const readAgentsCreationStatus = Effect.fn("governedCreation.readStatus")(
+  function* (sql: SqlClient.SqlClient, command: OrchestrationV2Command) {
+    if (command.type !== "thread.create" || !command.taskCreationReview || !command.taskContract)
+      return { status: "unknown" as const };
+    const actorId = yield* principal;
+    const environment = yield* Effect.serviceOption(ServerEnvironment);
+    if (Option.isNone(environment)) return { status: "unavailable" as const };
+    const environmentId = yield* environment.value.getEnvironmentId;
+    if (environmentId !== command.taskCreationReview.environmentId)
+      return { status: "unknown" as const };
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const receipts = yield* sql<{
+          aggregate_kind: string;
+          aggregate_id: string;
+          command_type: string;
+          status: string;
+          accepted_at: string;
+          result_sequence: number;
+          error: string | null;
+        }>`
+        SELECT aggregate_kind,aggregate_id,command_type,status,accepted_at,result_sequence,error
+        FROM orchestration_command_receipts WHERE command_id=${command.commandId}`;
+        const receipt = receipts.length === 1 ? receipts[0] : undefined;
+        if (
+          !receipt ||
+          receipt.aggregate_kind !== "thread" ||
+          receipt.aggregate_id !== command.threadId ||
+          receipt.command_type !== "thread.create"
+        )
+          return { status: "unknown" as const };
+        const proofs = yield* sql<{
+          actor_id: string;
+          environment_id: string;
+          command_json: string;
+          rejected_at: string;
+          result_sequence: number;
+        }>`
+        SELECT actor_id,environment_id,command_json,rejected_at,result_sequence
+        FROM agents_task_creation_rejections WHERE command_id=${command.commandId}`;
+        const events = yield* sql<{
+          sequence: number;
+          occurred_at: string;
+        }>`SELECT sequence,occurred_at FROM orchestration_events WHERE command_id=${command.commandId}`;
+        if (receipt.status === "accepted") {
+          if (
+            proofs.length !== 0 ||
+            events.length !== 1 ||
+            events[0]!.sequence !== receipt.result_sequence ||
+            events[0]!.occurred_at !== receipt.accepted_at ||
+            receipt.error !== null
+          )
+            return { status: "unknown" as const };
+          const verified = yield* verifyReviewedCreateReplay(sql, command).pipe(
+            Effect.as(true),
+            Effect.catchTag("AgentsTaskCreationDenied", () => Effect.succeed(false)),
+          );
+          return {
+            status: verified ? ("committed" as const) : ("unknown" as const),
+          };
+        }
+        const proof = proofs.length === 1 ? proofs[0] : undefined;
+        const intent = proof ? decodeCommand(proof.command_json) : Option.none();
+        if (
+          receipt.status !== "rejected" ||
+          !proof ||
+          events.length !== 0 ||
+          proof.actor_id !== actorId ||
+          proof.environment_id !== environmentId ||
+          proof.rejected_at !== receipt.accepted_at ||
+          proof.result_sequence !== receipt.result_sequence ||
+          Option.isNone(intent) ||
+          !sameCommand(intent.value, command)
+        )
+          return { status: "unknown" as const };
+        return { status: "rejected" as const };
+      }),
+    );
+  },
+  Effect.catch(() => Effect.succeed({ status: "unavailable" as const })),
 );

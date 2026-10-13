@@ -8,8 +8,10 @@ import {
   type EnvironmentId,
   type ServerProvider,
   type CollaborationSnapshot,
-  type OrchestrationV2Command,
+  OrchestrationV2Command,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
+import { usePreparedConnection } from "../../state/session";
 import * as Schema from "effect/Schema";
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { threadEnvironment } from "../../state/threads";
@@ -34,6 +36,7 @@ import {
 } from "../ui/alert-dialog";
 
 type Create = Extract<OrchestrationV2Command, { type: "thread.create" }>;
+const sameCommand = Schema.toEquivalence(OrchestrationV2Command.members[0]);
 const sameContract = Schema.toEquivalence(TaskContractFields);
 const sameReview = Schema.toEquivalence(AgentsTaskCreationReview);
 const decodeContract = Schema.decodeUnknownOption(TaskContractFields);
@@ -90,7 +93,10 @@ export function AgentsTaskCreator(props: {
   readonly onOpen: (environmentId: EnvironmentId, threadId: ThreadId) => void;
   readonly refresh: () => Promise<CollaborationSnapshot | undefined>;
 }) {
+  const sessionContext = Option.getOrNull(usePreparedConnection(props.environmentId));
+  const currentSessionContext = useRef(sessionContext);
   const create = useAtomCommand(threadEnvironment.create, { reportFailure: false });
+  const readStatus = useAtomCommand(threadEnvironment.readCreationStatus, { reportFailure: false });
   const readProjection = useAtomCommand(threadEnvironment.readProjection, { reportFailure: false });
   const [attempt, setAttempt] = useState<AgentsCreationAttempt | null>(() => {
     const saved = readAgentsCreationAttempt().attempt;
@@ -141,17 +147,25 @@ export function AgentsTaskCreator(props: {
     };
   }, []);
   useLayoutEffect(() => {
-    if (currentContext.current !== context) {
+    if (currentContext.current !== context || currentSessionContext.current !== sessionContext) {
+      currentSessionContext.current = sessionContext;
       currentContext.current = context;
       epoch.current += 1;
       recoveryOwner.current = null;
+      confirmedIdentity.current = null;
+      if (attemptRef.current) {
+        const unresolved: AgentsCreationAttempt = { ...attemptRef.current, status: "uncertain" };
+        attemptRef.current = unresolved;
+        setAttempt(unresolved);
+        latest.current.onLock(unresolved.command.commandId);
+      }
       setRecovering(false);
       if (editingOwner.current) latest.current.onRelease(editingOwner.current);
       editingOwner.current = null;
       setEditing(null);
       closeReview();
     }
-  }, [context, closeReview]);
+  }, [context, sessionContext, closeReview]);
   const requestToken = props.request?.token;
   useLayoutEffect(() => {
     const currentProps = latest.current;
@@ -160,8 +174,10 @@ export function AgentsTaskCreator(props: {
     if (
       stored.error ||
       (stored.attempt &&
-        (stored.attempt.status !== "confirmed" ||
-          confirmedIdentity.current !== stored.attempt.command.commandId))
+        ((stored.attempt.status !== "confirmed" && stored.attempt.status !== "rejected") ||
+          confirmedIdentity.current !== stored.attempt.command.commandId ||
+          !attemptRef.current ||
+          !sameCommand(stored.attempt.command, attemptRef.current.command)))
     ) {
       setNotice(stored.error ?? "Recover the original task creation before creating another task.");
       if (stored.attempt) {
@@ -185,6 +201,8 @@ export function AgentsTaskCreator(props: {
       return;
     }
     epoch.current += 1;
+    mutationOwner.current = null;
+    recoveryOwner.current = null;
     setAttempt(null);
     attemptRef.current = null;
     setDraft(blank);
@@ -263,7 +281,12 @@ export function AgentsTaskCreator(props: {
     return true;
   };
   const uncertain = (command: Create, generation: number) => {
-    if (!current(command, generation) || attemptRef.current?.status === "confirmed") return;
+    if (
+      !current(command, generation) ||
+      attemptRef.current?.status === "confirmed" ||
+      attemptRef.current?.status === "rejected"
+    )
+      return;
     const next: AgentsCreationAttempt = { command, status: "uncertain" };
     try {
       writeAgentsCreationAttempt(next);
@@ -320,7 +343,12 @@ export function AgentsTaskCreator(props: {
         environmentId: command.taskCreationReview!.environmentId,
         input: command,
       });
-      if (!current(command, generation) || attemptRef.current?.status === "confirmed") return;
+      if (
+        !current(command, generation) ||
+        attemptRef.current?.status === "confirmed" ||
+        attemptRef.current?.status === "rejected"
+      )
+        return;
       if (result._tag !== "Success" || !(await confirmPersisted(command, generation)))
         uncertain(command, generation);
     } catch {
@@ -340,14 +368,37 @@ export function AgentsTaskCreator(props: {
     setRecovering(true);
     const generation = epoch.current;
     try {
-      if (!(await confirmPersisted(saved.command, generation)))
+      const result = await readStatus({
+        environmentId: saved.command.taskCreationReview!.environmentId,
+        input: { command: saved.command },
+      });
+      if (!current(saved.command, generation)) return;
+      if (result._tag === "Success" && result.value.status === "rejected") {
+        const rejected: AgentsCreationAttempt = { command: saved.command, status: "rejected" };
+        writeAgentsCreationAttempt(rejected);
+        attemptRef.current = rejected;
+        setAttempt(rejected);
+        confirmedIdentity.current = saved.command.commandId;
+        mutationOwner.current = null;
+        setPending(false);
+        epoch.current += 1;
+        setNotice(
+          "This reviewed creation attempt was rejected. You may separately choose New task, review a new draft and confirm it. No retry was sent; another task may already use the original thread.",
+        );
+        latest.current.onRelease(saved.command.commandId);
+      } else if (
+        result._tag !== "Success" ||
+        result.value.status !== "committed" ||
+        !(await confirmPersisted(saved.command, generation))
+      ) {
         uncertain(saved.command, generation);
+      }
     } catch {
       uncertain(saved.command, generation);
     } finally {
       if (recoveryOwner.current === owner) {
         recoveryOwner.current = null;
-        if (current(saved.command, generation)) setRecovering(false);
+        if (mounted.current) setRecovering(false);
       }
     }
   };
@@ -405,7 +456,7 @@ export function AgentsTaskCreator(props: {
     epoch.current += 1;
     const retained = readAgentsCreationAttempt().attempt;
     if (
-      retained?.status === "confirmed" &&
+      (retained?.status === "confirmed" || retained?.status === "rejected") &&
       confirmedIdentity.current === retained.command.commandId
     ) {
       attemptRef.current = retained;
@@ -423,7 +474,7 @@ export function AgentsTaskCreator(props: {
   return (
     <section aria-label="Governed task creation">
       {notice ? <p role={attempt?.status === "confirmed" ? "status" : "alert"}>{notice}</p> : null}
-      {attempt && attempt.status !== "confirmed" ? (
+      {attempt && attempt.status !== "confirmed" && attempt.status !== "rejected" ? (
         <>
           <p>
             Original task: {attempt.command.title}. Environment:{" "}

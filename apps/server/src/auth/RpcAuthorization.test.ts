@@ -150,6 +150,9 @@ it("requires operate permission for tool updates even alongside a read-only chec
 });
 
 it("keeps Tasks eligibility a read and decisions on the existing operate boundary", () => {
+  expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.getAgentsCreationStatus)).toBe(
+    AuthOrchestrationOperateScope,
+  );
   expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.getTaskReview)).toBe(
     AuthOrchestrationReadScope,
   );

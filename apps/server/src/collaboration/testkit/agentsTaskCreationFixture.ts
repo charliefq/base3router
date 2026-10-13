@@ -16,11 +16,15 @@ import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
-import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import {
+  SqlitePersistenceMemory,
+  makeSqlitePersistenceLive,
+} from "../../persistence/Layers/Sqlite.ts";
 import { PolicyExecutionContext } from "../../policy/executionContext.ts";
 import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
+import type * as CommandReceiptStore from "../../orchestration-v2/CommandReceiptStore.ts";
 import * as EventSink from "../../orchestration-v2/EventSink.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectStore from "../../orchestration-v2/ProjectStore.ts";
@@ -95,6 +99,16 @@ type Fixture = {
     command: OrchestrationV2Command,
     actor?: typeof agentsCreationActor,
   ) => ReturnType<Orchestrator.OrchestratorV2["Service"]["dispatch"]>;
+  reject: (
+    command: Extract<OrchestrationV2Command, { type: "thread.create" }>,
+  ) => ReturnType<EventSink.EventSinkV2["Service"]["commitRejectedCommand"]>;
+  commitCreation: (
+    input: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0],
+  ) => ReturnType<EventSink.EventSinkV2["Service"]["commitCommand"]>;
+  readStatus: (
+    command: OrchestrationV2Command,
+    actor?: typeof agentsCreationActor,
+  ) => ReturnType<Orchestrator.OrchestratorV2["Service"]["getAgentsCreationStatus"]>;
   readSnapshot: () => ReturnType<typeof readCollaborationSnapshot>;
   readReview: (
     input: TaskContractReviewInput,
@@ -107,6 +121,15 @@ type Fixture = {
 };
 export const withAgentsTaskCreationFixture = <E>(
   check: (fixture: Fixture) => Effect.Effect<void, E>,
+  options: {
+    readonly dbPath?: string;
+    readonly decorateEventSink?: (
+      service: EventSink.EventSinkV2["Service"],
+    ) => EventSink.EventSinkV2["Service"];
+    readonly decorateCommandReceipts?: (
+      service: CommandReceiptStore.CommandReceiptStoreV2["Service"],
+    ) => CommandReceiptStore.CommandReceiptStoreV2["Service"];
+  } = {},
 ) => {
   let providers: ReadonlyArray<ServerProvider> = [agentsCreationProvider];
   let providerReadCount = 0;
@@ -121,11 +144,20 @@ export const withAgentsTaskCreationFixture = <E>(
   const environmentLayer = Layer.mock(ServerEnvironment)({
     getEnvironmentId: Effect.sync(() => EnvironmentId.make(environment)),
   });
-  const database = SqlitePersistenceMemory;
+  const database = options.dbPath
+    ? makeSqlitePersistenceLive(options.dbPath).pipe(Layer.provide(NodeServices.layer))
+    : SqlitePersistenceMemory;
   const orchestrator = makeOrchestratorV2ReplayLayerWithRegistry(
     { name: "agents-task-creation" },
     ProviderAdapterRegistry.makeLayer([]),
-    { databaseLayer: database, runEffectWorker: false },
+    {
+      databaseLayer: database,
+      runEffectWorker: false,
+      ...(options.decorateEventSink ? { decorateEventSink: options.decorateEventSink } : {}),
+      ...(options.decorateCommandReceipts
+        ? { decorateCommandReceipts: options.decorateCommandReceipts }
+        : {}),
+    },
   );
   const dependencies = Layer.mergeAll(
     database,
@@ -149,7 +181,7 @@ export const withAgentsTaskCreationFixture = <E>(
       const context = yield* Effect.context();
       const now = DateTime.formatIso(yield* DateTime.now);
       for (const id of ["project-a", "project-b"])
-        yield* sql`INSERT INTO projection_projects (project_id,title,workspace_root,scripts_json,created_at,updated_at) VALUES (${id},${id},'/tmp','[]',${now},${now})`;
+        yield* sql`INSERT OR IGNORE INTO projection_projects (project_id,title,workspace_root,scripts_json,created_at,updated_at) VALUES (${id},${id},'/tmp','[]',${now},${now})`;
       const actorContext = Effect.provideService(PolicyExecutionContext, agentsCreationActor);
       yield* check({
         sql,
@@ -167,6 +199,23 @@ export const withAgentsTaskCreationFixture = <E>(
         dispatch: (command, actor = agentsCreationActor) =>
           service
             .dispatch(command)
+            .pipe(Effect.provideService(PolicyExecutionContext, actor), Effect.provide(context)),
+        reject: (command) =>
+          Effect.gen(function* () {
+            return yield* eventSink.commitRejectedCommand({
+              commandId: command.commandId,
+              threadId: command.threadId,
+              commandType: command.type,
+              creationCommand: command,
+              rejectedAt: yield* DateTime.now,
+              error: "Controlled fixture rejection",
+            });
+          }).pipe(actorContext, Effect.provide(context)),
+        commitCreation: (input) =>
+          eventSink.commitCommand(input).pipe(actorContext, Effect.provide(context)),
+        readStatus: (command, actor = agentsCreationActor) =>
+          service
+            .getAgentsCreationStatus({ command })
             .pipe(Effect.provideService(PolicyExecutionContext, actor), Effect.provide(context)),
         readSnapshot: () =>
           readCollaborationSnapshot(sql, agentsCreationActor.actorId, {
