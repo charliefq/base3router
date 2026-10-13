@@ -59,32 +59,46 @@ function useCollaboration(environmentId: EnvironmentId | null) {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const currentEnvironment = useRef(environmentId);
+  const readGeneration = useRef(0);
   useLayoutEffect(() => {
+    readGeneration.current += 1;
     currentEnvironment.current = environmentId;
     return () => {
+      readGeneration.current += 1;
       currentEnvironment.current = null;
     };
   }, [environmentId]);
 
-  useEffect(() => {
-    if (!environmentId) return;
-    let active = true;
-    void loadSnapshot().then(
-      (snapshot) => {
-        if (!active) return;
-        setLoaded({ environmentId, snapshot });
-        setError(null);
-      },
-      (cause) => {
-        if (!active) return;
-        setError(cause instanceof Error ? cause.message : "The agent directory could not be read.");
-      },
-    );
-    return () => {
-      active = false;
-    };
+  const read = useCallback(() => {
+    if (!environmentId || currentEnvironment.current !== environmentId) return;
+    const generation = ++readGeneration.current;
+    const isCurrent = () =>
+      generation === readGeneration.current && currentEnvironment.current === environmentId;
+    return loadSnapshot()
+      .then(
+        (snapshot) => {
+          if (isCurrent()) {
+            setLoaded({ environmentId, snapshot });
+            setError(null);
+          }
+        },
+        (cause) => {
+          if (isCurrent())
+            setError(
+              cause instanceof Error ? cause.message : "The agent directory could not be read.",
+            );
+        },
+      )
+      .finally(() => {
+        if (isCurrent()) setRefreshing(false);
+      });
   }, [environmentId]);
+
+  useEffect(() => {
+    void read();
+  }, [read]);
 
   const execute = useCallback(
     async (request: () => Promise<CollaborationCommandResult>) => {
@@ -107,22 +121,13 @@ function useCollaboration(environmentId: EnvironmentId | null) {
     [environmentId],
   );
 
-  const refresh = async () => {
-    if (!environmentId || currentEnvironment.current !== environmentId) return;
-    try {
-      const snapshot = await loadSnapshot();
-      if (currentEnvironment.current === environmentId) {
-        setLoaded({ environmentId, snapshot });
-        setError(null);
-      }
-    } catch (cause) {
-      if (currentEnvironment.current === environmentId)
-        setError(cause instanceof Error ? cause.message : "The task directory could not be read.");
-    }
-  };
-
   return {
-    refresh,
+    refresh: () => {
+      if (!environmentId || currentEnvironment.current !== environmentId) return;
+      setRefreshing(true);
+      return read();
+    },
+    refreshing,
     snapshot: loaded?.environmentId === environmentId ? loaded.snapshot : null,
     error,
     pending,
@@ -452,8 +457,7 @@ export function AgentsPage() {
 export function TasksPage() {
   const navigate = useNavigate();
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
-  const { snapshot, error, refresh } = useCollaboration(environmentId);
-  const [refreshing, setRefreshing] = useState(false);
+  const { snapshot, error, refresh, refreshing } = useCollaboration(environmentId);
   const tasks = snapshot?.tasks ?? [];
 
   const openTask = (task: CollaborationTask) => {
@@ -482,8 +486,7 @@ export function TasksPage() {
                 variant="outline"
                 disabled={!environmentId || refreshing}
                 onClick={() => {
-                  setRefreshing(true);
-                  void refresh().finally(() => setRefreshing(false));
+                  void refresh();
                 }}
               >
                 {refreshing ? "Refreshing tasks…" : "Refresh tasks"}
@@ -492,6 +495,11 @@ export function TasksPage() {
             {error ? (
               <Alert variant="error">
                 <AlertDescription>{error}</AlertDescription>
+                {snapshot ? (
+                  <AlertDescription>
+                    Task data may be stale. The read failed; showing the last successful task data.
+                  </AlertDescription>
+                ) : null}
               </Alert>
             ) : null}
             {!environmentId ? (
