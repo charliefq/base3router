@@ -4,7 +4,7 @@ import {
   type TaskContractFields,
   type TaskUsageSummary,
 } from "@t3tools/contracts";
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 
 import { Button } from "../ui/button";
 
@@ -144,17 +144,40 @@ export function TaskContractReadout(props: {
   readonly revision: number | null;
   readonly phase: string;
   readonly acceptedRevision: number | null;
-  readonly onAccept?: (() => void) | undefined;
-  readonly onRedirect?: (() => void) | undefined;
-  readonly onResume?: (() => void) | undefined;
+  readonly onAccept?: (() => void | Promise<void>) | undefined;
+  readonly onRedirect?: (() => void | Promise<void>) | undefined;
+  readonly onResume?: (() => void | Promise<void>) | undefined;
 }) {
   const [pending, setPending] = useState(false);
+  const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
+  const currentKey = `${props.revision}:${props.phase}:${props.acceptedRevision}`;
+  const currentFailure = failure?.key === currentKey ? failure.message : null;
+  const pendingRef = useRef(false);
+  const mounted = useRef(true);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const accepted = props.acceptedRevision !== null && props.acceptedRevision === props.revision;
-  const run = (action: (() => void) | undefined) => {
-    if (action === undefined || pending) return;
+  const run = async (action: (() => void | Promise<void>) | undefined) => {
+    if (action === undefined || pendingRef.current || currentFailure !== null) return;
+    pendingRef.current = true;
+    setFailure(null);
     setPending(true);
-    action();
-    setPending(false);
+    try {
+      await action();
+    } catch {
+      if (mounted.current)
+        setFailure({
+          key: currentKey,
+          message: "Decision response is uncertain. Refresh the contract before another decision.",
+        });
+    } finally {
+      pendingRef.current = false;
+      if (mounted.current) setPending(false);
+    }
   };
   return (
     <article
@@ -162,6 +185,7 @@ export function TaskContractReadout(props: {
       data-task-contract-inspector=""
     >
       <h3 className="font-medium">Task contract</h3>
+      {currentFailure !== null ? <p role="alert">{currentFailure}</p> : null}
       <p className="mt-1 text-muted-foreground" data-task-contract-phase={props.phase}>
         Revision {props.revision ?? "missing"} · {props.phase}
         {props.acceptedRevision !== null ? ` · accepted ${props.acceptedRevision}` : ""}
@@ -201,8 +225,10 @@ export function TaskContractReadout(props: {
             variant="outline"
             type="button"
             data-task-contract-accept=""
-            disabled={pending}
-            onClick={() => run(props.onAccept)}
+            disabled={pending || currentFailure !== null}
+            onClick={() => {
+              void run(props.onAccept);
+            }}
           >
             Accept result
           </Button>
@@ -211,8 +237,10 @@ export function TaskContractReadout(props: {
             variant="outline"
             type="button"
             data-task-contract-redirect-action=""
-            disabled={pending}
-            onClick={() => run(props.onRedirect)}
+            disabled={pending || currentFailure !== null}
+            onClick={() => {
+              void run(props.onRedirect);
+            }}
           >
             Pause for redirect
           </Button>
@@ -225,8 +253,10 @@ export function TaskContractReadout(props: {
             variant="outline"
             type="button"
             data-task-contract-resume=""
-            disabled={pending}
-            onClick={() => run(props.onResume)}
+            disabled={pending || currentFailure !== null}
+            onClick={() => {
+              void run(props.onResume);
+            }}
           >
             Resume under this contract
           </Button>

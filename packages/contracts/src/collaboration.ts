@@ -10,7 +10,7 @@ import {
   OrchestrationV2ProviderFailure,
 } from "./orchestrationV2.ts";
 
-import { TaskContract, TaskContractPhase } from "./taskContract.ts";
+import { TaskContract, TaskContractPhase, TaskContractReviewHint } from "./taskContract.ts";
 import { ModelRouterMode, ModelRouterTarget } from "./modelRouter.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
@@ -181,6 +181,7 @@ export const CollaborationTask = Schema.Struct({
   pendingClarificationId: Schema.NullOr(TrimmedNonEmptyString),
   gateDecision: CollaborationGateDecision,
   contractReadout: Schema.optionalKey(CollaborationTaskContractReadout),
+  review: Schema.optionalKey(TaskContractReviewHint),
   routingReadout: Schema.optionalKey(CollaborationTaskRoutingReadout),
   resultReadout: Schema.optionalKey(CollaborationTaskResultReadout),
 });
@@ -202,6 +203,7 @@ export const CollaborationMessage = Schema.Struct({
 export type CollaborationMessage = typeof CollaborationMessage.Type;
 
 export const CollaborationSnapshot = Schema.Struct({
+  environmentId: Schema.optionalKey(TrimmedNonEmptyString),
   agents: Schema.Array(CollaborationAgent),
   tasks: Schema.Array(CollaborationTask),
   messages: Schema.Array(CollaborationMessage),

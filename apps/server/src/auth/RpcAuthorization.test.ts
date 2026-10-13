@@ -4,6 +4,7 @@ import {
   AuthRelayReadScope,
   AuthRelayWriteScope,
   WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -146,4 +147,13 @@ it("requires operate permission for tool updates even alongside a read-only chec
     AuthOrchestrationOperateScope,
   );
   expect(requiredScopeForDeviceList({ updateTool: "hub" })).toBe(AuthOrchestrationOperateScope);
+});
+
+it("keeps Tasks eligibility a read and decisions on the existing operate boundary", () => {
+  expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.getTaskReview)).toBe(
+    AuthOrchestrationReadScope,
+  );
+  expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.dispatchCommand)).toBe(
+    AuthOrchestrationOperateScope,
+  );
 });

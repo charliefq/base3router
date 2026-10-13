@@ -21,6 +21,7 @@ import {
   type OrchestrationV2AppThread,
   TaskContract,
   type TaskContractDecision,
+  type TaskContractReviewReference,
   type TaskContractFields,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -129,9 +130,21 @@ export function nextTaskContractThread(input: {
         readonly acceptance: string;
         readonly brake: TaskContractFields["brake"];
       }
-    | { readonly type: "thread.task-contract.accept"; readonly revision: number }
-    | { readonly type: "thread.task-contract.redirect"; readonly revision: number }
-    | { readonly type: "thread.task-contract.resume"; readonly revision: number };
+    | {
+        readonly type: "thread.task-contract.accept";
+        readonly revision: number;
+        readonly reviewTask?: TaskContractReviewReference;
+      }
+    | {
+        readonly type: "thread.task-contract.redirect";
+        readonly revision: number;
+        readonly reviewTask?: TaskContractReviewReference;
+      }
+    | {
+        readonly type: "thread.task-contract.resume";
+        readonly revision: number;
+        readonly reviewTask?: TaskContractReviewReference;
+      };
 }):
   | { readonly error: string }
   | { readonly thread: OrchestrationV2AppThread; readonly rootThreadId: string } {
@@ -144,6 +157,9 @@ export function nextTaskContractThread(input: {
     revision,
     actorId: input.actorId,
     at: input.now,
+    ...(input.command.type !== "thread.task-contract.set" && input.command.reviewTask !== undefined
+      ? { reviewTask: input.command.reviewTask }
+      : {}),
   });
   const withDecision = (
     thread: OrchestrationV2AppThread,

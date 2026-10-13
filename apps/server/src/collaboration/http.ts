@@ -28,6 +28,7 @@ import {
 } from "./admit.ts";
 import { readCollaborationSnapshot, submitCollaborationCommand } from "./store.ts";
 
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as CollaborationThreads from "./CollaborationThreads.ts";
 
 const decodeCommand = Schema.decodeUnknownEffect(CollaborationCommand);
@@ -53,6 +54,7 @@ export const collaborationHttpApiLayer = HttpApiBuilder.group(
     const collaborationThreads = yield* CollaborationThreads.CollaborationThreads;
     const projects = yield* ProjectStore.ProjectStoreV2;
     const providers = yield* ProviderRegistry;
+    const environment = yield* ServerEnvironment.ServerEnvironment;
 
     const factsFor = (principalId: string, command: CollaborationCommand) =>
       Effect.gen(function* () {
@@ -84,9 +86,10 @@ export const collaborationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.collaboration.snapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           const principal = yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          return yield* readCollaborationSnapshot(sql, principal.subject).pipe(
-            Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
-          );
+          return yield* readCollaborationSnapshot(sql, principal.subject, {
+            environmentId: yield* environment.getEnvironmentId,
+            canOperate: principal.scopes.has(AuthOrchestrationOperateScope),
+          }).pipe(Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)));
         }),
       )
       .handle(

@@ -23,6 +23,7 @@ import {
   TurnItemId,
 } from "./index.ts";
 import {
+  OrchestrationV2AppThreadJson,
   OrchestrationV2Checkpoint,
   OrchestrationV2CheckpointScope,
   OrchestrationV2Command,
@@ -1268,4 +1269,57 @@ describe("contract enrollment dispatch result", () => {
       decode({ sequence: 1, taskEnrollment: { status: "not-enrolled", reason: "unknown" } }),
     ).toThrow();
   });
+});
+
+const decodeReviewThreadJson = Schema.decodeUnknownSync(OrchestrationV2AppThreadJson);
+it("keeps reviewed decision references through persisted JSON while accepting legacy commands", () => {
+  const reference = {
+    environmentId: "environment-a",
+    taskId: "task-a",
+    projectId: "project-a",
+    threadUpdatedAt: "2026-10-13T00:00:00.000Z",
+    threadSequence: 3,
+  };
+  const base = {
+    type: "thread.task-contract.accept",
+    commandId: "review-command",
+    threadId: "thread-a",
+    revision: 1,
+  };
+  expect(decodeOrchestrationV2Command(base)).toEqual(base);
+  expect(decodeOrchestrationV2Command({ ...base, reviewTask: reference })).toEqual({
+    ...base,
+    reviewTask: reference,
+  });
+  const iso = "2026-10-13T00:00:00.000Z";
+  const thread = {
+    id: "thread-a",
+    projectId: "project-a",
+    title: "Review",
+    createdBy: "user",
+    creationSource: "web",
+    providerInstanceId: "codex",
+    modelSelection: { instanceId: "codex", model: "fake-model" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    activeProviderThreadId: null,
+    lineage: { rootThreadId: "thread-a", parentThreadId: null, relationshipToParent: null },
+    forkedFrom: null,
+    createdAt: iso,
+    updatedAt: iso,
+    archivedAt: null,
+    deletedAt: null,
+    taskDecisions: [
+      { actorId: "owner", kind: "accept", revision: 1, at: iso, reviewTask: reference },
+    ],
+  };
+  const decoded = decodeReviewThreadJson(thread);
+  expect(decoded.taskDecisions?.[0]?.reviewTask).toEqual(reference);
+  const legacy = decodeReviewThreadJson({
+    ...thread,
+    taskDecisions: [{ actorId: "owner", kind: "accept", revision: 1, at: iso }],
+  });
+  expect(legacy.taskDecisions?.[0]).not.toHaveProperty("reviewTask");
 });

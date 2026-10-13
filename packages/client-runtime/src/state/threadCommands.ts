@@ -79,6 +79,7 @@ import {
   settleThread,
   snoozeThread,
   decideTaskContract,
+  readTaskReview,
   readTaskUsage,
   startThreadTurn,
   stopThreadSession,
@@ -269,6 +270,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     startTurn: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:start-turn",
       execute: (input: StartThreadTurnInput) => startThreadTurn(input),
+      scheduler,
+      concurrency,
+    }),
+    readTaskReview: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:read-task-review",
+      execute: readTaskReview,
       scheduler,
       concurrency,
     }),

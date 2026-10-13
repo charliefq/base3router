@@ -2,6 +2,8 @@ import {
   CommandId,
   CollaborationCommand,
   type TaskEnrollmentOutcome,
+  type TaskContractReviewReference,
+  type TaskContractReviewAction,
   type OrchestrationV2Run,
   OrchestrationV2DomainEvent,
   OrchestrationV2StoredEvent,
@@ -24,8 +26,17 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as OwnedChat from "../collaboration/ownedChat.ts";
+import {
+  requestTaskCancellation,
+  nextTaskContractThread,
+  revokeTaskContractGrants,
+} from "../policy/TaskContract.ts";
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
-import { enrollGovernedTask } from "../collaboration/store.ts";
+import {
+  enrollGovernedTask,
+  validateTaskDecision,
+  verifyTaskDecisionReplay,
+} from "../collaboration/store.ts";
 
 import { replayAndBufferProjectedLiveEvents } from "./LiveStreamBudget.ts";
 import type { UnsequencedProjectEvent } from "../persistence/Services/OrchestrationEventStore.ts";
@@ -134,6 +145,11 @@ export interface EventSinkV2Shape {
     readonly governedTaskOwner?: string;
     readonly ordinaryRootOwner?: string;
     readonly contractSetActor?: string;
+    readonly taskContractDecision?: {
+      readonly action: TaskContractReviewAction;
+      readonly revision: number;
+      readonly reviewTask?: TaskContractReviewReference;
+    };
     readonly acceptedAt: DateTime.Utc;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
@@ -527,6 +543,27 @@ const baseLayer: Layer.Layer<
               existing.receipt.commandType !== input.commandType
             )
               return yield* refuse();
+            if (
+              [
+                "thread.task-contract.accept",
+                "thread.task-contract.redirect",
+                "thread.task-contract.resume",
+              ].includes(existing.receipt.commandType) &&
+              input.taskContractDecision === undefined
+            )
+              return yield* refuse();
+            if (input.taskContractDecision !== undefined)
+              yield* verifyTaskDecisionReplay(sql, {
+                ...input.taskContractDecision,
+                commandId: input.commandId,
+                threadId: input.threadId,
+              });
+            if (existing.receipt.commandType === "thread.task-contract.set")
+              yield* verifyTaskDecisionReplay(sql, {
+                commandId: input.commandId,
+                threadId: input.threadId,
+                action: "set",
+              });
             let taskEnrollment: TaskEnrollmentOutcome | undefined;
             if (
               existing.receipt.commandType === "thread.create" ||
@@ -609,6 +646,8 @@ const baseLayer: Layer.Layer<
               commandId: input.commandId,
               eventCount: input.events.length,
             });
+          if (input.commandType === "thread.task-contract.set")
+            yield* validateTaskDecision(sql, { threadId: input.threadId, action: "set" });
           const upgrade =
             input.contractSetActor === undefined
               ? undefined
@@ -616,7 +655,133 @@ const baseLayer: Layer.Layer<
                   threadId: input.threadId,
                   actorId: input.contractSetActor,
                 });
-          const normalized = yield* normalizeEvents(input.events);
+          if (
+            [
+              "thread.task-contract.accept",
+              "thread.task-contract.redirect",
+              "thread.task-contract.resume",
+            ].includes(input.commandType) &&
+            input.taskContractDecision === undefined
+          )
+            return yield* new EventSinkWriteError({
+              commandId: input.commandId,
+              eventCount: input.events.length,
+            });
+          let decisionEvents = input.events;
+          if (input.commandType === "thread.task-contract.set") {
+            const current = yield* projectionStore.getThread(input.threadId);
+            const event = input.events.find(
+              (item) => item.type === "thread.metadata-updated" && item.threadId === input.threadId,
+            );
+            if (
+              input.events.length !== 1 ||
+              event?.type !== "thread.metadata-updated" ||
+              context.kind !== "session" ||
+              event.payload.taskDecisions?.at(-1)?.kind !== "set" ||
+              event.payload.taskDecisions?.at(-1)?.actorId !== context.actorId ||
+              event.payload.projectId !== current.projectId ||
+              event.payload.lineage.rootThreadId !== current.lineage.rootThreadId ||
+              event.payload.lineage.parentThreadId !== current.lineage.parentThreadId ||
+              event.payload.lineage.relationshipToParent !== current.lineage.relationshipToParent ||
+              event.payload.taskContract == null
+            )
+              return yield* new EventSinkWriteError({
+                commandId: input.commandId,
+                eventCount: input.events.length,
+              });
+            const next = nextTaskContractThread({
+              thread: current,
+              actorId: context.actorId,
+              now: event.occurredAt,
+              command: {
+                type: "thread.task-contract.set",
+                goal: event.payload.taskContract.goal,
+                redirect: event.payload.taskContract.redirect,
+                acceptance: event.payload.taskContract.acceptance,
+                brake: event.payload.taskContract.brake,
+              },
+            });
+            if ("error" in next)
+              return yield* new EventSinkWriteError({
+                commandId: input.commandId,
+                eventCount: input.events.length,
+              });
+            decisionEvents = [{ ...event, payload: next.thread }];
+            yield* revokeTaskContractGrants(sql, current.lineage.rootThreadId);
+          }
+          if (input.taskContractDecision !== undefined) {
+            if (input.commandType !== `thread.task-contract.${input.taskContractDecision.action}`)
+              return yield* new EventSinkWriteError({
+                commandId: input.commandId,
+                eventCount: input.events.length,
+              });
+            yield* validateTaskDecision(sql, {
+              ...input.taskContractDecision,
+              threadId: input.threadId,
+            });
+            const event = input.events.find(
+              (item) => item.type === "thread.metadata-updated" && item.threadId === input.threadId,
+            );
+            const decision =
+              event?.type === "thread.metadata-updated"
+                ? event.payload.taskDecisions?.at(-1)
+                : undefined;
+            if (
+              !decision ||
+              decision.kind !== input.taskContractDecision.action ||
+              decision.revision !== input.taskContractDecision.revision ||
+              context.kind !== "session" ||
+              decision.actorId !== context.actorId
+            )
+              return yield* new EventSinkWriteError({
+                commandId: input.commandId,
+                eventCount: input.events.length,
+              });
+            {
+              if (input.events.length !== 1 || event?.type !== "thread.metadata-updated")
+                return yield* new EventSinkWriteError({
+                  commandId: input.commandId,
+                  eventCount: input.events.length,
+                });
+              const current = yield* projectionStore.getThread(input.threadId);
+              if (
+                event.payload.projectId !== current.projectId ||
+                event.payload.lineage.rootThreadId !== current.lineage.rootThreadId ||
+                event.payload.lineage.parentThreadId !== current.lineage.parentThreadId ||
+                event.payload.lineage.relationshipToParent !== current.lineage.relationshipToParent
+              )
+                return yield* new EventSinkWriteError({
+                  commandId: input.commandId,
+                  eventCount: input.events.length,
+                });
+              const next = nextTaskContractThread({
+                thread: current,
+                actorId: context.actorId,
+                now: event.occurredAt,
+                command: {
+                  type: input.commandType as
+                    | "thread.task-contract.accept"
+                    | "thread.task-contract.redirect"
+                    | "thread.task-contract.resume",
+                  revision: input.taskContractDecision.revision,
+                  ...(input.taskContractDecision.reviewTask === undefined
+                    ? {}
+                    : { reviewTask: input.taskContractDecision.reviewTask }),
+                },
+              });
+              if ("error" in next)
+                return yield* new EventSinkWriteError({
+                  commandId: input.commandId,
+                  eventCount: input.events.length,
+                });
+              decisionEvents = [{ ...event, payload: next.thread }];
+            }
+            if (input.taskContractDecision.action === "redirect") {
+              const current = yield* projectionStore.getThread(input.threadId);
+              yield* requestTaskCancellation(sql, current.lineage.rootThreadId, input.threadId);
+            }
+          }
+          const normalized = yield* normalizeEvents(decisionEvents);
           const storedEvents = yield* eventStore.append({
             commandId: input.commandId,
             events: normalized,

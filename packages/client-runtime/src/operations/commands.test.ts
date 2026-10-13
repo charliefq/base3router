@@ -39,6 +39,7 @@ import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import { v2Now, v2Projection, v2ThreadId } from "../state/orchestrationV2TestFixtures.ts";
 import {
   decideTaskContract,
+  readTaskReview,
   archiveThread,
   cancelQueuedRun,
   createProject,
@@ -76,6 +77,7 @@ const TARGET = new PrimaryConnectionTarget({
 const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(function* (input: {
   readonly dispatchResult?: OrchestrationV2DispatchCommandResult;
   readonly commands: OrchestrationV2Command[];
+  readonly reviewRequests?: unknown[];
   readonly projects: ProjectMutation[];
   readonly launches?: OrchestrationV2ThreadLaunchInput[];
   readonly projection?: OrchestrationV2ThreadProjection;
@@ -83,6 +85,11 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly advertiseServerResolvedCommandContext?: boolean;
 }) {
   const client = {
+    [ORCHESTRATION_V2_WS_METHODS.getTaskReview]: (reviewInput: unknown) =>
+      Effect.sync(() => {
+        input.reviewRequests?.push(reviewInput);
+        return { status: "unavailable", reason: "fixture-read-only" };
+      }),
     [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
       Effect.sync(() => {
         input.commands.push(command);
@@ -998,5 +1005,53 @@ it.effect(
       expect(commands).toHaveLength(1);
       expect(commands[0]?.type).toBe("thread.task-contract.set");
       expect(commands[0]?.commandId).toBe("contract-command");
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+);
+
+it.effect(
+  "forwards explicit reviewed revision references once and reads eligibility without dispatch",
+  () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const reviewRequests: unknown[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [], reviewRequests });
+      const reviewTask = {
+        environmentId: "fixture-env",
+        taskId: "fixture-task",
+        projectId: "fixture-project",
+        threadUpdatedAt: "2026-10-13T00:00:00.000Z",
+        threadSequence: 5,
+      };
+      const input = {
+        environmentId: reviewTask.environmentId,
+        taskId: reviewTask.taskId,
+        projectId: reviewTask.projectId,
+        threadId: v2ThreadId,
+        revision: 1,
+      };
+      expect(
+        yield* readTaskReview(input).pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        ),
+      ).toEqual({ status: "unavailable", reason: "fixture-read-only" });
+      expect(reviewRequests).toEqual([input]);
+      expect(commands).toHaveLength(0);
+      for (const action of ["accept", "redirect", "resume"] as const)
+        yield* decideTaskContract({
+          threadId: v2ThreadId,
+          commandId: CommandId.make(`review-${action}`),
+          action,
+          revision: 1,
+          reviewTask,
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      expect(commands).toEqual(
+        ["accept", "redirect", "resume"].map((action) => ({
+          type: `thread.task-contract.${action}`,
+          commandId: `review-${action}`,
+          threadId: v2ThreadId,
+          revision: 1,
+          reviewTask,
+        })),
+      );
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
 );
