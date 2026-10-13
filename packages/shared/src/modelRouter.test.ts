@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
+import * as NodeCrypto from "node:crypto";
+import * as Schema from "effect/Schema";
 import {
+  ModelRouterConstraints,
   ProviderDriverKind,
   ProviderInstanceId,
   type ModelRouterMetrics,
@@ -35,6 +38,291 @@ const entry = (input: {
   capabilities: input.capabilities ?? ["code", "tools"],
   availabilityReasons: input.availabilityReasons ?? [],
   ...(input.metrics ? { metrics: input.metrics } : {}),
+});
+
+describe("estimated hard limits", () => {
+  const metrics = (costUsd: number, latencyMs: number, quality = 1): ModelRouterMetrics => ({
+    quality: { status: "known", value: quality },
+    costUsd: { status: "known", value: costUsd },
+    latencyMs: { status: "known", value: latencyMs },
+  });
+  const rows = [
+    {
+      field: "maxCostUsd",
+      value: 0.5,
+      limit: 1,
+      eligible: true,
+      reason: "ESTIMATED_COST_LIMIT_EXCEEDED",
+    },
+    {
+      field: "maxCostUsd",
+      value: 1,
+      limit: 1,
+      eligible: true,
+      reason: "ESTIMATED_COST_LIMIT_EXCEEDED",
+    },
+    {
+      field: "maxCostUsd",
+      value: 2,
+      limit: 1,
+      eligible: false,
+      reason: "ESTIMATED_COST_LIMIT_EXCEEDED",
+    },
+    {
+      field: "maxLatencyMs",
+      value: 50,
+      limit: 100,
+      eligible: true,
+      reason: "ESTIMATED_LATENCY_LIMIT_EXCEEDED",
+    },
+    {
+      field: "maxLatencyMs",
+      value: 100,
+      limit: 100,
+      eligible: true,
+      reason: "ESTIMATED_LATENCY_LIMIT_EXCEEDED",
+    },
+    {
+      field: "maxLatencyMs",
+      value: 101,
+      limit: 100,
+      eligible: false,
+      reason: "ESTIMATED_LATENCY_LIMIT_EXCEEDED",
+    },
+    {
+      field: "maxCostUsd",
+      value: 0,
+      limit: 0,
+      eligible: true,
+      reason: "ESTIMATED_COST_LIMIT_EXCEEDED",
+    },
+    {
+      field: "maxLatencyMs",
+      value: 0,
+      limit: 0,
+      eligible: true,
+      reason: "ESTIMATED_LATENCY_LIMIT_EXCEEDED",
+    },
+  ] as const;
+  it.each(rows)("filters $field metric $value against $limit (eligible=$eligible)", (row) => {
+    const decision = routeModel({
+      mode: "auto",
+      catalog: [
+        entry({
+          instanceId: "fixture-limit",
+          model: "fixture-model",
+          metrics: row.field === "maxCostUsd" ? metrics(row.value, 0) : metrics(0, row.value),
+        }),
+      ],
+      constraints: { [row.field]: row.limit },
+    });
+    expect(decision.candidates[0]?.eligible).toBe(row.eligible);
+    expect(decision.candidates[0]?.reasonCodes).toEqual(row.eligible ? [] : [row.reason]);
+    expect(decision.selected?.target.model ?? null).toBe(row.eligible ? "fixture-model" : null);
+    expect(decision.fallbacks).toEqual([]);
+    const estimate =
+      row.field === "maxCostUsd" ? decision.estimatedCostUsd : decision.estimatedLatencyMs;
+    expect(estimate).toEqual(
+      row.eligible ? { status: "known", value: row.value } : { status: "unknown" },
+    );
+  });
+
+  it.each([
+    { field: "maxCostUsd", reason: "ESTIMATED_COST_UNKNOWN" },
+    { field: "maxLatencyMs", reason: "ESTIMATED_LATENCY_UNKNOWN" },
+  ] as const)("fails closed for unknown $field evidence", ({ field, reason }) => {
+    const decision = routeModel({
+      mode: "auto",
+      catalog: [entry({ instanceId: "fixture-unknown", model: "unknown" })],
+      constraints: { [field]: 0 },
+    });
+    expect(decision.candidates[0]).toMatchObject({ eligible: false, reasonCodes: [reason] });
+    expect(decision.selected).toBeNull();
+    expect(decision.reasonCodes).toContain(reason);
+    expect(decision.estimatedCostUsd).toEqual({ status: "unknown" });
+    expect(decision.estimatedLatencyMs).toEqual({ status: "unknown" });
+  });
+
+  it("does not constrain an unknown dimension without its corresponding limit", () => {
+    const decision = routeModel({
+      mode: "auto",
+      catalog: [
+        entry({
+          instanceId: "fixture-partial",
+          model: "partial",
+          metrics: { ...metrics(0.5, 0), latencyMs: { status: "unknown" } },
+        }),
+      ],
+      constraints: { maxCostUsd: 1 },
+    });
+    expect(decision.candidates[0]?.eligible).toBe(true);
+    expect(decision.selected?.target.model).toBe("partial");
+    expect(decision.estimatedLatencyMs).toEqual({ status: "unknown" });
+  });
+
+  const constrainedCatalog = [
+    entry({ instanceId: "over-cost", model: "expensive", metrics: metrics(2, 1, 100) }),
+    entry({ instanceId: "over-latency", model: "slow", metrics: metrics(0.1, 101, 80) }),
+    entry({ instanceId: "unknown", model: "unknown" }),
+    entry({
+      instanceId: "good-low",
+      model: "good-low",
+      driver: driver("codex"),
+      metrics: metrics(0.2, 10, 1),
+    }),
+    entry({
+      instanceId: "good-high",
+      model: "good-high",
+      driver: driver("claudeAgent"),
+      metrics: metrics(0.3, 20, 5),
+    }),
+  ];
+  it("filters both limits before weighted ranking and exposes only eligible fallbacks deterministically", () => {
+    const input = {
+      mode: "auto" as const,
+      catalog: constrainedCatalog,
+      constraints: { maxCostUsd: 1, maxLatencyMs: 100 },
+      policy: {
+        version: "model-router.v0" as const,
+        qualityWeight: 1,
+        costWeight: 0,
+        latencyWeight: 0,
+      },
+    };
+    const decision = routeModel(input);
+    expect(decision.selected?.target.instanceId).toBe("good-high");
+    expect(decision.fallbacks.map((item) => item.target.instanceId)).toEqual(["good-low"]);
+    expect(
+      decision.candidates.find((item) => item.target.instanceId === "over-cost"),
+    ).toMatchObject({ eligible: false, reasonCodes: ["ESTIMATED_COST_LIMIT_EXCEEDED"] });
+    expect(
+      decision.candidates.find((item) => item.target.instanceId === "over-latency"),
+    ).toMatchObject({ eligible: false, reasonCodes: ["ESTIMATED_LATENCY_LIMIT_EXCEEDED"] });
+    expect(decision.candidates.find((item) => item.target.instanceId === "unknown")).toMatchObject({
+      eligible: false,
+      reasonCodes: ["ESTIMATED_COST_UNKNOWN", "ESTIMATED_LATENCY_UNKNOWN"],
+    });
+    expect(decision.estimatedCostUsd).toEqual({ status: "known", value: 0.3 });
+    expect(routeModel(input)).toEqual(decision);
+    expect(routeModel({ ...input, catalog: constrainedCatalog.toReversed() })).toEqual(decision);
+  });
+
+  it.each([
+    {
+      constraints: { maxCostUsd: 1 },
+      metrics: metrics(2, 1),
+      reason: "ESTIMATED_COST_LIMIT_EXCEEDED",
+    },
+    {
+      constraints: { maxLatencyMs: 100 },
+      metrics: metrics(0.1, 101),
+      reason: "ESTIMATED_LATENCY_LIMIT_EXCEEDED",
+    },
+    {
+      constraints: { maxCostUsd: 1 },
+      metrics: { ...metrics(0, 0), costUsd: { status: "unknown" as const } },
+      reason: "ESTIMATED_COST_UNKNOWN",
+    },
+    {
+      constraints: { maxLatencyMs: 100 },
+      metrics: { ...metrics(0, 0), latencyMs: { status: "unknown" as const } },
+      reason: "ESTIMATED_LATENCY_UNKNOWN",
+    },
+  ])("keeps manual provenance while rejecting $reason overrides", (row) => {
+    const decision = routeModel({
+      mode: "manual",
+      catalog: [
+        entry({ instanceId: "manual", model: "manual", metrics: row.metrics }),
+        entry({ instanceId: "other", model: "other", metrics: metrics(0, 0) }),
+      ],
+      manualOverride: { instanceId: instance("manual"), model: "manual" },
+      constraints: row.constraints,
+    });
+    expect(decision.selected).toBeNull();
+    expect(decision.executed).toBeNull();
+    expect(decision.reasonCodes).toContain("MANUAL_OVERRIDE");
+    expect(decision.reasonCodes).toContain(row.reason);
+    expect(decision.reasonCodes).not.toContain("SELECTED");
+    expect(decision.candidates.find((item) => item.target.instanceId === "manual")?.eligible).toBe(
+      false,
+    );
+    expect(decision.fallbacks.map((item) => item.target.instanceId)).toEqual(["other"]);
+    expect(decision.estimatedCostUsd.status).toBe("unknown");
+    expect(decision.estimatedLatencyMs.status).toBe("unknown");
+  });
+
+  it("allows a manual override exactly at both supplied limits", () => {
+    const decision = routeModel({
+      mode: "manual",
+      catalog: [entry({ instanceId: "manual", model: "manual", metrics: metrics(1, 100) })],
+      manualOverride: { instanceId: instance("manual"), model: "manual" },
+      constraints: { maxCostUsd: 1, maxLatencyMs: 100 },
+    });
+    expect(decision.selected).toMatchObject({ eligible: true, target: { instanceId: "manual" } });
+    expect(decision.reasonCodes).toContain("MANUAL_OVERRIDE");
+    expect(decision.estimatedCostUsd).toEqual({ status: "known", value: 1 });
+    expect(decision.estimatedLatencyMs).toEqual({ status: "known", value: 100 });
+  });
+
+  it.each(["maxCostUsd", "maxLatencyMs"] as const)(
+    "decodes only finite non-negative optional $field without a default",
+    (field) => {
+      const decode = Schema.decodeUnknownOption(ModelRouterConstraints);
+      for (const value of [0, 0.5, 100]) {
+        const decoded = decode({ [field]: value });
+        expect(decoded._tag).toBe("Some");
+        if (decoded._tag === "Some") expect(decoded.value[field]).toBe(value);
+      }
+      for (const value of [-0.1, Number.NaN, Infinity, -Infinity, null])
+        expect(decode({ [field]: value })._tag).toBe("None");
+      const empty = decode({});
+      expect(empty._tag).toBe("Some");
+      if (empty._tag === "Some") expect(empty.value[field]).toBeUndefined();
+    },
+  );
+
+  it.each([
+    {
+      mode: "auto" as const,
+      hash: "e2922b04f8acbc518607b641522b1ffcc21f4c60f0185ef23c8bcadf3d11ae4c",
+    },
+    {
+      mode: "manual" as const,
+      hash: "6a15747d47c116b98bb2b2a873f354ba6340b103b2a07f8db2d2f77a3e94656d",
+    },
+  ])(
+    "preserves the starting full serialized $mode decision when limits are absent",
+    ({ mode, hash }) => {
+      const catalog = [
+        entry({
+          instanceId: "fixture-a",
+          model: "fixture-a",
+          driver: driver("codex"),
+          capabilities: ["code"],
+        }),
+        entry({
+          instanceId: "fixture-b",
+          model: "fixture-b",
+          driver: driver("claudeAgent"),
+          capabilities: ["code"],
+        }),
+      ];
+      const input = {
+        mode,
+        catalog,
+        ...(mode === "manual"
+          ? {
+              manualOverride: { instanceId: instance("fixture-missing"), model: "fixture-missing" },
+            }
+          : {}),
+      };
+      const decision = routeModel(input);
+      expect(NodeCrypto.createHash("sha256").update(JSON.stringify(decision)).digest("hex")).toBe(
+        hash,
+      );
+      expect(routeModel({ ...input, constraints: {} })).toEqual(decision);
+    },
+  );
 });
 
 const known = (value: number): ModelRouterMetrics => ({

@@ -367,6 +367,25 @@ function sanitizeDecision(decision: ModelRouterDecision): ModelRouterDecision {
   };
 }
 
+function estimatedLimitReasons(
+  metrics: ModelRouterMetrics | undefined,
+  constraints: ModelRouterConstraints | undefined,
+): ReadonlyArray<ModelRouterReasonCode> {
+  const reasons: Array<ModelRouterReasonCode> = [];
+  if (constraints?.maxCostUsd !== undefined) {
+    const cost = metricOrUnknown(metrics?.costUsd);
+    if (cost.status === "unknown") reasons.push("ESTIMATED_COST_UNKNOWN");
+    else if (cost.value > constraints.maxCostUsd) reasons.push("ESTIMATED_COST_LIMIT_EXCEEDED");
+  }
+  if (constraints?.maxLatencyMs !== undefined) {
+    const latency = metricOrUnknown(metrics?.latencyMs);
+    if (latency.status === "unknown") reasons.push("ESTIMATED_LATENCY_UNKNOWN");
+    else if (latency.value > constraints.maxLatencyMs)
+      reasons.push("ESTIMATED_LATENCY_LIMIT_EXCEEDED");
+  }
+  return reasons;
+}
+
 function toCandidate(
   entry: ModelRouterCatalogEntry,
   input: {
@@ -376,6 +395,7 @@ function toCandidate(
   },
 ): Omit<ModelRouterCandidate, "fallbackIndex"> {
   const filterReasons = uniqueReasons([
+    ...estimatedLimitReasons(entry.metrics, input.constraints),
     ...entry.availabilityReasons,
     ...constraintReasons(entry, input.constraints, input.requiredCapabilities),
   ]);
@@ -466,18 +486,20 @@ export function routeModel(input: ModelRouterInput): ModelRouterDecision {
   const eligible = withIndex.filter((candidate) => candidate.eligible);
   let selected: ModelRouterCandidate | null = null;
   let selectionReasons: Array<ModelRouterReasonCode> = [];
+  let manualLimitReasons: ReadonlyArray<ModelRouterReasonCode> = [];
 
   if (input.mode === "manual") {
     const override = input.manualOverride;
     if (override) {
       const match =
         withIndex.find((candidate) => targetKey(candidate.target) === targetKey(override)) ?? null;
-      selected = match;
-      selectionReasons = ["MANUAL_OVERRIDE"];
-      if (match) {
+      manualLimitReasons = match ? estimatedLimitReasons(match.metrics, input.constraints) : [];
+      selected = manualLimitReasons.length > 0 ? null : match;
+      selectionReasons = ["MANUAL_OVERRIDE", ...manualLimitReasons];
+      if (selected) {
         selected = {
-          ...match,
-          reasonCodes: uniqueReasons([...match.reasonCodes, "MANUAL_OVERRIDE", "SELECTED"]),
+          ...selected,
+          reasonCodes: uniqueReasons([...selected.reasonCodes, "MANUAL_OVERRIDE", "SELECTED"]),
         };
       }
     }
@@ -521,13 +543,16 @@ export function routeModel(input: ModelRouterInput): ModelRouterDecision {
         : selected === null
           ? ["NO_ELIGIBLE_CANDIDATES"]
           : ["SELECTED"],
-    explanation: explanationFor({
-      mode: input.mode,
-      selected,
-      qualityActive,
-      costActive,
-      latencyActive,
-    }),
+    explanation:
+      manualLimitReasons.length > 0
+        ? "Manual override could not satisfy the supplied estimated cost or latency limits. No model was selected."
+        : explanationFor({
+            mode: input.mode,
+            selected,
+            qualityActive,
+            costActive,
+            latencyActive,
+          }),
     estimatedCostUsd: selected?.metrics.costUsd ?? MODEL_ROUTER_UNKNOWN_METRIC,
     estimatedLatencyMs: selected?.metrics.latencyMs ?? MODEL_ROUTER_UNKNOWN_METRIC,
     estimatedQuality: selected?.metrics.quality ?? MODEL_ROUTER_UNKNOWN_METRIC,

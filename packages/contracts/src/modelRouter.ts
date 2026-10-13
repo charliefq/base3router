@@ -45,6 +45,10 @@ export const MODEL_ROUTER_REASON_CODES = [
   "METRICS_UNKNOWN",
   "REQUIRED_CAPABILITY_MISSING",
   "CONSTRAINT_EXCLUDED",
+  "ESTIMATED_COST_LIMIT_EXCEEDED",
+  "ESTIMATED_COST_UNKNOWN",
+  "ESTIMATED_LATENCY_LIMIT_EXCEEDED",
+  "ESTIMATED_LATENCY_UNKNOWN",
   "PROVIDER_INSTANCE_NOT_FOUND",
   "PROVIDER_UNAVAILABLE",
   "PROVIDER_DISABLED",
@@ -119,6 +123,14 @@ export const MODEL_ROUTER_DEFAULT_POLICY: ModelRouterPolicy = {
 };
 
 export const ModelRouterConstraints = Schema.Struct({
+  /** Hard limit over caller-declared catalog estimates, not verified provider spend. */
+  maxCostUsd: Schema.optional(
+    Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0)),
+  ),
+  /** Hard limit over caller-declared catalog estimates, not observed execution latency. */
+  maxLatencyMs: Schema.optional(
+    Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0)),
+  ),
   requiredCapabilities: Schema.optional(BoundedCapabilityList),
   allowedInstanceIds: Schema.optional(BoundedInstanceIdList),
   excludedInstanceIds: Schema.optional(BoundedInstanceIdList),
