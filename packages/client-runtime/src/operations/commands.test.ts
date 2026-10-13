@@ -22,6 +22,8 @@ import {
   type ProjectMutation,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -40,6 +42,7 @@ import { v2Now, v2Projection, v2ThreadId } from "../state/orchestrationV2TestFix
 import {
   decideTaskContract,
   readTaskReview,
+  readAgentsCreationStatus,
   archiveThread,
   cancelQueuedRun,
   createProject,
@@ -79,6 +82,9 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly dispatchResult?: OrchestrationV2DispatchCommandResult;
   readonly commands: OrchestrationV2Command[];
   readonly reviewRequests?: unknown[];
+  readonly statusRequests?: unknown[];
+  readonly statusGate?: Deferred.Deferred<void>;
+  readonly statusStarted?: Deferred.Deferred<void>;
   readonly projects: ProjectMutation[];
   readonly launches?: OrchestrationV2ThreadLaunchInput[];
   readonly projection?: OrchestrationV2ThreadProjection;
@@ -86,6 +92,13 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly advertiseServerResolvedCommandContext?: boolean;
 }) {
   const client = {
+    [ORCHESTRATION_V2_WS_METHODS.getAgentsCreationStatus]: (inputStatus: unknown) =>
+      Effect.gen(function* () {
+        input.statusRequests?.push(inputStatus);
+        if (input.statusStarted) yield* Deferred.succeed(input.statusStarted, undefined);
+        if (input.statusGate) yield* Deferred.await(input.statusGate);
+        return { status: input.statusGate ? "rejected" : "unknown" };
+      }),
     [ORCHESTRATION_V2_WS_METHODS.getTaskReview]: (reviewInput: unknown) =>
       Effect.sync(() => {
         input.reviewRequests?.push(reviewInput);
@@ -1143,4 +1156,98 @@ it.effect(
         },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+);
+
+it.effect("reads exact creation intent without dispatch or allocating a command", () =>
+  Effect.gen(function* () {
+    const commands: OrchestrationV2Command[] = [];
+    const statusRequests: unknown[] = [];
+    const supervisor = yield* makeSupervisor({ commands, projects: [], statusRequests });
+    const command: Extract<OrchestrationV2Command, { type: "thread.create" }> = {
+      type: "thread.create",
+      createdBy: "user",
+      creationSource: "web",
+      commandId: CommandId.make("original"),
+      taskGovernance: "required",
+      taskContract: {
+        goal: "Fix",
+        redirect: "Ask",
+        acceptance: "Test",
+        brake: { maxProviderStarts: 1, stopConditions: "Stop" },
+      },
+      taskCreationReview: {
+        environmentId: EnvironmentId.make("environment-1"),
+        projectId: ProjectId.make("project"),
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "fake" },
+      },
+      threadId: v2ThreadId,
+      projectId: ProjectId.make("project"),
+      title: "Task",
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "fake" },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+    };
+    expect(
+      yield* readAgentsCreationStatus({ command }).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      ),
+    ).toEqual({ status: "unknown" });
+    expect(statusRequests).toEqual([{ command }]);
+    expect(commands).toHaveLength(0);
+  }),
+);
+
+it.effect("discards a prior authenticated transport's status after its session is replaced", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const statusGate = yield* Deferred.make<void>();
+      const statusStarted = yield* Deferred.make<void>();
+      const supervisor = yield* makeSupervisor({
+        commands,
+        projects: [],
+        statusGate,
+        statusStarted,
+      });
+      const command: Extract<OrchestrationV2Command, { type: "thread.create" }> = {
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("session-a"),
+        threadId: v2ThreadId,
+        projectId: ProjectId.make("project"),
+        title: "Task",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "fake" },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        taskGovernance: "required",
+        taskContract: {
+          goal: "Fix",
+          redirect: "Ask",
+          acceptance: "Test",
+          brake: { maxProviderStarts: 1, stopConditions: "Stop" },
+        },
+        taskCreationReview: {
+          environmentId: EnvironmentId.make("environment-1"),
+          projectId: ProjectId.make("project"),
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "fake" },
+        },
+      };
+      const read = yield* readAgentsCreationStatus({ command }).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(statusStarted);
+      const previous = yield* SubscriptionRef.get(supervisor.session);
+      if (Option.isNone(previous)) throw new Error("Expected session");
+      yield* SubscriptionRef.set(supervisor.session, Option.some({ ...previous.value }));
+      yield* Deferred.succeed(statusGate, undefined);
+      expect(yield* Fiber.join(read)).toEqual({ status: "unavailable" });
+      expect(commands).toHaveLength(0);
+    }),
+  ),
 );

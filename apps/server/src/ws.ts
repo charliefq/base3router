@@ -1921,6 +1921,17 @@ const makeWsRpcLayer = (
               "orchestration_v2.thread_id": input.threadId,
             },
           ),
+        [ORCHESTRATION_V2_WS_METHODS.getAgentsCreationStatus]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.getAgentsCreationStatus,
+            orchestrationEngine
+              .getAgentsCreationStatus(input)
+              .pipe(
+                Effect.provideService(ServerEnvironment.ServerEnvironment, serverEnvironment),
+                Effect.provideService(SqlClient.SqlClient, sql),
+              ),
+            { "rpc.aggregate": "orchestrationV2" },
+          ),
         [ORCHESTRATION_V2_WS_METHODS.getTaskReview]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.getTaskReview,

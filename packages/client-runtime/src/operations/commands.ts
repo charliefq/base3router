@@ -34,6 +34,9 @@ import {
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Crypto from "effect/Crypto";
+import * as Option from "effect/Option";
+import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Effect from "effect/Effect";
 
 import { getInitialServerConfig, request } from "../rpc/client.ts";
@@ -277,6 +280,24 @@ const dispatch = (command: OrchestrationV2Command) =>
 
 const getProjection = (threadId: ThreadId) =>
   request(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, { threadId });
+
+export const readAgentsCreationStatus = Effect.fn("EnvironmentCommands.readAgentsCreationStatus")(
+  function* (input: {
+    readonly command: Extract<OrchestrationV2Command, { type: "thread.create" }>;
+  }) {
+    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+    const originalSession = yield* SubscriptionRef.get(supervisor.session);
+    const result = yield* request(ORCHESTRATION_V2_WS_METHODS.getAgentsCreationStatus, input);
+    const currentSession = yield* SubscriptionRef.get(supervisor.session);
+    if (
+      Option.isNone(originalSession) ||
+      Option.isNone(currentSession) ||
+      originalSession.value !== currentSession.value
+    )
+      return { status: "unavailable" as const };
+    return result;
+  },
+);
 
 export const readThreadProjection = (input: { readonly threadId: ThreadId }) =>
   getProjection(input.threadId);

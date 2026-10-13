@@ -29,6 +29,7 @@ import {
   validateReviewedCreate,
   verifyReviewedCreateReplay,
   reviewedCreateMatchesThread,
+  persistReviewedCreateRejection,
 } from "../collaboration/governedCreation.ts";
 
 import * as OwnedChat from "../collaboration/ownedChat.ts";
@@ -179,6 +180,7 @@ export interface EventSinkV2Shape {
     readonly commandId: CommandId;
     readonly threadId: ThreadId;
     readonly commandType: string;
+    readonly creationCommand?: Extract<OrchestrationV2Command, { type: "thread.create" }>;
     readonly rejectedAt: DateTime.Utc;
     readonly error: string;
   }) => Effect.Effect<CommandReceiptStore.CommandReceiptV2, EventSinkV2Error>;
@@ -1001,6 +1003,18 @@ const baseLayer: Layer.Layer<
           };
           const inserted = yield* commandReceipts.insertIfAbsent(receipt);
           if (inserted) {
+            if (
+              input.creationCommand !== undefined &&
+              input.commandType === "thread.create" &&
+              input.creationCommand.commandId === input.commandId &&
+              input.creationCommand.threadId === input.threadId
+            )
+              yield* persistReviewedCreateRejection(
+                sql,
+                input.creationCommand,
+                DateTime.formatIso(input.rejectedAt),
+                sequence,
+              );
             return receipt;
           }
           const existing = yield* commandReceipts.getByCommandId(input.commandId);

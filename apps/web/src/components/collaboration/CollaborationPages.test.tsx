@@ -1,6 +1,7 @@
 import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
 import { routeHybridModel, emptyLocalEvidence } from "@t3tools/shared/hybridRouter";
 import { routeModel } from "@t3tools/shared/modelRouter";
+import * as Option from "effect/Option";
 import * as EffectForFixture from "effect/Effect";
 import * as SchemaForFixture from "effect/Schema";
 import * as SqlClientForFixture from "effect/unstable/sql/SqlClient";
@@ -20,6 +21,7 @@ import {
   type CollaborationCommand,
   OrchestrationV2Command,
   type OrchestrationV2ThreadProjection,
+  type ServerProvider,
   type OrchestrationV2DispatchCommandResult,
   type CollaborationCommandResult,
   type TaskContractReviewInput,
@@ -57,12 +59,17 @@ const state = vi.hoisted(() => ({
   reviewRead: vi.fn(),
   reviewDecide: vi.fn(),
   readProjection: vi.fn(),
+  readCreationStatus: vi.fn(),
+  sessionIdentity: {} as object,
 }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: string) => (atom === "environment" ? state.environmentId : state.providers),
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
 vi.mock("../../state/primaryEnvironment", () => ({ primaryEnvironmentIdAtom: "environment" }));
+vi.mock("../../state/session", () => ({
+  usePreparedConnection: () => Option.some(state.sessionIdentity),
+}));
 vi.mock("../../state/server", () => ({ primaryServerProvidersAtom: "providers" }));
 vi.mock("../../state/entities", () => ({ useProjects: () => state.projects }));
 vi.mock("../../state/threads", () => ({
@@ -71,17 +78,20 @@ vi.mock("../../state/threads", () => ({
     readTaskReview: "review-read",
     decideTaskContract: "review-decide",
     readProjection: "read-projection",
+    readCreationStatus: "read-creation-status",
   },
 }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
-    command === "review-read"
-      ? state.reviewRead
-      : command === "review-decide"
-        ? state.reviewDecide
-        : command === "read-projection"
-          ? state.readProjection
-          : state.create,
+    command === "read-creation-status"
+      ? state.readCreationStatus
+      : command === "review-read"
+        ? state.reviewRead
+        : command === "review-decide"
+          ? state.reviewDecide
+          : command === "read-projection"
+            ? state.readProjection
+            : state.create,
 }));
 vi.mock("../../env", () => ({ isElectron: false }));
 vi.mock("../../lib/utils", () => {
@@ -230,6 +240,8 @@ beforeEach(() => {
   state.reviewRead.mockReset();
   state.reviewDecide.mockReset();
   state.readProjection.mockReset();
+  state.readCreationStatus.mockReset();
+  state.sessionIdentity = {};
 });
 afterEach(async () => {
   await act(async () => renderer?.unmount());
@@ -1688,12 +1700,26 @@ const loadAgentsCreationFixture = async () =>
       import.meta.url,
     ).href
   )) as {
+    agentsCreationProvider: ServerProvider;
     withAgentsTaskCreationFixture: (
       check: (fixture: {
         sql: SqlClientForFixture.SqlClient;
         dispatch: (
           command: OrchestrationV2Command,
         ) => EffectForFixture.Effect<OrchestrationV2DispatchCommandResult, Error>;
+        readStatus: (
+          command: OrchestrationV2Command,
+          actor?: {
+            kind: "session";
+            actorId: string;
+            sessionId: string;
+            scopes: Array<"orchestration:read" | "orchestration:operate">;
+          },
+        ) => EffectForFixture.Effect<
+          { status: "committed" | "rejected" | "unknown" | "unavailable" },
+          Error
+        >;
+        setProviders: (providers: ReadonlyArray<ServerProvider>) => void;
         readSnapshot: () => EffectForFixture.Effect<CollaborationSnapshot, Error>;
         readReview: (
           input: TaskContractReviewInput,
@@ -1906,6 +1932,12 @@ it.each(["malformed-cache", "storage-read-throws", "absent-task"] as const)(
       module.withAgentsTaskCreationFixture((f) =>
         EffectForFixture.promise(async () => {
           state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+          state.readCreationStatus.mockImplementation(
+            async ({ input }: { input: { command: OrchestrationV2Command } }) => ({
+              _tag: "Success",
+              value: await EffectForFixture.runPromise(f.readStatus(input.command)),
+            }),
+          );
           state.readProjection.mockImplementation(
             async ({ input }: { input: { threadId: string } }) => ({
               _tag: "Success",
@@ -1951,7 +1983,8 @@ it.each(["malformed-cache", "storage-read-throws", "absent-task"] as const)(
               });
             }
             expect(state.create).toHaveBeenCalledTimes(1);
-            expect(state.readProjection).toHaveBeenCalledTimes(2);
+            expect(state.readCreationStatus).toHaveBeenCalledTimes(2);
+            expect(state.readProjection).not.toHaveBeenCalled();
           }
           expect((await EffectForFixture.runPromise(f.readSnapshot())).tasks).toHaveLength(0);
           expect(state.navigate).not.toHaveBeenCalled();
@@ -1990,6 +2023,12 @@ it.each([
       module.withAgentsTaskCreationFixture((f) =>
         EffectForFixture.promise(async () => {
           state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+          state.readCreationStatus.mockImplementation(
+            async ({ input }: { input: { command: OrchestrationV2Command } }) => ({
+              _tag: "Success",
+              value: await EffectForFixture.runPromise(f.readStatus(input.command)),
+            }),
+          );
           state.readProjection.mockImplementation(
             async ({ input }: { input: { threadId: string } }) => ({
               _tag: "Success",
@@ -2159,6 +2198,12 @@ it.each([
       module.withAgentsTaskCreationFixture((f) =>
         EffectForFixture.promise(async () => {
           state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+          state.readCreationStatus.mockImplementation(
+            async ({ input }: { input: { command: OrchestrationV2Command } }) => ({
+              _tag: "Success",
+              value: await EffectForFixture.runPromise(f.readStatus(input.command)),
+            }),
+          );
           state.create.mockImplementation(async ({ input }: { input: OrchestrationV2Command }) => ({
             _tag: "Success",
             value: await EffectForFixture.runPromise(f.dispatch(input)),
@@ -3341,4 +3386,172 @@ it.each(["active", "accepted", "accepted-paused", "paused-readonly"] as const)(
     );
   },
   60_000,
+);
+
+it.each([
+  "lost-reject",
+  "late-success",
+  "late-failure",
+  "reload",
+  "context-roundtrip",
+  "late-status",
+  "principal-switch",
+] as const)(
+  "recovers proved rejected creation then separately reviews one new task across %s",
+  async (mode) => {
+    const storage = creationStorage();
+    const module = await loadAgentsCreationFixture();
+    await EffectForFixture.runPromise(
+      module.withAgentsTaskCreationFixture((f) =>
+        EffectForFixture.promise(async () => {
+          state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+          state.readCreationStatus.mockImplementation(
+            async ({ input }: { input: { command: OrchestrationV2Command } }) => ({
+              _tag: "Success",
+              value: await EffectForFixture.runPromise(f.readStatus(input.command)),
+            }),
+          );
+          state.readProjection.mockImplementation(
+            async ({ input }: { input: { threadId: string } }) => ({
+              _tag: "Success",
+              value: await EffectForFixture.runPromise(
+                f.orchestrator.getThreadProjection(input.threadId),
+              ),
+            }),
+          );
+          const oldReply = deferred<void>();
+          let calls = 0;
+          state.create.mockImplementation(async ({ input }: { input: OrchestrationV2Command }) => {
+            calls++;
+            if (calls === 1) {
+              f.setProviders([]);
+              const result = await EffectForFixture.runPromise(
+                EffectForFixture.exit(f.dispatch(input)),
+              );
+              expect(result._tag).toBe("Failure");
+              f.setProviders([module.agentsCreationProvider]);
+              if (mode !== "lost-reject") await oldReply.promise;
+              if (mode === "late-success") return { _tag: "Success", value: { sequence: 0 } };
+              return { _tag: "Failure", cause: "Lost rejected response" };
+            }
+            return { _tag: "Success", value: await EffectForFixture.runPromise(f.dispatch(input)) };
+          });
+          await mount();
+          await creationClick("New task");
+          await fillCreation("Rejected old attempt");
+          await creationClick("Review new task");
+          await creationClick("Create task");
+          const old = state.create.mock.calls[0]![0].input as OrchestrationV2Command;
+          expect(creationButton("New task")!.props.disabled).toBe(true);
+          if (mode === "reload") {
+            await act(async () => renderer.unmount());
+            await mount();
+          }
+          const before = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
+          const originalSessionIdentity = state.sessionIdentity;
+          const oldStatus = deferred<{ _tag: "Success"; value: { status: "rejected" } }>();
+          if (mode === "late-status" || mode === "principal-switch") {
+            state.readCreationStatus.mockImplementationOnce(() => oldStatus.promise);
+            await creationClick("Recover task creation");
+            expect(creationButton("New task")!.props.disabled).toBe(true);
+            if (mode === "principal-switch") {
+              state.sessionIdentity = {};
+              await act(async () => renderer.update(<AgentsPage />));
+              state.readCreationStatus.mockImplementation(
+                async ({ input }: { input: { command: OrchestrationV2Command } }) => ({
+                  _tag: "Success",
+                  value: await EffectForFixture.runPromise(
+                    f.readStatus(input.command, {
+                      kind: "session",
+                      actorId: "foreign",
+                      sessionId: "foreign-session",
+                      scopes: ["orchestration:read", "orchestration:operate"],
+                    }),
+                  ),
+                }),
+              );
+              await act(async () =>
+                oldStatus.resolve({ _tag: "Success", value: { status: "rejected" } }),
+              );
+              expect(creationButton("New task")!.props.disabled).toBe(true);
+              await creationClick("Recover task creation");
+              expect(text()).toContain("uncertain");
+              expect(creationButton("New task")!.props.disabled).toBe(true);
+              state.sessionIdentity = originalSessionIdentity;
+              await act(async () => renderer.update(<AgentsPage />));
+              state.readCreationStatus.mockImplementation(
+                async ({ input }: { input: { command: OrchestrationV2Command } }) => ({
+                  _tag: "Success",
+                  value: await EffectForFixture.runPromise(f.readStatus(input.command)),
+                }),
+              );
+            } else {
+              state.environmentId = "environment-b";
+              await act(async () => renderer.update(<AgentsPage />));
+              state.environmentId = "environment-a";
+              await act(async () => renderer.update(<AgentsPage />));
+            }
+          }
+          await creationClick("Recover task creation", true);
+          expect(text()).toContain("attempt was rejected");
+          expect(await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`)).toEqual(
+            before,
+          );
+          expect(creationButton("New task")!.props.disabled).toBe(false);
+          expect(state.create).toHaveBeenCalledTimes(1);
+          expect((await EffectForFixture.runPromise(f.readSnapshot())).tasks).toHaveLength(0);
+          expect(state.navigate).not.toHaveBeenCalled();
+          if (mode === "context-roundtrip") {
+            state.environmentId = "environment-b";
+            await act(async () => renderer.update(<AgentsPage />));
+            state.environmentId = "environment-a";
+            await act(async () => renderer.update(<AgentsPage />));
+            expect(creationButton("New task")!.props.disabled).toBe(true);
+            await creationClick("Recover task creation");
+          }
+          if (mode === "reload") {
+            await act(async () => renderer.unmount());
+            await mount();
+            expect(creationButton("New task")!.props.disabled).toBe(true);
+            expect(decodeCreationStorage([...storage.values()][0]!)).toMatchObject({
+              status: "rejected",
+            });
+            await creationClick("Recover task creation");
+          }
+          await creationClick("New task");
+          await fillCreation("Separate new task");
+          await creationClick("Review new task");
+          await act(async () => {
+            oldReply.resolve();
+            oldStatus.resolve({ _tag: "Success", value: { status: "rejected" } });
+          });
+          expect(text()).toContain("Separate new task");
+          expect(state.create).toHaveBeenCalledTimes(1);
+          await creationClick("Create task", true);
+          expect(state.create).toHaveBeenCalledTimes(2);
+          const next = state.create.mock.calls[1]![0].input as Extract<
+            OrchestrationV2Command,
+            { type: "thread.create" }
+          >;
+          expect(next.commandId).not.toBe(old.commandId);
+          expect(next.threadId).not.toBe("threadId" in old ? old.threadId : undefined);
+          expect(
+            (await EffectForFixture.runPromise(f.readSnapshot())).tasks.map((t) => t.threadId),
+          ).toEqual([next.threadId]);
+          expect(decodeCreationStorage([...storage.values()][0]!)).toMatchObject({
+            status: "confirmed",
+            command: { commandId: next.commandId },
+          });
+          expect(await EffectForFixture.runPromise(f.noExecution())).toEqual({
+            runs: 0,
+            grants: 0,
+            outbox: 0,
+            messages: 0,
+          });
+          expect(state.bind).not.toHaveBeenCalled();
+          expect(state.navigate).not.toHaveBeenCalled();
+        }),
+      ),
+    );
+  },
 );

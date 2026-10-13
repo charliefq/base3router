@@ -132,6 +132,7 @@ import {
 import * as OwnedChat from "../collaboration/ownedChat.ts";
 import {
   validateReviewedCreate,
+  readAgentsCreationStatus,
   verifyReviewedCreateReplay,
 } from "../collaboration/governedCreation.ts";
 import {
@@ -283,6 +284,9 @@ export interface OrchestratorV2Shape {
     fields: ReadonlyArray<K>,
     filter?: ProjectionRecordFilter,
   ) => Effect.Effect<ProjectionRecords<K>, OrchestratorV2Error>;
+  readonly getAgentsCreationStatus: (input: {
+    readonly command: OrchestrationV2Command;
+  }) => Effect.Effect<{ readonly status: "committed" | "rejected" | "unknown" | "unavailable" }>;
   readonly getTaskReview: (
     input: TaskContractReviewInput,
   ) => Effect.Effect<TaskContractReviewState, OrchestratorV2Error>;
@@ -9748,6 +9752,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               commandId: command.commandId,
               threadId: commandThreadId(command),
               commandType: command.type,
+              ...(command.type === "thread.create" ? { creationCommand: command } : {}),
               rejectedAt,
               error: cause instanceof Error ? cause.message : String(cause),
             })
@@ -10034,6 +10039,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       projectionStore
         .getThreadRecords(threadId, fields, filter)
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
+    getAgentsCreationStatus: ({ command }) =>
+      taskReviewSqlAtCall.pipe(
+        Effect.flatMap((database) =>
+          Option.isSome(database)
+            ? readAgentsCreationStatus(database.value, command)
+            : Effect.succeed({ status: "unavailable" as const }),
+        ),
+      ),
     getTaskReview: (input) =>
       taskReviewSqlAtCall.pipe(
         Effect.flatMap((database) =>
@@ -10164,6 +10177,7 @@ const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
     getTimelinePage: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
     getMessageCount: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
     getThreadRecords: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
+    getAgentsCreationStatus: () => Effect.succeed({ status: "unavailable" as const }),
     getTaskReview: () =>
       Effect.succeed({ status: "unavailable" as const, reason: "runtime-unavailable" }),
     getThreadProjection: (threadId) =>
