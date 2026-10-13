@@ -179,4 +179,57 @@ describe("fixed Model Router corpus", () => {
     expect(zero.actualCost.quantity).toMatchObject({ status: "known", value: 0 });
     expect(zero.p90Latency.quantity.status).toBe("unknown");
   });
+
+  it.each(["monotonic_clock", "provider_reported"] as const)(
+    "preserves qualified single-source %s latency without inventing a user source",
+    (source) => {
+      const records = measurements(20).map((record) => ({
+        ...record,
+        latency: {
+          ...quantity(record.latency.status === "known" ? record.latency.value : 0, "ms"),
+          source,
+        },
+      }));
+      const report = runFixedTaskCorpus(measuredCorpus(records));
+      expect(report.p90Latency).toMatchObject({
+        status: "reliable",
+        sampleCount: 20,
+        quantity: { status: "known", value: 180, source },
+        sources: [source],
+        sourceComposition: "single",
+      });
+      expect(report.actualCost).toMatchObject({
+        sampleCount: 20,
+        quantity: { status: "known", source: "provider_reported" },
+        sources: ["provider_reported"],
+        sourceComposition: "single",
+      });
+    },
+  );
+
+  it("reports mixed qualified sources deterministically and excludes unqualified sources", () => {
+    const sources = ["wall_clock", "provider_reported", "monotonic_clock"] as const;
+    const records: ReadonlyArray<FixedTaskMeasurement> = [
+      ...measurements(20).map((record, index) => ({
+        ...record,
+        latency: { ...quantity((index + 1) * 10, "ms"), source: sources[index % sources.length]! },
+      })),
+      {
+        id: "excluded-source",
+        evidenceClass: "FIXTURE",
+        cost: quantity(10, "usd"),
+        latency: { ...quantity(50000, "ms"), source: "user_explicit" },
+      },
+    ];
+    const report = runFixedTaskCorpus(measuredCorpus(records));
+    expect(report.p90Latency).toMatchObject({
+      status: "reliable",
+      sampleCount: 20,
+      excludedCount: 1,
+      quantity: { status: "known", value: 180, source: "unknown" },
+      sources: ["monotonic_clock", "provider_reported", "wall_clock"],
+      sourceComposition: "mixed",
+    });
+    expect(runFixedTaskCorpus(measuredCorpus(records.toReversed()))).toEqual(report);
+  });
 });

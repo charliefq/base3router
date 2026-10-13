@@ -290,6 +290,9 @@ const aggregate = (records: ReadonlyArray<FixedTaskMeasurement>, unit: "usd" | "
       : [];
   });
   const sampleCount = quantities.length;
+  const sources = sorted([...new Set(quantities.map((item) => item.source))]);
+  const sourceComposition =
+    sources.length === 0 ? "none" : sources.length === 1 ? "single" : "mixed";
   const status =
     sampleCount === 0
       ? "unknown"
@@ -307,7 +310,8 @@ const aggregate = (records: ReadonlyArray<FixedTaskMeasurement>, unit: "usd" | "
           status: "known",
           value,
           unit,
-          source: unit === "usd" ? "provider_reported" : "user_explicit",
+          source:
+            unit === "usd" ? "provider_reported" : sources.length === 1 ? sources[0]! : "unknown",
           provenance: "observed",
           observedAt: quantities
             .map((item) => item.observedAt)
@@ -319,6 +323,8 @@ const aggregate = (records: ReadonlyArray<FixedTaskMeasurement>, unit: "usd" | "
     status: quantity.status === "unknown" && status === "reliable" ? "unknown" : status,
     quantity,
     sampleCount,
+    sources,
+    sourceComposition,
     excludedCount: records.length - sampleCount,
     aggregation:
       unit === "usd"
