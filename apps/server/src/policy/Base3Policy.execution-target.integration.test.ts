@@ -1,9 +1,31 @@
+import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
+import * as Etag from "effect/unstable/http/Etag";
 import { assert, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import * as ModelRouter from "@t3tools/shared/modelRouter";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   AuthOrchestrationOperateScope,
+  EnvironmentId,
+  EnvironmentHttpApi,
+  EnvironmentAuthenticatedAuth,
+  EnvironmentAuthenticatedPrincipal,
+  AuthSessionId,
+  AuthOrchestrationReadScope,
+  EnvironmentRouterPolicyStatus,
+  EnvironmentRouterPolicyCommandResult,
+  EnvironmentRouterPolicyCommand,
+  HYBRID_ROUTER_POLICY_VERSION,
+  HYBRID_MIN_SAMPLE_RATE,
+  MODEL_ROUTER_POLICY_VERSION,
+  ObservationId,
+  RouterEvaluationError,
+  TURN_OUTCOME_OBSERVATION_VERSION,
+  UNKNOWN_TASK_PROFILE,
+  emptyTiming,
+  emptyUsageMeasurement,
+  emptyCostMeasurement,
+  emptyOutcomeEvidence,
   CommandId,
   DispatcherTaskRouteBinding,
   MessageId,
@@ -42,6 +64,21 @@ import { makeOrchestratorV2ReplayLayerWithRegistry } from "../orchestration-v2/t
 import { checkpointWorkspace } from "../orchestration-v2/testkit/ReplayFixtureWorkspace.ts";
 import { argumentHash, authorizeDispatch, Base3PolicyDeniedError } from "./Base3PolicyGate.ts";
 import { PolicyExecutionContext } from "./executionContext.ts";
+import * as RouterEvaluation from "../routerEvaluation/RouterEvaluationService.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import { routerPolicyHttpApiLayer } from "../routerEvaluation/http.ts";
+const decodePolicyStatus = Schema.decodeUnknownSync(EnvironmentRouterPolicyStatus);
+const decodePolicyResult = Schema.decodeUnknownSync(EnvironmentRouterPolicyCommandResult);
+const encodePolicyControl = Schema.encodeSync(
+  Schema.fromJsonString(EnvironmentRouterPolicyCommand),
+);
+class PolicyControlFixtureApi extends HttpApi.make("environment").add(
+  EnvironmentHttpApi.groups.routerPolicy,
+) {}
+const policyEnvironment = EnvironmentId.make("policy-control-disposable");
 const instanceId = ProviderInstanceId.make("fake-routing-provider");
 const driver = ProviderDriverKind.make("codex");
 const a: ModelSelection = { instanceId, model: "gpt-5.4" };
@@ -685,3 +722,288 @@ it("decodes finite non-negative dispatch limits and rejects invalid numeric valu
   assert.equal(decoded.type, "message.dispatch");
   if (decoded.type === "message.dispatch") assert.deepEqual(decoded.modelRouteConstraints, limits);
 });
+
+it.live.each([0, 1, 24])(
+  "policy control with %i observations per target: HTTP → shadow → active → real V2 bind → rollback",
+  (recordCount) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace("policy-control-whole-flow");
+        const fixtureProviders = [
+          { ...provider, models: provider.models.filter((model) => model.slug === a.model) },
+          {
+            ...provider,
+            instanceId: b.instanceId,
+            models: provider.models.filter((model) => model.slug === b.model),
+          },
+        ];
+        const started = yield* Ref.make<ReadonlyArray<ModelSelection>>([]);
+        const database = SqlitePersistenceMemory;
+        const runtime = Layer.mergeAll(
+          database,
+          RouterEvaluation.layer.pipe(Layer.provide(database)),
+          Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed(fixtureProviders) }),
+          Layer.succeed(ServerEnvironment.ServerEnvironment, {
+            getEnvironmentId: Effect.succeed(policyEnvironment),
+            getDescriptor: Effect.die("Not used"),
+          }),
+          makeOrchestratorV2ReplayLayerWithRegistry(
+            { name: "policy-control-whole-flow" },
+            ProviderAdapterRegistry.makeLayer([
+              makeAdapter(started, a.instanceId),
+              makeAdapter(started, b.instanceId),
+            ]),
+            { databaseLayer: database, runEffectWorker: true },
+          ),
+        );
+        yield* Effect.gen(function* () {
+          const evaluation = yield* RouterEvaluation.RouterEvaluationService;
+          const routes = HttpApiBuilder.layer(PolicyControlFixtureApi).pipe(
+            Layer.provide(routerPolicyHttpApiLayer),
+            Layer.provide(Layer.succeed(RouterEvaluation.RouterEvaluationService, evaluation)),
+            Layer.provide(
+              Layer.succeed(ServerEnvironment.ServerEnvironment, {
+                getEnvironmentId: Effect.succeed(policyEnvironment),
+                getDescriptor: Effect.die("Not used"),
+              }),
+            ),
+            Layer.provide(
+              Layer.succeed(EnvironmentAuthenticatedAuth, (effect) =>
+                effect.pipe(
+                  Effect.provideService(EnvironmentAuthenticatedPrincipal, {
+                    sessionId: AuthSessionId.make("policy-fixture-session"),
+                    subject: "fixture-operator",
+                    method: "browser-session-cookie",
+                    scopes: new Set([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
+                  }),
+                ),
+              ),
+            ),
+            Layer.provideMerge(
+              HttpPlatform.layer.pipe(
+                Layer.provideMerge(NodeServices.layer),
+                Layer.provideMerge(Etag.layerWeak),
+              ),
+            ),
+            Layer.provide(NodeServices.layer),
+          );
+          const web = yield* Effect.acquireRelease(
+            Effect.sync(() => HttpRouter.toWebHandler(routes, { disableLogger: true })),
+            (web) => Effect.promise(() => web.dispose()),
+          );
+          const status = () =>
+            Effect.promise(async () => {
+              const response = await web.handler(new Request("http://fixture/api/router-policy"));
+              assert.equal(response.status, 200);
+              return decodePolicyStatus(await response.json());
+            });
+          const control = (input: EnvironmentRouterPolicyCommand) =>
+            Effect.promise(async () => {
+              const response = await web.handler(
+                new Request("http://fixture/api/router-policy/command", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: encodePolicyControl(input),
+                }),
+              );
+              assert.equal(response.status, 200);
+              const result = decodePolicyResult(await response.json());
+              assert.equal(result.outcome, "applied");
+              if (result.outcome !== "applied") throw new Error(result.error.detail);
+              return result.status;
+            });
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const sql = yield* SqlClient.SqlClient;
+          const projectId = ProjectId.make("policy-fixture-project");
+          const now = DateTime.formatIso(yield* DateTime.now);
+          const defaultJson = yield* encodeModelSelection(a);
+          yield* sql`INSERT INTO projection_projects (project_id,title,workspace_root,default_model_selection_json,scripts_json,created_at,updated_at) VALUES (${projectId},'Policy fixture',${cwd},${defaultJson},'[]',${now},${now})`;
+          const runAuto = (
+            label: string,
+            expected: ModelSelection,
+            hybrid: boolean,
+            loadFailure = false,
+            mode: "auto" | "manual" = "auto",
+          ) =>
+            Effect.gen(function* () {
+              const threadId = ThreadId.make(`policy-thread-${label}`);
+              const messageId = MessageId.make(`policy-message-${label}`);
+              yield* orchestrator.dispatch({
+                type: "thread.create",
+                commandId: CommandId.make(`policy-create-${label}`),
+                threadId,
+                projectId,
+                title: "Policy fixture",
+                modelSelection: a,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: null,
+                worktreePath: cwd,
+                createdBy: "user",
+                creationSource: "web",
+              });
+              const completed = yield* orchestrator.streamDomainEvents.pipe(
+                Stream.filter(
+                  (event) =>
+                    event.type === "run.updated" &&
+                    event.payload.threadId === threadId &&
+                    event.payload.status === "completed",
+                ),
+                Stream.take(1),
+                Stream.runDrain,
+                Effect.forkScoped,
+              );
+              const messageCommand = {
+                type: "message.dispatch",
+                commandId: CommandId.make(`policy-dispatch-${label}`),
+                threadId,
+                messageId,
+                text: "Disposable policy fixture",
+                attachments: [],
+                routingMode: mode,
+                modelSelection: a,
+                dispatchMode: { type: "start_immediately" },
+                createdBy: "user",
+                creationSource: "web",
+              } as const;
+              yield* orchestrator.dispatch(messageCommand).pipe(
+                Effect.provideService(
+                  RouterEvaluation.RouterEvaluationService,
+                  loadFailure
+                    ? {
+                        ...evaluation,
+                        routingSnapshot: () =>
+                          Effect.fail(
+                            new RouterEvaluationError({
+                              reason: "malformed_policy",
+                              detail: "Fixture load failure",
+                            }),
+                          ),
+                      }
+                    : evaluation,
+                ),
+              );
+              yield* worker.drain();
+              yield* Fiber.join(completed);
+              yield* worker.drain();
+              const run = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+                (entry) => entry.userMessageId === messageId,
+              );
+              assert.deepEqual(run?.modelSelection, expected);
+              const row = (yield* sql<{
+                binding: string;
+              }>`SELECT binding_json AS binding FROM projection_dispatcher_task_routes WHERE message_id = ${messageId}`)[0]!;
+              const binding = yield* decodeRoute(row.binding);
+              assert.deepEqual(
+                { instanceId: binding.target.instanceId, model: binding.target.model },
+                expected,
+              );
+              assert.deepEqual(binding.modelRoute?.selected?.target, expected);
+              assert.deepEqual(binding.modelRoute?.executed?.target, expected);
+              assert.equal(binding.hybrid?.usedHybridRanking ?? false, hybrid);
+              if (loadFailure && mode === "auto") {
+                assert.equal(binding.hybrid?.fallbackToV0, true);
+                assert.include(binding.hybrid?.fallbackReason ?? "", "unavailable");
+              }
+              if (label === "active" && recordCount < HYBRID_MIN_SAMPLE_RATE) {
+                assert.equal(binding.hybrid?.fallbackToV0, true);
+                assert.include(binding.hybrid?.fallbackReason ?? "", "Insufficient");
+              }
+              assert.deepEqual(
+                binding.modelRoute?.estimatedCostUsd,
+                binding.modelRoute?.selected?.metrics.costUsd,
+              );
+              assert.deepEqual(
+                binding.modelRoute?.estimatedLatencyMs,
+                binding.modelRoute?.selected?.metrics.latencyMs,
+              );
+              assert.equal(
+                binding.modelRoute?.fallbacks.every(
+                  (fallback) => fallback.target.instanceId !== expected.instanceId,
+                ),
+                true,
+              );
+              const grant = (yield* sql<{
+                hash: string;
+              }>`SELECT argument_hash AS hash FROM base3_execution_grants WHERE grant_id=${`grant:message:${threadId}:${messageId}`}`)[0]!;
+              assert.equal(
+                grant.hash,
+                argumentHash({
+                  text: "Disposable policy fixture",
+                  model: expected.model,
+                  instanceId: expected.instanceId,
+                  attachmentIds: [],
+                }),
+              );
+            });
+          const initial = yield* status();
+          const candidate = initial.policies.find(
+            (policy) => policy.policyVersion === HYBRID_ROUTER_POLICY_VERSION,
+          )!;
+          yield* runAuto("baseline", a, false);
+          // Synthetic, persisted local evidence only. No adapter or provider calls generate these measurements.
+          for (const selection of [a, b])
+            for (let index = 0; index < recordCount; index++)
+              yield* evaluation.recordObservation({
+                version: TURN_OUTCOME_OBSERVATION_VERSION,
+                observationId: ObservationId.make(
+                  `policy-fixture-${selection.instanceId}-${index}`,
+                ),
+                environmentId: policyEnvironment,
+                recordedAt: now,
+                policyVersion: MODEL_ROUTER_POLICY_VERSION,
+                routingMode: "auto",
+                instanceId: selection.instanceId,
+                model: selection.model,
+                taskProfile: UNKNOWN_TASK_PROFILE,
+                timing: emptyTiming(),
+                usage: emptyUsageMeasurement(),
+                cost: emptyCostMeasurement(),
+                providerAttempts: 1,
+                fallbackCount: 0,
+                cancelled: false,
+                timedOut: false,
+                finishReason: selection === b ? "stop" : "error",
+                terminalCategory: selection === b ? "success" : "provider_failure",
+                evidence: emptyOutcomeEvidence(),
+              });
+          const shadow = yield* control({
+            action: "shadow",
+            policyId: candidate.policyId,
+            expectedRevision: initial.revision,
+            confirm: true,
+          });
+          yield* runAuto("shadow", a, false);
+          const active = yield* control({
+            action: "activate",
+            policyId: candidate.policyId,
+            expectedRevision: shadow.revision,
+            confirm: true,
+          });
+          yield* runAuto(
+            "active",
+            recordCount >= HYBRID_MIN_SAMPLE_RATE ? b : a,
+            recordCount >= HYBRID_MIN_SAMPLE_RATE,
+          );
+          yield* runAuto("load-failure", a, false, true);
+          yield* runAuto("manual", a, false, false, "manual");
+          const rollback = yield* control({
+            action: "rollback",
+            expectedRevision: active.revision,
+            confirm: true,
+          });
+          assert.equal(rollback.active.policyId, initial.active.policyId);
+          yield* runAuto("rollback", a, false);
+          assert.deepEqual(yield* Ref.get(started), [
+            a,
+            a,
+            recordCount >= HYBRID_MIN_SAMPLE_RATE ? b : a,
+            a,
+            a,
+            a,
+          ]);
+        }).pipe(Effect.provide(runtime), Effect.provideService(PolicyExecutionContext, session));
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+);

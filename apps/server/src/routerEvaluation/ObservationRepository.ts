@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { isSqlError } from "effect/unstable/sql/SqlError";
 
 import {
   type EnvironmentId,
@@ -41,6 +42,9 @@ const PolicyRow = Schema.Struct({
 });
 
 const EventRow = Schema.Struct({
+  eventId: Schema.String,
+  environmentId: Schema.String,
+  sequence: Schema.Number,
   payloadJson: Schema.String,
 });
 
@@ -62,6 +66,9 @@ export type RecordTerminalContext = {
 export class ObservationRepository extends Context.Service<
   ObservationRepository,
   {
+    readonly transaction: <A, E, R>(
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | PersistenceSqlError, R>;
     readonly upsert: (
       observation: TurnOutcomeObservationV0,
       context?: RecordTerminalContext,
@@ -332,7 +339,24 @@ const make = Effect.gen(function* () {
       ORDER BY recorded_at ASC, observation_id ASC
     `.pipe(
       Effect.flatMap((rows) =>
-        Effect.forEach(rows, (row) => decodeObservationPayload(row.payloadJson)),
+        Effect.forEach(rows, (row) =>
+          decodeObservationPayload(row.payloadJson).pipe(
+            Effect.flatMap((observation) =>
+              observation.environmentId === environmentId &&
+              observation.environmentId === row.environmentId &&
+              observation.observationId === row.observationId &&
+              observation.recordedAt === row.recordedAt &&
+              observation.version === row.schemaVersion
+                ? Effect.succeed(observation)
+                : Effect.fail(
+                    new PersistenceDecodeError({
+                      operation: "observation.list",
+                      issue: "Observation columns and payload disagree.",
+                    }),
+                  ),
+            ),
+          ),
+        ),
       ),
       Effect.mapError(toRepoError("ObservationRepository.list")),
     );
@@ -401,11 +425,35 @@ const make = Effect.gen(function* () {
       Effect.mapError(toRepoError("ObservationRepository.prune")),
     );
 
+  const decodePolicyRow = (row: typeof PolicyRow.Type) =>
+    decodePolicyPayload(row.payloadJson).pipe(
+      Effect.flatMap((policy) =>
+        policy.policyId === row.policyId &&
+        policy.environmentId === row.environmentId &&
+        policy.state === row.state &&
+        policy.createdAt === row.createdAt
+          ? Effect.succeed(policy)
+          : Effect.fail(
+              new PersistenceDecodeError({
+                operation: "policy.read",
+                issue: "Policy columns and payload disagree.",
+              }),
+            ),
+      ),
+    );
+
   const upsertPolicy: ObservationRepository["Service"]["upsertPolicy"] = (policy) =>
-    encodePolicyPayload(policy).pipe(
-      Effect.flatMap(
-        (payloadJson) =>
-          sql`
+    Effect.gen(function* () {
+      const existing = yield* getPolicy(policy.policyId);
+      if (Option.isSome(existing) && existing.value.environmentId !== policy.environmentId)
+        return yield* new PersistenceDecodeError({
+          operation: "policy.write",
+          issue: "Policy belongs to another environment.",
+        });
+      return yield* encodePolicyPayload(policy).pipe(
+        Effect.flatMap(
+          (payloadJson) =>
+            sql`
             INSERT INTO router_policies (
               policy_id,
               environment_id,
@@ -423,8 +471,12 @@ const make = Effect.gen(function* () {
               state = excluded.state,
               payload_json = excluded.payload_json
           `,
-      ),
-      Effect.asVoid,
+        ),
+        Effect.asVoid,
+        Effect.mapError(toRepoError("ObservationRepository.upsertPolicy")),
+      );
+    }).pipe(
+      sql.withTransaction,
       Effect.mapError(toRepoError("ObservationRepository.upsertPolicy")),
     );
 
@@ -440,7 +492,7 @@ const make = Effect.gen(function* () {
       WHERE environment_id = ${environmentId}
       ORDER BY created_at ASC, policy_id ASC
     `.pipe(
-      Effect.flatMap((rows) => Effect.forEach(rows, (row) => decodePolicyPayload(row.payloadJson))),
+      Effect.flatMap((rows) => Effect.forEach(rows, decodePolicyRow)),
       Effect.mapError(toRepoError("ObservationRepository.listPolicies")),
     );
 
@@ -458,23 +510,51 @@ const make = Effect.gen(function* () {
       Effect.flatMap((rows) => {
         const row = rows[0];
         if (row === undefined) return Effect.succeed(Option.none());
-        return decodePolicyPayload(row.payloadJson).pipe(Effect.map(Option.some));
+        return decodePolicyRow(row).pipe(Effect.map(Option.some));
       }),
       Effect.mapError(toRepoError("ObservationRepository.getPolicy")),
     );
 
   const listEvents: ObservationRepository["Service"]["listEvents"] = (environmentId) =>
     sql<typeof EventRow.Type>`
-      SELECT payload_json AS "payloadJson"
+      SELECT event_id AS "eventId", environment_id AS "environmentId", sequence, payload_json AS "payloadJson"
       FROM router_observation_events
       WHERE environment_id = ${environmentId}
       ORDER BY sequence ASC, event_id ASC
     `.pipe(
-      Effect.flatMap((rows) => Effect.forEach(rows, (row) => decodeEventPayload(row.payloadJson))),
+      Effect.flatMap((rows) =>
+        Effect.forEach(rows, (row) =>
+          decodeEventPayload(row.payloadJson).pipe(
+            Effect.flatMap((event) =>
+              event.environmentId === row.environmentId &&
+              event.environmentId === environmentId &&
+              event.eventId === row.eventId &&
+              event.sequence === row.sequence
+                ? Effect.succeed(event)
+                : Effect.fail(
+                    new PersistenceDecodeError({
+                      operation: "event.list",
+                      issue: "Event columns and payload disagree.",
+                    }),
+                  ),
+            ),
+          ),
+        ),
+      ),
       Effect.mapError(toRepoError("ObservationRepository.listEvents")),
     );
 
   return {
+    transaction: (effect) =>
+      sql
+        .withTransaction(effect)
+        .pipe(
+          Effect.mapError((cause) =>
+            isSqlError(cause)
+              ? new PersistenceSqlError({ operation: "policy.transaction", cause })
+              : cause,
+          ),
+        ),
     upsert,
     get,
     listByEnvironment,

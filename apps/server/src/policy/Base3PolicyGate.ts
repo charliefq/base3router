@@ -4,6 +4,8 @@
 import * as NodeCrypto from "node:crypto";
 import {
   type AuthEnvironmentScope,
+  MODEL_ROUTER_POLICY_VERSION,
+  HYBRID_ROUTER_POLICY_VERSION,
   AuthOrchestrationOperateScope,
   defaultConcurrencyBudgetPolicy,
   EnvironmentId,
@@ -32,6 +34,7 @@ import {
 } from "../dispatcher/Dispatcher.ts";
 import { deleteTaskHandoffsByThread } from "../dispatcher/Handoff.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as RouterEvaluation from "../routerEvaluation/RouterEvaluationService.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { PolicyExecutionContext } from "./executionContext.ts";
@@ -512,12 +515,39 @@ const bindRoute = (input: {
         : { modelRouteConstraints: input.command.modelRouteConstraints }),
       ...(preferred === undefined ? {} : { modelSelection: preferred }),
     };
+    const evaluation = yield* Effect.serviceOption(RouterEvaluation.RouterEvaluationService);
+    const fallback = {
+      activePolicyVersion: MODEL_ROUTER_POLICY_VERSION,
+      challengerEnabled: false,
+      evidenceByTarget: new Map(),
+      policyLoadFailure: "Policy snapshot unavailable; Router V0 was used.",
+    };
+    const hybrid = Option.isNone(evaluation)
+      ? fallback
+      : yield* evaluation.value.routingSnapshot(input.environmentId).pipe(
+          Effect.map((snapshot) => {
+            const rankingPolicy =
+              snapshot.active.policyVersion === HYBRID_ROUTER_POLICY_VERSION
+                ? snapshot.active
+                : (snapshot.challengerPolicy ?? snapshot.active);
+            return {
+              activePolicyVersion: snapshot.active.policyVersion,
+              weights: rankingPolicy.weights,
+              shrinkageK: rankingPolicy.shrinkageK,
+              minSampleRate: rankingPolicy.minSampleRate,
+              challengerEnabled: snapshot.challengerEnabled,
+              evidenceByTarget: snapshot.evidenceByTarget,
+            };
+          }),
+          Effect.orElseSucceed(() => fallback),
+        );
     const bound = yield* bindDispatcherTurnStartCommand(turn, {
       enabled: true,
       environmentId: Effect.succeed(input.environmentId),
       providers: Effect.succeed(input.providers),
       environmentDefaultModelSelection: Effect.succeed(environmentDefaultModelSelection),
       sql: input.sql,
+      hybrid,
     }).pipe(
       Effect.provideService(SqlClient.SqlClient, input.sql),
       Effect.mapError(

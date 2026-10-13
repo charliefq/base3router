@@ -16,6 +16,9 @@ import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 
+export { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
+export { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
+
 function initialConfigOption<E>(
   initialConfig: Effect.Effect<ServerConfig, E>,
 ): Effect.Effect<Option.Option<ServerConfig>> {
