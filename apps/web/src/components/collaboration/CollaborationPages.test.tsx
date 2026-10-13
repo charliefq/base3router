@@ -1,3 +1,4 @@
+import { routeModel } from "@t3tools/shared/modelRouter";
 import * as EffectForFixture from "effect/Effect";
 import * as SchemaForFixture from "effect/Schema";
 import * as SqlClientForFixture from "effect/unstable/sql/SqlClient";
@@ -6,6 +7,8 @@ import * as SqliteForFixture from "@t3tools/shared/nodeSqliteClient";
 import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import {
+  ProviderInstanceId,
+  ProviderDriverKind,
   CollaborationTask,
   CollaborationSnapshot,
   type CollaborationCommand,
@@ -110,6 +113,9 @@ const click = async () => {
     button().props.onClick();
   });
 };
+const encodeEvidence = SchemaForFixture.encodeSync(
+  SchemaForFixture.fromJsonString(SchemaForFixture.Unknown),
+);
 const text = () => JSON.stringify(renderer.toJSON());
 const bindResult = (command: CollaborationCommand) => {
   state.snapshot = {
@@ -733,6 +739,218 @@ it("renders the persisted SQLite contract through the server snapshot and refres
   );
 });
 
+it.each(["manual", "auto"] as const)(
+  "renders %s SQLite routing evidence and refreshes matching execution without dispatch",
+  async (mode) => {
+    const fixtureStore = (await import(
+      /* @vite-ignore */ new URL("../../../../server/src/collaboration/store.ts", import.meta.url)
+        .href
+    )) as {
+      readCollaborationSnapshot: (
+        sql: SqlClientForFixture.SqlClient,
+        principal: string,
+      ) => EffectForFixture.Effect<unknown, SchemaForFixture.SchemaError | SqlError>;
+      submitCollaborationCommand: (
+        sql: SqlClientForFixture.SqlClient,
+        command: CollaborationCommand,
+        options: { allowNewBinding: boolean },
+      ) => EffectForFixture.Effect<unknown, SchemaForFixture.SchemaError | SqlError>;
+    };
+    const fixtureSnapshot = (sql: SqlClientForFixture.SqlClient, principal: string) =>
+      fixtureStore
+        .readCollaborationSnapshot(sql, principal)
+        .pipe(
+          EffectForFixture.flatMap(SchemaForFixture.decodeUnknownEffect(CollaborationSnapshot)),
+        );
+    const fixtureSubmit = fixtureStore.submitCollaborationCommand;
+    await EffectForFixture.runPromise(
+      EffectForFixture.scoped(
+        EffectForFixture.gen(function* () {
+          const sql = yield* SqlClientForFixture.SqlClient;
+          yield* sql`CREATE TABLE collaboration_commands (command_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL UNIQUE,payload_json TEXT NOT NULL,created_at TEXT NOT NULL)`;
+          yield* sql`CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT PRIMARY KEY,project_id TEXT,provider_instance_id TEXT,archived_at TEXT,deleted_at TEXT,payload_json TEXT NOT NULL)`;
+          yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES ('fixture-thread','project-a','codex',NULL,NULL,'{}')`;
+          yield* fixtureSubmit(
+            sql,
+            {
+              type: "thread.bind",
+              commandId: "fixture-bind",
+              projectId: "project-a",
+              threadId: "fixture-thread",
+              agentId: "codex",
+              displayName: "Codex",
+              origin: "internal",
+              capabilities: [],
+              admissionSource: "server",
+              admittedBy: "fixture-owner",
+            },
+            { allowNewBinding: true },
+          );
+          const encode = SchemaForFixture.encodeEffect(
+            SchemaForFixture.fromJsonString(SchemaForFixture.Unknown),
+          );
+          const contract = {
+            revision: 1,
+            goal: "SQLite persisted goal",
+            redirect: "Ask before widening scope",
+            acceptance: "Owner inspects persisted result",
+            brake: {
+              maxProviderStarts: 2,
+              stopConditions: "Stop on missing input",
+              maxTokens: 900,
+              maxCostUsd: 0.1,
+              deadlineAt: "2026-10-14T00:00:00Z",
+            },
+          };
+          yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=${yield* encode({ taskGovernance: "required", taskContract: contract, taskContractPhase: "active", taskAcceptedRevision: null })}`;
+          yield* sql`CREATE TABLE projection_dispatcher_task_routes (thread_id TEXT, message_id TEXT, binding_json TEXT, created_at TEXT)`;
+          yield* sql`CREATE TABLE orchestration_v2_projection_runs (run_id TEXT, thread_id TEXT, ordinal INTEGER, provider_instance_id TEXT, status TEXT, payload_json TEXT)`;
+          yield* sql`CREATE TABLE orchestration_v2_projection_run_attempts (attempt_id TEXT, thread_id TEXT, run_id TEXT, provider_instance_id TEXT, payload_json TEXT)`;
+          yield* sql`CREATE TABLE orchestration_v2_projection_provider_threads (provider_thread_id TEXT, thread_id TEXT, provider_instance_id TEXT, payload_json TEXT)`;
+          yield* sql`CREATE TABLE orchestration_v2_projection_provider_turns (provider_turn_id TEXT, thread_id TEXT, provider_thread_id TEXT, run_attempt_id TEXT, node_id TEXT, status TEXT, started_at TEXT, payload_json TEXT)`;
+          const target = { instanceId: ProviderInstanceId.make("codex"), model: "selected-A" };
+          const decision = routeModel({
+            mode,
+            manualOverride: target,
+            catalog: [
+              {
+                ...target,
+                driver: ProviderDriverKind.make("codex"),
+                isDefault: true,
+                capabilities: ["code"],
+                availabilityReasons: [],
+              },
+            ],
+          });
+          const binding = {
+            policyVersion: "dispatcher.phase-1a.v1",
+            target,
+            driver: "codex",
+            modelFamily: "gpt",
+            fallbackIndex: 0,
+            source: "explicit",
+            gate: { decision: "ALLOW", reasonCodes: ["ACTION_ALLOWED"] },
+            modelRoute: { ...decision, executed: decision.selected, executionStatus: "bound" },
+          };
+          const run = {
+            id: "run-1",
+            threadId: "fixture-thread",
+            ordinal: 1,
+            providerInstanceId: "codex",
+            modelSelection: { instanceId: "codex", model: "configured-B" },
+            userMessageId: "message-1",
+            activeAttemptId: "attempt-1",
+            rootNodeId: "node-1",
+            providerThreadId: "provider-thread-1",
+            status: "running",
+          };
+          const attempt = {
+            id: "attempt-1",
+            runId: "run-1",
+            rootNodeId: "node-1",
+            providerInstanceId: "codex",
+            providerThreadId: "provider-thread-1",
+            providerTurnId: "turn-1",
+          };
+          const providerThread = {
+            id: "provider-thread-1",
+            appThreadId: "fixture-thread",
+            providerInstanceId: "codex",
+          };
+          const turn = {
+            id: "turn-1",
+            providerThreadId: "provider-thread-1",
+            nodeId: "node-1",
+            runAttemptId: "attempt-1",
+            status: "completed",
+            startedAt: "2026-10-13T00:00:00Z",
+          };
+          yield* sql`INSERT INTO projection_dispatcher_task_routes VALUES ('fixture-thread','message-1',${encodeEvidence(binding)},'2026-10-13T00:00:00Z')`;
+          yield* sql`INSERT INTO orchestration_v2_projection_runs VALUES ('run-1','fixture-thread',1,'codex','running',${encodeEvidence(run)})`;
+          yield* sql`INSERT INTO orchestration_v2_projection_run_attempts VALUES ('attempt-1','fixture-thread','run-1','codex',${encodeEvidence(attempt)})`;
+          yield* sql`INSERT INTO orchestration_v2_projection_provider_threads VALUES ('provider-thread-1','fixture-thread','codex',${encodeEvidence(providerThread)})`;
+          state.load.mockImplementation(() =>
+            EffectForFixture.runPromise(fixtureSnapshot(sql, "fixture-owner")),
+          );
+          yield* EffectForFixture.promise(async () => {
+            await act(async () => {
+              renderer = create(<TasksPage />);
+            });
+            expect(text()).toContain(mode === "auto" ? "Auto" : "Manual");
+            expect(text()).toContain("Selected model");
+            expect(text()).toContain("selected-A (codex)");
+            expect(text()).toContain("configured-B (codex)");
+            expect(text()).toContain(decision.explanation);
+            expect(text()).toContain("not provider-attested");
+            expect(text()).toContain("Execution evidence:");
+            expect(text()).toContain("No matching provider turn is recorded.");
+            expect(text()).not.toContain("Provider-turn start recorded");
+            await EffectForFixture.runPromise(
+              sql`INSERT INTO orchestration_v2_projection_provider_turns VALUES ('turn-1','fixture-thread','provider-thread-1','attempt-1','node-1','completed',${turn.startedAt},${encodeEvidence(turn)})`,
+            );
+            expect(text()).toContain("SQLite persisted goal");
+            expect(text()).toContain("Ask before widening scope");
+            expect(text()).toContain("Owner inspects persisted result");
+            expect(text()).toContain("Stop on missing input");
+            expect(text()).toContain("900");
+            expect(text()).toContain("0.1");
+            expect(
+              renderer.root.findAllByProps({ "data-task-contract-phase": "active" }),
+            ).toHaveLength(1);
+            const updated = { ...contract, revision: 2, goal: "Latest persisted goal" };
+            await EffectForFixture.runPromise(
+              sql`UPDATE orchestration_v2_projection_threads SET payload_json=${await EffectForFixture.runPromise(encode({ taskGovernance: "required", taskContract: updated, taskContractPhase: "redirected", taskAcceptedRevision: null }))}`,
+            );
+            await act(async () => {
+              renderer.root
+                .findAllByType("button")
+                .find((node) => node.children.includes("Refresh tasks"))!
+                .props.onClick();
+            });
+            expect(text()).toContain("Provider-turn start recorded");
+            expect(text()).toContain("turn-1");
+            expect(text()).toContain("Terminal execution is not owner acceptance.");
+            state.load.mockRejectedValueOnce(new Error("Fixture refresh failed"));
+            await act(async () => {
+              renderer.root
+                .findAllByType("button")
+                .find((node) => node.children.includes("Refresh tasks"))!
+                .props.onClick();
+            });
+            expect(text()).toContain("Fixture refresh failed");
+            expect(text()).toContain("Provider-turn start recorded");
+            expect(text()).toContain("Latest persisted goal");
+            expect(text()).not.toContain("SQLite persisted goal");
+            expect(
+              renderer.root.findAllByProps({ "data-task-contract-phase": "redirected" }),
+            ).toHaveLength(1);
+            expect(renderer.root.findAllByProps({ "data-task-contract-accept": "" })).toHaveLength(
+              0,
+            );
+            expect(
+              renderer.root.findAllByProps({ "data-task-contract-redirect-action": "" }),
+            ).toHaveLength(0);
+            await act(async () => {
+              renderer.root
+                .findAllByType("button")
+                .find((node) => node.children.includes("Open conversation"))!
+                .props.onClick();
+            });
+            expect(state.navigate).toHaveBeenCalledWith({
+              to: "/$environmentId/$threadId",
+              params: { environmentId: "environment-a", threadId: "fixture-thread" },
+            });
+            expect(state.bind).not.toHaveBeenCalled();
+            expect(state.recover).not.toHaveBeenCalled();
+            expect(state.create).not.toHaveBeenCalled();
+            await act(async () => renderer.unmount());
+          });
+        }),
+      ).pipe(EffectForFixture.provide(SqliteForFixture.layer({ filename: ":memory:" }))),
+    );
+  },
+);
+
 it.each([
   { reason: undefined, message: "Persisted contract readout is unavailable in this snapshot." },
   { reason: "ordinary_chat", message: "Ordinary chat has no persisted task contract." },
@@ -771,17 +989,24 @@ it.each([
     ...state.snapshot,
     tasks: [task],
   });
-  const { contractReadout: _projection, ...oldTaskFields } = CollaborationTask.fields;
+  const {
+    contractReadout: _projection,
+    routingReadout: _routing,
+    ...oldTaskFields
+  } = CollaborationTask.fields;
   const oldCodec = SchemaForFixture.Struct({
     ...CollaborationSnapshot.fields,
     tasks: SchemaForFixture.Array(SchemaForFixture.Struct(oldTaskFields)),
   });
   const old = SchemaForFixture.decodeSync(oldCodec)(state.snapshot);
   expect("contractReadout" in old.tasks[0]!).toBe(false);
+  expect("routingReadout" in old.tasks[0]!).toBe(false);
   await act(async () => {
     renderer = create(<TasksPage />);
   });
   expect(text()).toContain(message);
+  expect(text()).toContain("Routing evidence is unavailable");
+  expect(text()).not.toContain("fake-model");
   expect(renderer.root.findAllByProps({ "data-task-contract-goal-text": "" })).toHaveLength(0);
   expect(renderer.root.findAllByProps({ "data-task-contract-acceptance-text": "" })).toHaveLength(
     0,

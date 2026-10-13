@@ -2,6 +2,12 @@ import {
   CollaborationCommand,
   type CollaborationSnapshot,
   type CollaborationTaskContractReadout,
+  type CollaborationTaskRoutingReadout,
+  DispatcherTaskRouteBinding,
+  OrchestrationV2Run,
+  OrchestrationV2RunAttempt,
+  OrchestrationV2ProviderThread,
+  OrchestrationV2ProviderTurn,
   TaskContract,
   TaskContractPhase,
 } from "@t3tools/contracts";
@@ -52,6 +58,229 @@ const contractReadout = (row: {
     acceptedRevision: value.taskAcceptedRevision ?? null,
   };
 };
+
+const StoredRunEvidence = Schema.Struct({
+  id: OrchestrationV2Run.fields.id,
+  threadId: OrchestrationV2Run.fields.threadId,
+  ordinal: OrchestrationV2Run.fields.ordinal,
+  providerInstanceId: OrchestrationV2Run.fields.providerInstanceId,
+  modelSelection: OrchestrationV2Run.fields.modelSelection,
+  userMessageId: OrchestrationV2Run.fields.userMessageId,
+  activeAttemptId: OrchestrationV2Run.fields.activeAttemptId,
+  rootNodeId: OrchestrationV2Run.fields.rootNodeId,
+  providerThreadId: OrchestrationV2Run.fields.providerThreadId,
+  status: OrchestrationV2Run.fields.status,
+});
+const StoredAttemptEvidence = Schema.Struct({
+  id: OrchestrationV2RunAttempt.fields.id,
+  runId: OrchestrationV2RunAttempt.fields.runId,
+  rootNodeId: OrchestrationV2RunAttempt.fields.rootNodeId,
+  providerInstanceId: OrchestrationV2RunAttempt.fields.providerInstanceId,
+  providerThreadId: OrchestrationV2RunAttempt.fields.providerThreadId,
+  providerTurnId: OrchestrationV2RunAttempt.fields.providerTurnId,
+});
+const StoredProviderThreadEvidence = Schema.Struct({
+  id: OrchestrationV2ProviderThread.fields.id,
+  appThreadId: OrchestrationV2ProviderThread.fields.appThreadId,
+  providerInstanceId: OrchestrationV2ProviderThread.fields.providerInstanceId,
+});
+const StoredTurnEvidence = Schema.Struct({
+  id: OrchestrationV2ProviderTurn.fields.id,
+  providerThreadId: OrchestrationV2ProviderTurn.fields.providerThreadId,
+  nodeId: OrchestrationV2ProviderTurn.fields.nodeId,
+  runAttemptId: OrchestrationV2ProviderTurn.fields.runAttemptId,
+  status: OrchestrationV2ProviderTurn.fields.status,
+  startedAt: Schema.NullOr(Schema.String),
+});
+const decodeRunEvidence = Schema.decodeUnknownOption(Schema.fromJsonString(StoredRunEvidence));
+const decodeAttemptEvidence = Schema.decodeUnknownOption(
+  Schema.fromJsonString(StoredAttemptEvidence),
+);
+const decodeProviderThreadEvidence = Schema.decodeUnknownOption(
+  Schema.fromJsonString(StoredProviderThreadEvidence),
+);
+const decodeTurnEvidence = Schema.decodeUnknownOption(Schema.fromJsonString(StoredTurnEvidence));
+const decodeRouteEvidence = Schema.decodeUnknownOption(
+  Schema.fromJsonString(DispatcherTaskRouteBinding),
+);
+const unknownExecution = (reason: string) => ({
+  status: "unknown" as const,
+  reason,
+  providerTurnId: null,
+  providerStatus: null,
+  startedAt: null,
+});
+
+const readRoutingEvidence = (
+  sql: SqlClient.SqlClient,
+  threadId: string,
+): Effect.Effect<CollaborationTaskRoutingReadout> =>
+  Effect.gen(function* () {
+    const runs = yield* sql<{
+      run_id: string;
+      thread_id: string;
+      ordinal: number;
+      provider_instance_id: string;
+      status: string;
+      payload_json: string;
+    }>`
+      SELECT run_id, thread_id, ordinal, provider_instance_id, status, payload_json
+      FROM orchestration_v2_projection_runs WHERE thread_id=${threadId}
+      ORDER BY ordinal DESC, run_id DESC LIMIT 1
+    `;
+    const row = runs[0];
+    const parsedRun = row === undefined ? null : decodeRunEvidence(row.payload_json);
+    if (parsedRun?._tag === "None")
+      return { status: "unavailable" as const, reason: "invalid_run" };
+    const run = parsedRun?._tag === "Some" ? parsedRun.value : null;
+    if (
+      run !== null &&
+      row !== undefined &&
+      (run.id !== row.run_id ||
+        run.threadId !== threadId ||
+        row.thread_id !== threadId ||
+        run.ordinal !== row.ordinal ||
+        run.providerInstanceId !== row.provider_instance_id ||
+        run.modelSelection.instanceId !== run.providerInstanceId ||
+        run.status !== row.status)
+    )
+      return { status: "unavailable" as const, reason: "invalid_run" };
+    // With a run, require that exact message; never borrow an older route.
+    const routes =
+      run === null
+        ? yield* sql<{
+            message_id: string;
+            binding_json: string;
+          }>`SELECT message_id, binding_json FROM projection_dispatcher_task_routes WHERE thread_id=${threadId} ORDER BY created_at DESC, message_id DESC LIMIT 1`
+        : yield* sql<{
+            message_id: string;
+            binding_json: string;
+          }>`SELECT message_id, binding_json FROM projection_dispatcher_task_routes WHERE thread_id=${threadId} AND message_id=${run.userMessageId} LIMIT 1`;
+    const routeRow = routes[0];
+    if (run === null && routeRow === undefined)
+      return { status: "unavailable" as const, reason: "no_dispatch_evidence" };
+    const parsedRoute = routeRow === undefined ? null : decodeRouteEvidence(routeRow.binding_json);
+    const binding = parsedRoute?._tag === "Some" ? parsedRoute.value : null;
+    const decision = binding?.modelRoute;
+    const selected =
+      decision === undefined ? (binding?.target ?? null) : (decision.selected?.target ?? null);
+    const routeConsistent =
+      binding !== null &&
+      (selected === null ||
+        (selected.instanceId === binding.target.instanceId &&
+          selected.model === binding.target.model));
+    const result = {
+      status: "available" as const,
+      threadId,
+      messageId: run?.userMessageId ?? routeRow!.message_id,
+      runId: run?.id ?? null,
+      mode: routeConsistent ? (decision?.mode ?? null) : null,
+      selected: routeConsistent ? selected : null,
+      source: routeConsistent ? binding.source : null,
+      reasons: routeConsistent ? (decision?.reasonCodes ?? binding.gate.reasonCodes) : [],
+      explanation: routeConsistent ? (decision?.explanation ?? null) : null,
+      selectionUnknownReason:
+        routeRow === undefined
+          ? "route_missing"
+          : !routeConsistent
+            ? "route_invalid"
+            : selected === null
+              ? "selection_not_recorded"
+              : null,
+      configuredModel: run?.modelSelection ?? null,
+      execution: unknownExecution(run === null ? "route_only" : "missing_attempt"),
+    };
+    if (run === null || run.activeAttemptId === null) return result;
+    const attempts = yield* sql<{
+      attempt_id: string;
+      thread_id: string;
+      run_id: string;
+      provider_instance_id: string;
+      payload_json: string;
+    }>`SELECT attempt_id, thread_id, run_id, provider_instance_id, payload_json FROM orchestration_v2_projection_run_attempts WHERE attempt_id=${run.activeAttemptId} AND thread_id=${threadId} AND run_id=${run.id} LIMIT 1`;
+    const attemptRow = attempts[0];
+    if (attemptRow === undefined) return result;
+    const parsedAttempt = decodeAttemptEvidence(attemptRow.payload_json);
+    if (parsedAttempt._tag === "None")
+      return { ...result, execution: unknownExecution("invalid_attempt") };
+    const attempt = parsedAttempt.value;
+    if (
+      attempt.id !== attemptRow.attempt_id ||
+      attempt.runId !== run.id ||
+      attemptRow.provider_instance_id !== run.providerInstanceId ||
+      attempt.providerInstanceId !== run.providerInstanceId ||
+      attempt.providerThreadId !== run.providerThreadId ||
+      attempt.rootNodeId !== run.rootNodeId
+    )
+      return { ...result, execution: unknownExecution("invalid_attempt") };
+    const providerThreads = yield* sql<{
+      provider_thread_id: string;
+      thread_id: string;
+      provider_instance_id: string;
+      payload_json: string;
+    }>`SELECT provider_thread_id, thread_id, provider_instance_id, payload_json FROM orchestration_v2_projection_provider_threads WHERE provider_thread_id=${attempt.providerThreadId} AND thread_id=${threadId} LIMIT 1`;
+    const providerThreadRow = providerThreads[0];
+    if (providerThreadRow === undefined)
+      return { ...result, execution: unknownExecution("missing_provider_thread") };
+    const parsedThread = decodeProviderThreadEvidence(providerThreadRow.payload_json);
+    if (
+      parsedThread._tag === "None" ||
+      parsedThread.value.id !== attempt.providerThreadId ||
+      parsedThread.value.appThreadId !== threadId ||
+      parsedThread.value.providerInstanceId !== run.providerInstanceId ||
+      providerThreadRow.provider_instance_id !== run.providerInstanceId
+    )
+      return { ...result, execution: unknownExecution("invalid_provider_thread") };
+    if (attempt.providerTurnId === null)
+      return { ...result, execution: unknownExecution("missing_provider_turn") };
+    const turns = yield* sql<{
+      provider_turn_id: string;
+      provider_thread_id: string;
+      run_attempt_id: string | null;
+      node_id: string;
+      status: string;
+      started_at: string | null;
+      payload_json: string;
+    }>`SELECT provider_turn_id, provider_thread_id, run_attempt_id, node_id, status, started_at, payload_json FROM orchestration_v2_projection_provider_turns WHERE provider_turn_id=${attempt.providerTurnId} AND thread_id=${threadId} LIMIT 1`;
+    const turnRow = turns[0];
+    if (turnRow === undefined)
+      return { ...result, execution: unknownExecution("missing_provider_turn") };
+    const parsedTurn = decodeTurnEvidence(turnRow.payload_json);
+    if (parsedTurn._tag === "None")
+      return { ...result, execution: unknownExecution("invalid_provider_turn") };
+    const turn = parsedTurn.value;
+    if (
+      turn.id !== turnRow.provider_turn_id ||
+      turn.providerThreadId !== attempt.providerThreadId ||
+      turnRow.provider_thread_id !== attempt.providerThreadId ||
+      turn.runAttemptId !== attempt.id ||
+      turnRow.run_attempt_id !== attempt.id ||
+      turn.nodeId !== attempt.rootNodeId ||
+      turnRow.node_id !== attempt.rootNodeId ||
+      turn.status !== turnRow.status ||
+      turn.startedAt !== turnRow.started_at
+    )
+      return { ...result, execution: unknownExecution("invalid_provider_turn") };
+    if (turn.status === "pending")
+      return { ...result, execution: unknownExecution("provider_turn_pending") };
+    if (turn.startedAt === null || !Number.isFinite(Date.parse(turn.startedAt)))
+      return { ...result, execution: unknownExecution("provider_turn_not_started") };
+    return {
+      ...result,
+      execution: {
+        status: "observed" as const,
+        reason: null,
+        providerTurnId: turn.id,
+        providerStatus: turn.status,
+        startedAt: turn.startedAt,
+      },
+    };
+  }).pipe(
+    Effect.orElseSucceed(() => ({
+      status: "unavailable" as const,
+      reason: "evidence_unavailable",
+    })),
+  );
 
 const CommandJson = Schema.fromJsonString(CollaborationCommand);
 const decodeCommand = Schema.decodeUnknownEffect(CommandJson);
@@ -213,6 +442,7 @@ const validateThreadLinks = (
                 gateDecision: "DENY" as const,
                 waitReason: "The thread link is invalid. Explicit repair is required.",
               }),
+          routingReadout: { status: "unavailable" as const, reason: "invalid_thread_link" },
           contractReadout: {
             status: "unavailable" as const,
             reason: "invalid_thread_link" as const,
@@ -237,8 +467,19 @@ const validateThreadLinks = (
       `;
         const payload = payloads[0];
         if (payload === undefined || task.threadId === null) return invalidTask();
+        const threadEvidence = decodeStoredContract(payload.payload_json);
+        const validThreadEvidence =
+          threadEvidence._tag === "Some" &&
+          (threadEvidence.value.id === undefined || threadEvidence.value.id === task.threadId) &&
+          (threadEvidence.value.projectId === undefined ||
+            threadEvidence.value.projectId === task.projectId) &&
+          (threadEvidence.value.providerInstanceId === undefined ||
+            threadEvidence.value.providerInstanceId === task.assigneeAgentId);
         return {
           ...task,
+          routingReadout: validThreadEvidence
+            ? yield* readRoutingEvidence(sql, task.threadId)
+            : { status: "unavailable" as const, reason: "invalid_thread_evidence" },
           contractReadout: contractReadout({
             thread_id: task.threadId,
             project_id: task.projectId,
