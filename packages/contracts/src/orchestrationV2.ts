@@ -37,6 +37,9 @@ import {
   TaskContractDecision,
   TaskContractFields,
   TaskContractPhase,
+  TaskContractReviewInput,
+  TaskContractReviewState,
+  TaskContractReviewReference,
   TaskEnrollmentOutcome,
 } from "./taskContract.ts";
 import { TaskUsageCohort, TaskUsageSummary } from "./taskUsage.ts";
@@ -1868,6 +1871,7 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
         kind: Schema.Literals(["set", "accept", "redirect", "resume"]),
         revision: PositiveInt,
         actorId: TrimmedNonEmptyString,
+        reviewTask: Schema.optionalKey(TaskContractReviewReference),
         at: Schema.DateTimeUtcFromString,
       }),
     ),
@@ -2856,18 +2860,21 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     revision: PositiveInt,
+    reviewTask: Schema.optionalKey(TaskContractReviewReference),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.task-contract.redirect"),
     commandId: CommandId,
     threadId: ThreadId,
     revision: PositiveInt,
+    reviewTask: Schema.optionalKey(TaskContractReviewReference),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.task-contract.resume"),
     commandId: CommandId,
     threadId: ThreadId,
     revision: PositiveInt,
+    reviewTask: Schema.optionalKey(TaskContractReviewReference),
   }),
   Schema.Struct({
     type: Schema.Literal("delegated_task.wake-policy"),
@@ -2948,6 +2955,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   getThreadProjection: "orchestration.getThreadProjection",
   getTaskUsage: "orchestration.getTaskUsage",
+  getTaskReview: "orchestration.getTaskReview",
   getTaskUsageCohort: "orchestration.getTaskUsageCohort",
   getWorkflowScript: "orchestration.getWorkflowScript",
   launchThread: "orchestration.launchThread",
@@ -3314,6 +3322,7 @@ export const OrchestrationV2RpcSchemas = {
     input: OrchestrationV2GetThreadProjectionInput,
     output: OrchestrationV2ThreadProjection,
   },
+  getTaskReview: { input: TaskContractReviewInput, output: TaskContractReviewState },
   getTaskUsage: {
     input: Schema.Struct({ threadId: ThreadId }),
     output: TaskUsageSummary,

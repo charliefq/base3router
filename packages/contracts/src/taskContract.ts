@@ -5,7 +5,7 @@
  */
 import * as Schema from "effect/Schema";
 
-import { PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { IsoDateTime, NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /**
  * Fixture-only mark for a price a test inserted on purpose.
@@ -58,10 +58,53 @@ export type TaskContract = typeof TaskContract.Type;
 export const TaskContractPhase = Schema.Literals(["active", "redirected"]);
 export type TaskContractPhase = typeof TaskContractPhase.Type;
 
+/** A task selector and stale-facts precondition; never an authorization grant. */
+export const TaskContractReviewReference = Schema.Struct({
+  environmentId: TrimmedNonEmptyString,
+  taskId: TrimmedNonEmptyString,
+  projectId: TrimmedNonEmptyString,
+  threadUpdatedAt: IsoDateTime,
+  threadSequence: NonNegativeInt,
+});
+export type TaskContractReviewReference = typeof TaskContractReviewReference.Type;
+export const TaskContractReviewAction = Schema.Literals(["accept", "redirect", "resume"]);
+export type TaskContractReviewAction = typeof TaskContractReviewAction.Type;
+export const TaskContractReviewHint = Schema.Struct({
+  reference: TaskContractReviewReference,
+  revision: PositiveInt,
+  actions: Schema.Array(TaskContractReviewAction),
+});
+export type TaskContractReviewHint = typeof TaskContractReviewHint.Type;
+export const TaskContractReviewInput = Schema.Struct({
+  environmentId: TrimmedNonEmptyString,
+  taskId: TrimmedNonEmptyString,
+  projectId: TrimmedNonEmptyString,
+  threadId: TrimmedNonEmptyString,
+  revision: PositiveInt,
+});
+export type TaskContractReviewInput = typeof TaskContractReviewInput.Type;
+export const TaskContractReviewState = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("available"),
+    taskId: TrimmedNonEmptyString,
+    threadId: TrimmedNonEmptyString,
+    projectId: TrimmedNonEmptyString,
+    title: TrimmedNonEmptyString,
+    contract: TaskContract,
+    phase: TaskContractPhase,
+    acceptedRevision: Schema.NullOr(PositiveInt),
+    reference: TaskContractReviewReference,
+    actions: Schema.Array(TaskContractReviewAction),
+  }),
+  Schema.Struct({ status: Schema.Literal("unavailable"), reason: Schema.String }),
+]);
+export type TaskContractReviewState = typeof TaskContractReviewState.Type;
+
 export const TaskContractDecision = Schema.Struct({
   kind: Schema.Literals(["set", "accept", "redirect", "resume"]),
   revision: PositiveInt,
   actorId: TrimmedNonEmptyString,
+  reviewTask: Schema.optionalKey(TaskContractReviewReference),
   at: Schema.DateTimeUtc,
 });
 export type TaskContractDecision = typeof TaskContractDecision.Type;

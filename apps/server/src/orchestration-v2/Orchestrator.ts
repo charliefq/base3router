@@ -42,6 +42,10 @@ import {
   AuthOrchestrationOperateScope,
   CollaborationCommand,
   type TaskEnrollmentOutcome,
+  type TaskContractReviewInput,
+  type TaskContractReviewState,
+  type TaskContractReviewReference,
+  type TaskContractReviewAction,
   childConstraintConflict,
   incompleteTaskContractMessage,
   ProviderInstanceId,
@@ -120,10 +124,14 @@ import {
 import { planThreadDeletion } from "./ThreadDeletion.ts";
 import { authorizeDispatch } from "../policy/Base3PolicyGate.ts";
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
+import {
+  readTaskReview,
+  validateTaskDecision,
+  verifyTaskDecisionReplay,
+} from "../collaboration/store.ts";
 import * as OwnedChat from "../collaboration/ownedChat.ts";
 import {
   nextTaskContractThread,
-  requestTaskCancellation,
   reserveGovernedStart,
   revokeTaskContractGrants,
   taskStateFromUnknown,
@@ -272,6 +280,9 @@ export interface OrchestratorV2Shape {
     fields: ReadonlyArray<K>,
     filter?: ProjectionRecordFilter,
   ) => Effect.Effect<ProjectionRecords<K>, OrchestratorV2Error>;
+  readonly getTaskReview: (
+    input: TaskContractReviewInput,
+  ) => Effect.Effect<TaskContractReviewState, OrchestratorV2Error>;
   readonly getThreadProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, OrchestratorV2Error>;
@@ -681,6 +692,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const idAllocator = yield* IdAllocatorV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const projectionStore = yield* ProjectionStoreV2;
+  const taskReviewSql = yield* Effect.serviceOption(SqlClient.SqlClient);
+  const taskReviewSqlAtCall = Effect.serviceOption(SqlClient.SqlClient).pipe(
+    Effect.map((current) => (Option.isSome(taskReviewSql) ? taskReviewSql : current)),
+  );
   const nextTurnItemOrdinal = (
     projection: Pick<OrchestrationV2ThreadProjection, "thread"> &
       Partial<Pick<OrchestrationV2ThreadProjection, "turnItems">>,
@@ -9118,6 +9133,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             "Accept, redirect, and contract completion require an authenticated session with orchestration:operate. Provider completion is not acceptance.",
         });
       }
+      if (command.type !== "thread.task-contract.set") {
+        const reviewSql = yield* taskReviewSqlAtCall;
+        if (Option.isSome(reviewSql))
+          yield* validateTaskDecision(reviewSql.value, {
+            threadId: command.threadId,
+            action: command.type.slice("thread.task-contract.".length) as TaskContractReviewAction,
+            revision: command.revision,
+            ...(command.reviewTask === undefined ? {} : { reviewTask: command.reviewTask }),
+          }).pipe(mapDispatchError(command));
+        else if (command.reviewTask !== undefined)
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Task review persistence is unavailable.",
+          });
+      }
       const thread = yield* projectionStore
         .getThread(command.threadId)
         .pipe(
@@ -9147,14 +9178,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           );
         }
       }
-      if (command.type === "thread.task-contract.redirect") {
-        const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
-        if (Option.isSome(sqlOption)) {
-          yield* requestTaskCancellation(sqlOption.value, next.rootThreadId, command.threadId).pipe(
-            mapDispatchError(command),
-          );
-        }
-      }
       yield* emit(
         events,
         command,
@@ -9175,6 +9198,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       readonly governedTaskOwner?: string;
       readonly ordinaryRootOwner?: string;
       readonly contractSetActor?: string;
+      readonly taskContractDecision?: {
+        readonly action: TaskContractReviewAction;
+        readonly revision: number;
+        readonly reviewTask?: TaskContractReviewReference;
+      };
       readonly cancelUnsettledEffects?: {
         readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
         readonly reason: string;
@@ -9473,6 +9501,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(governedTaskOwner === undefined ? {} : { governedTaskOwner }),
       ...(ordinaryRootOwner === undefined ? {} : { ordinaryRootOwner }),
       ...(contractSetActor === undefined ? {} : { contractSetActor }),
+      ...(command.type === "thread.task-contract.accept" ||
+      command.type === "thread.task-contract.redirect" ||
+      command.type === "thread.task-contract.resume"
+        ? {
+            taskContractDecision: {
+              action: command.type.slice(
+                "thread.task-contract.".length,
+              ) as TaskContractReviewAction,
+              revision: command.revision,
+              ...(command.reviewTask === undefined ? {} : { reviewTask: command.reviewTask }),
+            },
+          }
+        : {}),
       ...(cancelUnsettledEffects === undefined ? {} : { cancelUnsettledEffects }),
     };
   });
@@ -9525,6 +9566,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           receiptThreadId: receipt.threadId,
           commandThreadId: dispatchThreadId,
         });
+      }
+      if (
+        command.type === "thread.task-contract.accept" ||
+        command.type === "thread.task-contract.redirect" ||
+        command.type === "thread.task-contract.resume"
+      ) {
+        const reviewSql = yield* taskReviewSqlAtCall;
+        if (Option.isSome(reviewSql))
+          yield* verifyTaskDecisionReplay(reviewSql.value, {
+            commandId: command.commandId,
+            threadId: command.threadId,
+            action: command.type.slice("thread.task-contract.".length) as TaskContractReviewAction,
+            revision: command.revision,
+            ...(command.reviewTask === undefined ? {} : { reviewTask: command.reviewTask }),
+          }).pipe(mapDispatchError(command));
+        else if (command.reviewTask !== undefined)
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Task review persistence is unavailable for receipt verification.",
+          });
       }
       let taskEnrollment: TaskEnrollmentOutcome | undefined;
       if (
@@ -9691,6 +9753,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ? {}
           : { ordinaryRootOwner: plan.ordinaryRootOwner }),
         ...(plan.contractSetActor === undefined ? {} : { contractSetActor: plan.contractSetActor }),
+        ...(plan.taskContractDecision === undefined
+          ? {}
+          : { taskContractDecision: plan.taskContractDecision }),
         ...(plan.cancelUnsettledEffects === undefined
           ? {}
           : { cancelUnsettledEffects: plan.cancelUnsettledEffects }),
@@ -9900,6 +9965,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       projectionStore
         .getThreadRecords(threadId, fields, filter)
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause }))),
+    getTaskReview: (input) =>
+      taskReviewSqlAtCall.pipe(
+        Effect.flatMap((database) =>
+          Option.isSome(database)
+            ? readTaskReview(database.value, input).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestratorProjectionError({
+                      threadId: ThreadId.make(input.threadId),
+                      cause,
+                    }),
+                ),
+              )
+            : Effect.succeed({ status: "unavailable" as const, reason: "persistence-unavailable" }),
+        ),
+      ),
     getThreadProjection: (threadId) =>
       projectionStore
         .getThreadProjection(threadId)
@@ -10014,6 +10095,8 @@ const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
     getTimelinePage: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
     getMessageCount: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
     getThreadRecords: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
+    getTaskReview: () =>
+      Effect.succeed({ status: "unavailable" as const, reason: "runtime-unavailable" }),
     getThreadProjection: (threadId) =>
       Effect.fail(
         new OrchestratorProjectionError({

@@ -47,6 +47,8 @@ const state = vi.hoisted(() => ({
   bind: vi.fn(),
   recover: vi.fn(),
   navigate: vi.fn(),
+  reviewRead: vi.fn(),
+  reviewDecide: vi.fn(),
 }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: string) => (atom === "environment" ? state.environmentId : state.providers),
@@ -55,8 +57,21 @@ vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }))
 vi.mock("../../state/primaryEnvironment", () => ({ primaryEnvironmentIdAtom: "environment" }));
 vi.mock("../../state/server", () => ({ primaryServerProvidersAtom: "providers" }));
 vi.mock("../../state/entities", () => ({ useProjects: () => state.projects }));
-vi.mock("../../state/threads", () => ({ threadEnvironment: { create: "create" } }));
-vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.create }));
+vi.mock("../../state/threads", () => ({
+  threadEnvironment: {
+    create: "create",
+    readTaskReview: "review-read",
+    decideTaskContract: "review-decide",
+  },
+}));
+vi.mock("../../state/use-atom-command", () => ({
+  useAtomCommand: (command: string) =>
+    command === "review-read"
+      ? state.reviewRead
+      : command === "review-decide"
+        ? state.reviewDecide
+        : state.create,
+}));
 vi.mock("../../env", () => ({ isElectron: false }));
 vi.mock("../../lib/utils", () => {
   let id = 0;
@@ -80,6 +95,27 @@ vi.mock("../../environments/primary/httpClient", async () => {
     }),
   };
 });
+vi.mock("../ui/alert-dialog", () => ({
+  AlertDialog: ({
+    open,
+    children,
+    onOpenChange,
+  }: {
+    open: boolean;
+    children: import("react").ReactNode;
+    onOpenChange: (open: boolean) => void;
+  }) =>
+    open ? (
+      <dialog open data-review-dialog="" onClose={() => onOpenChange(false)}>
+        {children}
+      </dialog>
+    ) : null,
+  AlertDialogPopup: "div",
+  AlertDialogHeader: "div",
+  AlertDialogFooter: "div",
+  AlertDialogTitle: "h2",
+  AlertDialogDescription: "p",
+}));
 vi.mock("../ui/button", () => ({ Button: "button" }));
 vi.mock("../ui/sidebar", () => ({ SidebarInset: "main" }));
 vi.mock("../WorkspacePageHeader", () => ({ WorkspacePageHeader: "header" }));
@@ -172,6 +208,8 @@ beforeEach(() => {
     }),
   );
   state.navigate.mockReset();
+  state.reviewRead.mockReset();
+  state.reviewDecide.mockReset();
 });
 afterEach(async () => {
   await act(async () => renderer?.unmount());
@@ -1773,6 +1811,429 @@ it("renders ordinary roots before and after actual upgrade, refreshes/reopens an
           grants: 0,
           outbox: 0,
         });
+      }),
+    ),
+  );
+}, 60_000);
+
+it("confirms three Tasks decisions against actual authoritative services and refreshes the same contract without execution", async () => {
+  const fixture = await loadTaskReviewFixture();
+  await EffectForFixture.runPromise(
+    fixture.withTaskReviewFixture((fixture) =>
+      EffectForFixture.promise(async () => {
+        state.load.mockImplementation(() => EffectForFixture.runPromise(fixture.readSnapshot()));
+        state.reviewRead.mockImplementation(
+          async ({ input }: { input: import("@t3tools/contracts").TaskContractReviewInput }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(fixture.readReview(input)),
+          }),
+        );
+        state.reviewDecide.mockImplementation(
+          async ({ input }: { input: Parameters<typeof fixture.decide>[0] }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(fixture.decide(input)),
+          }),
+        );
+        await act(async () => {
+          renderer = create(<TasksPage />);
+        });
+        expect(text()).toContain("Fix parser behavior");
+        const actionButton = (action: string) =>
+          renderer.root
+            .findAllByType("button")
+            .find((node) => node.props[`data-task-contract-${action}`] !== undefined)!;
+        expect(actionButton("accept")).toBeDefined();
+        const snapshotBefore = await EffectForFixture.runPromise(fixture.readSnapshot());
+        const taskBefore = snapshotBefore.tasks[0]!;
+        const reviewBefore = await EffectForFixture.runPromise(
+          fixture.readReview({
+            environmentId: "environment-a",
+            taskId: taskBefore.id,
+            projectId: taskBefore.projectId,
+            threadId: taskBefore.threadId!,
+            revision: 1,
+          }),
+        );
+        expect(reviewBefore.status).toBe("available");
+        for (const [action, attribute, expected] of [
+          ["redirect", "redirect-action", "redirected"],
+          ["resume", "resume", "active"],
+          ["accept", "accept", "active"],
+        ] as const) {
+          await act(async () => {
+            actionButton(attribute).props.onClick();
+          });
+          expect(text()).toContain("Task: ");
+          expect(text()).toContain("Fix parser behavior");
+          expect(text()).toContain("environment-a");
+          expect(text()).toContain("Displayed revision:");
+          expect(state.reviewDecide).toHaveBeenCalledTimes(
+            action === "redirect" ? 0 : action === "resume" ? 1 : 2,
+          );
+          await act(async () => {
+            renderer.root
+              .findAllByType("button")
+              .find((node) => node.children.includes("Confirm decision"))!
+              .props.onClick();
+          });
+          const facts = await EffectForFixture.runPromise(fixture.facts());
+          expect(facts).toEqual({
+            runs: 0,
+            grants: 0,
+            outbox: 0,
+            phase: expected,
+            acceptedRevision: action === "accept" ? 1 : null,
+          });
+          expect(text()).toContain(expected);
+          expect(text()).toContain("Command ledger:");
+          expect(text()).toContain("blocked");
+        }
+        expect(text()).toContain("accepted 1");
+        expect(state.create).not.toHaveBeenCalled();
+        expect(state.bind).not.toHaveBeenCalled();
+        expect(state.reviewDecide).toHaveBeenCalledTimes(3);
+        expect(await EffectForFixture.runPromise(fixture.readSnapshot())).toMatchObject({
+          environmentId: "environment-a",
+          tasks: [
+            {
+              state: "blocked",
+              gateDecision: "DENY",
+              contractReadout: { status: "available", acceptedRevision: 1 },
+            },
+          ],
+        });
+      }),
+    ),
+  );
+}, 60_000);
+
+const loadTaskReviewFixture = async () =>
+  (await import(
+    /* @vite-ignore */ new URL(
+      "../../../../server/src/collaboration/testkit/taskReviewFixture.ts",
+      import.meta.url,
+    ).href
+  )) as {
+    withTaskReviewFixture: (
+      check: (fixture: {
+        readSnapshot: (
+          canOperate?: boolean,
+        ) => EffectForFixture.Effect<CollaborationSnapshot, Error>;
+        createAdditional: () => EffectForFixture.Effect<unknown, Error>;
+        revise: () => EffectForFixture.Effect<unknown, Error>;
+        readReview: (
+          input: import("@t3tools/contracts").TaskContractReviewInput,
+        ) => EffectForFixture.Effect<import("@t3tools/contracts").TaskContractReviewState, Error>;
+        decide: (input: {
+          threadId: string;
+          action: "accept" | "redirect" | "resume";
+          revision: number;
+          reviewTask: import("@t3tools/contracts").TaskContractReviewReference;
+        }) => EffectForFixture.Effect<unknown, Error>;
+        facts: () => EffectForFixture.Effect<
+          {
+            runs: number;
+            grants: number;
+            outbox: number;
+            acceptedRevision: number | null;
+            phase: string | undefined;
+          },
+          Error
+        >;
+      }) => EffectForFixture.Effect<void, Error>,
+    ) => EffectForFixture.Effect<void, Error>;
+  };
+
+it.each([
+  "cancel",
+  "close",
+  "preflight-unmount",
+  "preflight-environment",
+  "preflight-refresh",
+  "confirmation-refresh",
+  "confirmation-unmount",
+  "confirmation-environment",
+  "lost-response",
+  "decision-environment",
+  "decision-navigation-race",
+  "stale-preflight",
+  "revision-at-confirm",
+] as const)(
+  "keeps actual review decisions safe across %s",
+  async (mode) => {
+    const module = await loadTaskReviewFixture();
+    await EffectForFixture.runPromise(
+      module.withTaskReviewFixture((fixture) =>
+        EffectForFixture.promise(async () => {
+          state.load.mockImplementation(() => EffectForFixture.runPromise(fixture.readSnapshot()));
+          const bridgeRead = async ({
+            input,
+          }: {
+            input: import("@t3tools/contracts").TaskContractReviewInput;
+          }) => ({
+            _tag: "Success" as const,
+            value: await EffectForFixture.runPromise(fixture.readReview(input)),
+          });
+          const bridgeDecide = async ({
+            input,
+          }: {
+            input: Parameters<typeof fixture.decide>[0];
+          }) => ({
+            _tag: "Success" as const,
+            value: await EffectForFixture.runPromise(fixture.decide(input)),
+          });
+          state.reviewRead.mockImplementation(bridgeRead);
+          state.reviewDecide.mockImplementation(bridgeDecide);
+          const preflight = deferred<Awaited<ReturnType<typeof bridgeRead>>>();
+          const mutation = deferred<Awaited<ReturnType<typeof bridgeDecide>>>();
+          if (mode.startsWith("preflight-") || mode === "stale-preflight")
+            state.reviewRead.mockImplementationOnce(() => preflight.promise);
+          if (mode === "decision-environment")
+            state.reviewDecide.mockImplementationOnce(() => mutation.promise);
+          if (mode === "lost-response")
+            state.reviewDecide.mockImplementationOnce(async (input) => {
+              await bridgeDecide(input);
+              return { _tag: "Failure", cause: "fixture lost reply after committed decision" };
+            });
+          await act(async () => {
+            renderer = create(<TasksPage />);
+          });
+          const button = (name: string) =>
+            renderer.root.findAllByType("button").find((node) => node.children.includes(name));
+          const action = () =>
+            renderer.root
+              .findAllByType("button")
+              .find((node) => node.props["data-task-contract-accept"] !== undefined);
+          const click = async (name: string) => {
+            await act(async () => {
+              button(name)!.props.onClick();
+            });
+          };
+          const initial = (await EffectForFixture.runPromise(fixture.readSnapshot())).tasks[0]!;
+          const target = {
+            environmentId: "environment-a",
+            taskId: initial.id,
+            projectId: initial.projectId,
+            threadId: initial.threadId!,
+            revision: 1,
+          };
+          const retire = async () => {
+            if (mode.endsWith("unmount")) await act(async () => renderer.unmount());
+            else if (mode.endsWith("environment")) {
+              state.environmentId = "environment-b";
+              state.snapshot = {
+                ...(await EffectForFixture.runPromise(fixture.readSnapshot())),
+                environmentId: "environment-b",
+              };
+              state.load.mockResolvedValue(state.snapshot);
+              await act(async () => renderer.update(<TasksPage />));
+            } else await click("Refresh tasks");
+          };
+          const originalAction = action()!;
+          await act(async () => {
+            originalAction.props.onClick();
+            originalAction.props.onClick();
+          });
+          expect(state.reviewRead).toHaveBeenCalledTimes(1);
+          expect(state.reviewDecide).not.toHaveBeenCalled();
+          if (mode.startsWith("preflight-")) {
+            await retire();
+            await act(async () => preflight.resolve(await bridgeRead({ input: target })));
+          } else if (mode === "stale-preflight") {
+            const fresh = await bridgeRead({ input: target });
+            if (fresh.value.status !== "available") throw new Error("fixture review unavailable");
+            await EffectForFixture.runPromise(
+              fixture.decide({
+                threadId: target.threadId,
+                action: "redirect",
+                revision: 1,
+                reviewTask: fresh.value.reference,
+              }),
+            );
+            await act(async () => preflight.resolve(await bridgeRead({ input: target })));
+            expect(text()).toContain("could not be confirmed");
+          } else {
+            expect(button("Confirm decision")).toBeDefined();
+            if (mode === "cancel") await click("Cancel");
+            else if (mode === "close")
+              await act(async () =>
+                renderer.root.findByProps({ "data-review-dialog": "" }).props.onClose(),
+              );
+            else if (mode.startsWith("confirmation-")) await retire();
+            else {
+              let staleRead: ReturnType<typeof deferred<CollaborationSnapshot>> | undefined;
+              if (mode === "decision-navigation-race") {
+                staleRead = deferred<CollaborationSnapshot>();
+                state.load.mockReturnValueOnce(staleRead.promise);
+              }
+              if (mode === "revision-at-confirm")
+                await EffectForFixture.runPromise(fixture.revise());
+              const confirm = button("Confirm decision")!;
+              await act(async () => {
+                confirm.props.onClick();
+                confirm.props.onClick();
+              });
+              expect(state.reviewDecide).toHaveBeenCalledTimes(1);
+              if (mode === "decision-navigation-race") {
+                state.environmentId = "environment-b";
+                await act(async () => renderer.update(<TasksPage />));
+                state.environmentId = "environment-a";
+                await act(async () => renderer.update(<TasksPage />));
+                await act(async () =>
+                  staleRead!.resolve({
+                    ...(await EffectForFixture.runPromise(fixture.readSnapshot())),
+                    tasks: [initial],
+                  }),
+                );
+                expect(text()).toContain("accepted 1");
+              }
+              if (mode === "decision-environment") {
+                await retire();
+                await act(async () =>
+                  mutation.resolve({ _tag: "Success", value: { sequence: 1 } }),
+                );
+                expect(text()).not.toContain("Acceptance recorded");
+              } else if (mode === "revision-at-confirm") {
+                expect(text()).toContain("could not be confirmed");
+                expect(action()).toBeUndefined();
+                await click("Refresh tasks");
+                expect(text()).toContain("Revised parser behavior");
+                expect(action()).toBeDefined();
+                expect(state.reviewDecide).toHaveBeenCalledTimes(1);
+              } else if (mode === "lost-response") {
+                expect(text()).toContain("outcome is uncertain");
+                expect(action()).toBeUndefined();
+                expect((await EffectForFixture.runPromise(fixture.facts())).acceptedRevision).toBe(
+                  1,
+                );
+                await click("Refresh tasks");
+                expect(text()).toContain("accepted 1");
+                expect(text()).not.toContain("outcome is uncertain");
+              } else {
+                expect((await EffectForFixture.runPromise(fixture.facts())).acceptedRevision).toBe(
+                  1,
+                );
+                expect(text()).toContain("accepted 1");
+              }
+            }
+          }
+          if (
+            ![
+              "lost-response",
+              "decision-environment",
+              "decision-navigation-race",
+              "revision-at-confirm",
+            ].includes(mode)
+          )
+            expect(state.reviewDecide).not.toHaveBeenCalled();
+          const facts = await EffectForFixture.runPromise(fixture.facts());
+          expect(facts.runs + facts.grants + facts.outbox).toBe(0);
+          if (!["lost-response", "decision-navigation-race"].includes(mode))
+            expect(facts.acceptedRevision).toBeNull();
+          expect(state.create).not.toHaveBeenCalled();
+          expect(state.bind).not.toHaveBeenCalled();
+        }),
+      ),
+    );
+  },
+  60_000,
+);
+
+it.each(["readonly", "wrong-environment"] as const)(
+  "does not expose review actions from actual %s snapshots",
+  async (mode) => {
+    const module = await loadTaskReviewFixture();
+    await EffectForFixture.runPromise(
+      module.withTaskReviewFixture((fixture) =>
+        EffectForFixture.promise(async () => {
+          state.load.mockImplementation(async () => ({
+            ...(await EffectForFixture.runPromise(fixture.readSnapshot(mode !== "readonly"))),
+            ...(mode === "wrong-environment" ? { environmentId: "environment-b" } : {}),
+          }));
+          await act(async () => {
+            renderer = create(<TasksPage />);
+          });
+          expect(
+            renderer.root
+              .findAllByType("button")
+              .filter(
+                (b) =>
+                  b.props["data-task-contract-accept"] !== undefined ||
+                  b.props["data-task-contract-redirect-action"] !== undefined,
+              ),
+          ).toHaveLength(0);
+          expect(state.reviewRead).not.toHaveBeenCalled();
+          expect(state.reviewDecide).not.toHaveBeenCalled();
+          expect((await EffectForFixture.runPromise(fixture.facts())).acceptedRevision).toBeNull();
+        }),
+      ),
+    );
+  },
+  60_000,
+);
+
+it("isolates explicitly confirmed decisions on two actual governed Tasks roots", async () => {
+  const module = await loadTaskReviewFixture();
+  await EffectForFixture.runPromise(
+    module.withTaskReviewFixture((fixture) =>
+      EffectForFixture.promise(async () => {
+        await EffectForFixture.runPromise(fixture.createAdditional());
+        state.load.mockImplementation(() => EffectForFixture.runPromise(fixture.readSnapshot()));
+        state.reviewRead.mockImplementation(async ({ input }) => ({
+          _tag: "Success",
+          value: await EffectForFixture.runPromise(fixture.readReview(input)),
+        }));
+        state.reviewDecide.mockImplementation(async ({ input }) => ({
+          _tag: "Success",
+          value: await EffectForFixture.runPromise(fixture.decide(input)),
+        }));
+        await act(async () => {
+          renderer = create(<TasksPage />);
+        });
+        expect(
+          renderer.root
+            .findAllByType("button")
+            .filter((b) => b.props["data-task-contract-accept"] !== undefined),
+        ).toHaveLength(2);
+        for (const root of ["task-parser", "task-second"]) {
+          const index = (await EffectForFixture.runPromise(fixture.readSnapshot())).tasks
+            .filter(
+              (t) =>
+                t.contractReadout?.status === "available" &&
+                t.contractReadout.acceptedRevision !== 1,
+            )
+            .findIndex((t) => t.threadId === root);
+          const buttons = renderer.root
+            .findAllByType("button")
+            .filter((b) => b.props["data-task-contract-accept"] !== undefined);
+          await act(async () => buttons[index]!.props.onClick());
+          expect(state.reviewRead.mock.calls.at(-1)?.[0]).toMatchObject({
+            environmentId: "environment-a",
+            input: { threadId: root, environmentId: "environment-a" },
+          });
+          await act(async () =>
+            renderer.root
+              .findAllByType("button")
+              .find((b) => b.children.includes("Confirm decision"))!
+              .props.onClick(),
+          );
+          expect(state.reviewDecide.mock.calls.at(-1)?.[0]).toMatchObject({
+            environmentId: "environment-a",
+            input: { threadId: root, revision: 1 },
+          });
+          const snapshot = await EffectForFixture.runPromise(fixture.readSnapshot());
+          expect(snapshot.tasks.find((t) => t.threadId === root)?.contractReadout).toMatchObject({
+            acceptedRevision: 1,
+          });
+          if (root === "task-parser")
+            expect(
+              snapshot.tasks.find((t) => t.threadId === "task-second")?.contractReadout,
+            ).toMatchObject({ acceptedRevision: null });
+          expect(snapshot.tasks.every((t) => t.state === "blocked")).toBe(true);
+        }
+        expect(state.reviewDecide).toHaveBeenCalledTimes(2);
+        expect((await EffectForFixture.runPromise(fixture.facts())).runs).toBe(0);
+        expect((await EffectForFixture.runPromise(fixture.facts())).grants).toBe(0);
       }),
     ),
   );

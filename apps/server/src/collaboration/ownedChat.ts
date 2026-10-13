@@ -161,7 +161,7 @@ const receiptMatches = Effect.fn("ownedChat.receiptMatches")(function* (
     Number(receipt.result_sequence) >= sequence
   );
 });
-const selectionMatches = Effect.fn("ownedChat.selectionMatches")(function* (
+export const selectionMatches = Effect.fn("ownedChat.selectionMatches")(function* (
   sql: SqlClient.SqlClient,
   thread: OrchestrationV2AppThreadJson,
   throughSequence?: number,

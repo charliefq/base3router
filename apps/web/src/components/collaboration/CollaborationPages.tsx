@@ -23,7 +23,7 @@ import { useProjects } from "../../state/entities";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
-import { TaskContractReadout } from "../chat/TaskContractPanel";
+import { TaskReviewControls } from "./TaskReviewControls";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { Alert, AlertDescription } from "../ui/alert";
@@ -224,6 +224,7 @@ function useCollaboration(environmentId: EnvironmentId | null) {
   const [loaded, setLoaded] = useState<{
     environmentId: EnvironmentId;
     snapshot: CollaborationSnapshot;
+    version: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -248,15 +249,24 @@ function useCollaboration(environmentId: EnvironmentId | null) {
       .then(
         (snapshot) => {
           if (isCurrent()) {
-            setLoaded({ environmentId, snapshot });
+            if (snapshot.environmentId !== undefined && snapshot.environmentId !== environmentId) {
+              setError(
+                "The response belongs to another environment. Refresh the selected environment.",
+              );
+              return undefined;
+            }
+            setLoaded({ environmentId, snapshot, version: generation });
             setError(null);
+            return snapshot;
           }
+          return undefined;
         },
         (cause) => {
           if (isCurrent())
             setError(
               cause instanceof Error ? cause.message : "The agent directory could not be read.",
             );
+          return undefined;
         },
       )
       .finally(() => {
@@ -274,7 +284,11 @@ function useCollaboration(environmentId: EnvironmentId | null) {
       try {
         const result = await request();
         if (environmentId && currentEnvironment.current === environmentId) {
-          setLoaded({ environmentId, snapshot: result.snapshot });
+          setLoaded({
+            environmentId,
+            snapshot: result.snapshot,
+            version: ++readGeneration.current,
+          });
           setError(result.outcome === "rejected" ? result.detail : null);
         }
         return result;
@@ -296,6 +310,13 @@ function useCollaboration(environmentId: EnvironmentId | null) {
       return read();
     },
     refreshing,
+    readVersion: loaded?.environmentId === environmentId ? loaded.version : 0,
+    invalidateReads: () => {
+      if (currentEnvironment.current === environmentId) {
+        readGeneration.current += 1;
+        setRefreshing(false);
+      }
+    },
     snapshot: loaded?.environmentId === environmentId ? loaded.snapshot : null,
     error,
     pending,
@@ -615,7 +636,8 @@ export function AgentsPage() {
 export function TasksPage() {
   const navigate = useNavigate();
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
-  const { snapshot, error, refresh, refreshing } = useCollaboration(environmentId);
+  const { snapshot, error, refresh, refreshing, readVersion, invalidateReads } =
+    useCollaboration(environmentId);
   const tasks = snapshot?.tasks ?? [];
 
   const openTask = (task: CollaborationTask) => {
@@ -712,18 +734,17 @@ export function TasksPage() {
                     <div className="mt-4 space-y-2">
                       {task.contractReadout?.status === "available" ? (
                         <>
-                          <TaskContractReadout
-                            goal={task.contractReadout.contract.goal}
-                            redirect={task.contractReadout.contract.redirect}
-                            acceptance={task.contractReadout.contract.acceptance}
-                            maxProviderStarts={
-                              task.contractReadout.contract.brake.maxProviderStarts
-                            }
-                            stopConditions={task.contractReadout.contract.brake.stopConditions}
-                            revision={task.contractReadout.contract.revision}
-                            phase={task.contractReadout.phase ?? "phase not persisted"}
-                            acceptedRevision={task.contractReadout.acceptedRevision}
-                          />
+                          {environmentId ? (
+                            <TaskReviewControls
+                              key={`${environmentId}:${task.projectId}:${task.id}:${task.threadId}`}
+                              task={task}
+                              environmentId={environmentId}
+                              readVersion={readVersion}
+                              stale={error !== null || refreshing}
+                              invalidateReads={invalidateReads}
+                              refresh={async () => await refresh()}
+                            />
+                          ) : null}
                           <dl className="space-y-1 text-xs text-muted-foreground">
                             {task.contractReadout.contract.brake.maxTokens !== undefined ? (
                               <div>

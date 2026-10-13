@@ -1,6 +1,8 @@
 import { remapComposerContextAttachments } from "@t3tools/shared/composerContextReferences";
 import {
   type ThreadLinkedPullRequest,
+  type TaskContractReviewInput,
+  type TaskContractReviewReference,
   CommandId,
   CheckpointId,
   CheckpointScopeId,
@@ -611,6 +613,7 @@ export const setThreadRuntimeMode = Effect.fn("EnvironmentCommands.setThreadRunt
 );
 
 export interface DecideTaskContractInput extends CommandMetadata {
+  readonly reviewTask?: TaskContractReviewReference;
   readonly threadId: ThreadId;
   readonly action: "set" | "accept" | "redirect" | "resume";
   readonly revision?: number;
@@ -649,6 +652,7 @@ export const decideTaskContract = Effect.fn("EnvironmentCommands.decideTaskContr
     commandId,
     threadId: input.threadId,
     revision: input.revision ?? 0,
+    ...(input.reviewTask === undefined ? {} : { reviewTask: input.reviewTask }),
   });
 });
 
@@ -1094,3 +1098,9 @@ export const unlinkThreadPullRequest = Effect.fn("EnvironmentCommands.unlinkThre
     });
   },
 );
+
+export const readTaskReview = Effect.fn("EnvironmentCommands.readTaskReview")(function* (
+  input: TaskContractReviewInput,
+) {
+  return yield* request(ORCHESTRATION_V2_WS_METHODS.getTaskReview, input);
+});

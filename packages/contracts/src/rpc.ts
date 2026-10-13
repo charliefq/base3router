@@ -1650,6 +1650,12 @@ const WsOrchestrationV2GetThreadProjectionRpc = Rpc.make(
   },
 );
 
+const WsOrchestrationV2GetTaskReviewRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.getTaskReview, {
+  payload: OrchestrationV2RpcSchemas.getTaskReview.input,
+  success: OrchestrationV2RpcSchemas.getTaskReview.output,
+  error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
+});
+
 const WsOrchestrationV2GetTaskUsageRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.getTaskUsage, {
   payload: OrchestrationV2RpcSchemas.getTaskUsage.input,
   success: OrchestrationV2RpcSchemas.getTaskUsage.output,
@@ -1991,6 +1997,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetArchivedShellSnapshotRpc,
   WsOrchestrationV2GetThreadProjectionRpc,
   WsOrchestrationV2GetTaskUsageRpc,
+  WsOrchestrationV2GetTaskReviewRpc,
   WsOrchestrationV2GetTaskUsageCohortRpc,
   WsOrchestrationV2LaunchThreadRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,

@@ -1790,10 +1790,15 @@ const makeWsRpcLayer = (
                     createdBy: "user",
                     creationSource: "creationSource" in command ? command.creationSource : "web",
                   }),
-                ).pipe(Effect.provide(intakeContext)),
+                ).pipe(
+                  Effect.provideService(ServerEnvironment.ServerEnvironment, serverEnvironment),
+                  Effect.provideService(SqlClient.SqlClient, sql),
+                  Effect.provide(intakeContext),
+                ),
               )
               .pipe(
                 Effect.tap(() => recordClientCommandAnalytics(command)),
+                Effect.provideService(ServerEnvironment.ServerEnvironment, serverEnvironment),
                 Effect.map((result) => ({
                   sequence: result.sequence,
                   ...(result.taskEnrollment === undefined
@@ -1915,6 +1920,23 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "orchestrationV2",
               "orchestration_v2.thread_id": input.threadId,
             },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.getTaskReview]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.getTaskReview,
+            orchestrationEngine.getTaskReview(input).pipe(
+              Effect.provideService(ServerEnvironment.ServerEnvironment, serverEnvironment),
+              Effect.provideService(SqlClient.SqlClient, sql),
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationV2GetThreadProjectionError({
+                    threadId: ThreadId.make(input.threadId),
+                    message: "Failed to read task review",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestrationV2", "orchestration_v2.thread_id": input.threadId },
           ),
         [ORCHESTRATION_V2_WS_METHODS.getTaskUsage]: (input) =>
           observeRpcEffect(

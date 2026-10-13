@@ -1,5 +1,11 @@
 import {
   CollaborationCommand,
+  AuthOrchestrationOperateScope,
+  type CollaborationTask,
+  type TaskContractReviewInput,
+  type TaskContractReviewState,
+  type TaskContractReviewReference,
+  type TaskContractReviewAction,
   RawEventId,
   OrchestrationV2AppThreadJson,
   COLLABORATION_RESULT_PREVIEW_MAX_CHARS,
@@ -25,6 +31,8 @@ import type * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as OwnedChat from "./ownedChat.ts";
 
+import { PolicyExecutionContext } from "../policy/executionContext.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
 
 import { applyCollaboration, foldCollaboration, foldCollaborationState } from "./decide.ts";
@@ -1135,16 +1143,239 @@ const validateThreadLinks = (
     return { ...snapshot, agents, tasks };
   });
 
-export const readCollaborationSnapshot = (sql: SqlClient.SqlClient, principalId: string) =>
+const primaryTaskLinks = (commands: ReadonlyArray<CollaborationCommand>, threadId: string) =>
+  commands.filter(
+    (command) =>
+      (command.type === "task.enroll" || command.type === "thread.bind") &&
+      command.threadId === threadId,
+  );
+const sealedTaskOwner = (commands: ReadonlyArray<CollaborationCommand>, threadId: string) => {
+  const links = primaryTaskLinks(commands, threadId);
+  if (links.length === 0) return null;
+  if (links.some((link) => link.admissionSource !== "server" || !link.admittedBy)) return false;
+  const owners = new Set(links.map((link) => link.admittedBy!));
+  return owners.size === 1 ? [...owners][0]! : false;
+};
+const reviewFacts = Effect.fn("collaboration.reviewFacts")(function* (
+  sql: SqlClient.SqlClient,
+  commands: ReadonlyArray<CollaborationCommand>,
+  task: CollaborationTask,
+  actorId: string,
+  environmentId: string,
+): Effect.fn.Return<TaskContractReviewState, import("effect/unstable/sql/SqlError").SqlError> {
+  const no = (reason: string): TaskContractReviewState => ({ status: "unavailable", reason });
+  if (
+    task.ownerAgentId !== actorId ||
+    !task.threadId ||
+    task.contractReadout?.status !== "available"
+  )
+    return no("task-link-unavailable");
+  if (sealedTaskOwner(commands, task.threadId) !== actorId) return no("task-owner-unavailable");
+  const rows = yield* sql<{
+    thread_id: string;
+    project_id: string;
+    provider_instance_id: string;
+    created_at: string;
+    updated_at: string;
+    payload_json: string;
+  }>`SELECT t.thread_id,t.project_id,t.provider_instance_id,t.created_at,t.updated_at,t.payload_json FROM orchestration_v2_projection_threads t JOIN projection_projects p ON p.project_id=t.project_id WHERE t.thread_id=${task.threadId} AND t.archived_at IS NULL AND t.deleted_at IS NULL AND p.deleted_at IS NULL`;
+  const row = rows[0];
+  const decoded = row === undefined ? undefined : decodeGovernedThread(row.payload_json);
+  if (!row || decoded?._tag !== "Some") return no("invalid-task-link");
+  const thread = decoded.value;
+  if (
+    !isActiveGovernedRoot(thread) ||
+    !thread.taskContract ||
+    thread.id !== task.threadId ||
+    thread.projectId !== task.projectId ||
+    row.thread_id !== thread.id ||
+    row.project_id !== thread.projectId ||
+    row.provider_instance_id !== thread.providerInstanceId ||
+    thread.modelSelection.instanceId !== row.provider_instance_id ||
+    DateTime.formatIso(thread.createdAt) !== row.created_at ||
+    DateTime.formatIso(thread.updatedAt) !== row.updated_at ||
+    !(yield* OwnedChat.selectionMatches(sql, thread))
+  )
+    return no("invalid-task-link");
+  if (thread.taskContractPhase !== "active" && thread.taskContractPhase !== "redirected")
+    return no("contract-phase-unavailable");
+  const versions = yield* sql<{
+    sequence: number | null;
+  }>`SELECT MAX(sequence) AS sequence FROM orchestration_events WHERE aggregate_kind='thread' AND application_event_version=2 AND stream_id=${thread.id} AND event_type LIKE 'thread.%'`;
+  if (versions[0]?.sequence == null) return no("task-version-unavailable");
+  const acceptedRevision = thread.taskAcceptedRevision ?? null;
+  const actions: TaskContractReviewAction[] =
+    thread.taskContractPhase === "redirected"
+      ? ["resume"]
+      : acceptedRevision === thread.taskContract.revision
+        ? []
+        : ["accept", "redirect"];
+  return {
+    status: "available",
+    taskId: task.id,
+    threadId: thread.id,
+    projectId: thread.projectId,
+    title: thread.title,
+    contract: thread.taskContract,
+    phase: thread.taskContractPhase,
+    acceptedRevision,
+    actions,
+    reference: {
+      environmentId,
+      taskId: task.id,
+      projectId: thread.projectId,
+      threadUpdatedAt: DateTime.formatIso(thread.updatedAt),
+      threadSequence: Number(versions[0].sequence),
+    },
+  };
+});
+
+/** Review hints are read-only. Commands independently revalidate authenticated authority. */
+export const readCollaborationSnapshot = (
+  sql: SqlClient.SqlClient,
+  principalId: string,
+  reviewContext?: { readonly environmentId: string; readonly canOperate: boolean },
+) =>
   Effect.gen(function* () {
     const commands = yield* readCommands(sql);
-    return yield* validateThreadLinks(
+    const snapshot = yield* validateThreadLinks(
       sql,
       scopedSnapshot(commands, principalId),
       commands,
       principalId,
     );
+    if (!reviewContext) return snapshot;
+    if (!reviewContext.canOperate)
+      return { ...snapshot, environmentId: reviewContext.environmentId };
+    const tasks = yield* Effect.forEach(snapshot.tasks, (task) =>
+      Effect.gen(function* () {
+        const facts = yield* reviewFacts(
+          sql,
+          commands,
+          task,
+          principalId,
+          reviewContext.environmentId,
+        );
+        return facts.status === "available"
+          ? {
+              ...task,
+              review: {
+                reference: facts.reference,
+                revision: facts.contract.revision,
+                actions: facts.actions,
+              },
+            }
+          : task;
+      }),
+    );
+    return { ...snapshot, environmentId: reviewContext.environmentId, tasks };
   });
+
+class TaskReviewDeniedError extends Schema.TaggedError<TaskReviewDeniedError>()(
+  "TaskReviewDeniedError",
+  {
+    reason: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Task review unavailable: ${this.reason}. Refresh task facts before another decision.`;
+  }
+}
+const reviewContext = Effect.gen(function* () {
+  const context = yield* PolicyExecutionContext;
+  if (
+    context.kind !== "session" ||
+    !context.scopes.includes(AuthOrchestrationOperateScope) ||
+    !context.actorId.trim()
+  )
+    return null;
+  if (
+    context.expiresAt !== undefined &&
+    (!Number.isFinite(Date.parse(context.expiresAt)) ||
+      Date.parse(context.expiresAt) <= DateTime.toEpochMillis(yield* DateTime.now))
+  )
+    return null;
+  return context;
+});
+export const readTaskReview = Effect.fn("collaboration.readTaskReview")(function* (
+  sql: SqlClient.SqlClient,
+  input: TaskContractReviewInput,
+) {
+  const no = (reason: string): TaskContractReviewState => ({ status: "unavailable", reason });
+  const context = yield* reviewContext;
+  if (!context) return no("operate-scope-required");
+  const environment = yield* Effect.serviceOption(ServerEnvironment.ServerEnvironment);
+  if (environment._tag !== "Some") return no("environment-unavailable");
+  if ((yield* environment.value.getEnvironmentId) !== input.environmentId)
+    return no("wrong-environment");
+  const commands = yield* readCommands(sql);
+  const snapshot = yield* validateThreadLinks(
+    sql,
+    scopedSnapshot(commands, context.actorId),
+    commands,
+    context.actorId,
+  );
+  const task = snapshot.tasks.find(
+    (item) =>
+      item.id === input.taskId &&
+      item.projectId === input.projectId &&
+      item.threadId === input.threadId,
+  );
+  if (!task) return no("task-link-unavailable");
+  const facts = yield* reviewFacts(sql, commands, task, context.actorId, input.environmentId);
+  if (facts.status === "available" && facts.contract.revision !== input.revision)
+    return no("stale-revision");
+  return facts;
+});
+export const validateTaskDecision = Effect.fn("collaboration.validateTaskDecision")(function* (
+  sql: SqlClient.SqlClient,
+  input: {
+    readonly threadId: string;
+    readonly action: TaskContractReviewAction;
+    readonly revision: number;
+    readonly reviewTask?: TaskContractReviewReference;
+  },
+) {
+  const context = yield* reviewContext;
+  if (!context) return yield* new TaskReviewDeniedError({ reason: "operate-scope-required" });
+  const commands = yield* readCommands(sql);
+  const ownerId = sealedTaskOwner(commands, input.threadId);
+  if (ownerId === false || (ownerId !== null && ownerId !== context.actorId))
+    return yield* new TaskReviewDeniedError({ reason: "task-owner-mismatch" });
+  if (!input.reviewTask) {
+    if (ownerId === null) return; // Unsealed legacy conversations retain their separate decision semantics.
+    const snapshot = yield* validateThreadLinks(
+      sql,
+      scopedSnapshot(commands, context.actorId),
+      commands,
+      context.actorId,
+    );
+    const task = snapshot.tasks.find(
+      (item) =>
+        item.threadId === input.threadId &&
+        (item.id === `task:governed:thread:${input.threadId}` ||
+          item.id === `task:thread:${input.threadId}`),
+    );
+    if (!task) return yield* new TaskReviewDeniedError({ reason: "task-link-unavailable" });
+    const current = yield* reviewFacts(sql, commands, task, context.actorId, "legacy-command");
+    if (current.status !== "available" || current.contract.revision !== input.revision)
+      return yield* new TaskReviewDeniedError({ reason: "invalid-current-task" });
+    return;
+  }
+  const facts = yield* readTaskReview(sql, {
+    ...input.reviewTask,
+    threadId: input.threadId,
+    revision: input.revision,
+  });
+  if (facts.status !== "available")
+    return yield* new TaskReviewDeniedError({ reason: facts.reason });
+  if (
+    facts.reference.threadUpdatedAt !== input.reviewTask.threadUpdatedAt ||
+    facts.reference.threadSequence !== input.reviewTask.threadSequence ||
+    !facts.actions.includes(input.action)
+  )
+    return yield* new TaskReviewDeniedError({ reason: "stale-review" });
+});
 
 // Server seals carry all semantic fields. Property order is not command semantics.
 const semanticKey = (command: CollaborationCommand) =>
@@ -1324,3 +1555,65 @@ export const submitCollaborationCommand = (
       };
     }),
   );
+
+export const verifyTaskDecisionReplay = Effect.fn("collaboration.verifyTaskDecisionReplay")(
+  function* (
+    sql: SqlClient.SqlClient,
+    input: {
+      readonly commandId: string;
+      readonly threadId: string;
+      readonly action: TaskContractReviewAction;
+      readonly revision: number;
+      readonly reviewTask?: TaskContractReviewReference;
+    },
+  ) {
+    const context = yield* reviewContext;
+    const deny = () => new TaskReviewDeniedError({ reason: "decision-replay-mismatch" });
+    if (!context) return yield* deny();
+    const rows = yield* sql<{
+      payload_json: string;
+    }>`SELECT payload_json FROM orchestration_events WHERE command_id=${input.commandId} AND stream_id=${input.threadId} AND aggregate_kind='thread' AND application_event_version=2 AND event_type='thread.metadata-updated'`;
+    const decoded = rows.length === 1 ? decodeGovernedThread(rows[0]!.payload_json) : undefined;
+    const decision = decoded?._tag === "Some" ? decoded.value.taskDecisions?.at(-1) : undefined;
+    if (
+      !decision ||
+      decision.actorId !== context.actorId ||
+      decision.kind !== input.action ||
+      decision.revision !== input.revision
+    )
+      return yield* deny();
+    const stored = decision.reviewTask;
+    const incoming = input.reviewTask;
+    if (
+      (stored === undefined) !== (incoming === undefined) ||
+      (stored &&
+        incoming &&
+        (stored.environmentId !== incoming.environmentId ||
+          stored.taskId !== incoming.taskId ||
+          stored.projectId !== incoming.projectId ||
+          stored.threadUpdatedAt !== incoming.threadUpdatedAt ||
+          stored.threadSequence !== incoming.threadSequence))
+    )
+      return yield* deny();
+    const commands = yield* readCommands(sql);
+    const ownerId = sealedTaskOwner(commands, input.threadId);
+    if (ownerId === false || (ownerId !== null && ownerId !== context.actorId))
+      return yield* deny();
+    if (incoming) {
+      // A receipt proves the original command. Later human decisions or revisions
+      // must not turn an authentic retry into a new mutation or erase that proof.
+      const rows = yield* sql<{
+        payload_json: string;
+      }>`SELECT payload_json FROM orchestration_v2_projection_threads WHERE thread_id=${input.threadId}`;
+      const projection =
+        rows[0] === undefined ? undefined : decodeGovernedThread(rows[0].payload_json);
+      if (projection?._tag !== "Some" || !projection.value.taskContract) return yield* deny();
+      const current = yield* readTaskReview(sql, {
+        ...incoming,
+        threadId: input.threadId,
+        revision: projection.value.taskContract.revision,
+      });
+      if (current.status !== "available") return yield* deny();
+    }
+  },
+);
