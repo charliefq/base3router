@@ -214,9 +214,12 @@ export class OrchestratorCommandIdConflictError extends Schema.TaggedError<Orche
     commandType: Schema.String,
     receiptThreadId: ThreadId,
     commandThreadId: ThreadId,
+    receiptCommandType: Schema.optional(Schema.String),
   },
 ) {
   override get message(): string {
+    if (this.receiptCommandType !== undefined && this.receiptCommandType !== this.commandType)
+      return `Command ${this.commandId} was handled as ${this.receiptCommandType} and cannot be replayed as ${this.commandType}.`;
     return `Command ${this.commandId} was already handled for thread ${this.receiptThreadId} and cannot be replayed for ${this.commandThreadId}.`;
   }
 }
@@ -9477,6 +9480,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
     if (Option.isSome(existingReceipt)) {
       const receipt = existingReceipt.value;
+      if (receipt.commandType !== command.type)
+        return yield* new OrchestratorCommandIdConflictError({
+          commandId: command.commandId,
+          commandType: command.type,
+          receiptThreadId: receipt.threadId,
+          commandThreadId: commandThreadId(command),
+          receiptCommandType: receipt.commandType,
+        });
       if (receipt.status === "rejected") {
         return yield* new OrchestratorCommandPreviouslyRejectedError({
           commandId: command.commandId,
@@ -9496,12 +9507,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           commandThreadId: dispatchThreadId,
         });
       }
-      if (command.type === "thread.create") {
+      if (receipt.commandType === "thread.create") {
         const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
         if (Option.isSome(sqlOption)) {
           const rows = yield* sqlOption.value<{
             payload_json: string;
-          }>`SELECT payload_json FROM collaboration_commands WHERE command_id=${`task:enroll:${command.commandId}`} LIMIT 1`.pipe(
+          }>`SELECT payload_json FROM collaboration_commands WHERE command_id=${`task:enroll:${receipt.commandId}`} LIMIT 1`.pipe(
             mapDispatchError(command),
           );
           if (rows[0] !== undefined) {

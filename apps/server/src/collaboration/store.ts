@@ -1,5 +1,6 @@
 import {
   CollaborationCommand,
+  RawEventId,
   OrchestrationV2AppThreadJson,
   COLLABORATION_RESULT_PREVIEW_MAX_CHARS,
   type CollaborationTaskResultReadout,
@@ -36,6 +37,19 @@ export class GovernedEnrollmentError extends Schema.TaggedError<GovernedEnrollme
 }
 const decodeGovernedThread = Schema.decodeUnknownOption(
   Schema.fromJsonString(OrchestrationV2AppThreadJson),
+);
+const decodeSelectionMetadata = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      runId: Schema.optionalKey(OrchestrationV2Run.fields.id),
+      nodeId: Schema.optionalKey(OrchestrationV2ExecutionNode.fields.id),
+      driver: Schema.optionalKey(OrchestrationV2ProviderThread.fields.driver),
+      providerInstanceId: Schema.optionalKey(
+        OrchestrationV2ProviderThread.fields.providerInstanceId,
+      ),
+      rawEventId: Schema.optionalKey(RawEventId),
+    }),
+  ),
 );
 const isGovernedRoot = (thread: OrchestrationV2AppThreadJson) =>
   thread.taskGovernance === "required" &&
@@ -1047,13 +1061,21 @@ const validateThreadLinks = (
             return invalidTask();
           const selected = yield* sql<{
             payload_json: string;
-          }>`SELECT payload_json FROM orchestration_events
+            metadata_json: string;
+          }>`SELECT payload_json,metadata_json FROM orchestration_events
             WHERE aggregate_kind='thread' AND application_event_version=2 AND stream_id=${task.threadId}
               AND event_type IN ('thread.created','thread.provider-switched','thread.model-selection-updated')
             ORDER BY sequence DESC LIMIT 1`;
           const attested =
             selected[0] === undefined ? undefined : decodeGovernedThread(selected[0].payload_json);
+          const metadata =
+            selected[0] === undefined
+              ? undefined
+              : decodeSelectionMetadata(selected[0].metadata_json);
           if (
+            metadata?._tag !== "Some" ||
+            (metadata.value.providerInstanceId !== undefined &&
+              metadata.value.providerInstanceId !== evidenceProviderId) ||
             attested?._tag !== "Some" ||
             !isGovernedRoot(attested.value) ||
             attested.value.id !== task.threadId ||

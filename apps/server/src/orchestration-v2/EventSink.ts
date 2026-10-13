@@ -1,5 +1,6 @@
 import {
   CommandId,
+  CollaborationCommand,
   type OrchestrationV2Run,
   OrchestrationV2DomainEvent,
   OrchestrationV2StoredEvent,
@@ -21,6 +22,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import { enrollGovernedTask } from "../collaboration/store.ts";
 
 import { replayAndBufferProjectedLiveEvents } from "./LiveStreamBudget.ts";
@@ -33,6 +35,10 @@ import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
+
+const decodeEnrollmentCommand = Schema.decodeUnknownOption(
+  Schema.fromJsonString(CollaborationCommand),
+);
 
 /**
  * ERRORS
@@ -506,6 +512,37 @@ const baseLayer: Layer.Layer<
           });
           if (!reserved) {
             const existing = yield* existingCommandResult(input.commandId);
+            const refuse = () =>
+              new EventSinkWriteError({
+                commandId: input.commandId,
+                eventCount: input.events.length,
+              });
+            if (
+              existing.receipt.threadId !== input.threadId ||
+              existing.receipt.commandType !== input.commandType
+            )
+              return yield* refuse();
+            if (existing.receipt.commandType === "thread.create") {
+              const rows = yield* sql<{
+                payload_json: string;
+              }>`SELECT payload_json FROM collaboration_commands WHERE command_id=${`task:enroll:${existing.receipt.commandId}`} LIMIT 1`;
+              if (rows[0] !== undefined || input.governedTaskOwner !== undefined) {
+                const enrollment =
+                  rows[0] === undefined ? undefined : decodeEnrollmentCommand(rows[0].payload_json);
+                const context = yield* PolicyExecutionContext;
+                if (
+                  enrollment?._tag !== "Some" ||
+                  enrollment.value.type !== "task.enroll" ||
+                  enrollment.value.admissionSource !== "server" ||
+                  enrollment.value.threadId !== input.threadId ||
+                  context.kind !== "session" ||
+                  enrollment.value.admittedBy !== context.actorId ||
+                  (input.governedTaskOwner !== undefined &&
+                    enrollment.value.admittedBy !== input.governedTaskOwner)
+                )
+                  return yield* refuse();
+              }
+            }
             return { ...existing, committed: false as const, cancelledEffectIds: [] };
           }
 

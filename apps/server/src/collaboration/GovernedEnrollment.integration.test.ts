@@ -11,7 +11,7 @@ import {
   ProviderInstanceId,
   ProviderDriverKind,
   ThreadId,
-  type OrchestrationV2Command,
+  OrchestrationV2Command,
   NodeId,
   EventId,
   CollaborationCommand,
@@ -43,6 +43,7 @@ import { readCollaborationSnapshot, submitCollaborationCommand } from "./store.t
 
 import { withGovernedEnrollmentFixture } from "./testkit/governedEnrollmentFixture.ts";
 
+const decodeReplayCommand = Schema.decodeEffect(OrchestrationV2Command);
 const encodeEvidence = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const principal = {
@@ -813,6 +814,233 @@ it.live.each([false, true])(
         assert.equal((yield* sql`SELECT command_id FROM collaboration_commands`).length, 1);
         const grantCount = yield* sql`SELECT grant_id FROM base3_execution_grants`;
         assert.equal(grantCount.length, 0);
+      }),
+    ).pipe(Effect.provide(Layer.mergeAll(runtime, NodeServices.layer))),
+);
+
+it.live.each(["thread", "principal"] as const)(
+  "rejects a %s identity collision at the atomic duplicate-receipt boundary",
+  (collision) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sql = yield* seedProject;
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const command = create("receipt-boundary");
+        const accepted = yield* orchestrator
+          .dispatch(command)
+          .pipe(Effect.provideService(PolicyExecutionContext, principal));
+        const sink = yield* EventSink.EventSinkV2;
+        const original = (yield* orchestrator.getThreadProjection(command.threadId)).thread;
+        const threadId =
+          collision === "thread" ? ThreadId.make("other-receipt-root") : command.threadId;
+        const input = {
+          commandId: command.commandId,
+          threadId,
+          commandType: "thread.create",
+          governedTaskOwner: collision === "principal" ? "foreign-owner" : principal.actorId,
+          acceptedAt: yield* DateTime.now,
+          effects: [],
+          events: accepted.storedEvents.map(({ event }) =>
+            event.type === "thread.created"
+              ? {
+                  ...event,
+                  id: EventId.make("duplicate-boundary-event"),
+                  threadId,
+                  payload: {
+                    ...original,
+                    id: threadId,
+                    lineage: {
+                      parentThreadId: null,
+                      relationshipToParent: null,
+                      rootThreadId: threadId,
+                    },
+                  },
+                }
+              : event,
+          ),
+        };
+        // Models both callers observing no receipt before one transaction wins reservation.
+        // Exercise the real atomic fallback directly; do not mock receipt persistence.
+        const before = yield* enrollmentFacts(sql);
+        const actor =
+          collision === "principal"
+            ? { ...principal, actorId: "foreign-owner", sessionId: "foreign-session" }
+            : principal;
+        const result = yield* Effect.exit(
+          sink.commitCommand(input).pipe(Effect.provideService(PolicyExecutionContext, actor)),
+        );
+        assert.isTrue(
+          Exit.isFailure(result),
+          "a reservation collision must not report another identity's successful creation",
+        );
+        assert.deepEqual(yield* enrollmentFacts(sql), before);
+        const replay = yield* sink
+          .commitCommand({
+            ...input,
+            threadId: command.threadId,
+            governedTaskOwner: principal.actorId,
+          })
+          .pipe(Effect.provideService(PolicyExecutionContext, principal));
+        assert.deepEqual(yield* enrollmentFacts(sql), before);
+        assert.equal(replay.committed, false);
+        assert.equal(replay.receipt.resultSequence, accepted.sequence);
+        assert.equal((yield* sql`SELECT command_id FROM collaboration_commands`).length, 1);
+        assert.deepEqual(
+          (yield* readCollaborationSnapshot(sql, principal.actorId)).tasks.map(
+            (task) => task.threadId,
+          ),
+          [command.threadId],
+        );
+        assert.deepEqual((yield* readCollaborationSnapshot(sql, "foreign-owner")).tasks, []);
+      }),
+    ).pipe(Effect.provide(Layer.mergeAll(runtime, NodeServices.layer))),
+);
+
+const enrollmentFacts = (sql: SqlClient.SqlClient) =>
+  Effect.all({
+    threads: sql`SELECT thread_id,payload_json FROM orchestration_v2_projection_threads ORDER BY thread_id`,
+    ledger: sql`SELECT command_id,payload_json FROM collaboration_commands ORDER BY command_id`,
+    receipts: sql`SELECT command_id,result_sequence,status FROM orchestration_command_receipts ORDER BY command_id`,
+    events: sql`SELECT sequence,event_id,payload_json,metadata_json FROM orchestration_events ORDER BY sequence`,
+    runs: sql`SELECT run_id FROM orchestration_v2_projection_runs`,
+    grants: sql`SELECT grant_id FROM base3_execution_grants`,
+    outbox: sql`SELECT effect_id FROM orchestration_v2_effect_outbox`,
+  });
+
+it.live.each([
+  { foreign: false, type: "thread.visit" },
+  { foreign: true, type: "thread.visit" },
+  { foreign: false, type: "thread.metadata.update" },
+  { foreign: true, type: "thread.metadata.update" },
+] as const)(
+  "rejects mismatched $type receipt replay foreign=$foreign with no mutation",
+  ({ foreign, type }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sql = yield* seedProject;
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const command = create("stored-type-root");
+        yield* orchestrator
+          .dispatch(command)
+          .pipe(Effect.provideService(PolicyExecutionContext, principal));
+        const before = yield* enrollmentFacts(sql);
+        const actor = foreign
+          ? { ...principal, actorId: "foreign-owner", sessionId: "foreign-session" }
+          : principal;
+        const replayCommand =
+          type === "thread.visit"
+            ? {
+                type,
+                commandId: command.commandId,
+                threadId: command.threadId,
+                visitedAt: DateTime.formatIso(yield* DateTime.now),
+              }
+            : {
+                type,
+                commandId: command.commandId,
+                threadId: command.threadId,
+                title: "must not mutate",
+              };
+        const decoded = yield* decodeReplayCommand(replayCommand);
+        const result = yield* Effect.exit(
+          orchestrator.dispatch(decoded).pipe(Effect.provideService(PolicyExecutionContext, actor)),
+        );
+        assert.isTrue(
+          Exit.isFailure(result),
+          "the stored create receipt cannot be replayed as a caller-selected different command type",
+        );
+        assert.deepEqual(yield* enrollmentFacts(sql), before);
+        assert.deepEqual((yield* readCollaborationSnapshot(sql, "foreign-owner")).tasks, []);
+        const replay = yield* orchestrator
+          .dispatch(command)
+          .pipe(Effect.provideService(PolicyExecutionContext, principal));
+        assert.isAbove(replay.sequence, 0);
+        assert.deepEqual(yield* enrollmentFacts(sql), before);
+      }),
+    ).pipe(Effect.provide(Layer.mergeAll(runtime, NodeServices.layer))),
+);
+
+it.live.each([
+  { name: "malformed JSON", metadata: "not-json", valid: false },
+  { name: "null structure", metadata: "null", valid: false },
+  { name: "string structure", metadata: '"bad"', valid: false },
+  { name: "array structure", metadata: "[]", valid: false },
+  {
+    name: "provider mismatch",
+    metadata: '{"providerInstanceId":"foreign-provider"}',
+    valid: false,
+  },
+  { name: "provider number", metadata: '{"providerInstanceId":42}', valid: false },
+  { name: "provider null", metadata: '{"providerInstanceId":null}', valid: false },
+  { name: "provider empty", metadata: '{"providerInstanceId":""}', valid: false },
+  { name: "malformed known field", metadata: '{"runId":42}', valid: false },
+  { name: "optional provider absence", metadata: "{}", valid: true },
+  { name: "compatible extra legacy field", metadata: '{"legacy":"compatible"}', valid: true },
+])(
+  "validates event envelope $name without mutating creation or enrollment",
+  ({ metadata, valid }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sql = yield* seedProject;
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const command = create("envelope-root");
+        yield* orchestrator
+          .dispatch(command)
+          .pipe(Effect.provideService(PolicyExecutionContext, principal));
+        yield* sql`UPDATE orchestration_events SET metadata_json=${metadata} WHERE stream_id=${command.threadId} AND event_type='thread.created' AND application_event_version=2`;
+        const before = yield* enrollmentFacts(sql);
+        for (let read = 0; read < 2; read++) {
+          const task = (yield* readCollaborationSnapshot(sql, principal.actorId)).tasks[0]!;
+          assert.equal(task.threadId, valid ? command.threadId : null);
+          assert.equal(task.contractReadout?.status, valid ? "available" : "unavailable");
+          if (!valid)
+            assert.deepEqual(task.contractReadout, {
+              status: "unavailable",
+              reason: "invalid_thread_link",
+            });
+        }
+        assert.deepEqual(yield* enrollmentFacts(sql), before);
+        assert.equal(before.runs.length, 0);
+        assert.equal(before.grants.length, 0);
+        assert.equal(before.outbox.length, 0);
+      }),
+    ).pipe(Effect.provide(Layer.mergeAll(runtime, NodeServices.layer))),
+);
+
+it.live(
+  "preserves ordinary valid create and metadata receipt replay without enrollment or mutation",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sql = yield* seedProject;
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const command = {
+          ...create("ordinary-replay"),
+          taskGovernance: "chat" as const,
+          taskContract: undefined,
+        };
+        const dispatch = (command: OrchestrationV2Command) =>
+          orchestrator
+            .dispatch(command)
+            .pipe(Effect.provideService(PolicyExecutionContext, principal));
+        const createReceipt = yield* dispatch(command);
+        const created = yield* enrollmentFacts(sql);
+        assert.equal((yield* dispatch(command)).sequence, createReceipt.sequence);
+        assert.deepEqual(yield* enrollmentFacts(sql), created);
+        const metadata: OrchestrationV2Command = {
+          type: "thread.metadata.update",
+          commandId: CommandId.make("ordinary-metadata"),
+          threadId: command.threadId,
+          title: "Ordinary title",
+        };
+        const update = yield* dispatch(metadata);
+        const updated = yield* enrollmentFacts(sql);
+        assert.equal((yield* dispatch(metadata)).sequence, update.sequence);
+        assert.deepEqual(yield* enrollmentFacts(sql), updated);
+        assert.deepEqual((yield* readCollaborationSnapshot(sql, principal.actorId)).tasks, []);
+        assert.equal(updated.runs.length, 0);
+        assert.equal(updated.grants.length, 0);
+        assert.equal(updated.outbox.length, 0);
       }),
     ).pipe(Effect.provide(Layer.mergeAll(runtime, NodeServices.layer))),
 );
