@@ -7,6 +7,7 @@ import {
   RouterPolicyId,
   MODEL_ROUTER_POLICY_VERSION,
   HYBRID_ROUTER_POLICY_VERSION,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
   ROUTER_POLICY_SNAPSHOT_VERSION,
   DEFAULT_HYBRID_ROUTER_WEIGHTS,
   HYBRID_SHRINKAGE_K,
@@ -389,4 +390,120 @@ describe("authenticated selected-environment transport", () => {
         expect(wrong.calls).toHaveLength(0);
       }),
   );
+});
+
+it("selects the explicit new version and confirms its environment while shadow retains active v1", async () => {
+  const taskCandidate = {
+    ...candidate,
+    policyId: RouterPolicyId.make("fixture-task-policy"),
+    policyVersion: HYBRID_TASK_ROUTER_POLICY_VERSION,
+  };
+  const oldActive = { ...candidate, state: "active" as const };
+  const status: EnvironmentRouterPolicyStatus = {
+    ...first,
+    active: oldActive,
+    policies: [{ ...baseline, state: "retired" }, oldActive, taskCandidate],
+  };
+  ui.read.mockResolvedValueOnce(result(status));
+  let tree = render();
+  ui.effects[0]!();
+  await flush();
+  tree = render();
+  const select = elements(tree).find((element) => element.type === "select")!;
+  expect(select.props.value).toBe(HYBRID_ROUTER_POLICY_VERSION);
+  (select.props.onChange as (event: unknown) => void)({
+    target: { value: HYBRID_TASK_ROUTER_POLICY_VERSION },
+  });
+  tree = render();
+  await click(tree, "Enable shadow");
+  tree = render();
+  expect(text(tree)).toContain(HYBRID_TASK_ROUTER_POLICY_VERSION);
+  expect(text(tree)).toContain(environmentId);
+  expect(text(tree)).toContain(`future Auto turns keep ${HYBRID_ROUTER_POLICY_VERSION}`);
+  (checkbox(tree).props.onChange as (event: unknown) => void)({ target: { checked: true } });
+  tree = render();
+  const shadowStatus: EnvironmentRouterPolicyStatus = {
+    ...status,
+    revision: 2,
+    policies: [{ ...baseline, state: "retired" }, oldActive, { ...taskCandidate, state: "shadow" }],
+  };
+  ui.operate.mockResolvedValueOnce(result({ outcome: "applied", status: shadowStatus }));
+  await click(tree, "Confirm policy change");
+  await flush();
+  tree = render();
+  expect(ui.operate).toHaveBeenLastCalledWith({
+    environmentId,
+    input: {
+      action: "shadow",
+      policyId: taskCandidate.policyId,
+      expectedRevision: 1,
+      confirm: true,
+    },
+  });
+  expect(text(tree)).toContain(`Active: ${HYBRID_ROUTER_POLICY_VERSION}`);
+  await click(tree, "Activate Hybrid");
+  tree = render();
+  (checkbox(tree).props.onChange as (event: unknown) => void)({ target: { checked: true } });
+  tree = render();
+  const activeStatus: EnvironmentRouterPolicyStatus = {
+    ...shadowStatus,
+    revision: 3,
+    active: { ...taskCandidate, state: "active", priorActivePolicyId: oldActive.policyId },
+    policies: [
+      { ...baseline, state: "retired" },
+      { ...oldActive, state: "retired" },
+      { ...taskCandidate, state: "active" },
+    ],
+  };
+  ui.operate.mockResolvedValueOnce(result({ outcome: "applied", status: activeStatus }));
+  await click(tree, "Confirm policy change");
+  await flush();
+  tree = render();
+  expect(ui.operate).toHaveBeenLastCalledWith({
+    environmentId,
+    input: {
+      action: "activate",
+      policyId: taskCandidate.policyId,
+      expectedRevision: 2,
+      confirm: true,
+    },
+  });
+  expect(text(tree)).toContain(`Active: ${HYBRID_TASK_ROUTER_POLICY_VERSION}`);
+  await click(tree, "Restore prior policy");
+  tree = render();
+  expect(text(tree)).toContain(`Policy ${HYBRID_ROUTER_POLICY_VERSION}`);
+});
+
+it("does not enable a second shadow or trust another environment's policy status", async () => {
+  const taskCandidate = {
+    ...candidate,
+    policyId: RouterPolicyId.make("fixture-task-policy"),
+    policyVersion: HYBRID_TASK_ROUTER_POLICY_VERSION,
+  };
+  ui.read.mockResolvedValueOnce(
+    result({ ...first, policies: [baseline, { ...candidate, state: "shadow" }, taskCandidate] }),
+  );
+  let tree = render();
+  ui.effects[0]!();
+  await flush();
+  tree = render();
+  (
+    elements(tree).find((element) => element.type === "select")!.props.onChange as (
+      event: unknown,
+    ) => void
+  )({ target: { value: HYBRID_TASK_ROUTER_POLICY_VERSION } });
+  tree = render();
+  expect(button(tree, "Enable shadow").props.disabled).toBe(true);
+  expect(ui.operate).not.toHaveBeenCalled();
+  hooks.reset();
+  ui.effects = [];
+  ui.read.mockResolvedValueOnce(
+    result({ ...first, environmentId: EnvironmentId.make("other-environment") }),
+  );
+  tree = render();
+  ui.effects[0]!();
+  await flush();
+  tree = render();
+  expect(button(tree, "Enable shadow").props.disabled).toBe(true);
+  expect(text(tree)).toContain("could not be loaded");
 });

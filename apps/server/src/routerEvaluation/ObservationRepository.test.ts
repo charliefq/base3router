@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  LOCAL_TASK_CLASSIFIER_VERSION,
   ObservationId,
   TURN_OUTCOME_OBSERVATION_VERSION,
   UNKNOWN_TASK_PROFILE,
@@ -184,4 +185,52 @@ it.effect("rebuilds terminal facts from append-only events", () =>
     assert.equal(Option.isSome(still) && still.value.terminalCategory, "success");
     assert.equal(Option.isSome(still) && still.value.evidence.explicitFeedback[0]?.kind, "helpful");
   }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "rejects conflicting local profiles and records the rejection without overwriting provenance",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* ObservationRepository;
+      const profile = {
+        classifierVersion: LOCAL_TASK_CLASSIFIER_VERSION,
+        category: "debugging" as const,
+        source: "local-heuristic" as const,
+      };
+      const original = { ...observation("profile-conflict"), localTaskProfile: profile };
+      yield* store.upsert(original);
+      const rejected = yield* store.upsert({
+        ...original,
+        localTaskProfile: { ...profile, category: "writing" },
+      });
+      assert.equal(rejected.kind, "rejected");
+      assert.equal(rejected.reason, "conflicting_profile");
+      const stored = yield* store.get(original.observationId);
+      assert.equal(Option.isSome(stored), true);
+      if (Option.isNone(stored)) return;
+      assert.deepEqual(stored.value.localTaskProfile, profile);
+      const enriched = yield* store.upsert({
+        ...original,
+        usage: {
+          ...original.usage,
+          promptTokens: knownQuantity({
+            value: 12,
+            unit: "token",
+            source: "provider_reported",
+            provenance: "observed",
+            observedAt: original.recordedAt,
+          }),
+        },
+      });
+      assert.equal(enriched.kind, "enriched");
+      assert.deepEqual(enriched.observation.localTaskProfile, profile);
+      const events = yield* store.listEvents(original.environmentId);
+      assert.equal(
+        events.some(
+          (event) =>
+            event.eventType === "conflict_rejected" && event.detail === "conflicting_profile",
+        ),
+        true,
+      );
+    }).pipe(Effect.provide(layer)),
 );

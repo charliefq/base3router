@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   HYBRID_ROUTER_POLICY_VERSION,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
   MODEL_ROUTER_POLICY_VERSION,
   ObservationId,
   RouterPolicyId,
@@ -306,6 +307,75 @@ it.effect(
           (policy) => policy.state === "active",
         ).length,
         1,
+      );
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "adds a separate task candidate without rewriting existing policies and serializes one shadow",
+  () =>
+    Effect.gen(function* () {
+      const service = yield* RouterEvaluationService;
+      const sql = yield* SqlClient.SqlClient;
+      const initial = yield* service.status(environmentId);
+      const original = initial.policies.filter(
+        (policy) => policy.policyVersion !== HYBRID_TASK_ROUTER_POLICY_VERSION,
+      );
+      yield* sql`DELETE FROM router_policies WHERE policy_id = ${initial.policies.find((policy) => policy.policyVersion === HYBRID_TASK_ROUTER_POLICY_VERSION)!.policyId}`;
+      const after = yield* service.status(environmentId);
+      assert.deepEqual(
+        after.policies.filter(
+          (policy) => policy.policyVersion !== HYBRID_TASK_ROUTER_POLICY_VERSION,
+        ),
+        original,
+      );
+      assert.equal(after.active.policyId, initial.active.policyId);
+      const candidates = after.policies.filter((policy) => policy.state === "candidate");
+      assert.equal(candidates.length, 2);
+      assert.notEqual(candidates[0]!.policyId, candidates[1]!.policyId);
+      const transitions = yield* Effect.all(
+        candidates.map((policy) =>
+          service
+            .control(
+              environmentId,
+              {
+                action: "shadow",
+                policyId: policy.policyId,
+                expectedRevision: after.revision,
+                confirm: true,
+              },
+              "2026-10-13T00:00:00.000Z",
+              "operator",
+            )
+            .pipe(Effect.result),
+        ),
+        { concurrency: "unbounded" },
+      );
+      assert.equal(transitions.filter((transition) => transition._tag === "Success").length, 1);
+      assert.equal(transitions.filter((transition) => transition._tag === "Failure").length, 1);
+      const shadow = yield* service.status(environmentId);
+      assert.equal(shadow.policies.filter((policy) => policy.state === "shadow").length, 1);
+      const other = shadow.policies.find((policy) => policy.state === "candidate")!;
+      const rejected = yield* service
+        .control(
+          environmentId,
+          {
+            action: "shadow",
+            policyId: other.policyId,
+            expectedRevision: shadow.revision,
+            confirm: true,
+          },
+          "2026-10-13T00:00:00.000Z",
+          "operator",
+        )
+        .pipe(Effect.flip);
+      assert.equal(rejected.reason, "illegal_transition");
+      assert.deepEqual(yield* service.status(environmentId), shadow);
+      assert.equal(
+        (yield* service.status(EnvironmentId.make("second-environment"))).policies.filter(
+          (policy) => policy.state === "shadow",
+        ).length,
+        0,
       );
     }).pipe(Effect.provide(layer)),
 );

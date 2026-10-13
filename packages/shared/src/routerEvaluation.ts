@@ -1,5 +1,8 @@
 import {
   type EvaluationDatasetFilterV0,
+  type LocalTaskProfile,
+  type EnvironmentId,
+  LOCAL_TASK_CLASSIFIER_VERSION,
   type EvaluationDatasetManifestV0,
   type EvaluationMetricV0,
   type PolicyEvaluationRecordV0,
@@ -19,6 +22,7 @@ import {
   TURN_OUTCOME_OBSERVATION_VERSION,
 } from "@t3tools/contracts";
 
+import { taskProfileFromLocalHeuristic } from "./openRouterTaskProfile.ts";
 import { emptyLocalEvidence, type LocalModelEvidence } from "./hybridRouter.ts";
 import { modelRouterTargetKey } from "./modelRouter.ts";
 
@@ -413,6 +417,42 @@ export const calculateEvaluationMetrics = (
       provenance: "observed",
     }),
   ];
+};
+
+/** Only this bounded projection is recorded; the heuristic's input never leaves dispatch. */
+export const classifyLocalTask = (text: string): LocalTaskProfile => ({
+  classifierVersion: LOCAL_TASK_CLASSIFIER_VERSION,
+  category: taskProfileFromLocalHeuristic(text).macroCategory,
+  source: "local-heuristic",
+});
+
+export const evidenceForLocalTask = (input: {
+  readonly records: ReadonlyArray<TurnOutcomeObservationV0>;
+  readonly profile?: LocalTaskProfile;
+  readonly environmentId: EnvironmentId;
+}): Map<string, LocalModelEvidence> => {
+  const profile = input.profile;
+  if (
+    !profile ||
+    profile.source !== "local-heuristic" ||
+    profile.category === "unknown" ||
+    profile.classifierVersion !== LOCAL_TASK_CLASSIFIER_VERSION
+  )
+    return new Map();
+  return evidenceFromObservations(
+    input.records.filter(
+      (record) =>
+        record.environmentId === input.environmentId &&
+        record.instanceId !== undefined &&
+        !record.cancelled &&
+        !record.timedOut &&
+        record.localTaskProfile?.source === "local-heuristic" &&
+        record.localTaskProfile.classifierVersion === profile.classifierVersion &&
+        record.localTaskProfile.category === profile.category &&
+        (record.terminalCategory === "success" || record.terminalCategory === "provider_failure") &&
+        (record.actualExecutionModel === undefined || record.actualExecutionModel === record.model),
+    ),
+  );
 };
 
 export const evidenceFromObservations = (

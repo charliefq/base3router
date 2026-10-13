@@ -1,6 +1,10 @@
+import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
+import { emptyLocalEvidence, routeHybridModel } from "@t3tools/shared/hybridRouter";
 import { assert, it } from "@effect/vitest";
 import {
   DISPATCHER_POLICY_VERSION,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
+  type DispatcherTaskRouteBinding,
   EnvironmentId,
   EventId,
   MessageId,
@@ -225,6 +229,7 @@ const seed = (input: {
   readonly messageId: MessageId;
   readonly runId: RunId;
   readonly attempts?: number;
+  readonly bound?: DispatcherTaskRouteBinding;
 }) =>
   Effect.gen(function* () {
     const now = yield* DateTime.now;
@@ -239,7 +244,7 @@ const seed = (input: {
     yield* persistDispatcherTaskRoute({
       threadId: input.threadId,
       messageId: input.messageId,
-      binding: binding(input.attempts ?? 1),
+      binding: input.bound ?? binding(input.attempts ?? 1),
       createdAt: DateTime.formatIso(now),
     });
     return now;
@@ -447,4 +452,62 @@ it.effect("skips persist when the run id is missing and when the turn is still r
       assert.equal(latest._tag, "None");
     }),
   ),
+);
+
+it.effect(
+  "records bound task policy and local profile even when current environment policy is V0",
+  () =>
+    provideTestLayer(
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("thread-task-policy-outcome");
+        const messageId = MessageId.make("message-task-policy-outcome");
+        const runId = RunId.make("run-task-policy-outcome");
+        const profile = classifyLocalTask("debug this exception");
+        const routed = routeHybridModel({
+          mode: "auto",
+          executionStatus: "bound",
+          activePolicyVersion: HYBRID_TASK_ROUTER_POLICY_VERSION,
+          localTaskProfile: profile,
+          catalog: [
+            {
+              instanceId: providerInstanceId,
+              driver,
+              model: "gpt-5.5",
+              isDefault: true,
+              capabilities: ["code", "tools"],
+              availabilityReasons: [],
+            },
+          ],
+          evidenceByTarget: new Map([
+            [
+              `${providerInstanceId}\u0000gpt-5.5`,
+              { ...emptyLocalEvidence(), successTrials: 8, successCount: 8 },
+            ],
+          ]),
+        });
+        assert.equal(routed.hybrid.usedHybridRanking, true);
+        const bound: DispatcherTaskRouteBinding = {
+          ...binding(1),
+          modelRoute: routed.decision,
+          hybrid: routed.hybrid,
+          localTaskProfile: profile,
+        };
+        const now = yield* seed({ threadId, messageId, runId, bound });
+        const evaluation = yield* RouterEvaluationService;
+        assert.equal(
+          yield* evaluation.activePolicyVersion(environmentId),
+          MODEL_ROUTER_POLICY_VERSION,
+        );
+        const turn = providerTurn(now, "completed", "task-policy");
+        yield* ingest({ threadId, runId, turn });
+        yield* ingest({ threadId, runId, turn });
+        const latest = yield* evaluation.latestObservationForThread(environmentId, threadId);
+        assert.equal(latest._tag, "Some");
+        if (latest._tag !== "Some") return;
+        assert.equal(latest.value.policyVersion, HYBRID_TASK_ROUTER_POLICY_VERSION);
+        assert.deepEqual(latest.value.localTaskProfile, profile);
+        assert.equal(latest.value.taskProfile.macroCategory, "unknown");
+        assert.equal(yield* evaluation.observationCount(environmentId), 1);
+      }),
+    ),
 );

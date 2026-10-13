@@ -1,3 +1,5 @@
+import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
+import { routeHybridModel, emptyLocalEvidence } from "@t3tools/shared/hybridRouter";
 import { routeModel } from "@t3tools/shared/modelRouter";
 import * as EffectForFixture from "effect/Effect";
 import * as SchemaForFixture from "effect/Schema";
@@ -8,6 +10,7 @@ import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import {
   ProviderInstanceId,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
   ProviderDriverKind,
   OrchestrationV2ExecutionNode,
   OrchestrationV2TurnItem,
@@ -956,7 +959,7 @@ it("renders the persisted SQLite contract through the server snapshot and refres
   );
 });
 
-it.each(["manual", "auto"] as const)(
+it.each(["manual", "auto", "task-debugging"] as const)(
   "renders %s SQLite routing evidence and refreshes matching execution without dispatch",
   async (mode) => {
     const fixtureStore = (await import(
@@ -1026,8 +1029,8 @@ it.each(["manual", "auto"] as const)(
           yield* sql`CREATE TABLE orchestration_v2_projection_provider_threads (provider_thread_id TEXT, thread_id TEXT, provider_instance_id TEXT, payload_json TEXT)`;
           yield* sql`CREATE TABLE orchestration_v2_projection_provider_turns (provider_turn_id TEXT, thread_id TEXT, provider_thread_id TEXT, run_attempt_id TEXT, node_id TEXT, status TEXT, started_at TEXT, payload_json TEXT)`;
           const target = { instanceId: ProviderInstanceId.make("codex"), model: "selected-A" };
-          const decision = routeModel({
-            mode,
+          const baselineDecision = routeModel({
+            mode: mode === "task-debugging" ? "auto" : mode,
             manualOverride: target,
             catalog: [
               {
@@ -1039,6 +1042,31 @@ it.each(["manual", "auto"] as const)(
               },
             ],
           });
+          const localTaskProfile = classifyLocalTask("debug this exception");
+          const taskRoute =
+            mode === "task-debugging"
+              ? routeHybridModel({
+                  mode: "auto",
+                  activePolicyVersion: HYBRID_TASK_ROUTER_POLICY_VERSION,
+                  localTaskProfile,
+                  catalog: [
+                    {
+                      ...target,
+                      driver: ProviderDriverKind.make("codex"),
+                      isDefault: true,
+                      capabilities: ["code"],
+                      availabilityReasons: [],
+                    },
+                  ],
+                  evidenceByTarget: new Map([
+                    [
+                      `${target.instanceId}\u0000${target.model}`,
+                      { ...emptyLocalEvidence(), successTrials: 8, successCount: 8 },
+                    ],
+                  ]),
+                })
+              : null;
+          const decision = taskRoute?.decision ?? baselineDecision;
           const binding = {
             policyVersion: "dispatcher.phase-1a.v1",
             target,
@@ -1048,6 +1076,7 @@ it.each(["manual", "auto"] as const)(
             source: "explicit",
             gate: { decision: "ALLOW", reasonCodes: ["ACTION_ALLOWED"] },
             modelRoute: { ...decision, executed: decision.selected, executionStatus: "bound" },
+            ...(taskRoute === null ? {} : { hybrid: taskRoute.hybrid, localTaskProfile }),
           };
           const run = {
             id: "run-1",
@@ -1093,7 +1122,8 @@ it.each(["manual", "auto"] as const)(
             await act(async () => {
               renderer = create(<TasksPage />);
             });
-            expect(text()).toContain(mode === "auto" ? "Auto" : "Manual");
+            expect(text()).toContain(mode === "manual" ? "Manual" : "Auto");
+            if (mode === "task-debugging") expect(text()).toContain("Local task debugging");
             expect(text()).toContain("Selected model");
             expect(text()).toContain("selected-A (codex)");
             expect(text()).toContain("configured-B (codex)");

@@ -21,6 +21,14 @@ export const HYBRID_ROUTER_POLICY_VERSION = "hybrid-router.v1.0.0" as const;
 export const ROUTER_EVALUATION_DATASET_VERSION = "router-evaluation-dataset.v0" as const;
 export const ROUTER_POLICY_SNAPSHOT_VERSION = "router-policy-snapshot.v0" as const;
 export const DEFAULT_OBSERVATION_RETENTION_DAYS = 90;
+export const HYBRID_TASK_ROUTER_POLICY_VERSION = "hybrid-router.task-v2.0.0" as const;
+export const LOCAL_TASK_CLASSIFIER_VERSION = "local-task.heuristic.v1.0.0" as const;
+export const LocalTaskProfile = Schema.Struct({
+  classifierVersion: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  category: TaskMacroCategory,
+  source: Schema.Literal("local-heuristic"),
+});
+export type LocalTaskProfile = typeof LocalTaskProfile.Type;
 export const HYBRID_SHRINKAGE_K = 10;
 export const HYBRID_MIN_SAMPLE_RATE = 8;
 export const HYBRID_MIN_SAMPLE_MEDIAN = 8;
@@ -31,7 +39,10 @@ export const REWORK_ABANDONMENT_WINDOW_MS = 120_000;
 export const TurnOutcomeObservationVersion = Schema.Literal(TURN_OUTCOME_OBSERVATION_VERSION);
 export type TurnOutcomeObservationVersion = typeof TurnOutcomeObservationVersion.Type;
 
-export const HybridRouterPolicyVersion = Schema.Literal(HYBRID_ROUTER_POLICY_VERSION);
+export const HybridRouterPolicyVersion = Schema.Literals([
+  HYBRID_ROUTER_POLICY_VERSION,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
+]);
 export type HybridRouterPolicyVersion = typeof HybridRouterPolicyVersion.Type;
 
 export const RouterEvaluationDatasetVersion = Schema.Literal(ROUTER_EVALUATION_DATASET_VERSION);
@@ -295,6 +306,8 @@ export const HybridRouteDecisionV1 = Schema.Struct({
   challenger: Schema.optional(
     Schema.Struct({
       kind: Schema.Literal("policy_shadow"),
+      policyVersion: Schema.optional(HybridRouterPolicyVersion),
+      fallbackReason: Schema.optional(BoundedExplanation),
       selected: Schema.NullOr(ModelRouterTarget),
       agreement: Schema.Literals(["agreement", "disagreement", "inapplicable", "unknown"]),
     }),
@@ -315,6 +328,7 @@ export const TurnOutcomeObservationV0 = Schema.Struct({
   providerIdentity: Schema.optional(BoundedSlug),
   actualExecutionModel: Schema.optional(BoundedSlug),
   taskProfile: TaskProfileV0,
+  localTaskProfile: Schema.optional(LocalTaskProfile),
   timing: ExecutionTimingV0,
   usage: UsageMeasurementV0,
   cost: CostMeasurementV0,

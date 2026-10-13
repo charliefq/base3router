@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   HYBRID_ROUTER_POLICY_VERSION,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
   MODEL_ROUTER_POLICY_VERSION,
   type EnvironmentId,
   type EnvironmentRouterPolicyCommand,
@@ -25,6 +26,7 @@ export function RouterPolicySettings({
   const [pending, setPending] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [action, setAction] = useState<Action | null>(null);
+  const [selectedVersion, setSelectedVersion] = useState<string>(HYBRID_ROUTER_POLICY_VERSION);
   const [confirmed, setConfirmed] = useState(false);
   const generation = useRef(0);
   const busy = useRef(false);
@@ -58,9 +60,7 @@ export function RouterPolicySettings({
       busy.current = false;
     };
   }, [load]);
-  const candidate = status?.policies.find(
-    (policy) => policy.policyVersion === HYBRID_ROUTER_POLICY_VERSION && policy.state !== "active",
-  );
+  const candidate = status?.policies.find((policy) => policy.policyVersion === selectedVersion);
   const apply = async () => {
     if (busy.current || !status || !action || !confirmed || readOnly) return;
     const input: EnvironmentRouterPolicyCommand | null =
@@ -113,13 +113,32 @@ export function RouterPolicySettings({
         </p>
         <p>
           {status
-            ? `Active: ${status.active.policyVersion}. Hybrid: ${candidate?.state ?? (status.active.policyVersion === HYBRID_ROUTER_POLICY_VERSION ? "active" : "unavailable")}.`
+            ? `Active: ${status.active.policyVersion}. Hybrid: ${candidate?.state ?? "unavailable"}. Selected version: ${selectedVersion}.`
             : "Policy status unavailable."}
         </p>
         <p className="text-sm text-muted-foreground">
-          Shadow keeps Router V0 and compares Hybrid without changing execution. Active Hybrid uses
-          local evidence; missing evidence falls back to Router V0.
+          Shadow compares the selected policy with the actual active policy without changing
+          execution. Task-conditioned v2 uses exact local categories and requires eight matching
+          outcome trials for every eligible model. Missing coverage falls back to Router V0.
         </p>
+        <label className="flex gap-2">
+          Hybrid policy version
+          <select
+            aria-label="Hybrid policy version"
+            value={selectedVersion}
+            disabled={pending || action !== null}
+            onChange={(event) => {
+              setSelectedVersion(event.target.value);
+              setAction(null);
+              setConfirmed(false);
+            }}
+          >
+            <option value={HYBRID_ROUTER_POLICY_VERSION}>{HYBRID_ROUTER_POLICY_VERSION}</option>
+            <option value={HYBRID_TASK_ROUTER_POLICY_VERSION}>
+              {HYBRID_TASK_ROUTER_POLICY_VERSION}
+            </option>
+          </select>
+        </label>
         {pending && <p role="status">Updating policy status…</p>}
         {error && <p role="alert">{error}</p>}
         {readOnly && <p>Operator permission is required to change policy.</p>}
@@ -130,7 +149,13 @@ export function RouterPolicySettings({
           <Button
             variant="outline"
             size="sm"
-            disabled={pending || readOnly || !status || candidate?.state !== "candidate"}
+            disabled={
+              pending ||
+              readOnly ||
+              !status ||
+              candidate?.state !== "candidate" ||
+              status.policies.some((policy) => policy.state === "shadow")
+            }
             onClick={() => choose("shadow")}
           >
             Enable shadow
@@ -173,11 +198,16 @@ export function RouterPolicySettings({
               />
               I confirm{" "}
               {action === "shadow"
-                ? "enabling comparison only; future Auto turns still use Router V0"
+                ? status?.active.policyVersion === MODEL_ROUTER_POLICY_VERSION
+                  ? "enabling comparison only; future Auto turns still use Router V0"
+                  : `enabling comparison only; future Auto turns keep ${status?.active.policyVersion}`
                 : action === "activate"
                   ? "changing future Auto turns to Hybrid ranking"
                   : "restoring the prior policy for future Auto turns"}{" "}
-              in this environment.
+              {action === "rollback"
+                ? `Policy ${status?.policies.find((policy) => policy.policyId === status.active.priorActivePolicyId)?.policyVersion ?? MODEL_ROUTER_POLICY_VERSION}`
+                : `Policy ${selectedVersion}`}{" "}
+              in environment {environmentId}.
             </label>
             <div className="flex gap-2">
               <Button

@@ -8,6 +8,8 @@ import * as Schema from "effect/Schema";
 
 import {
   type EnvironmentId,
+  type LocalTaskProfile,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
   type EnvironmentRouterPolicyCommand,
   type ObservationId,
   type ReworkSignalV0,
@@ -39,6 +41,7 @@ import {
   buildEvaluationDataset,
   calculateEvaluationMetrics,
   evidenceFromObservations,
+  evidenceForLocalTask,
 } from "@t3tools/shared/routerEvaluation";
 import type { LocalModelEvidence } from "@t3tools/shared/hybridRouter";
 import {
@@ -69,6 +72,7 @@ export class RouterEvaluationService extends Context.Service<
     ) => Effect.Effect<RouterPolicyStatus, RouterEvaluationError>;
     readonly routingSnapshot: (
       environmentId: EnvironmentId,
+      localTaskProfile?: LocalTaskProfile,
     ) => Effect.Effect<RouterPolicyRuntimeSnapshot, RouterEvaluationError>;
     readonly insights: (
       environmentId: EnvironmentId,
@@ -160,7 +164,7 @@ const toEvalError = (cause: unknown): RouterEvaluationError =>
 
 const scopedPolicyId = (environmentId: EnvironmentId, version: string) =>
   RouterPolicyId.make(
-    `${isBaselinePolicyVersion(version) ? baselinePolicyId : "policy-hybrid-router-v1"}-${NodeCrypto.createHash("sha256").update(`${environmentId}:${version}`).digest("hex")}`,
+    `${isBaselinePolicyVersion(version) ? baselinePolicyId : version === HYBRID_TASK_ROUTER_POLICY_VERSION ? "policy-hybrid-router-task-v2" : "policy-hybrid-router-v1"}-${NodeCrypto.createHash("sha256").update(`${environmentId}:${version}`).digest("hex")}`,
   );
 
 type RouterPolicyStatus = {
@@ -171,6 +175,7 @@ type RouterPolicyStatus = {
 };
 type RouterPolicyRuntimeSnapshot = RouterPolicyStatus & {
   readonly challengerPolicy?: RouterPolicySnapshotV0;
+  readonly taskEvidenceByTarget: ReadonlyMap<string, LocalModelEvidence>;
   readonly challengerEnabled: boolean;
   readonly evidenceByTarget: ReadonlyMap<string, LocalModelEvidence>;
 };
@@ -192,10 +197,11 @@ const hybridCandidateSnapshot = (
   environmentId: EnvironmentId,
   now: string,
   provenance: { readonly sourceDatasetHash: string; readonly evaluationRecordId: string },
+  policyVersion: string = HYBRID_ROUTER_POLICY_VERSION,
 ): RouterPolicySnapshotV0 => ({
   version: ROUTER_POLICY_SNAPSHOT_VERSION,
-  policyId: scopedPolicyId(environmentId, HYBRID_ROUTER_POLICY_VERSION),
-  policyVersion: HYBRID_ROUTER_POLICY_VERSION,
+  policyId: scopedPolicyId(environmentId, policyVersion),
+  policyVersion,
   state: "candidate",
   environmentId,
   createdAt: now,
@@ -278,16 +284,20 @@ const make = Effect.gen(function* () {
             detail: "Initialize baseline V0 only; no Hybrid activation.",
           });
         }
+        if (!policies.some((policy) => policy.policyVersion === HYBRID_TASK_ROUTER_POLICY_VERSION))
+          yield* store.upsertPolicy(
+            hybridCandidateSnapshot(
+              environmentId,
+              now,
+              provenance,
+              HYBRID_TASK_ROUTER_POLICY_VERSION,
+            ),
+          );
         const candidate = policies.find(
           (policy) => policy.policyVersion === HYBRID_ROUTER_POLICY_VERSION,
         );
         if (candidate === undefined) {
           yield* store.upsertPolicy(hybridCandidateSnapshot(environmentId, now, provenance));
-        } else if (
-          candidate.state === "candidate" &&
-          (candidate.sourceDatasetHash === undefined || candidate.evaluationRecordId === undefined)
-        ) {
-          yield* store.upsertPolicy({ ...candidate, ...provenance });
         }
       }),
     );
@@ -347,19 +357,32 @@ const make = Effect.gen(function* () {
     });
   const status: RouterEvaluationService["Service"]["status"] = (environmentId) =>
     store.transaction(readStatus(environmentId)).pipe(Effect.mapError(toEvalError));
-  const routingSnapshot: RouterEvaluationService["Service"]["routingSnapshot"] = (environmentId) =>
+  const routingSnapshot: RouterEvaluationService["Service"]["routingSnapshot"] = (
+    environmentId,
+    localTaskProfile,
+  ) =>
     store
       .transaction(
         Effect.gen(function* () {
           const snapshot = yield* readStatus(environmentId);
-          const challengerPolicy = snapshot.policies.find((policy) => policy.state === "shadow");
+          const shadows = snapshot.policies.filter((policy) => policy.state === "shadow");
+          if (shadows.length > 1)
+            return yield* new RouterEvaluationError({
+              reason: "malformed_policy",
+              detail: "Multiple shadow policies; repair is required.",
+            });
+          const challengerPolicy = shadows[0];
+          const records = yield* store.listByEnvironment(environmentId);
           return {
             ...(challengerPolicy === undefined ? {} : { challengerPolicy }),
             ...snapshot,
             challengerEnabled: snapshot.policies.some((policy) => policy.state === "shadow"),
-            evidenceByTarget: evidenceFromObservations(
-              yield* store.listByEnvironment(environmentId),
-            ),
+            evidenceByTarget: evidenceFromObservations(records),
+            taskEvidenceByTarget: evidenceForLocalTask({
+              records,
+              environmentId,
+              ...(localTaskProfile === undefined ? {} : { profile: localTaskProfile }),
+            }),
           };
         }),
       )
@@ -388,7 +411,9 @@ const make = Effect.gen(function* () {
         policies.find((policy) => policy.state === "active") ??
         baselineSnapshot(environmentId, "1970-01-01T00:00:00.000Z");
       const candidate = policies.find(
-        (policy) => policy.state === "candidate" || policy.state === "shadow",
+        (policy) =>
+          policy.policyVersion === HYBRID_ROUTER_POLICY_VERSION &&
+          (policy.state === "candidate" || policy.state === "shadow"),
       );
       const metrics = calculateEvaluationMetrics(records);
       const coverage = metrics[0] ?? {
@@ -629,6 +654,11 @@ const make = Effect.gen(function* () {
           detail: "Candidate policy not found.",
         });
       }
+      if ((yield* store.listPolicies(environmentId)).some((policy) => policy.state === "shadow"))
+        return yield* new RouterEvaluationError({
+          reason: "illegal_transition",
+          detail: "This environment already has a shadow policy.",
+        });
       const result = yield* shadowPolicy({
         candidate: candidate.value,
         confirmShadow: input.confirmShadow,
