@@ -190,7 +190,7 @@ const normalizedInput = (value: ModelRouterInput): ModelRouterInput => ({
         constraints: Object.fromEntries(
           Object.entries(value.constraints).map(([key, list]) => [
             key,
-            list === undefined ? undefined : sorted(list),
+            list === undefined || typeof list === "number" ? list : sorted(list),
           ]),
         ),
       }),
