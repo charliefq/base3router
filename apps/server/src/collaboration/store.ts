@@ -1,5 +1,7 @@
 import {
   CollaborationCommand,
+  RawEventId,
+  OrchestrationV2AppThreadJson,
   COLLABORATION_RESULT_PREVIEW_MAX_CHARS,
   type CollaborationTaskResultReadout,
   OrchestrationV2ProviderFailure,
@@ -24,6 +26,40 @@ import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
 
 import { applyCollaboration, foldCollaboration, foldCollaborationState } from "./decide.ts";
+
+export class GovernedEnrollmentError extends Schema.TaggedError<GovernedEnrollmentError>()(
+  "GovernedEnrollmentError",
+  { threadId: Schema.String },
+) {
+  override get message(): string {
+    return "Governed task enrollment requires consistent persisted root ownership.";
+  }
+}
+const decodeGovernedThread = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2AppThreadJson),
+);
+const decodeSelectionMetadata = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      runId: Schema.optionalKey(OrchestrationV2Run.fields.id),
+      nodeId: Schema.optionalKey(OrchestrationV2ExecutionNode.fields.id),
+      driver: Schema.optionalKey(OrchestrationV2ProviderThread.fields.driver),
+      providerInstanceId: Schema.optionalKey(
+        OrchestrationV2ProviderThread.fields.providerInstanceId,
+      ),
+      rawEventId: Schema.optionalKey(RawEventId),
+    }),
+  ),
+);
+const isGovernedRoot = (thread: OrchestrationV2AppThreadJson) =>
+  thread.taskGovernance === "required" &&
+  thread.creationSource !== "provider" &&
+  thread.lineage.rootThreadId === thread.id &&
+  thread.lineage.parentThreadId === null &&
+  thread.lineage.relationshipToParent === null &&
+  thread.forkedFrom === null;
+const isActiveGovernedRoot = (thread: OrchestrationV2AppThreadJson) =>
+  isGovernedRoot(thread) && thread.archivedAt === null && thread.deletedAt === null;
 
 const StoredContract = Schema.Struct({
   id: Schema.optionalKey(Schema.String),
@@ -733,6 +769,74 @@ export const readCommands = (sql: SqlClient.SqlClient) =>
     return yield* Effect.forEach(rows, (row) => decodeCommand(row.payload_json));
   });
 
+/** Called only inside the successful new-root create transaction, never client admission or reads. */
+export const enrollGovernedTask = Effect.fn("collaboration.enrollGovernedTask")(function* (
+  sql: SqlClient.SqlClient,
+  input: {
+    readonly principalId: string;
+    readonly threadId: string;
+    readonly creationCommandId: string;
+  },
+) {
+  const refusal = () => new GovernedEnrollmentError({ threadId: input.threadId });
+  if (!input.principalId.trim()) return yield* refusal();
+  const rows = yield* sql<{
+    thread_id: string;
+    project_id: string;
+    provider_instance_id: string;
+    payload_json: string;
+  }>`SELECT t.thread_id,t.project_id,t.provider_instance_id,t.payload_json
+     FROM orchestration_v2_projection_threads t JOIN projection_projects p ON p.project_id=t.project_id
+     WHERE t.thread_id=${input.threadId} AND t.archived_at IS NULL AND t.deleted_at IS NULL AND p.deleted_at IS NULL`;
+  const row = rows[0];
+  const decoded = row === undefined ? undefined : decodeGovernedThread(row.payload_json);
+  if (!row || decoded?._tag !== "Some") return yield* refusal();
+  const thread = decoded.value;
+  if (
+    thread.id !== row.thread_id ||
+    thread.projectId !== row.project_id ||
+    thread.providerInstanceId !== row.provider_instance_id ||
+    thread.modelSelection.instanceId !== row.provider_instance_id ||
+    !isActiveGovernedRoot(thread)
+  )
+    return yield* refusal();
+  const command: CollaborationCommand = {
+    type: "task.enroll",
+    commandId: `task:enroll:${input.creationCommandId}`,
+    admissionSource: "server",
+    admittedBy: input.principalId,
+    threadId: thread.id,
+    projectId: thread.projectId,
+    agentId: thread.providerInstanceId,
+    title: thread.title,
+    acceptance: thread.taskContract?.acceptance ?? "Acceptance requires a recorded task contract.",
+    gateDecision: "DENY",
+  };
+  const commands = yield* readCommands(sql);
+  if (
+    commands.some(
+      (item) =>
+        item.commandId === command.commandId ||
+        (item.type === "task.enroll" && item.threadId === thread.id),
+    )
+  )
+    return yield* refusal();
+  const result = applyCollaboration(
+    foldCollaborationState(
+      ownedCommands(commands, input.principalId).filter(
+        (item) => projectFor(commands, item) === thread.projectId,
+      ),
+    ),
+    command,
+  );
+  if (result.outcome !== "applied") return yield* refusal();
+  const next = yield* sql<{
+    next: number;
+  }>`SELECT COALESCE(MAX(sequence),0)+1 AS next FROM collaboration_commands`;
+  yield* sql`INSERT INTO collaboration_commands (command_id,sequence,payload_json,created_at)
+    VALUES (${command.commandId},${Number(next[0]?.next ?? 1)},${yield* encodeCommand(command)},${DateTime.formatIso(yield* DateTime.now)})`;
+});
+
 const owner = (command: CollaborationCommand) =>
   command.admissionSource === "server" ? command.admittedBy : undefined;
 
@@ -751,7 +855,9 @@ const projectFor = (
       .filter(
         (item) =>
           item.projectId &&
-          ((item.type === "thread.bind" && command.taskId === `task:thread:${item.threadId}`) ||
+          ((item.type === "task.enroll" &&
+            command.taskId === `task:governed:thread:${item.threadId}`) ||
+            (item.type === "thread.bind" && command.taskId === `task:thread:${item.threadId}`) ||
             (item.correlationId && command.taskId === `task:${item.correlationId}`)),
       )
       .map((item) => item.projectId),
@@ -883,25 +989,103 @@ const validateThreadLinks = (
             reason: "invalid_thread_link" as const,
           },
         });
-        const linked =
-          task.threadId !== null &&
-          !invalid.has(task.threadId) &&
-          agents.some(
-            (agent) =>
-              agent.id === task.assigneeAgentId &&
-              agent.projectId === task.projectId &&
-              agent.threadId === task.threadId,
+        const enrollment = commands.find(
+          (command) =>
+            command.type === "task.enroll" &&
+            owner(command) === principalId &&
+            command.threadId === task.threadId &&
+            command.projectId === task.projectId &&
+            command.agentId === task.assigneeAgentId &&
+            task.ownerAgentId === principalId &&
+            task.id === `task:governed:thread:${task.threadId}` &&
+            task.correlationId === `governed:thread:${task.threadId}`,
+        );
+        const enrolledRow =
+          enrollment === undefined
+            ? undefined
+            : rows.find((row) => row.thread_id === task.threadId);
+        const validEnrollment =
+          enrollment !== undefined &&
+          enrolledRow !== undefined &&
+          enrolledRow.project_id === task.projectId &&
+          enrolledRow.archived_at === null &&
+          enrolledRow.deleted_at === null &&
+          !commands.some(
+            (command) =>
+              command.type === "task.enroll" &&
+              command.threadId === task.threadId &&
+              (owner(command) !== principalId ||
+                command.projectId !== task.projectId ||
+                command.agentId !== task.assigneeAgentId),
           );
+        const linked =
+          enrollment !== undefined
+            ? validEnrollment
+            : task.threadId !== null &&
+              !invalid.has(task.threadId) &&
+              agents.some(
+                (agent) =>
+                  agent.id === task.assigneeAgentId &&
+                  agent.projectId === task.projectId &&
+                  agent.threadId === task.threadId,
+              );
         if (!linked) return invalidTask();
-        // Payload reads happen only after the sealed principal and canonical link checks.
+        // The root seal is immutable; a server-committed selection may change its assignee.
+        const evidenceProviderId =
+          validEnrollment && enrolledRow !== undefined
+            ? enrolledRow.provider_instance_id
+            : task.assigneeAgentId;
+        // Payload reads follow sealed ownership and canonical conversation or governed root validation.
         const payloads = yield* sql<{ readonly payload_json: string }>`
         SELECT payload_json FROM orchestration_v2_projection_threads
         WHERE thread_id=${task.threadId} AND project_id=${task.projectId}
-          AND provider_instance_id=${task.assigneeAgentId} AND archived_at IS NULL AND deleted_at IS NULL
+          AND provider_instance_id=${evidenceProviderId} AND archived_at IS NULL AND deleted_at IS NULL
         LIMIT 1
       `;
         const payload = payloads[0];
         if (payload === undefined || task.threadId === null) return invalidTask();
+        let enrolledThread: OrchestrationV2AppThreadJson | undefined;
+        if (enrollment !== undefined) {
+          const decoded = decodeGovernedThread(payload.payload_json);
+          const projects =
+            yield* sql`SELECT project_id FROM projection_projects WHERE project_id=${task.projectId} AND deleted_at IS NULL`;
+          if (
+            decoded._tag !== "Some" ||
+            !isActiveGovernedRoot(decoded.value) ||
+            decoded.value.id !== task.threadId ||
+            decoded.value.projectId !== task.projectId ||
+            decoded.value.providerInstanceId !== evidenceProviderId ||
+            decoded.value.modelSelection.instanceId !== evidenceProviderId ||
+            projects.length !== 1
+          )
+            return invalidTask();
+          const selected = yield* sql<{
+            payload_json: string;
+            metadata_json: string;
+          }>`SELECT payload_json,metadata_json FROM orchestration_events
+            WHERE aggregate_kind='thread' AND application_event_version=2 AND stream_id=${task.threadId}
+              AND event_type IN ('thread.created','thread.provider-switched','thread.model-selection-updated')
+            ORDER BY sequence DESC LIMIT 1`;
+          const attested =
+            selected[0] === undefined ? undefined : decodeGovernedThread(selected[0].payload_json);
+          const metadata =
+            selected[0] === undefined
+              ? undefined
+              : decodeSelectionMetadata(selected[0].metadata_json);
+          if (
+            metadata?._tag !== "Some" ||
+            (metadata.value.providerInstanceId !== undefined &&
+              metadata.value.providerInstanceId !== evidenceProviderId) ||
+            attested?._tag !== "Some" ||
+            !isGovernedRoot(attested.value) ||
+            attested.value.id !== task.threadId ||
+            attested.value.projectId !== task.projectId ||
+            attested.value.providerInstanceId !== evidenceProviderId ||
+            attested.value.modelSelection.instanceId !== evidenceProviderId
+          )
+            return invalidTask();
+          enrolledThread = decoded.value;
+        }
         const threadEvidence = decodeStoredContract(payload.payload_json);
         const validThreadEvidence =
           threadEvidence._tag === "Some" &&
@@ -909,20 +1093,23 @@ const validateThreadLinks = (
           (threadEvidence.value.projectId === undefined ||
             threadEvidence.value.projectId === task.projectId) &&
           (threadEvidence.value.providerInstanceId === undefined ||
-            threadEvidence.value.providerInstanceId === task.assigneeAgentId);
+            threadEvidence.value.providerInstanceId === evidenceProviderId);
         const routingReadout = validThreadEvidence
           ? yield* readRoutingEvidence(sql, task.threadId)
           : { status: "unavailable" as const, reason: "invalid_thread_evidence" };
         return {
           ...task,
+          ...(enrolledThread === undefined
+            ? {}
+            : { title: enrolledThread.title, assigneeAgentId: evidenceProviderId }),
           routingReadout,
           resultReadout: validThreadEvidence
-            ? yield* readResultEvidence(sql, task.threadId, task.assigneeAgentId, routingReadout)
+            ? yield* readResultEvidence(sql, task.threadId, evidenceProviderId, routingReadout)
             : { status: "unavailable" as const, reason: "invalid_thread_evidence" },
           contractReadout: contractReadout({
             thread_id: task.threadId,
             project_id: task.projectId,
-            provider_instance_id: task.assigneeAgentId,
+            provider_instance_id: evidenceProviderId,
             payload_json: payload.payload_json,
           }),
         };
@@ -997,6 +1184,11 @@ export const submitCollaborationCommand = (
         snapshot,
       });
       if (!principalId) return refusal("unauthorized", "The server admission seal is required.");
+      if (command.type === "task.enroll")
+        return refusal(
+          "unauthorized",
+          "Only successful server governed creation can enroll a task.",
+        );
       const prior = commands.find((item) => item.commandId === command.commandId);
       if (prior) {
         if (owner(prior) !== principalId || semanticKey(prior) !== semanticKey(command))

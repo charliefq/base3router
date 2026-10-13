@@ -221,6 +221,7 @@ export const CollaborationCommand = Schema.Struct({
     "result",
     "accept",
     "thread.bind",
+    "task.enroll",
     "scenario.rehearse",
   ]),
   commandId: TrimmedNonEmptyString,

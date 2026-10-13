@@ -194,6 +194,8 @@ const applyOne = (
         "unauthorized",
         "The product API does not persist a simulated rehearsal or a client-registered employee.",
       );
+    case "task.enroll":
+      return enrollTask(state, command, principalId);
     case "thread.bind":
       return bindThread(state, command, principalId);
     case "delegate":
@@ -209,6 +211,41 @@ const applyOne = (
     case "accept":
       return accept(state, command, principalId);
   }
+};
+
+// Enrollment records a governed root, independently of Agents' canonical conversation.
+const enrollTask = (
+  state: StoredState,
+  command: CollaborationCommand,
+  principalId: string,
+): CollaborationCommandResult => {
+  const { threadId, projectId, agentId, title, acceptance } = command;
+  if (!threadId || !projectId || !agentId || !title || !acceptance)
+    return notReady(state, "Task enrollment requires persisted root thread facts.");
+  const correlationId = `governed:thread:${threadId}`;
+  if (state.tasks.some((task) => task.correlationId === correlationId))
+    return rejected(state, "identity-conflict", "That governed root is already enrolled.");
+  const task: CollaborationTask = {
+    id: `task:${correlationId}`,
+    title,
+    ownerAgentId: principalId,
+    assigneeAgentId: agentId,
+    projectId,
+    threadId,
+    correlationId,
+    state: "blocked",
+    waitReason: "Enrollment records the task; execution and acceptance require separate evidence.",
+    acceptance,
+    revision: 1,
+    pendingClarificationId: null,
+    gateDecision: "DENY",
+  };
+  return applied(
+    remember(state, command.commandId, { tasks: [...state.tasks, task] }),
+    "The governed task is enrolled. Enrollment does not grant execution.",
+    false,
+    "DENY",
+  );
 };
 
 const bindThread = (

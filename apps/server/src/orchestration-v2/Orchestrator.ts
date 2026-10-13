@@ -40,6 +40,7 @@ import {
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
   AuthOrchestrationOperateScope,
+  CollaborationCommand,
   childConstraintConflict,
   incompleteTaskContractMessage,
   ProviderInstanceId,
@@ -213,9 +214,12 @@ export class OrchestratorCommandIdConflictError extends Schema.TaggedError<Orche
     commandType: Schema.String,
     receiptThreadId: ThreadId,
     commandThreadId: ThreadId,
+    receiptCommandType: Schema.optional(Schema.String),
   },
 ) {
   override get message(): string {
+    if (this.receiptCommandType !== undefined && this.receiptCommandType !== this.commandType)
+      return `Command ${this.commandId} was handled as ${this.receiptCommandType} and cannot be replayed as ${this.commandType}.`;
     return `Command ${this.commandId} was already handled for thread ${this.receiptThreadId} and cannot be replayed for ${this.commandThreadId}.`;
   }
 }
@@ -660,6 +664,10 @@ function lastDeliveredRunForProviderThread(
         projection.providerTurns.some((turn) => turn.runAttemptId === run.activeAttemptId)),
   );
 }
+
+const decodeEnrollmentCommand = Schema.decodeUnknownOption(
+  Schema.fromJsonString(CollaborationCommand),
+);
 
 const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(function* () {
   const checkpointService = yield* CheckpointServiceV2;
@@ -9161,6 +9169,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     {
       readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
       readonly effects: ReadonlyArray<PendingOrchestrationEffectV2>;
+      readonly governedTaskOwner?: string;
       readonly cancelUnsettledEffects?: {
         readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
         readonly reason: string;
@@ -9177,6 +9186,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const authorizedCommand = yield* authorizeDispatch(command).pipe(mapDispatchError(command));
     command = authorizedCommand ?? command;
 
+    const context = yield* PolicyExecutionContext;
+    const governedTaskOwner =
+      command.type === "thread.create" &&
+      (command.taskContract !== undefined || command.taskGovernance === "required") &&
+      command.creationSource !== "provider" &&
+      context.kind === "session"
+        ? context.actorId
+        : undefined;
+    if (governedTaskOwner !== undefined && !governedTaskOwner.trim())
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "Governed enrollment requires an authenticated principal.",
+      });
     const events = yield* Ref.make<Array<OrchestrationV2DomainEvent>>([]);
     const effects = yield* Ref.make<Array<PendingOrchestrationEffectV2>>([]);
     let cancelUnsettledEffects:
@@ -9430,6 +9453,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     return {
       events: yield* Ref.get(events),
       effects: yield* Ref.get(effects),
+      ...(governedTaskOwner === undefined ? {} : { governedTaskOwner }),
       ...(cancelUnsettledEffects === undefined ? {} : { cancelUnsettledEffects }),
     };
   });
@@ -9456,6 +9480,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
     if (Option.isSome(existingReceipt)) {
       const receipt = existingReceipt.value;
+      if (receipt.commandType !== command.type)
+        return yield* new OrchestratorCommandIdConflictError({
+          commandId: command.commandId,
+          commandType: command.type,
+          receiptThreadId: receipt.threadId,
+          commandThreadId: commandThreadId(command),
+          receiptCommandType: receipt.commandType,
+        });
       if (receipt.status === "rejected") {
         return yield* new OrchestratorCommandPreviouslyRejectedError({
           commandId: command.commandId,
@@ -9474,6 +9506,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           receiptThreadId: receipt.threadId,
           commandThreadId: dispatchThreadId,
         });
+      }
+      if (receipt.commandType === "thread.create") {
+        const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
+        if (Option.isSome(sqlOption)) {
+          const rows = yield* sqlOption.value<{
+            payload_json: string;
+          }>`SELECT payload_json FROM collaboration_commands WHERE command_id=${`task:enroll:${receipt.commandId}`} LIMIT 1`.pipe(
+            mapDispatchError(command),
+          );
+          if (rows[0] !== undefined) {
+            const enrollment = decodeEnrollmentCommand(rows[0].payload_json);
+            const context = yield* PolicyExecutionContext;
+            if (
+              enrollment._tag !== "Some" ||
+              enrollment.value.type !== "task.enroll" ||
+              enrollment.value.admissionSource !== "server" ||
+              context.kind !== "session" ||
+              enrollment.value.admittedBy !== context.actorId ||
+              enrollment.value.threadId !== dispatchThreadId
+            )
+              return yield* new OrchestratorDispatchError({
+                commandId: command.commandId,
+                commandType: command.type,
+                cause: "The governed create receipt belongs to a different principal or thread.",
+              });
+          }
+        }
       }
       const storedEvents = yield* eventSink.readByCommandId({ commandId: command.commandId }).pipe(
         Stream.runCollect,
@@ -9583,6 +9642,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         acceptedAt,
         events: plan.events,
         effects: plan.effects,
+        ...(plan.governedTaskOwner === undefined
+          ? {}
+          : { governedTaskOwner: plan.governedTaskOwner }),
         ...(plan.cancelUnsettledEffects === undefined
           ? {}
           : { cancelUnsettledEffects: plan.cancelUnsettledEffects }),
