@@ -94,10 +94,12 @@ import { AgentsPage, TasksPage } from "./CollaborationPages";
 let renderer: ReactTestRenderer;
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (cause: Error) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 };
 const button = () =>
   renderer.root
@@ -365,6 +367,149 @@ describe("Tasks loading and conversation access", () => {
     expect(state.recover).not.toHaveBeenCalled();
     expect(state.create).not.toHaveBeenCalled();
   });
+});
+
+describe("Tasks read freshness", () => {
+  const snapshot = (goal: string, revision: number): CollaborationSnapshot => ({
+    ...state.snapshot,
+    tasks: [
+      {
+        id: "freshness-task",
+        title: "Persisted task",
+        ownerAgentId: "owner",
+        assigneeAgentId: "codex",
+        projectId: "project-a",
+        state: "blocked",
+        waitReason: "Execution not granted",
+        acceptance: "Task note",
+        threadId: "linked-thread",
+        correlationId: "freshness",
+        revision: 1,
+        pendingClarificationId: null,
+        gateDecision: "DENY",
+        contractReadout: {
+          status: "available",
+          contract: {
+            revision,
+            goal,
+            redirect: "Ask the owner",
+            acceptance: "Owner reviews evidence",
+            brake: { maxProviderStarts: 1, stopConditions: "Stop on missing input" },
+          },
+          phase: "active",
+          acceptedRevision: null,
+        },
+      },
+    ],
+  });
+  const mountTasks = async () => {
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+  };
+  const refreshTasks = async () => {
+    await act(async () => {
+      renderer.root
+        .findAllByType("button")
+        .find((node) => node.children.includes("Refresh tasks"))!
+        .props.onClick();
+    });
+  };
+  const switchEnvironment = async (environmentId: string) => {
+    state.environmentId = environmentId;
+    await act(async () => renderer.update(<TasksPage />));
+  };
+
+  it("keeps the newer refresh when the initial read returns last", async () => {
+    const initial = deferred<CollaborationSnapshot>();
+    const refresh = deferred<CollaborationSnapshot>();
+    state.load.mockReturnValueOnce(initial.promise).mockReturnValueOnce(refresh.promise);
+    await mountTasks();
+    await refreshTasks();
+    await act(async () => refresh.resolve(snapshot("New revision goal", 2)));
+    expect(text()).toContain("New revision goal");
+    await act(async () => initial.resolve(snapshot("Old revision goal", 1)));
+    expect(text()).toContain("New revision goal");
+    expect(text()).not.toContain("Old revision goal");
+    expect(state.load).toHaveBeenCalledTimes(2);
+    expect(state.bind).not.toHaveBeenCalled();
+    expect(state.recover).not.toHaveBeenCalled();
+    expect(state.create).not.toHaveBeenCalled();
+  });
+
+  it.each(["success", "failure"] as const)(
+    "rejects an earlier environment refresh %s after A to B to A",
+    async (outcome) => {
+      const oldRefresh = deferred<CollaborationSnapshot>();
+      state.load
+        .mockResolvedValueOnce(snapshot("First A goal", 1))
+        .mockReturnValueOnce(oldRefresh.promise)
+        .mockResolvedValueOnce(snapshot("B goal", 2))
+        .mockResolvedValueOnce(snapshot("Current A goal", 3));
+      await mountTasks();
+      await refreshTasks();
+      await switchEnvironment("environment-b");
+      await switchEnvironment("environment-a");
+      expect(text()).toContain("Current A goal");
+      await act(async () => {
+        if (outcome === "success") oldRefresh.resolve(snapshot("Obsolete A goal", 1));
+        else oldRefresh.reject(new Error("Obsolete A failure"));
+      });
+      expect(text()).toContain("Current A goal");
+      expect(text()).not.toContain("Obsolete A");
+      expect(text()).not.toContain("Task data may be stale");
+      expect(state.load).toHaveBeenCalledTimes(4);
+    },
+  );
+
+  it("preserves the last successful data as stale after failure and clears it on recovery", async () => {
+    const failed = deferred<CollaborationSnapshot>();
+    state.load
+      .mockResolvedValueOnce(snapshot("Last successful goal", 1))
+      .mockReturnValueOnce(failed.promise)
+      .mockResolvedValueOnce(snapshot("Recovered goal", 2));
+    await mountTasks();
+    await refreshTasks();
+    await act(async () => failed.reject(new Error("Snapshot request failed")));
+    expect(text()).toContain("Last successful goal");
+    expect(text()).toContain("Snapshot request failed");
+    expect(text()).toContain("Task data may be stale");
+    await refreshTasks();
+    expect(text()).toContain("Recovered goal");
+    expect(text()).not.toContain("Last successful goal");
+    expect(text()).not.toContain("Snapshot request failed");
+    expect(text()).not.toContain("Task data may be stale");
+    expect(state.bind).not.toHaveBeenCalled();
+    expect(state.recover).not.toHaveBeenCalled();
+    expect(state.create).not.toHaveBeenCalled();
+  });
+
+  it.each(["success", "failure"] as const)(
+    "discards a refresh %s after unmount without updating the retired component",
+    async (outcome) => {
+      const refresh = deferred<CollaborationSnapshot>();
+      state.load
+        .mockResolvedValueOnce(snapshot("Visible goal", 1))
+        .mockReturnValueOnce(refresh.promise);
+      await mountTasks();
+      await refreshTasks();
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await act(async () => renderer.unmount());
+        await act(async () => {
+          if (outcome === "success") refresh.resolve(snapshot("Retired goal", 2));
+          else refresh.reject(new Error("Retired failure"));
+        });
+        expect(renderer.toJSON()).toBeNull();
+        expect(errors).not.toHaveBeenCalled();
+        expect(state.bind).not.toHaveBeenCalled();
+        expect(state.recover).not.toHaveBeenCalled();
+        expect(state.create).not.toHaveBeenCalled();
+      } finally {
+        errors.mockRestore();
+      }
+    },
+  );
 });
 
 it("renders the persisted SQLite contract through the server snapshot and refreshes its latest revision without dispatch", async () => {
