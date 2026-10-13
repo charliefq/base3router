@@ -4,6 +4,8 @@ import {
   AuthOrchestrationReadScope,
   CommandId,
   EnvironmentId,
+  EventId,
+  NodeId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -22,6 +24,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
+import { makeSubagentChildThread } from "../orchestration-v2/SubagentProjection.ts";
 import { readCollaborationSnapshot } from "./store.ts";
 
 const owner = {
@@ -568,6 +571,346 @@ it.live.each(["owner", "archive"] as const)(
           (yield* sql`SELECT status FROM orchestration_v2_projection_provider_turns`)[0]?.status,
           "running",
         );
+      }),
+    ),
+);
+
+const childId = ThreadId.make("review-child");
+const seedChild = (
+  sql: SqlClient.SqlClient,
+  orchestrator: Orchestrator.OrchestratorV2["Service"],
+) =>
+  Effect.gen(function* () {
+    const parent = (yield* orchestrator.getThreadProjection(threadId)).thread;
+    const now = yield* DateTime.now;
+    const child = makeSubagentChildThread({
+      parentThread: parent,
+      childThreadId: childId,
+      parentNodeId: NodeId.make("review-child-node"),
+      activeProviderThreadId: null,
+      providerInstanceId: parent.providerInstanceId,
+      modelSelection: parent.modelSelection,
+      title: "Disposable review child",
+      now,
+      createdBy: "agent",
+      creationSource: "provider",
+    });
+    const sink = yield* EventSink.EventSinkV2;
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make("review-child-created"),
+          type: "thread.created",
+          threadId: childId,
+          providerInstanceId: parent.providerInstanceId,
+          occurredAt: now,
+          payload: child,
+        },
+      ],
+    });
+    yield* seedRunningWork(sql);
+    yield* sql`INSERT INTO task_contract_members (thread_id,root_thread_id,revision) VALUES (${childId},${threadId},1)`;
+    yield* sql`INSERT INTO base3_capacity_leases (lease_id,environment_id,thread_id,workload_class,status,created_at) VALUES ('review-member-lease',${environmentId},${childId},'interactive','active',${DateTime.formatIso(now)})`;
+  });
+const childSet = {
+  type: "thread.task-contract.set" as const,
+  commandId: CommandId.make("review-child-set"),
+  threadId: childId,
+  ...contract,
+};
+const childRedirect = (revision = 1) => ({
+  ...decision("redirect"),
+  commandId: CommandId.make("review-child-redirect"),
+  threadId: childId,
+  revision,
+});
+it.live(
+  "rejects foreign child contract-set then redirect before affecting the sealed root cancellation cohort",
+  () =>
+    withReview(({ sql, orchestrator }) =>
+      Effect.gen(function* () {
+        yield* seedChild(sql, orchestrator);
+        const before = yield* persisted(sql);
+        const result = yield* Effect.exit(
+          Effect.gen(function* () {
+            yield* execute(sql, orchestrator, childSet, foreign);
+            yield* execute(sql, orchestrator, childRedirect(2), foreign);
+          }),
+        );
+        const after = yield* persisted(sql);
+        assert.isTrue(
+          Exit.isFailure(result),
+          `a child-local contract does not authorize cancellation of another owner root; actual interrupt flags=${after.leases.map((lease) => lease.interrupt_requested).join(",")}`,
+        );
+        assert.deepEqual(after.leases, before.leases);
+        assert.deepEqual(after.outbox, before.outbox);
+        assert.deepEqual(after.grants, before.grants);
+        assert.equal(
+          (yield* sql`SELECT status FROM orchestration_v2_projection_provider_turns`)[0]?.status,
+          "running",
+        );
+        assert.deepEqual(after.thread, before.thread);
+      }),
+    ),
+);
+it.live(
+  "rejects a foreign inherited child redirect without requesting root or member cancellation",
+  () =>
+    withReview(({ sql, orchestrator }) =>
+      Effect.gen(function* () {
+        yield* seedChild(sql, orchestrator);
+        const before = yield* persisted(sql);
+        assert.isTrue(
+          Exit.isFailure(yield* Effect.exit(execute(sql, orchestrator, childRedirect(), foreign))),
+        );
+        assert.deepEqual(yield* persisted(sql), before);
+      }),
+    ),
+);
+
+const seedExistingFixtureGrants = (sql: SqlClient.SqlClient) =>
+  Effect.gen(function* () {
+    const now = DateTime.formatIso(yield* DateTime.now);
+    // Inert synthetic rows in disposable SQLite, not issued executable grants.
+    for (const id of [threadId, childId])
+      yield* sql`INSERT INTO base3_execution_grants (grant_id,thread_id,message_id,operation,actor_id,scopes_json,argument_hash,created_at) VALUES (${`inert-fixture-grant:${id}`},${id},'no-executable-message','fixture-only',${owner.actorId},'[]','not-an-executable-grant',${now})`;
+  });
+it.live(
+  "preserves legitimate owner child editing, atomic grant revocation and cancellation without releasing leases",
+  () =>
+    withReview(({ sql, orchestrator }) =>
+      Effect.gen(function* () {
+        yield* seedChild(sql, orchestrator);
+        yield* seedExistingFixtureGrants(sql);
+        const before = yield* persisted(sql);
+        yield* sql`CREATE TRIGGER child_set_fault BEFORE UPDATE ON orchestration_command_receipts WHEN NEW.command_type='thread.task-contract.set' AND NEW.result_sequence>0 BEGIN SELECT RAISE(ABORT,'child set receipt fault'); END`;
+        assert.isTrue(Exit.isFailure(yield* Effect.exit(execute(sql, orchestrator, childSet))));
+        assert.deepEqual(yield* persisted(sql), before);
+        yield* sql`DROP TRIGGER child_set_fault`;
+        yield* execute(sql, orchestrator, childSet);
+        assert.isTrue((yield* persisted(sql)).grants.every((grant) => grant.revoked_at !== null));
+        yield* execute(sql, orchestrator, childRedirect(2));
+        const after = yield* persisted(sql);
+        assert.isTrue(
+          after.leases.every(
+            (lease) => lease.interrupt_requested === 1 && lease.released_at === null,
+          ),
+        );
+        assert.equal(after.outbox.length, 1);
+        const sink = yield* EventSink.EventSinkV2;
+        yield* execute(sql, orchestrator, childRedirect(2));
+        const replay = yield* sink
+          .commitCommand({
+            commandId: childRedirect(2).commandId,
+            threadId: childId,
+            commandType: "thread.task-contract.redirect",
+            acceptedAt: yield* DateTime.now,
+            events: [],
+            effects: [],
+            taskContractDecision: { action: "redirect", revision: 2 },
+          })
+          .pipe(Effect.provideService(PolicyExecutionContext, owner));
+        assert.isFalse(replay.committed);
+        assert.deepEqual(yield* persisted(sql), after);
+        yield* execute(sql, orchestrator, {
+          ...decision("resume"),
+          commandId: CommandId.make("child-owner-resume"),
+          threadId: childId,
+          revision: 2,
+        });
+        assert.deepEqual((yield* persisted(sql)).leases, after.leases);
+        assert.equal((yield* sql`SELECT run_id FROM orchestration_v2_projection_runs`).length, 0);
+      }),
+    ),
+);
+it.live(
+  "rejects foreign child edits before revoking any sealed root or cohort fixture grants",
+  () =>
+    withReview(({ sql, orchestrator }) =>
+      Effect.gen(function* () {
+        yield* seedChild(sql, orchestrator);
+        yield* seedExistingFixtureGrants(sql);
+        const before = yield* persisted(sql);
+        assert.isTrue(
+          Exit.isFailure(yield* Effect.exit(execute(sql, orchestrator, childSet, foreign))),
+        );
+        assert.deepEqual(yield* persisted(sql), before);
+      }),
+    ),
+);
+it.live.each([
+  "missing-root",
+  "missing-parent",
+  "null-parent",
+  "self-parent",
+  "self-root",
+  "wrong-parent-root",
+  "wrong-project",
+] as const)("rejects malformed child lineage %s without root or cohort mutation", (change) =>
+  withReview(({ sql, orchestrator }) =>
+    Effect.gen(function* () {
+      yield* seedChild(sql, orchestrator);
+      if (change === "missing-root")
+        yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.lineage.rootThreadId','missing-root') WHERE thread_id=${childId}`;
+      if (change === "missing-parent")
+        yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.lineage.parentThreadId','missing-parent') WHERE thread_id=${childId}`;
+      if (change === "null-parent")
+        yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.lineage.parentThreadId',NULL) WHERE thread_id=${childId}`;
+      if (change === "self-parent")
+        yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.lineage.parentThreadId',${childId}) WHERE thread_id=${childId}`;
+      if (change === "self-root")
+        yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.lineage.rootThreadId',${childId}) WHERE thread_id=${childId}`;
+      if (change === "wrong-parent-root")
+        yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.lineage.rootThreadId','other-root') WHERE thread_id=${threadId}`;
+      if (change === "wrong-project") {
+        const now = DateTime.formatIso(yield* DateTime.now);
+        yield* sql`INSERT INTO projection_projects (project_id,title,workspace_root,scripts_json,created_at,updated_at) VALUES ('other-child-project','Other fixture','/tmp','[]',${now},${now})`;
+        yield* sql`UPDATE orchestration_v2_projection_threads SET project_id='other-child-project',payload_json=json_set(payload_json,'$.projectId','other-child-project') WHERE thread_id=${childId}`;
+      }
+      const before = yield* persisted(sql);
+      assert.isTrue(
+        Exit.isFailure(yield* Effect.exit(execute(sql, orchestrator, childRedirect()))),
+      );
+      assert.deepEqual(yield* persisted(sql), before);
+    }),
+  ),
+);
+it.live.each([
+  { type: "thread.task-contract.set" as const, isForeign: true },
+  { type: "thread.task-contract.redirect" as const, isForeign: true },
+  { type: "thread.task-contract.set" as const, isForeign: false },
+  { type: "thread.task-contract.redirect" as const, isForeign: false },
+])("rejects effective root change at the winning transaction %j", ({ type, isForeign }) =>
+  withReview(({ sql, orchestrator }) =>
+    Effect.gen(function* () {
+      yield* seedChild(sql, orchestrator);
+      yield* execute(
+        sql,
+        orchestrator,
+        {
+          ...create,
+          commandId: CommandId.make("foreign-root-create"),
+          threadId: ThreadId.make("foreign-root"),
+        },
+        isForeign ? foreign : owner,
+      );
+      const before = yield* persisted(sql);
+      yield* sql`CREATE TRIGGER child_root_race BEFORE INSERT ON orchestration_command_receipts WHEN NEW.command_type IN ('thread.task-contract.set','thread.task-contract.redirect') BEGIN UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.lineage.rootThreadId','foreign-root','$.lineage.parentThreadId','foreign-root') WHERE thread_id='review-child'; END`;
+      assert.isTrue(
+        Exit.isFailure(
+          yield* Effect.exit(
+            execute(
+              sql,
+              orchestrator,
+              type === "thread.task-contract.set" ? childSet : childRedirect(),
+            ),
+          ),
+        ),
+      );
+      assert.deepEqual(yield* persisted(sql), before);
+    }),
+  ),
+);
+it.live.each([false, true])(
+  "rejects descendant receipt replay after effective root change to foreign=%s in both boundaries",
+  (isForeign) =>
+    withReview(({ sql, orchestrator }) =>
+      Effect.gen(function* () {
+        yield* seedChild(sql, orchestrator);
+        yield* execute(sql, orchestrator, childRedirect());
+        yield* execute(
+          sql,
+          orchestrator,
+          {
+            ...create,
+            commandId: CommandId.make("replay-root-create"),
+            threadId: ThreadId.make("replay-root"),
+          },
+          isForeign ? foreign : owner,
+        );
+        yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.lineage.rootThreadId','replay-root','$.lineage.parentThreadId','replay-root') WHERE thread_id=${childId}`;
+        const before = yield* persisted(sql);
+        assert.isTrue(
+          Exit.isFailure(yield* Effect.exit(execute(sql, orchestrator, childRedirect()))),
+        );
+        const sink = yield* EventSink.EventSinkV2;
+        assert.isTrue(
+          Exit.isFailure(
+            yield* Effect.exit(
+              sink
+                .commitCommand({
+                  commandId: childRedirect().commandId,
+                  threadId: childId,
+                  commandType: "thread.task-contract.redirect",
+                  acceptedAt: yield* DateTime.now,
+                  events: [],
+                  effects: [],
+                  taskContractDecision: { action: "redirect", revision: 1 },
+                })
+                .pipe(Effect.provideService(PolicyExecutionContext, owner)),
+            ),
+          ),
+        );
+        assert.deepEqual(yield* persisted(sql), before);
+      }),
+    ),
+);
+it.live("keeps valid unsealed legacy child contract editing and decisions compatible", () =>
+  withReview(({ sql, orchestrator }) =>
+    Effect.gen(function* () {
+      // Declare a legacy unsealed tree by removing only its disposable enrollment seal.
+      yield* sql`DELETE FROM collaboration_commands WHERE json_extract(payload_json,'$.type')='task.enroll'`;
+      yield* seedChild(sql, orchestrator);
+      yield* execute(sql, orchestrator, childSet, foreign);
+      yield* execute(sql, orchestrator, childRedirect(2), foreign);
+      assert.isTrue(
+        (yield* persisted(sql)).leases.every(
+          (lease) => lease.interrupt_requested === 1 && lease.released_at === null,
+        ),
+      );
+    }),
+  ),
+);
+
+it.live.each([false, true])(
+  "rejects child set receipt replay after effective root change to foreign=%s in both boundaries",
+  (isForeign) =>
+    withReview(({ sql, orchestrator }) =>
+      Effect.gen(function* () {
+        yield* seedChild(sql, orchestrator);
+        yield* execute(sql, orchestrator, childSet);
+        yield* execute(
+          sql,
+          orchestrator,
+          {
+            ...create,
+            commandId: CommandId.make("set-replay-root-create"),
+            threadId: ThreadId.make("set-replay-root"),
+          },
+          isForeign ? foreign : owner,
+        );
+        yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.lineage.rootThreadId','set-replay-root','$.lineage.parentThreadId','set-replay-root') WHERE thread_id=${childId}`;
+        const before = yield* persisted(sql);
+        assert.isTrue(Exit.isFailure(yield* Effect.exit(execute(sql, orchestrator, childSet))));
+        const sink = yield* EventSink.EventSinkV2;
+        assert.isTrue(
+          Exit.isFailure(
+            yield* Effect.exit(
+              sink
+                .commitCommand({
+                  commandId: childSet.commandId,
+                  threadId: childId,
+                  commandType: childSet.type,
+                  contractSetActor: owner.actorId,
+                  acceptedAt: yield* DateTime.now,
+                  events: [],
+                  effects: [],
+                })
+                .pipe(Effect.provideService(PolicyExecutionContext, owner)),
+            ),
+          ),
+        );
+        assert.deepEqual(yield* persisted(sql), before);
       }),
     ),
 );

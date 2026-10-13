@@ -133,7 +133,6 @@ import * as OwnedChat from "../collaboration/ownedChat.ts";
 import {
   nextTaskContractThread,
   reserveGovernedStart,
-  revokeTaskContractGrants,
   taskStateFromUnknown,
 } from "../policy/TaskContract.ts";
 
@@ -9133,22 +9132,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             "Accept, redirect, and contract completion require an authenticated session with orchestration:operate. Provider completion is not acceptance.",
         });
       }
-      if (command.type !== "thread.task-contract.set") {
-        const reviewSql = yield* taskReviewSqlAtCall;
-        if (Option.isSome(reviewSql))
-          yield* validateTaskDecision(reviewSql.value, {
-            threadId: command.threadId,
-            action: command.type.slice("thread.task-contract.".length) as TaskContractReviewAction,
-            revision: command.revision,
-            ...(command.reviewTask === undefined ? {} : { reviewTask: command.reviewTask }),
-          }).pipe(mapDispatchError(command));
-        else if (command.reviewTask !== undefined)
-          return yield* new OrchestratorDispatchError({
-            commandId: command.commandId,
-            commandType: command.type,
-            cause: "Task review persistence is unavailable.",
-          });
-      }
+      const reviewSql = yield* taskReviewSqlAtCall;
+      if (Option.isSome(reviewSql))
+        yield* validateTaskDecision(
+          reviewSql.value,
+          command.type === "thread.task-contract.set"
+            ? { threadId: command.threadId, action: "set" }
+            : {
+                threadId: command.threadId,
+                action: command.type.slice(
+                  "thread.task-contract.".length,
+                ) as TaskContractReviewAction,
+                revision: command.revision,
+                ...(command.reviewTask === undefined ? {} : { reviewTask: command.reviewTask }),
+              },
+        ).pipe(mapDispatchError(command));
+      else if (command.type !== "thread.task-contract.set" && command.reviewTask !== undefined)
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Task review persistence is unavailable.",
+        });
       const thread = yield* projectionStore
         .getThread(command.threadId)
         .pipe(
@@ -9169,14 +9173,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           commandType: command.type,
           cause: next.error,
         });
-      }
-      if (command.type === "thread.task-contract.set") {
-        const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
-        if (Option.isSome(sqlOption)) {
-          yield* revokeTaskContractGrants(sqlOption.value, next.rootThreadId).pipe(
-            mapDispatchError(command),
-          );
-        }
       }
       yield* emit(
         events,
@@ -9568,20 +9564,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
       if (
+        command.type === "thread.task-contract.set" ||
         command.type === "thread.task-contract.accept" ||
         command.type === "thread.task-contract.redirect" ||
         command.type === "thread.task-contract.resume"
       ) {
         const reviewSql = yield* taskReviewSqlAtCall;
         if (Option.isSome(reviewSql))
-          yield* verifyTaskDecisionReplay(reviewSql.value, {
-            commandId: command.commandId,
-            threadId: command.threadId,
-            action: command.type.slice("thread.task-contract.".length) as TaskContractReviewAction,
-            revision: command.revision,
-            ...(command.reviewTask === undefined ? {} : { reviewTask: command.reviewTask }),
-          }).pipe(mapDispatchError(command));
-        else if (command.reviewTask !== undefined)
+          yield* verifyTaskDecisionReplay(
+            reviewSql.value,
+            command.type === "thread.task-contract.set"
+              ? { commandId: command.commandId, threadId: command.threadId, action: "set" }
+              : {
+                  commandId: command.commandId,
+                  threadId: command.threadId,
+                  action: command.type.slice(
+                    "thread.task-contract.".length,
+                  ) as TaskContractReviewAction,
+                  revision: command.revision,
+                  ...(command.reviewTask === undefined ? {} : { reviewTask: command.reviewTask }),
+                },
+          ).pipe(mapDispatchError(command));
+        else if (command.type !== "thread.task-contract.set" && command.reviewTask !== undefined)
           return yield* new OrchestratorDispatchError({
             commandId: command.commandId,
             commandType: command.type,

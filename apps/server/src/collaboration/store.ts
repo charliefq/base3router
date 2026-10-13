@@ -1327,38 +1327,135 @@ export const readTaskReview = Effect.fn("collaboration.readTaskReview")(function
     return no("stale-revision");
   return facts;
 });
+// A local child contract does not confer authority over its cancellation root.
+// Resolve the actual parent chain, including old selector-less command paths.
+const decisionRoot = Effect.fn("collaboration.decisionRoot")(function* (
+  sql: SqlClient.SqlClient,
+  commands: ReadonlyArray<CollaborationCommand>,
+  actorId: string,
+  threadId: string,
+  action: TaskContractReviewAction | "set",
+) {
+  const deny = () => new TaskReviewDeniedError({ reason: "invalid-decision-lineage" });
+  const load = (id: string) =>
+    Effect.gen(function* () {
+      const rows = yield* sql<{
+        thread_id: string;
+        project_id: string;
+        provider_instance_id: string;
+        created_at: string;
+        updated_at: string;
+        archived_at: string | null;
+        deleted_at: string | null;
+        payload_json: string;
+      }>`SELECT thread_id,project_id,provider_instance_id,created_at,updated_at,archived_at,deleted_at,payload_json FROM orchestration_v2_projection_threads WHERE thread_id=${id}`;
+      const row = rows[0];
+      const decoded = row === undefined ? undefined : decodeGovernedThread(row.payload_json);
+      if (!row || decoded?._tag !== "Some") return yield* deny();
+      const thread = decoded.value;
+      if (
+        thread.id !== id ||
+        row.thread_id !== id ||
+        row.project_id !== thread.projectId ||
+        row.provider_instance_id !== thread.providerInstanceId ||
+        thread.modelSelection.instanceId !== row.provider_instance_id ||
+        DateTime.formatIso(thread.createdAt) !== row.created_at ||
+        DateTime.formatIso(thread.updatedAt) !== row.updated_at
+      )
+        return yield* deny();
+      return {
+        thread,
+        active:
+          row.archived_at === null &&
+          row.deleted_at === null &&
+          thread.archivedAt === null &&
+          thread.deletedAt === null,
+      };
+    });
+  const leaf = yield* load(threadId);
+  const rootId = leaf.thread.lineage.rootThreadId;
+  const seen = new Set<string>();
+  let node = leaf;
+  let active = true;
+  while (true) {
+    if (
+      seen.has(node.thread.id) ||
+      node.thread.lineage.rootThreadId !== rootId ||
+      node.thread.projectId !== leaf.thread.projectId
+    )
+      return yield* deny();
+    seen.add(node.thread.id);
+    active = active && node.active;
+    const ownerId = sealedTaskOwner(commands, node.thread.id);
+    if (ownerId === false || (ownerId !== null && ownerId !== actorId))
+      return yield* new TaskReviewDeniedError({ reason: "task-owner-mismatch" });
+    if (node.thread.id === rootId) {
+      if (
+        node.thread.lineage.parentThreadId !== null ||
+        node.thread.lineage.relationshipToParent !== null
+      )
+        return yield* deny();
+      break;
+    }
+    if (
+      node.thread.lineage.parentThreadId === null ||
+      node.thread.lineage.relationshipToParent === null
+    )
+      return yield* deny();
+    node = yield* load(node.thread.lineage.parentThreadId);
+  }
+  const rootOwner = sealedTaskOwner(commands, rootId);
+  if (rootOwner !== null) {
+    if (
+      !active ||
+      (yield* sql`SELECT project_id FROM projection_projects WHERE project_id=${node.thread.projectId} AND deleted_at IS NULL`)
+        .length !== 1 ||
+      !(yield* OwnedChat.selectionMatches(sql, node.thread))
+    )
+      return yield* deny();
+    if (action !== "set") {
+      const snapshot = yield* validateThreadLinks(
+        sql,
+        scopedSnapshot(commands, actorId),
+        commands,
+        actorId,
+      );
+      const task = snapshot.tasks.find(
+        (item) =>
+          item.threadId === rootId &&
+          (item.id === `task:governed:thread:${rootId}` || item.id === `task:thread:${rootId}`),
+      );
+      if (
+        !task ||
+        (yield* reviewFacts(sql, commands, task, actorId, "legacy-command")).status !== "available"
+      )
+        return yield* deny();
+    }
+  }
+  return { thread: leaf.thread, root: node.thread, rootOwner };
+});
 export const validateTaskDecision = Effect.fn("collaboration.validateTaskDecision")(function* (
   sql: SqlClient.SqlClient,
   input: {
     readonly threadId: string;
-    readonly action: TaskContractReviewAction;
-    readonly revision: number;
     readonly reviewTask?: TaskContractReviewReference;
-  },
+  } & (
+    | { readonly action: TaskContractReviewAction; readonly revision: number }
+    | { readonly action: "set" }
+  ),
 ) {
   const context = yield* reviewContext;
   if (!context) return yield* new TaskReviewDeniedError({ reason: "operate-scope-required" });
   const commands = yield* readCommands(sql);
   const ownerId = sealedTaskOwner(commands, input.threadId);
-  if (ownerId === false || (ownerId !== null && ownerId !== context.actorId))
-    return yield* new TaskReviewDeniedError({ reason: "task-owner-mismatch" });
+  const current = yield* decisionRoot(sql, commands, context.actorId, input.threadId, input.action);
+  if (input.action === "set") return;
   if (!input.reviewTask) {
-    if (ownerId === null) return; // Unsealed legacy conversations retain their separate decision semantics.
-    const snapshot = yield* validateThreadLinks(
-      sql,
-      scopedSnapshot(commands, context.actorId),
-      commands,
-      context.actorId,
-    );
-    const task = snapshot.tasks.find(
-      (item) =>
-        item.threadId === input.threadId &&
-        (item.id === `task:governed:thread:${input.threadId}` ||
-          item.id === `task:thread:${input.threadId}`),
-    );
-    if (!task) return yield* new TaskReviewDeniedError({ reason: "task-link-unavailable" });
-    const current = yield* reviewFacts(sql, commands, task, context.actorId, "legacy-command");
-    if (current.status !== "available" || current.contract.revision !== input.revision)
+    if (ownerId === null && current.rootOwner === null) return;
+    if (
+      (ownerId !== null && current.thread.id !== current.root.id) ||
+      current.thread.taskContract?.revision !== input.revision
+    )
       return yield* new TaskReviewDeniedError({ reason: "invalid-current-task" });
     return;
   }
@@ -1562,10 +1659,11 @@ export const verifyTaskDecisionReplay = Effect.fn("collaboration.verifyTaskDecis
     input: {
       readonly commandId: string;
       readonly threadId: string;
-      readonly action: TaskContractReviewAction;
-      readonly revision: number;
       readonly reviewTask?: TaskContractReviewReference;
-    },
+    } & (
+      | { readonly action: TaskContractReviewAction; readonly revision: number }
+      | { readonly action: "set" }
+    ),
   ) {
     const context = yield* reviewContext;
     const deny = () => new TaskReviewDeniedError({ reason: "decision-replay-mismatch" });
@@ -1579,7 +1677,7 @@ export const verifyTaskDecisionReplay = Effect.fn("collaboration.verifyTaskDecis
       !decision ||
       decision.actorId !== context.actorId ||
       decision.kind !== input.action ||
-      decision.revision !== input.revision
+      (input.action !== "set" && decision.revision !== input.revision)
     )
       return yield* deny();
     const stored = decision.reviewTask;
@@ -1596,8 +1694,21 @@ export const verifyTaskDecisionReplay = Effect.fn("collaboration.verifyTaskDecis
     )
       return yield* deny();
     const commands = yield* readCommands(sql);
-    const ownerId = sealedTaskOwner(commands, input.threadId);
-    if (ownerId === false || (ownerId !== null && ownerId !== context.actorId))
+    const currentRoot = yield* decisionRoot(
+      sql,
+      commands,
+      context.actorId,
+      input.threadId,
+      input.action,
+    );
+    const original = decoded?._tag === "Some" ? decoded.value : undefined;
+    if (
+      !original ||
+      original.projectId !== currentRoot.thread.projectId ||
+      original.lineage.rootThreadId !== currentRoot.thread.lineage.rootThreadId ||
+      original.lineage.parentThreadId !== currentRoot.thread.lineage.parentThreadId ||
+      original.lineage.relationshipToParent !== currentRoot.thread.lineage.relationshipToParent
+    )
       return yield* deny();
     if (incoming) {
       // A receipt proves the original command. Later human decisions or revisions
