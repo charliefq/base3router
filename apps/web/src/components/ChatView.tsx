@@ -1,6 +1,7 @@
 import { ChatCanvas } from "./chat/ChatCanvas";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import {
+  taskEnrollmentNotice,
   resolveBackgroundDraftWorkspaceOptions,
   resolveDraftHeroState,
   shouldDockDraftHeroForSubmission,
@@ -9206,6 +9207,9 @@ export default function ChatView(props: ChatViewProps) {
         });
         if (contractResult._tag === "Failure") {
           failure = contractResult;
+        } else {
+          const notice = taskEnrollmentNotice(contractResult.value.taskEnrollment);
+          if (notice !== null) toastManager.add({ type: "info", title: notice });
         }
       }
       const startPromise =

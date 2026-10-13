@@ -1794,7 +1794,12 @@ const makeWsRpcLayer = (
               )
               .pipe(
                 Effect.tap(() => recordClientCommandAnalytics(command)),
-                Effect.map((result) => ({ sequence: result.sequence })),
+                Effect.map((result) => ({
+                  sequence: result.sequence,
+                  ...(result.taskEnrollment === undefined
+                    ? {}
+                    : { taskEnrollment: result.taskEnrollment }),
+                })),
                 Effect.mapError((cause) => {
                   const detail = userFacingDispatchErrorMessage(cause);
                   return new OrchestrationV2DispatchCommandError({

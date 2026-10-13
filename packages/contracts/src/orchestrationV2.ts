@@ -37,6 +37,7 @@ import {
   TaskContractDecision,
   TaskContractFields,
   TaskContractPhase,
+  TaskEnrollmentOutcome,
 } from "./taskContract.ts";
 import { TaskUsageCohort, TaskUsageSummary } from "./taskUsage.ts";
 import {
@@ -3037,6 +3038,7 @@ export type OrchestrationV2ThreadLaunchResult = typeof OrchestrationV2ThreadLaun
 
 export const OrchestrationV2DispatchCommandResult = Schema.Struct({
   sequence: NonNegativeInt,
+  taskEnrollment: Schema.optionalKey(TaskEnrollmentOutcome),
 });
 export type OrchestrationV2DispatchCommandResult = typeof OrchestrationV2DispatchCommandResult.Type;
 

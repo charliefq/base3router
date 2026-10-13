@@ -202,66 +202,68 @@ it.live("keeps two same-provider tasks distinct and partitions principals and pr
   ).pipe(Effect.provide(Layer.mergeAll(runtime, NodeServices.layer))),
 );
 
-it.live("does not enroll ordinary chats, upgrades or provider-originated child projections", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const sql = yield* seedProject;
-      const orchestrator = yield* Orchestrator.OrchestratorV2;
-      yield* orchestrator
-        .dispatch({ ...create("ordinary"), taskGovernance: "chat", taskContract: undefined })
-        .pipe(Effect.provideService(PolicyExecutionContext, principal));
-      yield* orchestrator
-        .dispatch({
-          type: "thread.task-contract.set",
-          commandId: CommandId.make("upgrade"),
-          threadId: ThreadId.make("ordinary"),
-          ...contract,
-        })
-        .pipe(Effect.provideService(PolicyExecutionContext, principal));
-      yield* orchestrator
-        .dispatch(create("root"))
-        .pipe(Effect.provideService(PolicyExecutionContext, principal));
-      const parent = (yield* orchestrator.getThreadProjection(ThreadId.make("root"))).thread;
-      const child = makeSubagentChildThread({
-        parentThread: parent,
-        childThreadId: ThreadId.make("provider-child"),
-        parentNodeId: NodeId.make("fake-parent-node"),
-        activeProviderThreadId: null,
-        providerInstanceId: selection.instanceId,
-        modelSelection: selection,
-        title: "Provider child",
-        now: yield* DateTime.now,
-        createdBy: "agent",
-        creationSource: "provider",
-      });
-      const sink = yield* EventSink.EventSinkV2;
-      yield* sink.write({
-        events: [
-          {
-            id: EventId.make("fixture-child-event"),
-            type: "thread.created",
-            threadId: child.id,
-            providerInstanceId: selection.instanceId,
-            occurredAt: yield* DateTime.now,
-            payload: child,
-          },
-        ],
-      });
-      assert.deepEqual(
-        (yield* readCollaborationSnapshot(sql, principal.actorId)).tasks.map(
-          (task) => task.threadId,
-        ),
-        ["root"],
-      );
-      const unowned = yield* orchestrator.dispatch({
-        ...create("provider-root"),
-        createdBy: "agent",
-        creationSource: "provider",
-      });
-      assert.isAbove(unowned.sequence, 0);
-      assert.equal((yield* readCollaborationSnapshot(sql, principal.actorId)).tasks.length, 1);
-    }),
-  ).pipe(Effect.provide(Layer.mergeAll(runtime, NodeServices.layer))),
+it.live(
+  "enrolls prospective owned upgrades while excluding provider-originated child projections",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sql = yield* seedProject;
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        yield* orchestrator
+          .dispatch({ ...create("ordinary"), taskGovernance: "chat", taskContract: undefined })
+          .pipe(Effect.provideService(PolicyExecutionContext, principal));
+        yield* orchestrator
+          .dispatch({
+            type: "thread.task-contract.set",
+            commandId: CommandId.make("upgrade"),
+            threadId: ThreadId.make("ordinary"),
+            ...contract,
+          })
+          .pipe(Effect.provideService(PolicyExecutionContext, principal));
+        yield* orchestrator
+          .dispatch(create("root"))
+          .pipe(Effect.provideService(PolicyExecutionContext, principal));
+        const parent = (yield* orchestrator.getThreadProjection(ThreadId.make("root"))).thread;
+        const child = makeSubagentChildThread({
+          parentThread: parent,
+          childThreadId: ThreadId.make("provider-child"),
+          parentNodeId: NodeId.make("fake-parent-node"),
+          activeProviderThreadId: null,
+          providerInstanceId: selection.instanceId,
+          modelSelection: selection,
+          title: "Provider child",
+          now: yield* DateTime.now,
+          createdBy: "agent",
+          creationSource: "provider",
+        });
+        const sink = yield* EventSink.EventSinkV2;
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make("fixture-child-event"),
+              type: "thread.created",
+              threadId: child.id,
+              providerInstanceId: selection.instanceId,
+              occurredAt: yield* DateTime.now,
+              payload: child,
+            },
+          ],
+        });
+        assert.deepEqual(
+          (yield* readCollaborationSnapshot(sql, principal.actorId)).tasks.map(
+            (task) => task.threadId,
+          ),
+          ["ordinary", "root"],
+        );
+        const unowned = yield* orchestrator.dispatch({
+          ...create("provider-root"),
+          createdBy: "agent",
+          creationSource: "provider",
+        });
+        assert.isAbove(unowned.sequence, 0);
+        assert.equal((yield* readCollaborationSnapshot(sql, principal.actorId)).tasks.length, 2);
+      }),
+    ).pipe(Effect.provide(Layer.mergeAll(runtime, NodeServices.layer))),
 );
 
 it.live(
@@ -538,16 +540,26 @@ it.live("normal create-to-Tasks fixture reads the same two durable roots and no 
   ),
 );
 
-it.live.each([false, true])(
-  "attributes strict routing/output after provider change=%s and rejects wrong attempt/root/child/latest-run facts",
-  (changedSelection) =>
+it.live.each([
+  { changedSelection: false, upgradedOrdinary: false },
+  { changedSelection: true, upgradedOrdinary: false },
+  { changedSelection: false, upgradedOrdinary: true },
+  { changedSelection: true, upgradedOrdinary: true },
+])(
+  "attributes strict routing/output for %j and rejects wrong attempt/root/child/latest-run facts",
+  ({ changedSelection, upgradedOrdinary }) =>
     Effect.scoped(
       Effect.gen(function* () {
         const sql = yield* seedProject;
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const command = create("strict-evidence");
         yield* orchestrator
-          .dispatch(command)
+          .dispatch({
+            ...command,
+            ...(upgradedOrdinary
+              ? { taskGovernance: "chat" as const, taskContract: undefined }
+              : {}),
+          })
           .pipe(Effect.provideService(PolicyExecutionContext, principal));
         const evidenceSelection = changedSelection
           ? {
@@ -562,6 +574,15 @@ it.live.each([false, true])(
               commandId: CommandId.make("strict-selection-change"),
               threadId: command.threadId,
               modelSelection: evidenceSelection,
+            })
+            .pipe(Effect.provideService(PolicyExecutionContext, principal));
+        if (upgradedOrdinary)
+          yield* orchestrator
+            .dispatch({
+              type: "thread.task-contract.set",
+              commandId: CommandId.make("strict-upgrade"),
+              threadId: command.threadId,
+              ...contract,
             })
             .pipe(Effect.provideService(PolicyExecutionContext, principal));
         const json = encodeEvidence;

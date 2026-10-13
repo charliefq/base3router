@@ -1692,4 +1692,88 @@ it("renders two normal governed creations, refreshes/reopens and navigates each 
       }),
     ),
   );
-});
+}, 60_000);
+
+it("renders ordinary roots before and after actual upgrade, refreshes/reopens and navigates each exact task without dispatch", async () => {
+  const fixture = (await import(
+    /* @vite-ignore */ new URL(
+      "../../../../server/src/collaboration/testkit/ownedChatUpgradeFixture.ts",
+      import.meta.url,
+    ).href
+  )) as {
+    withOwnedChatUpgradeFixture: (
+      check: (fixture: {
+        upgrade: () => EffectForFixture.Effect<void, Error>;
+        readSnapshot: () => EffectForFixture.Effect<CollaborationSnapshot, Error>;
+        noExecution: () => EffectForFixture.Effect<
+          { runs: number; grants: number; outbox: number },
+          Error
+        >;
+      }) => EffectForFixture.Effect<void, Error>,
+    ) => EffectForFixture.Effect<void, Error>;
+  };
+  await EffectForFixture.runPromise(
+    fixture.withOwnedChatUpgradeFixture((fixture) =>
+      EffectForFixture.promise(async () => {
+        state.load.mockImplementation(() => EffectForFixture.runPromise(fixture.readSnapshot()));
+        expect((await EffectForFixture.runPromise(fixture.readSnapshot())).tasks).toHaveLength(0);
+        await act(async () => {
+          renderer = create(<TasksPage />);
+        });
+        expect(text()).not.toContain("Fix parser behavior");
+        expect(
+          renderer.root
+            .findAllByType("button")
+            .filter((node) => node.children.includes("Open conversation")),
+        ).toHaveLength(0);
+        await act(async () => renderer.unmount());
+        await EffectForFixture.runPromise(fixture.upgrade());
+        const snapshot = await EffectForFixture.runPromise(fixture.readSnapshot());
+        expect(snapshot.agents.filter((agent) => agent.origin === "internal")).toEqual([]);
+
+        for (let open = 0; open < 2; open++) {
+          await act(async () => {
+            renderer = create(<TasksPage />);
+          });
+          const text = () => JSON.stringify(renderer.toJSON());
+          expect(text()).toContain("Fix parser behavior");
+          expect(snapshot.tasks).toHaveLength(2);
+          expect(text()).toContain("Write parser documentation");
+          expect(text()).toContain("Ask before expanding scope");
+          expect(text()).toContain("Owner checks the result");
+          expect(text()).toContain("Command ledger:");
+          expect(text()).toContain("blocked");
+          expect(text()).toContain("No validated persisted result evidence");
+          await act(async () => {
+            renderer.root
+              .findAllByType("button")
+              .find((node) => node.children.includes("Refresh tasks"))!
+              .props.onClick();
+          });
+          const buttons = renderer.root
+            .findAllByType("button")
+            .filter((node) => node.children.includes("Open conversation"));
+          expect(buttons).toHaveLength(2);
+          for (const [index, threadId] of ["task-parser", "task-docs"].entries()) {
+            await act(async () => {
+              buttons[index]!.props.onClick();
+            });
+            expect(state.navigate).toHaveBeenLastCalledWith({
+              to: "/$environmentId/$threadId",
+              params: { environmentId: "environment-a", threadId },
+            });
+          }
+          await act(async () => renderer.unmount());
+        }
+        expect(state.create).not.toHaveBeenCalled();
+        expect(state.bind).not.toHaveBeenCalled();
+        expect(state.recover).not.toHaveBeenCalled();
+        expect(await EffectForFixture.runPromise(fixture.noExecution())).toEqual({
+          runs: 0,
+          grants: 0,
+          outbox: 0,
+        });
+      }),
+    ),
+  );
+}, 60_000);

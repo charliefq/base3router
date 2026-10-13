@@ -66,6 +66,25 @@ export const TaskContractDecision = Schema.Struct({
 });
 export type TaskContractDecision = typeof TaskContractDecision.Type;
 
+/** Server-owned enrollment facts; saving a contract does not itself establish task ownership. */
+export const TaskEnrollmentOutcome = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literals(["enrolled", "already-enrolled"]),
+    taskId: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("not-enrolled"),
+    reason: Schema.Literals([
+      "origin-unavailable",
+      "origin-invalid",
+      "ownership-mismatch",
+      "inactive-root",
+      "not-root",
+    ]),
+  }),
+]);
+export type TaskEnrollmentOutcome = typeof TaskEnrollmentOutcome.Type;
+
 export const TASK_CONTRACT_HUMAN_DECISION =
   "Redirect and acceptance text are human decisions. Provider completion does not accept the task, and the server does not judge those sentences.";
 

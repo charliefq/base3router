@@ -1,3 +1,4 @@
+import { OrchestrationV2DispatchCommandResult } from "./orchestrationV2.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
@@ -1246,5 +1247,25 @@ describe("limit recovery choice updates", () => {
     { autoResume: true, snooze: false },
   ])("accepts an explicit independent choice %j", (choice) => {
     expect(decode({ ...identity, ...choice })).toEqual({ ...identity, ...choice });
+  });
+});
+
+describe("contract enrollment dispatch result", () => {
+  const decode = Schema.decodeUnknownSync(OrchestrationV2DispatchCommandResult);
+  it("preserves older sequence-only results and accepts explicit enrollment outcomes", () => {
+    expect(decode({ sequence: 1 })).toEqual({ sequence: 1 });
+    for (const taskEnrollment of [
+      { status: "enrolled", taskId: "task:governed:thread:1" },
+      { status: "already-enrolled", taskId: "task:governed:thread:1" },
+      { status: "not-enrolled", reason: "origin-unavailable" },
+    ]) {
+      expect(decode({ sequence: 2, taskEnrollment })).toEqual({ sequence: 2, taskEnrollment });
+    }
+  });
+  it("rejects malformed feedback rather than reporting enrollment", () => {
+    expect(() => decode({ sequence: 1, taskEnrollment: { status: "enrolled" } })).toThrow();
+    expect(() =>
+      decode({ sequence: 1, taskEnrollment: { status: "not-enrolled", reason: "unknown" } }),
+    ).toThrow();
   });
 });

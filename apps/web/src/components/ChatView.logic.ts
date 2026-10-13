@@ -20,6 +20,7 @@ import {
   type ScopedProjectRef,
   type ScopedThreadRef,
   type ThreadContextRecord,
+  type TaskEnrollmentOutcome,
   type ThreadId,
   type ThreadLinkedPullRequest,
   type RunId,
@@ -1353,4 +1354,23 @@ export function restorePlanFollowUpComposer(input: {
     prompt: input.snapshot.prompt,
     detectTrigger: true,
   });
+}
+
+/** A saved contract is distinct from automatic enrollment and execution. */
+export function taskEnrollmentNotice(outcome: TaskEnrollmentOutcome | undefined): string | null {
+  if (outcome !== undefined && outcome.status !== "not-enrolled") return null;
+  if (outcome === undefined)
+    return "Contract saved. Tasks enrollment was not confirmed by this server.";
+  switch (outcome.reason) {
+    case "origin-unavailable":
+      return "Contract saved. This conversation has no verified creation owner, so it was not added to Tasks.";
+    case "origin-invalid":
+      return "Contract saved. Creation evidence could not be verified, so this conversation was not added to Tasks.";
+    case "ownership-mismatch":
+      return "Contract saved. Only the verified creation owner can add this conversation to Tasks.";
+    case "inactive-root":
+      return "Contract saved. This conversation or its project is inactive, so it was not added to Tasks.";
+    case "not-root":
+      return "Contract saved. Child and fork conversations are not automatically added to Tasks.";
+  }
 }

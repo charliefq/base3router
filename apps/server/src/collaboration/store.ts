@@ -23,6 +23,8 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import * as OwnedChat from "./ownedChat.ts";
+
 import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
 
 import { applyCollaboration, foldCollaboration, foldCollaborationState } from "./decide.ts";
@@ -766,16 +768,22 @@ export const readCommands = (sql: SqlClient.SqlClient) =>
       FROM collaboration_commands
       ORDER BY sequence
     `;
-    return yield* Effect.forEach(rows, (row) => decodeCommand(row.payload_json));
+    return yield* Effect.forEach(
+      rows.filter((row) => !OwnedChat.isPrivateRecord(row)),
+      (row) => decodeCommand(row.payload_json),
+    );
   });
 
-/** Called only inside the successful new-root create transaction, never client admission or reads. */
+/** Called only inside a server-owned create or verified upgrade transaction, never client admission or reads. */
 export const enrollGovernedTask = Effect.fn("collaboration.enrollGovernedTask")(function* (
   sql: SqlClient.SqlClient,
   input: {
     readonly principalId: string;
     readonly threadId: string;
     readonly creationCommandId: string;
+    readonly originCommandId?: string;
+    readonly upgradeCommandId?: string;
+    readonly upgradeEventId?: string;
   },
 ) {
   const refusal = () => new GovernedEnrollmentError({ threadId: input.threadId });
@@ -811,6 +819,9 @@ export const enrollGovernedTask = Effect.fn("collaboration.enrollGovernedTask")(
     title: thread.title,
     acceptance: thread.taskContract?.acceptance ?? "Acceptance requires a recorded task contract.",
     gateDecision: "DENY",
+    ...(input.originCommandId === undefined ? {} : { originCommandId: input.originCommandId }),
+    ...(input.upgradeCommandId === undefined ? {} : { upgradeCommandId: input.upgradeCommandId }),
+    ...(input.upgradeEventId === undefined ? {} : { upgradeEventId: input.upgradeEventId }),
   };
   const commands = yield* readCommands(sql);
   if (
@@ -1059,6 +1070,12 @@ const validateThreadLinks = (
             projects.length !== 1
           )
             return invalidTask();
+          const upgraded =
+            enrollment.originCommandId !== undefined ||
+            enrollment.upgradeCommandId !== undefined ||
+            enrollment.upgradeEventId !== undefined;
+          if (upgraded && !(yield* OwnedChat.verifyUpgrade(sql, enrollment, decoded.value)))
+            return invalidTask();
           const selected = yield* sql<{
             payload_json: string;
             metadata_json: string;
@@ -1077,7 +1094,7 @@ const validateThreadLinks = (
             (metadata.value.providerInstanceId !== undefined &&
               metadata.value.providerInstanceId !== evidenceProviderId) ||
             attested?._tag !== "Some" ||
-            !isGovernedRoot(attested.value) ||
+            (!upgraded && !isGovernedRoot(attested.value)) ||
             attested.value.id !== task.threadId ||
             attested.value.projectId !== task.projectId ||
             attested.value.providerInstanceId !== evidenceProviderId ||

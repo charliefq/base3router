@@ -1,3 +1,4 @@
+import { taskEnrollmentNotice } from "./ChatView.logic";
 import { findRecordedWorktreeSetup, resolveVisibleWorktreeSetup } from "./ChatView.logic";
 import {
   recallCheckoutIsRepo,
@@ -2134,5 +2135,25 @@ describe("waitForRevertedMessage", () => {
     await vi.advanceTimersByTimeAsync(50);
     await settled;
     vi.useRealTimers();
+  });
+});
+
+describe("contract enrollment feedback", () => {
+  it("distinguishes successful enrollment from legacy server silence", () => {
+    expect(taskEnrollmentNotice({ status: "enrolled", taskId: "task:1" })).toBeNull();
+    expect(taskEnrollmentNotice({ status: "already-enrolled", taskId: "task:1" })).toBeNull();
+    expect(taskEnrollmentNotice(undefined)).toContain("not confirmed");
+  });
+  it.each([
+    "origin-unavailable",
+    "origin-invalid",
+    "ownership-mismatch",
+    "inactive-root",
+    "not-root",
+  ] as const)("explains saved but unenrolled contracts: %s", (reason) => {
+    expect(taskEnrollmentNotice({ status: "not-enrolled", reason })).toContain("Contract saved.");
+    expect(taskEnrollmentNotice({ status: "not-enrolled", reason })).not.toContain(
+      "execution succeeded",
+    );
   });
 });
