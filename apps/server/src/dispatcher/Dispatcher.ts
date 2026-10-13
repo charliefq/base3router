@@ -801,6 +801,10 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
         readonly instanceId: ProviderInstanceId;
       };
       readonly hybrid?: {
+        readonly weights?: import("@t3tools/contracts").RouterPolicyWeightsV1;
+        readonly shrinkageK?: number;
+        readonly minSampleRate?: number;
+        readonly policyLoadFailure?: string;
         readonly activePolicyVersion: string;
         readonly challengerEnabled: boolean;
         readonly evidenceByTarget: ReadonlyMap<string, LocalModelEvidence>;
@@ -886,7 +890,7 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
                 }
               : {}),
             executionStatus: "bound",
-            activePolicyVersion: dependencies.hybrid.activePolicyVersion,
+            ...dependencies.hybrid,
             challengerEnabled: dependencies.hybrid.challengerEnabled,
             evidenceByTarget: dependencies.hybrid.evidenceByTarget,
           })

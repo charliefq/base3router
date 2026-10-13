@@ -47,6 +47,12 @@ import {
   OrchestrationV2ThreadDetailSnapshot,
   OrchestrationV2ThreadHistoryPage,
 } from "./orchestrationV2.ts";
+import { EnvironmentId } from "./baseSchemas.ts";
+import {
+  RouterPolicyId,
+  RouterPolicySnapshotV0,
+  RouterEvaluationError,
+} from "./routerEvaluation.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
 import {
   PullRequestDiffInput,
@@ -563,6 +569,58 @@ class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
+export const EnvironmentRouterPolicyStatus = Schema.Struct({
+  environmentId: EnvironmentId,
+  policies: Schema.Array(RouterPolicySnapshotV0).check(Schema.isMaxLength(32)),
+  active: RouterPolicySnapshotV0,
+  revision: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+});
+export type EnvironmentRouterPolicyStatus = typeof EnvironmentRouterPolicyStatus.Type;
+const PolicyControlFields = {
+  expectedRevision: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+  confirm: Schema.Boolean,
+};
+export const EnvironmentRouterPolicyCommand = Schema.Union([
+  Schema.Struct({
+    action: Schema.Literal("shadow"),
+    policyId: RouterPolicyId,
+    ...PolicyControlFields,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("activate"),
+    policyId: RouterPolicyId,
+    ...PolicyControlFields,
+  }),
+  Schema.Struct({ action: Schema.Literal("rollback"), ...PolicyControlFields }),
+]);
+export type EnvironmentRouterPolicyCommand = typeof EnvironmentRouterPolicyCommand.Type;
+export const EnvironmentRouterPolicyCommandResult = Schema.Union([
+  Schema.Struct({ outcome: Schema.Literal("applied"), status: EnvironmentRouterPolicyStatus }),
+  Schema.Struct({ outcome: Schema.Literal("rejected"), error: RouterEvaluationError }),
+]);
+export type EnvironmentRouterPolicyCommandResult = typeof EnvironmentRouterPolicyCommandResult.Type;
+class EnvironmentRouterPolicyHttpApi extends HttpApiGroup.make("routerPolicy")
+  .add(
+    HttpApiEndpoint.get("status", "/api/router-policy", {
+      headers: OptionalBearerHeaders,
+      success: EnvironmentRouterPolicyStatus,
+      error: [EnvironmentAuthInvalidError, EnvironmentScopeRequiredError, EnvironmentInternalError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("command", "/api/router-policy/command", {
+      headers: OptionalBearerHeaders,
+      payload: EnvironmentRouterPolicyCommand,
+      success: EnvironmentRouterPolicyCommandResult,
+      error: [
+        EnvironmentRequestInvalidError,
+        EnvironmentAuthInvalidError,
+        EnvironmentScopeRequiredError,
+        EnvironmentInternalError,
+      ],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 class EnvironmentCollaborationHttpApi extends HttpApiGroup.make("collaboration")
   .add(
     HttpApiEndpoint.get("snapshot", "/api/collaboration", {
@@ -699,4 +757,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentProjectsHttpApi)
   .add(EnvironmentCollaborationHttpApi)
+  .add(EnvironmentRouterPolicyHttpApi)
   .add(EnvironmentConnectHttpApi) {}

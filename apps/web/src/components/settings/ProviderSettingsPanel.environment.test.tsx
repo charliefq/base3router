@@ -64,6 +64,7 @@ vi.mock("./settingsLayout", async (importOriginal) => {
   };
 });
 
+vi.mock("./RouterPolicySettings", () => ({ RouterPolicySettings: () => null }));
 vi.mock("./SettingsScopeSentence", () => ({ SettingsScopeSentence: () => null }));
 vi.mock("react/compiler-runtime", async () => {
   const { reactHookHarness } = await import("../../test/reactHookHarness");
@@ -124,6 +125,7 @@ vi.mock("../../state/entities", () => ({
   useProjects: () => [],
 }));
 
+import { RouterPolicySettings } from "./RouterPolicySettings";
 import { EnvironmentProviderSettings } from "./ProviderSettingsPanel";
 
 const environmentId = EnvironmentId.make("remote-device");
@@ -617,4 +619,12 @@ describe("EnvironmentProviderSettings routing", () => {
       input: { instanceId, elicitationId: action.elicitationId },
     });
   });
+});
+
+it("passes the selected remote environment and read-only boundary to Router policy settings", () => {
+  settingsState.value = DEFAULT_UNIFIED_SETTINGS;
+  const panel = renderPanel({ readOnly: true });
+  const control = visitElements(panel, (element) => element.type === RouterPolicySettings);
+  expect(control?.props.environmentId).toBe(environmentId);
+  expect(control?.props.readOnly).toBe(true);
 });
