@@ -2157,3 +2157,9 @@ describe("contract enrollment feedback", () => {
     );
   });
 });
+
+it("explains preserved canonical conversation without implying another task was created", () => {
+  expect(
+    taskEnrollmentNotice({ status: "not-enrolled", reason: "existing-conversation-link" }),
+  ).toContain("prevents creating an additional Tasks card");
+});

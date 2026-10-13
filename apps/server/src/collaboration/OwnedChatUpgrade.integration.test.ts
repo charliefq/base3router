@@ -30,7 +30,8 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import type { ProviderAdapterV2Shape } from "../orchestration-v2/ProviderAdapter.ts";
-import { readCollaborationSnapshot } from "./store.ts";
+import { readCollaborationSnapshot, submitCollaborationCommand } from "./store.ts";
+import { sealCollaborationCommand, collaborationExecutionGate } from "./admit.ts";
 
 const actor = {
   kind: "session" as const,
@@ -623,4 +624,63 @@ it.live("cannot report eligible success with invalid persisted upgrade evidence"
       );
     }),
   ),
+);
+
+it.live(
+  "keeps one canonical Agents task when its prospectively owned ordinary conversation is upgraded",
+  () =>
+    scoped(({ sql, orchestrator }) =>
+      Effect.gen(function* () {
+        yield* dispatch(orchestrator, { ...create("canonical"), creationSource: "server" });
+        const sealed = sealCollaborationCommand(
+          {
+            type: "thread.bind",
+            commandId: "canonical-bind",
+            projectId,
+            agentId: selection.instanceId,
+            threadId: "canonical",
+          },
+          {
+            principalId: actor.actorId,
+            projectIds: [projectId],
+            providers: [
+              {
+                id: selection.instanceId,
+                displayName: "Fake provider",
+                capabilities: ["fake-model"],
+                executable: true,
+              },
+            ],
+            threads: [{ id: "canonical", projectId }],
+            executionGate: collaborationExecutionGate,
+          },
+        );
+        assert.equal(sealed.outcome, "sealed");
+        if (sealed.outcome !== "sealed") return;
+        const bound = yield* submitCollaborationCommand(sql, sealed.command, {
+          allowNewBinding: true,
+        });
+        assert.equal(bound.outcome, "applied");
+        assert.equal(bound.snapshot.tasks.length, 1);
+        const original = bound.snapshot.tasks[0]!;
+        const upgraded = yield* dispatch(orchestrator, upgrade("canonical"));
+        const snapshot = yield* readCollaborationSnapshot(sql, actor.actorId);
+        assert.equal(
+          snapshot.tasks.length,
+          1,
+          "a canonical conversation must not receive a second task card",
+        );
+        assert.equal(snapshot.tasks[0]?.id, original.id);
+        assert.equal(snapshot.tasks[0]?.threadId, "canonical");
+        assert.deepEqual(snapshot.agents, bound.snapshot.agents);
+        assert.equal(snapshot.tasks[0]?.contractReadout?.status, "available");
+        assert.deepEqual(upgraded.taskEnrollment, {
+          status: "not-enrolled",
+          reason: "existing-conversation-link",
+        });
+        assert.deepEqual(yield* dispatch(orchestrator, upgrade("canonical")), upgraded);
+        const persisted = yield* facts(sql);
+        assert.equal(persisted.runs.length + persisted.grants.length + persisted.outbox.length, 0);
+      }),
+    ),
 );

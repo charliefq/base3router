@@ -321,6 +321,10 @@ export const upgradeEligibility = Effect.fn("ownedChat.upgradeEligibility")(func
   )
     return { outcome: no("origin-invalid") };
   if (decoded.value.ownerId !== input.actorId) return { outcome: no("ownership-mismatch") };
+  // Agents' canonical conversation already has its own card. Do not add another identity.
+  const bound =
+    yield* sql`SELECT command_id FROM collaboration_commands WHERE CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.type')='thread.bind' AND json_extract(payload_json,'$.threadId')=${input.threadId} ELSE 0 END LIMIT 1`;
+  if (bound.length > 0) return { outcome: no("existing-conversation-link") };
   return { origin: decoded.value };
 });
 

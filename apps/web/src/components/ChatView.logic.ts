@@ -1370,6 +1370,8 @@ export function taskEnrollmentNotice(outcome: TaskEnrollmentOutcome | undefined)
       return "Contract saved. Only the verified creation owner can add this conversation to Tasks.";
     case "inactive-root":
       return "Contract saved. This conversation or its project is inactive, so it was not added to Tasks.";
+    case "existing-conversation-link":
+      return "Contract saved. An existing conversation link prevents creating an additional Tasks card.";
     case "not-root":
       return "Contract saved. Child and fork conversations are not automatically added to Tasks.";
   }

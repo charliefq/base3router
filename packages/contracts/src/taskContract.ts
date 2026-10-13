@@ -80,6 +80,7 @@ export const TaskEnrollmentOutcome = Schema.Union([
       "ownership-mismatch",
       "inactive-root",
       "not-root",
+      "existing-conversation-link",
     ]),
   }),
 ]);
