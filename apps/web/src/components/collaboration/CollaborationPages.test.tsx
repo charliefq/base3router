@@ -369,6 +369,112 @@ describe("Tasks loading and conversation access", () => {
   });
 });
 
+describe("Tasks command-ledger provenance", () => {
+  it.each(["running", "blocked", "review-ready", "completed"] as const)(
+    "labels %s as a ledger record independently of contract phase and acceptance",
+    async (ledgerState) => {
+      state.snapshot = {
+        ...state.snapshot,
+        tasks: [
+          {
+            id: "ledger-task",
+            title: "Recorded work",
+            ownerAgentId: "owner",
+            assigneeAgentId: "codex",
+            projectId: "project-a",
+            threadId: "linked-thread",
+            state: ledgerState,
+            waitReason: null,
+            acceptance: "Task note",
+            correlationId: "ledger",
+            revision: 1,
+            pendingClarificationId: null,
+            gateDecision: "DENY",
+            contractReadout: {
+              status: "available",
+              contract: {
+                revision: 2,
+                goal: "Persisted contract goal",
+                redirect: "Owner decides scope",
+                acceptance: "Review evidence",
+                brake: { maxProviderStarts: 1, stopConditions: "Stop on missing input" },
+              },
+              phase: "redirected",
+              acceptedRevision: 1,
+            },
+          },
+        ],
+      };
+      await act(async () => {
+        renderer = create(<TasksPage />);
+      });
+      expect(renderer.root.findAllByType("span").map((node) => node.children.join(""))).toContain(
+        `Command ledger: ${ledgerState}`,
+      );
+      expect(text()).toContain(
+        "Provider activity and terminal outcomes, plus owner/reviewer acceptance, require separate evidence.",
+      );
+      expect(text()).toContain(
+        "Contract phase and accepted revision are separate contract records.",
+      );
+      expect(
+        renderer.root.findByProps({ "data-task-contract-phase": "redirected" }).children.join(""),
+      ).toContain("Revision 2 · redirected · accepted 1");
+      expect(text()).toContain("Gate ");
+      expect(text()).toContain("DENY");
+      await act(async () => {
+        renderer.root
+          .findAllByType("button")
+          .find((node) => node.children.includes("Open conversation"))!
+          .props.onClick();
+      });
+      expect(state.navigate).toHaveBeenCalledWith({
+        to: "/$environmentId/$threadId",
+        params: { environmentId: "environment-a", threadId: "linked-thread" },
+      });
+      expect(state.bind).not.toHaveBeenCalled();
+      expect(state.recover).not.toHaveBeenCalled();
+      expect(state.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a legacy completed snapshot explicitly ledger-recorded without claiming provider or owner completion", async () => {
+    state.snapshot = {
+      ...state.snapshot,
+      tasks: [
+        {
+          id: "legacy-completed",
+          title: "Legacy record",
+          ownerAgentId: "owner",
+          assigneeAgentId: "codex",
+          projectId: "project-a",
+          state: "completed",
+          threadId: null,
+          waitReason: null,
+          acceptance: "Old note",
+          correlationId: "legacy",
+          revision: 1,
+          pendingClarificationId: null,
+          gateDecision: "DENY",
+        },
+      ],
+    };
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    expect(renderer.root.findAllByType("span").map((node) => node.children.join(""))).toContain(
+      "Command ledger: completed",
+    );
+    expect(text()).toContain("Persisted contract readout is unavailable in this snapshot.");
+    expect(text()).toContain(
+      "Provider activity and terminal outcomes, plus owner/reviewer acceptance, require separate evidence.",
+    );
+    expect(state.bind).not.toHaveBeenCalled();
+    expect(state.recover).not.toHaveBeenCalled();
+    expect(state.create).not.toHaveBeenCalled();
+  });
+});
+
 describe("Tasks read freshness", () => {
   const snapshot = (goal: string, revision: number): CollaborationSnapshot => ({
     ...state.snapshot,

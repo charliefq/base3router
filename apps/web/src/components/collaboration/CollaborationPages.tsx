@@ -524,8 +524,13 @@ export function TasksPage() {
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <h2 className="min-w-0 wrap-anywhere text-base font-medium">{task.title}</h2>
-                      <Badge variant="secondary">{task.state}</Badge>
+                      <Badge variant="secondary">Command ledger: {task.state}</Badge>
                     </div>
+                    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                      Provider activity and terminal outcomes, plus owner/reviewer acceptance,
+                      require separate evidence. Contract phase and accepted revision are separate
+                      contract records.
+                    </p>
                     <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
                       <div className="min-w-0 space-y-1">
                         <dt className="text-xs text-muted-foreground">Owner</dt>
