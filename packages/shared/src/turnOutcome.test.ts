@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   HYBRID_ROUTER_POLICY_VERSION,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
+  LOCAL_TASK_CLASSIFIER_VERSION,
   MODEL_ROUTER_POLICY_VERSION,
   TURN_OUTCOME_OBSERVATION_VERSION,
   UNKNOWN_TASK_PROFILE,
@@ -362,4 +364,54 @@ describe("mergeTerminalWrite", () => {
     expect(enriched.observation.terminalCategory).toBe("success");
     expect(enriched.observation.usage.promptTokens.status).toBe("known");
   });
+  it("preserves immutable local profile and rejects conflicting or backfilled provenance", () => {
+    const profile = {
+      classifierVersion: LOCAL_TASK_CLASSIFIER_VERSION,
+      category: "debugging" as const,
+      source: "local-heuristic" as const,
+    };
+    const original = observation("success", { localTaskProfile: profile });
+    const replacement = mergeTerminalWrite(original, observation("provider_failure"));
+    expect(replacement.kind).toBe("replaced");
+    expect(replacement.observation.localTaskProfile).toEqual(profile);
+    for (const incoming of [
+      { ...profile, category: "writing" as const },
+      { ...profile, classifierVersion: "different" },
+    ]) {
+      const conflict = mergeTerminalWrite(
+        original,
+        observation("success", { localTaskProfile: incoming }),
+      );
+      expect(conflict.kind).toBe("rejected");
+      expect(conflict.reason).toBe("conflicting_profile");
+      expect(conflict.observation).toBe(original);
+    }
+    const legacy = observation("success");
+    const backfill = mergeTerminalWrite(
+      legacy,
+      observation("success", { localTaskProfile: profile }),
+    );
+    expect(backfill.kind).toBe("rejected");
+    expect(backfill.observation.localTaskProfile).toBeUndefined();
+    const duplicate = mergeTerminalWrite(original, original);
+    expect(duplicate.kind).toBe("idempotent");
+    expect(duplicate.observation.localTaskProfile).toEqual(profile);
+  });
+});
+
+it("records the actual applied Hybrid version while fallback and legacy cases stay unchanged", () => {
+  expect(
+    effectivePolicyVersion({
+      usedHybridRanking: true,
+      hybridPolicyVersion: HYBRID_TASK_ROUTER_POLICY_VERSION,
+    }),
+  ).toBe(HYBRID_TASK_ROUTER_POLICY_VERSION);
+  expect(
+    effectivePolicyVersion({
+      usedHybridRanking: false,
+      hybridPolicyVersion: HYBRID_TASK_ROUTER_POLICY_VERSION,
+      modelRoutePolicyVersion: MODEL_ROUTER_POLICY_VERSION,
+    }),
+  ).toBe(MODEL_ROUTER_POLICY_VERSION);
+  expect(effectivePolicyVersion({ usedHybridRanking: true })).toBe(HYBRID_ROUTER_POLICY_VERSION);
 });

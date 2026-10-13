@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   HYBRID_ROUTER_POLICY_VERSION,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
+  LOCAL_TASK_CLASSIFIER_VERSION,
   DEFAULT_HYBRID_ROUTER_WEIGHTS,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -298,4 +300,197 @@ it("does not claim Hybrid execution for an evidence-free winner when only anothe
   expect(result.hybrid.usedHybridRanking).toBe(false);
   expect(result.hybrid.fallbackToV0).toBe(true);
   expect(result.decision.policyVersion).toBe(MODEL_ROUTER_POLICY_VERSION);
+});
+
+describe("explicit task-conditioned policy", () => {
+  const profile = {
+    classifierVersion: LOCAL_TASK_CLASSIFIER_VERSION,
+    category: "writing" as const,
+    source: "local-heuristic" as const,
+  };
+  const conditionedCatalog = [
+    entry({ instanceId: "a", model: "a" }),
+    entry({ instanceId: "b", model: "b" }),
+  ];
+  const local = (n: number, positive: boolean) =>
+    evidence({ successTrials: n, successCount: positive ? n : 0 });
+  const input = (n: number) => ({
+    mode: "auto" as const,
+    catalog: conditionedCatalog,
+    activePolicyVersion: HYBRID_TASK_ROUTER_POLICY_VERSION,
+    localTaskProfile: profile,
+    evidenceByTarget: new Map([
+      ["a\u0000a", local(n, false)],
+      ["b\u0000b", local(n, true)],
+    ]),
+  });
+  it("falls back at seven trials and ranks at eight only when every eligible model is covered", () => {
+    const seven = routeHybridModel(input(7));
+    expect(seven.hybrid.usedHybridRanking).toBe(false);
+    expect(seven.hybrid.fallbackReason).toContain("every eligible candidate");
+    const eight = routeHybridModel(input(8));
+    expect(eight.hybrid.usedHybridRanking).toBe(true);
+    expect(eight.decision.selected?.target.instanceId).toBe("b");
+    expect(eight.decision.policyVersion).toBe(HYBRID_TASK_ROUTER_POLICY_VERSION);
+    expect(eight.hybrid.policyVersion).toBe(HYBRID_TASK_ROUTER_POLICY_VERSION);
+    expect(eight.decision.explanation).toContain("Local task writing");
+    for (const explanation of [eight.decision.explanation, eight.hybrid.explanation]) {
+      expect(explanation).toContain(`Policy: ${HYBRID_TASK_ROUTER_POLICY_VERSION}.`);
+      expect(explanation).not.toContain(`Policy: ${HYBRID_ROUTER_POLICY_VERSION}.`);
+    }
+    const missing = routeHybridModel({
+      ...input(8),
+      catalog: [...conditionedCatalog, entry({ instanceId: "c", model: "c" })],
+    });
+    expect(missing.hybrid.usedHybridRanking).toBe(false);
+    expect(missing.hybrid.fallbackToV0).toBe(true);
+  });
+  it("keeps unavailable, unauthenticated, cooldown and hard-filtered models out of coverage", () => {
+    for (const reason of [
+      "PROVIDER_UNAVAILABLE",
+      "PROVIDER_UNAUTHENTICATED",
+      "PROVIDER_COOLDOWN",
+    ] as const) {
+      const result = routeHybridModel({
+        ...input(8),
+        catalog: [
+          ...conditionedCatalog,
+          { ...entry({ instanceId: "c", model: "c" }), availabilityReasons: [reason] },
+        ],
+      });
+      expect(result.hybrid.usedHybridRanking).toBe(true);
+      expect(result.hybrid.eligibleCount).toBe(2);
+      expect(
+        result.decision.fallbacks.some((candidate) => candidate.target.instanceId === "c"),
+      ).toBe(false);
+    }
+    const hard = routeHybridModel({
+      ...input(8),
+      constraints: { requiredCapabilities: ["code"] },
+      catalog: [conditionedCatalog[0]!, { ...conditionedCatalog[1]!, capabilities: [] }],
+    });
+    expect(hard.decision.selected?.target.instanceId).toBe("a");
+    const impossible = routeHybridModel({ ...input(8), constraints: { maxCostUsd: 0 } });
+    expect(impossible.decision.selected).toBeNull();
+    expect(impossible.hybrid.usedHybridRanking).toBe(false);
+  });
+  it("rejects absent, unknown and unsupported profiles while preserving Manual", () => {
+    const { localTaskProfile: _, ...absent } = input(8);
+    for (const request of [
+      absent,
+      { ...input(8), localTaskProfile: { ...profile, category: "unknown" as const } },
+      { ...input(8), localTaskProfile: { ...profile, classifierVersion: "other" } },
+    ]) {
+      const result = routeHybridModel(request);
+      expect(result.hybrid.fallbackToV0).toBe(true);
+      expect(result.hybrid.usedHybridRanking).toBe(false);
+      expect(result.decision.policyVersion).toBe(MODEL_ROUTER_POLICY_VERSION);
+    }
+    const manual = routeHybridModel({
+      ...input(8),
+      mode: "manual",
+      manualOverride: conditionedCatalog[0]!,
+    });
+    expect(manual.decision.selected?.target.instanceId).toBe("a");
+    expect(manual.hybrid.usedHybridRanking).toBe(false);
+  });
+  it("compares new shadow with the actual active v1 choice without replacing its decision", () => {
+    const aggregate = new Map([
+      ["a\u0000a", local(24, true)],
+      ["b\u0000b", local(24, false)],
+    ]);
+    const active = {
+      mode: "auto" as const,
+      catalog: conditionedCatalog,
+      activePolicyVersion: HYBRID_ROUTER_POLICY_VERSION,
+      evidenceByTarget: aggregate,
+      localTaskProfile: profile,
+    };
+    const original = routeHybridModel(active);
+    const shadow = routeHybridModel({
+      ...active,
+      shadowPolicy: {
+        policyVersion: HYBRID_TASK_ROUTER_POLICY_VERSION,
+        weights: DEFAULT_HYBRID_ROUTER_WEIGHTS,
+        shrinkageK: 10,
+        minSampleRate: 8,
+        evidenceByTarget: input(24).evidenceByTarget,
+      },
+    });
+    expect(shadow.decision).toEqual(original.decision);
+    expect(shadow.hybrid.selected?.instanceId).toBe("a");
+    expect(shadow.hybrid.challenger).toMatchObject({
+      policyVersion: HYBRID_TASK_ROUTER_POLICY_VERSION,
+      selected: { instanceId: "b", model: "b" },
+      agreement: "disagreement",
+    });
+    const insufficient = routeHybridModel({
+      ...active,
+      shadowPolicy: {
+        policyVersion: HYBRID_TASK_ROUTER_POLICY_VERSION,
+        weights: DEFAULT_HYBRID_ROUTER_WEIGHTS,
+        shrinkageK: 10,
+        minSampleRate: 8,
+        evidenceByTarget: input(7).evidenceByTarget,
+      },
+    });
+    expect(insufficient.decision).toEqual(original.decision);
+    expect(insufficient.hybrid.challenger?.agreement).toBe("inapplicable");
+    expect(insufficient.hybrid.challenger?.fallbackReason).toContain("coverage");
+  });
+});
+
+it("preserves the existing V0 / v1 shadow decision while calculating its explicit shadow independently", () => {
+  const measured = new Map([
+    ["codex\u0000gpt-5.5", enough(0.4, 900)],
+    ["claude\u0000claude-sonnet-4-6", enough(1, 200)],
+  ]);
+  const original = routeHybridModel({
+    mode: "auto",
+    catalog,
+    activePolicyVersion: MODEL_ROUTER_POLICY_VERSION,
+    evidenceByTarget: measured,
+    challengerEnabled: true,
+  });
+  const explicit = routeHybridModel({
+    mode: "auto",
+    catalog,
+    activePolicyVersion: MODEL_ROUTER_POLICY_VERSION,
+    evidenceByTarget: measured,
+    shadowPolicy: {
+      policyVersion: HYBRID_ROUTER_POLICY_VERSION,
+      weights: DEFAULT_HYBRID_ROUTER_WEIGHTS,
+      shrinkageK: 10,
+      minSampleRate: 8,
+      evidenceByTarget: measured,
+    },
+  });
+  expect(explicit.decision).toEqual(original.decision);
+});
+
+it("selects debugging A and writing B from distinct exact task cohorts on the same catalog", () => {
+  const sameCatalog = [
+    entry({ instanceId: "a", model: "a" }),
+    entry({ instanceId: "b", model: "b" }),
+  ];
+  const candidate = (success: boolean) =>
+    evidence({ successTrials: 24, successCount: success ? 24 : 0 });
+  const result = (category: "debugging" | "writing") =>
+    routeHybridModel({
+      mode: "auto",
+      catalog: sameCatalog,
+      activePolicyVersion: HYBRID_TASK_ROUTER_POLICY_VERSION,
+      localTaskProfile: {
+        classifierVersion: LOCAL_TASK_CLASSIFIER_VERSION,
+        category,
+        source: "local-heuristic",
+      },
+      evidenceByTarget: new Map([
+        ["a\u0000a", candidate(category === "debugging")],
+        ["b\u0000b", candidate(category === "writing")],
+      ]),
+    });
+  expect(result("debugging").decision.selected?.target.instanceId).toBe("a");
+  expect(result("writing").decision.selected?.target.instanceId).toBe("b");
+  expect(result("writing").decision.policyVersion).toBe(HYBRID_TASK_ROUTER_POLICY_VERSION);
 });

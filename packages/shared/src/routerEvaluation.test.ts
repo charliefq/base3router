@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   UNKNOWN_TASK_PROFILE,
+  LOCAL_TASK_CLASSIFIER_VERSION,
+  ObservationId,
+  EnvironmentId,
   emptyCostMeasurement,
   emptyOutcomeEvidence,
   emptyTiming,
@@ -9,7 +12,13 @@ import {
   type TurnOutcomeObservationV0,
 } from "@t3tools/contracts";
 
-import { buildEvaluationDataset, calculateEvaluationMetrics } from "./routerEvaluation.ts";
+import {
+  classifyLocalTask,
+  evidenceForLocalTask,
+  evidenceFromObservations,
+  buildEvaluationDataset,
+  calculateEvaluationMetrics,
+} from "./routerEvaluation.ts";
 import { knownQuantity } from "./turnOutcome.ts";
 
 const observation = (input: {
@@ -199,5 +208,89 @@ describe("router evaluation datasets", () => {
         expect(entry.status).toBe("insufficient");
       }
     }
+  });
+});
+
+describe("local task evidence cohorts", () => {
+  it("records only bounded heuristic provenance from the actual dispatch text", () => {
+    expect(classifyLocalTask("debug this exception; private value fixture-secret-123")).toEqual({
+      classifierVersion: LOCAL_TASK_CLASSIFIER_VERSION,
+      category: "debugging",
+      source: "local-heuristic",
+    });
+    expect(classifyLocalTask("draft an email").category).toBe("writing");
+    expect(classifyLocalTask("unclassified request").category).toBe("unknown");
+    expect(Object.keys(classifyLocalTask("debug this exception"))).toEqual([
+      "classifierVersion",
+      "category",
+      "source",
+    ]);
+  });
+  it("uses exact category, classifier, environment and known execution outcomes without backfill", () => {
+    const profile = classifyLocalTask("debug this exception");
+    const base = {
+      ...observation({ id: "matching", at: "2026-10-13T00:00:00Z" }),
+      localTaskProfile: profile,
+    };
+    const records: TurnOutcomeObservationV0[] = [
+      base,
+      {
+        ...base,
+        observationId: ObservationId.make("writing"),
+        localTaskProfile: classifyLocalTask("draft an email"),
+      },
+      {
+        ...base,
+        observationId: ObservationId.make("unsupported"),
+        localTaskProfile: { ...profile, classifierVersion: "older-classifier" },
+      },
+      {
+        ...base,
+        observationId: ObservationId.make("other-env"),
+        environmentId: EnvironmentId.make("other-environment"),
+      },
+      {
+        ...base,
+        observationId: ObservationId.make("unknown"),
+        localTaskProfile: classifyLocalTask("unclassified"),
+      },
+      {
+        ...base,
+        observationId: ObservationId.make("unknown-outcome"),
+        terminalCategory: "unknown",
+      },
+      {
+        ...base,
+        observationId: ObservationId.make("different-execution"),
+        actualExecutionModel: "different-model",
+      },
+      observation({ id: "legacy", at: "2026-10-13T00:00:00Z" }),
+      { ...base, observationId: ObservationId.make("contradictory-cancelled"), cancelled: true },
+      ...(["cancelled", "timeout", "infrastructure_failure"] as const).map((terminalCategory) => ({
+        ...base,
+        observationId: ObservationId.make(terminalCategory),
+        terminalCategory,
+      })),
+    ];
+    const original = records.map((record) => record.localTaskProfile);
+    const evidence = evidenceForLocalTask({ records, profile, environmentId: base.environmentId });
+    expect(evidence.get("codex\u0000gpt-5.5")?.successTrials).toBe(1);
+    expect(evidenceFromObservations(records).get("codex\u0000gpt-5.5")?.successTrials).toBe(9);
+    expect(records.map((record) => record.localTaskProfile)).toEqual(original);
+    expect(evidenceForLocalTask({ records, environmentId: base.environmentId }).size).toBe(0);
+    expect(
+      evidenceForLocalTask({
+        records,
+        environmentId: base.environmentId,
+        profile: { ...profile, classifierVersion: "other" },
+      }).size,
+    ).toBe(0);
+    expect(
+      evidenceForLocalTask({
+        records,
+        environmentId: base.environmentId,
+        profile: classifyLocalTask("unclassified"),
+      }).size,
+    ).toBe(0);
   });
 });

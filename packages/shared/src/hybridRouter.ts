@@ -1,5 +1,9 @@
 import {
   type HybridRouteDecisionV1,
+  type LocalTaskProfile,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
+  MODEL_ROUTER_POLICY_VERSION,
+  LOCAL_TASK_CLASSIFIER_VERSION,
   type HybridScoreComponentV0,
   type MeasurementProvenance,
   type MeasurementSource,
@@ -41,6 +45,14 @@ export type LocalModelEvidence = {
 };
 
 export type HybridRouterInput = ModelRouterInput & {
+  readonly localTaskProfile?: LocalTaskProfile;
+  readonly shadowPolicy?: {
+    readonly policyVersion: string;
+    readonly weights: RouterPolicyWeightsV1;
+    readonly shrinkageK: number;
+    readonly minSampleRate: number;
+    readonly evidenceByTarget: ReadonlyMap<string, LocalModelEvidence>;
+  };
   readonly evidenceByTarget?: ReadonlyMap<string, LocalModelEvidence>;
   readonly weights?: RouterPolicyWeightsV1;
   readonly activePolicyVersion?: string;
@@ -442,7 +454,7 @@ const explain = (input: {
  * local evidence falls back to Router V0. Policy shadow never changes the
  * live decision.
  */
-export function routeHybridModel(input: HybridRouterInput): HybridRouterOutput {
+function routeHybridV1(input: HybridRouterInput): HybridRouterOutput {
   const v0 = routeModel(input);
   const weights = input.weights ?? DEFAULT_HYBRID_ROUTER_WEIGHTS;
   const evidenceByTarget = input.evidenceByTarget ?? new Map();
@@ -607,6 +619,105 @@ export function routeHybridModel(input: HybridRouterInput): HybridRouterOutput {
   };
 
   return { decision, hybrid };
+}
+
+const routePolicy = (input: HybridRouterInput): HybridRouterOutput => {
+  if (input.activePolicyVersion !== HYBRID_TASK_ROUTER_POLICY_VERSION) return routeHybridV1(input);
+  const baseline = routeModel(input);
+  const eligible = baseline.candidates.filter((candidate) => candidate.eligible);
+  const profile = input.localTaskProfile;
+  const known =
+    profile?.source === "local-heuristic" &&
+    profile.classifierVersion === LOCAL_TASK_CLASSIFIER_VERSION &&
+    profile.category !== "unknown";
+  const coverage =
+    known &&
+    eligible.length > 0 &&
+    eligible.every(
+      (candidate) =>
+        (input.evidenceByTarget?.get(modelRouterTargetKey(candidate.target))?.successTrials ?? 0) >=
+        HYBRID_MIN_SAMPLE_RATE,
+    );
+  const fallbackReason = !known
+    ? "Local task profile is unknown or unsupported; Router V0 was used."
+    : !coverage
+      ? "Task-conditioned coverage requires 8 matching outcome trials for every eligible candidate; Router V0 was used."
+      : undefined;
+  const result = routeHybridV1({
+    ...input,
+    activePolicyVersion: HYBRID_ROUTER_POLICY_VERSION,
+    ...(fallbackReason === undefined
+      ? {}
+      : { policyLoadFailure: input.policyLoadFailure ?? fallbackReason }),
+  });
+  if (input.mode === "manual") return result;
+  const appliedPolicyVersion = result.hybrid.usedHybridRanking
+    ? HYBRID_TASK_ROUTER_POLICY_VERSION
+    : result.decision.policyVersion;
+  const policyExplanation = result.hybrid.explanation.replace(
+    `Policy: ${HYBRID_ROUTER_POLICY_VERSION}.`,
+    `Policy: ${appliedPolicyVersion}.`,
+  );
+  const explanation =
+    `Local task ${profile?.category ?? "unknown"} (${profile?.classifierVersion ?? LOCAL_TASK_CLASSIFIER_VERSION}); ${policyExplanation}`.slice(
+      0,
+      512,
+    );
+  return {
+    decision: {
+      ...result.decision,
+      policyVersion: appliedPolicyVersion,
+      explanation,
+    },
+    hybrid: { ...result.hybrid, policyVersion: HYBRID_TASK_ROUTER_POLICY_VERSION, explanation },
+  };
+};
+
+/** Explicit active and shadow policies use independent weights and evidence. */
+export function routeHybridModel(input: HybridRouterInput): HybridRouterOutput {
+  if (!input.shadowPolicy || input.mode === "manual") return routePolicy(input);
+  const { shadowPolicy, ...liveInput } = input;
+  const live = routePolicy({ ...liveInput, challengerEnabled: false });
+  const shadow = routePolicy({
+    ...liveInput,
+    ...shadowPolicy,
+    activePolicyVersion: shadowPolicy.policyVersion,
+    challengerEnabled: false,
+  });
+  const supported =
+    shadowPolicy.policyVersion === HYBRID_ROUTER_POLICY_VERSION ||
+    shadowPolicy.policyVersion === HYBRID_TASK_ROUTER_POLICY_VERSION;
+  const selected = shadow.hybrid.usedHybridRanking
+    ? (shadow.decision.selected?.target ?? null)
+    : null;
+  const decision =
+    (liveInput.activePolicyVersion === undefined ||
+      liveInput.activePolicyVersion === MODEL_ROUTER_POLICY_VERSION) &&
+    live.decision.policyVersion === MODEL_ROUTER_POLICY_VERSION &&
+    shadow.hybrid.usedHybridRanking
+      ? {
+          ...live.decision,
+          reasonCodes: uniqueReasons([...live.decision.reasonCodes, "POLICY_SHADOW_RECORDED"]),
+        }
+      : live.decision;
+  return {
+    ...live,
+    decision,
+    hybrid: {
+      ...live.hybrid,
+      challenger: {
+        kind: "policy_shadow",
+        ...(supported ? { policyVersion: shadowPolicy.policyVersion } : {}),
+        selected,
+        agreement: selected
+          ? agreement(live.decision.selected?.target ?? null, selected)
+          : "inapplicable",
+        ...(shadow.hybrid.fallbackReason === undefined
+          ? {}
+          : { fallbackReason: shadow.hybrid.fallbackReason }),
+      },
+    },
+  };
 }
 
 export const emptyLocalEvidence = (): LocalModelEvidence => ({

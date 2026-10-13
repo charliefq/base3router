@@ -1,3 +1,4 @@
+import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as Etag from "effect/unstable/http/Etag";
 import { assert, it } from "@effect/vitest";
@@ -16,6 +17,7 @@ import {
   EnvironmentRouterPolicyCommandResult,
   EnvironmentRouterPolicyCommand,
   HYBRID_ROUTER_POLICY_VERSION,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
   HYBRID_MIN_SAMPLE_RATE,
   MODEL_ROUTER_POLICY_VERSION,
   ObservationId,
@@ -1003,6 +1005,239 @@ it.live.each([0, 1, 24])(
             a,
             a,
           ]);
+        }).pipe(Effect.provide(runtime), Effect.provideService(PolicyExecutionContext, session));
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live(
+  "task-conditioned policy crosses debugging A / writing B through real V2 and persisted observations",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace("task-conditioned-crossover");
+        const started = yield* Ref.make<ReadonlyArray<ModelSelection>>([]);
+        const database = SqlitePersistenceMemory;
+        const fixtureEnvironment = Layer.succeed(ServerEnvironment.ServerEnvironment, {
+          getEnvironmentId: Effect.succeed(policyEnvironment),
+          getDescriptor: Effect.die("Not used"),
+        });
+        const evaluationLayer = RouterEvaluation.layer.pipe(Layer.provide(database));
+        const providers = [
+          { ...provider, models: provider.models.filter((model) => model.slug === a.model) },
+          {
+            ...provider,
+            instanceId: b.instanceId,
+            models: provider.models.filter((model) => model.slug === b.model),
+          },
+        ];
+        const runtime = Layer.mergeAll(
+          database,
+          evaluationLayer,
+          fixtureEnvironment,
+          Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed(providers) }),
+          makeOrchestratorV2ReplayLayerWithRegistry(
+            { name: "task-conditioned-crossover" },
+            ProviderAdapterRegistry.makeLayer([
+              makeAdapter(started, a.instanceId),
+              makeAdapter(started, b.instanceId),
+            ]),
+            { databaseLayer: database, runEffectWorker: true },
+          ).pipe(Layer.provide(Layer.mergeAll(evaluationLayer, fixtureEnvironment))),
+        );
+        yield* Effect.gen(function* () {
+          const evaluation = yield* RouterEvaluation.RouterEvaluationService;
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const sql = yield* SqlClient.SqlClient;
+          const now = DateTime.formatIso(yield* DateTime.now);
+          const projectId = ProjectId.make("task-conditioned-project");
+          const defaultJson = yield* encodeModelSelection(a);
+          yield* sql`INSERT INTO projection_projects (project_id,title,workspace_root,default_model_selection_json,scripts_json,created_at,updated_at) VALUES (${projectId},'Task-conditioned fixture',${cwd},${defaultJson},'[]',${now},${now})`;
+          const texts = {
+            debugging: "debug this exception, fixture text must not become telemetry",
+            writing: "draft an email, fixture text must not become telemetry",
+          };
+          for (const category of ["debugging", "writing"] as const)
+            for (const selection of [a, b])
+              for (let index = 0; index < 24; index++) {
+                const success = category === "debugging" ? selection === a : selection === b;
+                yield* evaluation.recordObservation({
+                  version: TURN_OUTCOME_OBSERVATION_VERSION,
+                  observationId: ObservationId.make(
+                    `task-seed-${category}-${selection.instanceId}-${index}`,
+                  ),
+                  environmentId: policyEnvironment,
+                  recordedAt: now,
+                  policyVersion: MODEL_ROUTER_POLICY_VERSION,
+                  routingMode: "auto",
+                  instanceId: selection.instanceId,
+                  model: selection.model,
+                  taskProfile: UNKNOWN_TASK_PROFILE,
+                  localTaskProfile: classifyLocalTask(texts[category]),
+                  timing: emptyTiming(),
+                  usage: emptyUsageMeasurement(),
+                  cost: emptyCostMeasurement(),
+                  providerAttempts: 1,
+                  fallbackCount: 0,
+                  cancelled: false,
+                  timedOut: false,
+                  finishReason: success ? "stop" : "error",
+                  terminalCategory: success ? "success" : "provider_failure",
+                  evidence: emptyOutcomeEvidence(),
+                });
+              }
+          const initial = yield* evaluation.status(policyEnvironment);
+          const old = initial.policies.find(
+            (policy) => policy.policyVersion === HYBRID_ROUTER_POLICY_VERSION,
+          )!;
+          const task = initial.policies.find(
+            (policy) => policy.policyVersion === HYBRID_TASK_ROUTER_POLICY_VERSION,
+          )!;
+          const transition = (
+            action: "shadow" | "activate",
+            policyId: typeof task.policyId,
+            revision: number,
+          ) =>
+            evaluation.control(
+              policyEnvironment,
+              { action, policyId, expectedRevision: revision, confirm: true },
+              now,
+              "fixture-operator",
+            );
+          const run = (
+            label: string,
+            category: "debugging" | "writing",
+            expected: ModelSelection,
+            appliedPolicy: string,
+            expectedShadow?: ModelSelection,
+          ) =>
+            Effect.gen(function* () {
+              const text = texts[category];
+              const threadId = ThreadId.make(`task-conditioned-${label}`);
+              const messageId = MessageId.make(`task-conditioned-${label}`);
+              yield* orchestrator.dispatch({
+                type: "thread.create",
+                commandId: CommandId.make(`task-create-${label}`),
+                threadId,
+                projectId,
+                title: "Task-conditioned fixture",
+                modelSelection: a,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: null,
+                worktreePath: cwd,
+                createdBy: "user",
+                creationSource: "web",
+              });
+              const terminal = yield* orchestrator.streamDomainEvents.pipe(
+                Stream.filter(
+                  (event) =>
+                    event.type === "run.updated" &&
+                    event.payload.threadId === threadId &&
+                    event.payload.status === "completed",
+                ),
+                Stream.take(1),
+                Stream.runDrain,
+                Effect.forkScoped,
+              );
+              const command = {
+                type: "message.dispatch" as const,
+                commandId: CommandId.make(`task-dispatch-${label}`),
+                threadId,
+                messageId,
+                text,
+                attachments: [],
+                routingMode: "auto" as const,
+                modelSelection: a,
+                dispatchMode: { type: "start_immediately" as const },
+                createdBy: "user" as const,
+                creationSource: "web" as const,
+              };
+              yield* orchestrator.dispatch(command);
+              yield* worker.drain();
+              yield* Fiber.join(terminal);
+              yield* worker.drain();
+              const target = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+                (candidate) => candidate.userMessageId === messageId,
+              )?.modelSelection;
+              assert.deepEqual(target, expected);
+              const route = yield* decodeRoute(
+                (yield* sql<{
+                  binding: string;
+                }>`SELECT binding_json AS binding FROM projection_dispatcher_task_routes WHERE thread_id=${threadId} AND message_id=${messageId}`)[0]!
+                  .binding,
+              );
+              assert.deepEqual(route.target, expected);
+              assert.equal(route.modelRoute?.policyVersion, appliedPolicy);
+              assert.deepEqual(route.localTaskProfile, classifyLocalTask(text));
+              assert.deepEqual(Object.keys(route.localTaskProfile!), [
+                "classifierVersion",
+                "category",
+                "source",
+              ]);
+              if (expectedShadow) {
+                assert.deepEqual(route.hybrid?.challenger?.selected, expectedShadow);
+                assert.equal(
+                  route.hybrid?.challenger?.policyVersion,
+                  HYBRID_TASK_ROUTER_POLICY_VERSION,
+                );
+                assert.equal(route.hybrid?.challenger?.agreement, "disagreement");
+              }
+              if (appliedPolicy === HYBRID_TASK_ROUTER_POLICY_VERSION) {
+                assert.include(route.modelRoute?.explanation ?? "", `Local task ${category}`);
+                assert.notInclude(route.modelRoute?.explanation ?? "", "fixture text");
+                for (const explanation of [
+                  route.modelRoute?.explanation,
+                  route.hybrid?.explanation,
+                ]) {
+                  assert.include(
+                    explanation ?? "",
+                    `Policy: ${HYBRID_TASK_ROUTER_POLICY_VERSION}.`,
+                  );
+                  assert.notInclude(explanation ?? "", `Policy: ${HYBRID_ROUTER_POLICY_VERSION}.`);
+                }
+              }
+              const observationRow = (yield* sql<{
+                id: string;
+              }>`SELECT observation_id AS id FROM router_turn_observations WHERE thread_id=${threadId} AND message_id=${messageId}`)[0];
+              const observation = (yield* evaluation.exportObservations(
+                policyEnvironment,
+              )).records.find((record) => record.observationId === observationRow?.id);
+              assert.isDefined(
+                observation,
+                "real provider-turn ingestion must persist this observation",
+              );
+              assert.equal(observation?.policyVersion, appliedPolicy);
+              assert.deepEqual(observation?.localTaskProfile, route.localTaskProfile);
+              assert.deepEqual(observation?.taskProfile, UNKNOWN_TASK_PROFILE);
+              const previousStarts = yield* Ref.get(started);
+              yield* orchestrator.dispatch(command);
+              yield* worker.drain();
+              assert.deepEqual(yield* Ref.get(started), previousStarts);
+              const replayed = (yield* evaluation.exportObservations(
+                policyEnvironment,
+              )).records.find((record) => record.observationId === observation!.observationId);
+              assert.deepEqual(replayed?.localTaskProfile, observation?.localTaskProfile);
+            });
+          const oldShadow = yield* transition("shadow", old.policyId, initial.revision);
+          const oldActive = yield* transition("activate", old.policyId, oldShadow.revision);
+          yield* run("v1-debug", "debugging", a, HYBRID_ROUTER_POLICY_VERSION);
+          yield* run("v1-write", "writing", a, HYBRID_ROUTER_POLICY_VERSION);
+          const taskShadow = yield* transition("shadow", task.policyId, oldActive.revision);
+          yield* run("task-shadow", "writing", a, HYBRID_ROUTER_POLICY_VERSION, b);
+          const taskActive = yield* transition("activate", task.policyId, taskShadow.revision);
+          yield* run("task-debug", "debugging", a, HYBRID_TASK_ROUTER_POLICY_VERSION);
+          yield* run("task-write", "writing", b, HYBRID_TASK_ROUTER_POLICY_VERSION);
+          const restored = yield* evaluation.control(
+            policyEnvironment,
+            { action: "rollback", expectedRevision: taskActive.revision, confirm: true },
+            now,
+            "fixture-operator",
+          );
+          assert.equal(restored.active.policyId, old.policyId);
+          yield* run("rollback-write", "writing", a, HYBRID_ROUTER_POLICY_VERSION);
+          assert.deepEqual(yield* Ref.get(started), [a, a, a, a, b, a]);
         }).pipe(Effect.provide(runtime), Effect.provideService(PolicyExecutionContext, session));
       }),
     ).pipe(Effect.provide(NodeServices.layer)),

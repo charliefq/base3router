@@ -1,3 +1,4 @@
+import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
 import {
   DISPATCHER_MAX_CANDIDATES,
   DISPATCHER_POLICY_VERSION,
@@ -27,6 +28,7 @@ import {
   type OpenRouterGuidanceSettings,
   ProviderInstanceId,
   type HybridRouteDecisionV1,
+  type LocalTaskProfile,
   TurnId,
 } from "@t3tools/contracts";
 import {
@@ -800,7 +802,11 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
         readonly credentialPresent: boolean;
         readonly instanceId: ProviderInstanceId;
       };
+      readonly localTaskProfile?: LocalTaskProfile;
       readonly hybrid?: {
+        readonly shadowPolicy?: NonNullable<
+          import("@t3tools/shared/hybridRouter").HybridRouterInput["shadowPolicy"]
+        >;
         readonly weights?: import("@t3tools/contracts").RouterPolicyWeightsV1;
         readonly shrinkageK?: number;
         readonly minSampleRate?: number;
@@ -816,6 +822,8 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
     const routingMode = command.routingMode;
     if (!dependencies.enabled && routingMode === undefined) return command;
 
+    const localTaskProfile =
+      dependencies.localTaskProfile ?? classifyLocalTask(command.message.text);
     const createThread = command.bootstrap?.createThread;
     const preferredModelSelection = command.modelSelection ?? createThread?.modelSelection;
 
@@ -891,6 +899,7 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
               : {}),
             executionStatus: "bound",
             ...dependencies.hybrid,
+            localTaskProfile,
             challengerEnabled: dependencies.hybrid.challengerEnabled,
             evidenceByTarget: dependencies.hybrid.evidenceByTarget,
           })
@@ -948,7 +957,7 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
           preferred: preferredModelSelection,
         });
         if (explicit !== null) {
-          return { ...routed, routeBinding: explicit };
+          return { ...routed, routeBinding: { ...explicit, localTaskProfile } };
         }
         return yield* new OrchestrationDispatchCommandError({
           message: "Manual Route could not bind the selected provider instance.",
@@ -956,7 +965,7 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
       }
       const nowIso = yield* Effect.map(DateTime.now, DateTime.formatIso);
       const phase12Binding = withPhase12Binding({
-        binding: routeBinding,
+        binding: { ...routeBinding, localTaskProfile },
         providers: resolution.providers,
         nowIso,
         turnId: TurnId.make(command.message.messageId),
@@ -1028,7 +1037,7 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
     return {
       ...command,
       routeBinding: withPhase12Binding({
-        binding: routeBinding,
+        binding: { ...routeBinding, localTaskProfile },
         providers: resolution.providers,
         nowIso,
         turnId: TurnId.make(command.message.messageId),

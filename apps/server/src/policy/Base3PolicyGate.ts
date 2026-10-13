@@ -1,3 +1,4 @@
+import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
 // Argument hashes are canonical JSON. A schema codec would change the bytes
 // a grant is compared against after a queue delay.
 // @effect-diagnostics preferSchemaOverJson:off
@@ -5,7 +6,7 @@ import * as NodeCrypto from "node:crypto";
 import {
   type AuthEnvironmentScope,
   MODEL_ROUTER_POLICY_VERSION,
-  HYBRID_ROUTER_POLICY_VERSION,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
   AuthOrchestrationOperateScope,
   defaultConcurrencyBudgetPolicy,
   EnvironmentId,
@@ -515,6 +516,7 @@ const bindRoute = (input: {
         : { modelRouteConstraints: input.command.modelRouteConstraints }),
       ...(preferred === undefined ? {} : { modelSelection: preferred }),
     };
+    const localTaskProfile = classifyLocalTask(input.command.text ?? "");
     const evaluation = yield* Effect.serviceOption(RouterEvaluation.RouterEvaluationService);
     const fallback = {
       activePolicyVersion: MODEL_ROUTER_POLICY_VERSION,
@@ -524,19 +526,33 @@ const bindRoute = (input: {
     };
     const hybrid = Option.isNone(evaluation)
       ? fallback
-      : yield* evaluation.value.routingSnapshot(input.environmentId).pipe(
+      : yield* evaluation.value.routingSnapshot(input.environmentId, localTaskProfile).pipe(
           Effect.map((snapshot) => {
-            const rankingPolicy =
-              snapshot.active.policyVersion === HYBRID_ROUTER_POLICY_VERSION
-                ? snapshot.active
-                : (snapshot.challengerPolicy ?? snapshot.active);
+            const shadow = snapshot.challengerPolicy;
             return {
               activePolicyVersion: snapshot.active.policyVersion,
-              weights: rankingPolicy.weights,
-              shrinkageK: rankingPolicy.shrinkageK,
-              minSampleRate: rankingPolicy.minSampleRate,
+              weights: snapshot.active.weights,
+              shrinkageK: snapshot.active.shrinkageK,
+              minSampleRate: snapshot.active.minSampleRate,
               challengerEnabled: snapshot.challengerEnabled,
-              evidenceByTarget: snapshot.evidenceByTarget,
+              evidenceByTarget:
+                snapshot.active.policyVersion === HYBRID_TASK_ROUTER_POLICY_VERSION
+                  ? snapshot.taskEvidenceByTarget
+                  : snapshot.evidenceByTarget,
+              ...(shadow === undefined
+                ? {}
+                : {
+                    shadowPolicy: {
+                      policyVersion: shadow.policyVersion,
+                      weights: shadow.weights,
+                      shrinkageK: shadow.shrinkageK,
+                      minSampleRate: shadow.minSampleRate,
+                      evidenceByTarget:
+                        shadow.policyVersion === HYBRID_TASK_ROUTER_POLICY_VERSION
+                          ? snapshot.taskEvidenceByTarget
+                          : snapshot.evidenceByTarget,
+                    },
+                  }),
             };
           }),
           Effect.orElseSucceed(() => fallback),
@@ -548,6 +564,7 @@ const bindRoute = (input: {
       environmentDefaultModelSelection: Effect.succeed(environmentDefaultModelSelection),
       sql: input.sql,
       hybrid,
+      localTaskProfile,
     }).pipe(
       Effect.provideService(SqlClient.SqlClient, input.sql),
       Effect.mapError(
@@ -588,6 +605,7 @@ const bindRoute = (input: {
     if (binding === undefined) {
       return yield* deny(input.command.type, "binding", "No immutable route binding was produced.");
     }
+    binding = { ...binding, localTaskProfile };
     const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
     yield* persistDispatcherTaskRoute({
       threadId: ThreadId.make(input.command.threadId),

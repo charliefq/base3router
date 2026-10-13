@@ -146,6 +146,9 @@ export const buildTurnOutcomeObservation = (input: {
     environmentId: input.environmentId,
     recordedAt: input.nowIso,
     policyVersion: effectivePolicyVersion({
+      ...(binding.hybrid === undefined
+        ? {}
+        : { hybridPolicyVersion: binding.hybrid.policyVersion }),
       ...(binding.hybrid?.usedHybridRanking === undefined
         ? {}
         : { usedHybridRanking: binding.hybrid.usedHybridRanking }),
@@ -159,6 +162,9 @@ export const buildTurnOutcomeObservation = (input: {
     driver: binding.driver,
     actualExecutionModel: openRouter?.actualExecutionModel ?? binding.target.model,
     taskProfile: openRouter?.taskProfile ?? UNKNOWN_TASK_PROFILE,
+    ...(binding.localTaskProfile === undefined
+      ? {}
+      : { localTaskProfile: binding.localTaskProfile }),
     timing: timingFromClock({
       iso: (ms) => DateTime.formatIso(DateTime.makeUnsafe(ms)),
       clock: "monotonic_nanos",
