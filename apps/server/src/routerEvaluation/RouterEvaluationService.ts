@@ -43,6 +43,7 @@ import {
 import type { LocalModelEvidence } from "@t3tools/shared/hybridRouter";
 import {
   activatePolicy,
+  baselinePolicyId,
   isBaselinePolicyVersion,
   rollbackPolicy,
   shadowPolicy,
@@ -159,7 +160,7 @@ const toEvalError = (cause: unknown): RouterEvaluationError =>
 
 const scopedPolicyId = (environmentId: EnvironmentId, version: string) =>
   RouterPolicyId.make(
-    `policy-${NodeCrypto.createHash("sha256").update(`${environmentId}:${version}`).digest("hex")}`,
+    `${isBaselinePolicyVersion(version) ? baselinePolicyId : "policy-hybrid-router-v1"}-${NodeCrypto.createHash("sha256").update(`${environmentId}:${version}`).digest("hex")}`,
   );
 
 type RouterPolicyStatus = {
