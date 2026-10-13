@@ -1,10 +1,57 @@
-import { CollaborationCommand, type CollaborationSnapshot } from "@t3tools/contracts";
+import {
+  CollaborationCommand,
+  type CollaborationSnapshot,
+  type CollaborationTaskContractReadout,
+  TaskContract,
+  TaskContractPhase,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { applyCollaboration, foldCollaboration, foldCollaborationState } from "./decide.ts";
+
+const StoredContract = Schema.Struct({
+  id: Schema.optionalKey(Schema.String),
+  projectId: Schema.optionalKey(Schema.String),
+  providerInstanceId: Schema.optionalKey(Schema.String),
+  taskGovernance: Schema.optionalKey(Schema.Literals(["chat", "required"])),
+  taskContract: Schema.optionalKey(Schema.NullOr(TaskContract)),
+  taskContractPhase: Schema.optionalKey(TaskContractPhase),
+  taskAcceptedRevision: Schema.optionalKey(
+    Schema.NullOr(Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))),
+  ),
+});
+const decodeStoredContract = Schema.decodeUnknownOption(Schema.fromJsonString(StoredContract));
+const contractReadout = (row: {
+  readonly thread_id: string;
+  readonly project_id: string;
+  readonly provider_instance_id: string;
+  readonly payload_json: string;
+}): CollaborationTaskContractReadout => {
+  const decoded = decodeStoredContract(row.payload_json);
+  if (decoded._tag === "None") return { status: "unavailable", reason: "invalid_contract" };
+  const value = decoded.value;
+  if (
+    (value.id !== undefined && value.id !== row.thread_id) ||
+    (value.projectId !== undefined && value.projectId !== row.project_id) ||
+    (value.providerInstanceId !== undefined &&
+      value.providerInstanceId !== row.provider_instance_id)
+  )
+    return { status: "unavailable", reason: "invalid_contract" };
+  if (value.taskContract == null)
+    return {
+      status: "unavailable",
+      reason: value.taskGovernance === "required" ? "missing_contract" : "ordinary_chat",
+    };
+  return {
+    status: "available",
+    contract: value.taskContract,
+    phase: value.taskContractPhase ?? null,
+    acceptedRevision: value.taskAcceptedRevision ?? null,
+  };
+};
 
 const CommandJson = Schema.fromJsonString(CollaborationCommand);
 const decodeCommand = Schema.decodeUnknownEffect(CommandJson);
@@ -154,28 +201,54 @@ const validateThreadLinks = (
       }
       return agent;
     });
-    return {
-      ...snapshot,
-      agents,
-      tasks: snapshot.tasks.map((task) =>
-        task.threadId &&
-        (invalid.has(task.threadId) ||
-          !agents.some(
+    const tasks = yield* Effect.forEach(snapshot.tasks, (task) =>
+      Effect.gen(function* () {
+        const invalidTask = () => ({
+          ...task,
+          ...(task.threadId === null
+            ? {}
+            : {
+                threadId: null,
+                state: "blocked" as const,
+                gateDecision: "DENY" as const,
+                waitReason: "The thread link is invalid. Explicit repair is required.",
+              }),
+          contractReadout: {
+            status: "unavailable" as const,
+            reason: "invalid_thread_link" as const,
+          },
+        });
+        const linked =
+          task.threadId !== null &&
+          !invalid.has(task.threadId) &&
+          agents.some(
             (agent) =>
               agent.id === task.assigneeAgentId &&
               agent.projectId === task.projectId &&
               agent.threadId === task.threadId,
-          ))
-          ? {
-              ...task,
-              threadId: null,
-              state: "blocked" as const,
-              gateDecision: "DENY" as const,
-              waitReason: "The thread link is invalid. Explicit repair is required.",
-            }
-          : task,
-      ),
-    };
+          );
+        if (!linked) return invalidTask();
+        // Payload reads happen only after the sealed principal and canonical link checks.
+        const payloads = yield* sql<{ readonly payload_json: string }>`
+        SELECT payload_json FROM orchestration_v2_projection_threads
+        WHERE thread_id=${task.threadId} AND project_id=${task.projectId}
+          AND provider_instance_id=${task.assigneeAgentId} AND archived_at IS NULL AND deleted_at IS NULL
+        LIMIT 1
+      `;
+        const payload = payloads[0];
+        if (payload === undefined || task.threadId === null) return invalidTask();
+        return {
+          ...task,
+          contractReadout: contractReadout({
+            thread_id: task.threadId,
+            project_id: task.projectId,
+            provider_instance_id: task.assigneeAgentId,
+            payload_json: payload.payload_json,
+          }),
+        };
+      }),
+    );
+    return { ...snapshot, agents, tasks };
   });
 
 export const readCollaborationSnapshot = (sql: SqlClient.SqlClient, principalId: string) =>

@@ -4,7 +4,8 @@
  */
 import * as Schema from "effect/Schema";
 
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { TaskContract, TaskContractPhase } from "./taskContract.ts";
+import { PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const CollaborationConnection = Schema.Literals(["NOT_CONNECTED", "SIMULATED"]);
 export type CollaborationConnection = typeof CollaborationConnection.Type;
@@ -58,6 +59,26 @@ export const CollaborationAgent = Schema.Struct({
 });
 export type CollaborationAgent = typeof CollaborationAgent.Type;
 
+/** Read-only facts from the validated linked thread, never task title/body defaults. */
+export const CollaborationTaskContractReadout = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("available"),
+    contract: TaskContract,
+    phase: Schema.NullOr(TaskContractPhase),
+    acceptedRevision: Schema.NullOr(PositiveInt),
+  }),
+  Schema.Struct({
+    status: Schema.Literal("unavailable"),
+    reason: Schema.Literals([
+      "ordinary_chat",
+      "missing_contract",
+      "invalid_contract",
+      "invalid_thread_link",
+    ]),
+  }),
+]);
+export type CollaborationTaskContractReadout = typeof CollaborationTaskContractReadout.Type;
+
 export const CollaborationTask = Schema.Struct({
   id: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
@@ -72,6 +93,7 @@ export const CollaborationTask = Schema.Struct({
   revision: Schema.Number,
   pendingClarificationId: Schema.NullOr(TrimmedNonEmptyString),
   gateDecision: CollaborationGateDecision,
+  contractReadout: Schema.optionalKey(CollaborationTaskContractReadout),
 });
 export type CollaborationTask = typeof CollaborationTask.Type;
 
