@@ -24,6 +24,8 @@ import { primaryServerProvidersAtom } from "../../state/server";
 import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
 import { TaskReviewControls } from "./TaskReviewControls";
+import { AgentsTaskCreator } from "./AgentsTaskCreator";
+import { randomUUID } from "../../lib/utils";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { Alert, AlertDescription } from "../ui/alert";
@@ -330,7 +332,23 @@ export function AgentsPage() {
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const providers = useAtomValue(primaryServerProvidersAtom);
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
-  const { snapshot, error, pending, open } = useCollaboration(environmentId);
+  const { snapshot, error, pending, open, refresh } = useCollaboration(environmentId);
+  const [creationRequest, setCreationRequest] = useState<{
+    providerId: string;
+    token: string;
+  } | null>(null);
+  const [creating, setCreating] = useState(false);
+  const creationOwner = useRef<string | null>(null);
+  const lockCreation = useCallback((owner: string) => {
+    creationOwner.current = owner;
+    setCreating(true);
+  }, []);
+  const releaseCreation = useCallback((owner: string) => {
+    if (creationOwner.current !== owner) return;
+    creationOwner.current = null;
+    setCreating(false);
+    setCreationRequest(null);
+  }, []);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{
     environmentId: EnvironmentId;
@@ -362,6 +380,7 @@ export function AgentsPage() {
     // A ref closes the same-render double-click window before React updates disabled.
     if (
       openingRef.current ||
+      creationOwner.current !== null ||
       !snapshot ||
       !environmentId ||
       !selectedProject ||
@@ -606,7 +625,9 @@ export function AgentsPage() {
                         )}
                       </div>
                       <Button
-                        disabled={opening || pending || !snapshot || !ready || !selectedProject}
+                        disabled={
+                          opening || creating || pending || !snapshot || !ready || !selectedProject
+                        }
                         onClick={() => {
                           void openAgent(entry.id);
                         }}
@@ -616,11 +637,67 @@ export function AgentsPage() {
                       >
                         Open conversation
                       </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={
+                          opening ||
+                          creating ||
+                          pending ||
+                          !snapshot ||
+                          !!error ||
+                          !ready ||
+                          !selectedProject
+                        }
+                        aria-label={`New ${entry.displayName} task`}
+                        onClick={() => {
+                          if (
+                            openingRef.current ||
+                            creationOwner.current !== null ||
+                            !snapshot ||
+                            error ||
+                            !environmentId ||
+                            !selectedProject ||
+                            !provider ||
+                            !providerExecutable(provider) ||
+                            !context.current.mounted ||
+                            context.current.environmentId !== environmentId ||
+                            context.current.projectId !== selectedProject.id
+                          )
+                            return;
+                          const token = randomUUID();
+                          lockCreation(token);
+                          setCreationRequest({ providerId: entry.id, token });
+                        }}
+                      >
+                        New task
+                      </Button>
                     </div>
                   </li>
                 );
               })}
             </ul>
+            <AgentsTaskCreator
+              environmentId={environmentId}
+              project={selectedProject}
+              providers={providers}
+              request={creationRequest}
+              onLock={lockCreation}
+              onRelease={releaseCreation}
+              refresh={async () => await refresh()}
+              onOpen={(selectedEnvironment, threadId) => {
+                if (
+                  context.current.mounted &&
+                  context.current.environmentId === selectedEnvironment &&
+                  context.current.projectId === selectedProjectId
+                )
+                  void navigate({
+                    to: "/$environmentId/$threadId",
+                    params: { environmentId: selectedEnvironment, threadId },
+                  });
+              }}
+            />
             {providers.length === 0 && snapshot ? (
               <div className="rounded-xl border border-dashed border-border p-6 text-sm leading-relaxed text-muted-foreground">
                 No provider is configured. A provider CLI is not an employee.

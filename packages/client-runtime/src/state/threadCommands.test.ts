@@ -24,6 +24,7 @@ import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { createThreadEnvironmentAtoms } from "./threadCommands.ts";
+import { v2Projection } from "./orchestrationV2TestFixtures.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("remote");
 const THREAD_ID = ThreadId.make("thread");
@@ -81,6 +82,7 @@ const SNAPSHOT: OrchestrationV2ShellSnapshot = {
 };
 
 const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* () {
+  const projectionRequests: ThreadId[] = [];
   const requests = yield* Queue.unbounded<{
     command: OrchestrationV2Command;
     reply: Deferred.Deferred<{ sequence: number }, Error>;
@@ -90,6 +92,11 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* () {
     session: yield* SubscriptionRef.make(
       Option.some({
         client: {
+          [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: (input: { threadId: ThreadId }) =>
+            Effect.sync(() => {
+              projectionRequests.push(input.threadId);
+              return v2Projection;
+            }),
           [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
             Effect.gen(function* () {
               const reply = yield* Deferred.make<{ sequence: number }, Error>();
@@ -121,10 +128,44 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* () {
   yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
   const visibleAtom = commands.snapshotAtom(ENVIRONMENT_ID);
   registry.mount(visibleAtom);
-  return { registry, commands, snapshotAtom, visibleAtom, requests };
+  return { registry, commands, snapshotAtom, visibleAtom, requests, projectionRequests };
 });
 
 describe("remote thread lifecycle commands", () => {
+  it.effect(
+    "reads authoritative creation projection while its mutation reply is still pending",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const h = yield* makeHarness();
+          const creation = h.commands.create.run(h.registry, {
+            environmentId: ENVIRONMENT_ID,
+            input: {
+              commandId: CommandId.make("creation-pending"),
+              threadId: THREAD_ID,
+              projectId: ProjectId.make("project"),
+              title: "Task",
+              modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+              runtimeMode: "approval-required",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: null,
+            },
+          });
+          const pending = yield* Queue.take(h.requests);
+          const read = yield* Effect.promise(() =>
+            h.commands.readProjection.run(h.registry, {
+              environmentId: ENVIRONMENT_ID,
+              input: { threadId: THREAD_ID },
+            }),
+          ).pipe(Effect.timeout("2 seconds"));
+          expect(read._tag).toBe("Success");
+          expect(h.projectionRequests).toEqual([THREAD_ID]);
+          yield* Deferred.succeed(pending.reply, { sequence: 1 });
+          expect((yield* Effect.promise(() => creation))._tag).toBe("Success");
+        }),
+      ),
+  );
   const actions = [
     ["settle", {}, { settledOverride: "settled", pinnedAt: null, snoozedUntil: null }],
     ["unsettle", { reason: "user" }, { settledOverride: "active", settledAt: null }],

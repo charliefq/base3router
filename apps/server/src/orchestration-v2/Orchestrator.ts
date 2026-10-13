@@ -131,6 +131,10 @@ import {
 } from "../collaboration/store.ts";
 import * as OwnedChat from "../collaboration/ownedChat.ts";
 import {
+  validateReviewedCreate,
+  verifyReviewedCreateReplay,
+} from "../collaboration/governedCreation.ts";
+import {
   nextTaskContractThread,
   reserveGovernedStart,
   taskStateFromUnknown,
@@ -2088,6 +2092,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
     const governed = command.taskContract !== undefined || command.taskGovernance === "required";
+    const creationSql = yield* taskReviewSqlAtCall;
+    if (command.taskCreationReview !== undefined && Option.isNone(creationSql))
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "Reviewed task creation persistence is unavailable.",
+      });
+    const agentsTaskCreation =
+      command.taskCreationReview === undefined || Option.isNone(creationSql)
+        ? undefined
+        : yield* validateReviewedCreate(creationSql.value, command).pipe(mapDispatchError(command));
     const thread: OrchestrationV2AppThread = {
       createdBy: command.createdBy,
       creationSource: command.creationSource,
@@ -2116,6 +2131,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       snoozedAt: null,
       lastVisitedAt: null,
       deletedAt: null,
+      ...(agentsTaskCreation === undefined ? {} : { agentsTaskCreation }),
       ...(governed
         ? {
             taskGovernance: "required" as const,
@@ -9205,6 +9221,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       readonly ordinaryRootOwner?: string;
       readonly contractSetActor?: string;
       readonly reviewedSet?: Extract<OrchestrationV2Command, { type: "thread.task-contract.set" }>;
+      readonly creationCommand?: Extract<OrchestrationV2Command, { type: "thread.create" }>;
       readonly taskContractDecision?: {
         readonly action: TaskContractReviewAction;
         readonly revision: number;
@@ -9508,6 +9525,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(governedTaskOwner === undefined ? {} : { governedTaskOwner }),
       ...(ordinaryRootOwner === undefined ? {} : { ordinaryRootOwner }),
       ...(contractSetActor === undefined ? {} : { contractSetActor }),
+      ...(command.type === "thread.create" ? { creationCommand: command } : {}),
       ...(command.type === "thread.task-contract.set" &&
       (command.expectedRevision !== undefined || command.reviewTask !== undefined)
         ? { reviewedSet: command }
@@ -9640,6 +9658,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
       }
       if (receipt.commandType === "thread.create") {
+        if (command.type !== "thread.create")
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Creation receipt command mismatch.",
+          });
+        const creationSql = yield* taskReviewSqlAtCall;
+        if (Option.isSome(creationSql))
+          yield* verifyReviewedCreateReplay(creationSql.value, command).pipe(
+            mapDispatchError(command),
+          );
+        else if (
+          command.taskCreationReview !== undefined ||
+          (yield* PolicyExecutionContext).kind === "session"
+        )
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Reviewed creation replay persistence is unavailable.",
+          });
         const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
         if (Option.isSome(sqlOption)) {
           const rows = yield* sqlOption.value<{
@@ -9783,6 +9821,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           : { ordinaryRootOwner: plan.ordinaryRootOwner }),
         ...(plan.contractSetActor === undefined ? {} : { contractSetActor: plan.contractSetActor }),
         ...(plan.reviewedSet === undefined ? {} : { reviewedSet: plan.reviewedSet }),
+        ...(plan.creationCommand === undefined ? {} : { creationCommand: plan.creationCommand }),
         ...(plan.taskContractDecision === undefined
           ? {}
           : { taskContractDecision: plan.taskContractDecision }),
