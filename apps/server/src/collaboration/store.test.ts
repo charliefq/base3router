@@ -1,10 +1,19 @@
 import {
   CollaborationCommand,
+  OrchestrationV2TurnItem,
+  ThreadId,
+  RunId,
+  NodeId,
+  ProviderThreadId,
+  ProviderTurnId,
   CollaborationSnapshot,
   ProviderInstanceId,
   ProviderDriverKind,
 } from "@t3tools/contracts";
 import { routeModel } from "@t3tools/shared/modelRouter";
+import * as DateTime from "effect/DateTime";
+import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
+import { makeProviderFailureTurnItem } from "../orchestration-v2/ProviderFailure.ts";
 import * as Schema from "effect/Schema";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -140,6 +149,318 @@ const routingFixture = Effect.gen(function* () {
     sql`INSERT INTO orchestration_v2_projection_provider_turns VALUES ('turn-1','thread-1','provider-thread-1','attempt-1','node-1','running',${turn.startedAt},${encodeEvidence(turn)})`;
   return { sql, binding, run, attempt, turn, read, insertTurn };
 });
+
+const encodeTurnItem = Schema.encodeEffect(Schema.fromJsonString(OrchestrationV2TurnItem));
+
+const resultFixture = Effect.gen(function* () {
+  const f = yield* routingFixture;
+  yield* f.insertTurn();
+  yield* f.sql`ALTER TABLE orchestration_v2_projection_run_attempts ADD COLUMN root_node_id TEXT`;
+  yield* f.sql`ALTER TABLE orchestration_v2_projection_run_attempts ADD COLUMN provider_thread_id TEXT`;
+  yield* f.sql`ALTER TABLE orchestration_v2_projection_run_attempts ADD COLUMN provider_turn_id TEXT`;
+  yield* f.sql`ALTER TABLE orchestration_v2_projection_run_attempts ADD COLUMN status TEXT`;
+  yield* f.sql`ALTER TABLE orchestration_v2_projection_provider_threads ADD COLUMN driver TEXT`;
+  yield* f.sql`ALTER TABLE orchestration_v2_projection_provider_turns ADD COLUMN completed_at TEXT`;
+  yield* f.sql`CREATE TABLE orchestration_v2_projection_turn_items (turn_item_id TEXT PRIMARY KEY, thread_id TEXT, run_id TEXT, node_id TEXT, provider_thread_id TEXT, provider_turn_id TEXT, parent_item_id TEXT, ordinal INTEGER, type TEXT, status TEXT, updated_at TEXT, payload_json TEXT)`;
+  const run = { ...f.run, status: "completed" };
+  const attempt = { ...f.attempt, status: "completed" };
+  const turn = { ...f.turn, status: "completed", completedAt: "2026-10-13T00:00:01Z" };
+  yield* f.sql`UPDATE orchestration_v2_projection_runs SET status='completed',payload_json=${encodeEvidence(run)}`;
+  yield* f.sql`UPDATE orchestration_v2_projection_run_attempts SET root_node_id='node-1',provider_thread_id='provider-thread-1',provider_turn_id='turn-1',status='completed',payload_json=${encodeEvidence(attempt)}`;
+  yield* f.sql`UPDATE orchestration_v2_projection_provider_threads SET driver='codex',payload_json=${encodeEvidence({ id: "provider-thread-1", appThreadId: "thread-1", providerInstanceId: "provider-codex", driver: "codex" })}`;
+  yield* f.sql`UPDATE orchestration_v2_projection_provider_turns SET status='completed',completed_at=${turn.completedAt},payload_json=${encodeEvidence(turn)}`;
+  const item = {
+    id: "answer-1",
+    threadId: "thread-1",
+    runId: "run-1",
+    nodeId: "node-1",
+    providerThreadId: "provider-thread-1",
+    providerTurnId: "turn-1",
+    parentItemId: null,
+    ordinal: 1,
+    type: "assistant_message",
+    status: "completed",
+    updatedAt: turn.completedAt,
+    completedAt: turn.completedAt,
+    text: "Persisted fixture output",
+    streaming: false,
+  };
+  yield* f.sql`INSERT INTO orchestration_v2_projection_turn_items VALUES ('answer-1','thread-1','run-1','node-1','provider-thread-1','turn-1',NULL,1,'assistant_message','completed',${item.updatedAt},${encodeEvidence(item)})`;
+  const read = () =>
+    readCollaborationSnapshot(f.sql, facts.principalId).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(CollaborationSnapshot)),
+      Effect.map((snapshot) => snapshot.tasks[0]?.resultReadout),
+    );
+  const setStatus = (status: "running" | "failed" | "cancelled" | "interrupted" | "rolled_back") =>
+    Effect.gen(function* () {
+      const turnStatus = status === "rolled_back" ? "completed" : status;
+      yield* f.sql`UPDATE orchestration_v2_projection_runs SET status=${status},payload_json=${encodeEvidence({ ...run, status })}`;
+      yield* f.sql`UPDATE orchestration_v2_projection_run_attempts SET status=${status},payload_json=${encodeEvidence({ ...attempt, status })}`;
+      yield* f.sql`UPDATE orchestration_v2_projection_provider_turns SET status=${turnStatus},payload_json=${encodeEvidence({ ...turn, status: turnStatus })}`;
+    });
+  const writeFailure = (retry = false) =>
+    Effect.gen(function* () {
+      yield* setStatus("failed");
+      const ids = yield* IdAllocator.IdAllocatorV2.pipe(Effect.provide(IdAllocator.layer));
+      const error = makeProviderFailureTurnItem({
+        idAllocator: ids,
+        driver: ProviderDriverKind.make("codex"),
+        threadId: ThreadId.make("thread-1"),
+        runId: RunId.make("run-1"),
+        nodeId: NodeId.make("node-1"),
+        providerThreadId: ProviderThreadId.make("provider-thread-1"),
+        providerTurnId: ProviderTurnId.make("turn-1"),
+        itemOrdinal: 2,
+        failure: {
+          class: "provider_error",
+          message: "Persisted structured failure",
+          code: "FIXTURE_FAILURE",
+          retryable: false,
+        },
+        occurredAt: DateTime.makeUnsafe(item.completedAt),
+        ...(retry ? { retry: { attempt: 1, maxAttempts: 3, retryDelayMs: 100 } } : {}),
+      });
+      const payload = yield* encodeTurnItem(error);
+      yield* f.sql`INSERT INTO orchestration_v2_projection_turn_items VALUES (${error.id},'thread-1','run-1','node-1','provider-thread-1','turn-1',NULL,2,'error','failed',${DateTime.formatIso(error.updatedAt)},${payload})`;
+    });
+  return { ...f, run, attempt, turn, item, readResult: read, setStatus, writeFailure };
+});
+
+it.effect(
+  "reads bounded attributed output without changing ledger acceptance or routing evidence",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* resultFixture;
+      const result = yield* f.readResult();
+      assert.equal(result?.status, "available");
+      if (result?.status !== "available") return;
+      assert.equal(result.runStatus, "completed");
+      assert.equal(result.attemptId, "attempt-1");
+      assert.equal(result.providerTurnId, "turn-1");
+      assert.deepEqual(result.content, {
+        status: "output",
+        itemId: "answer-1",
+        preview: "Persisted fixture output",
+        truncated: false,
+      });
+      const snapshot = yield* readCollaborationSnapshot(f.sql, facts.principalId);
+      assert.equal(snapshot.tasks[0]?.state, "blocked");
+      assert.equal(snapshot.tasks[0]?.gateDecision, "DENY");
+      assert.equal(
+        snapshot.tasks[0]?.routingReadout?.status === "available" &&
+          snapshot.tasks[0]?.routingReadout.execution.status,
+        "observed",
+      );
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET payload_json=${encodeEvidence({ ...f.item, text: "<script>neverExecute()</script>" + "x".repeat(3000) })}`;
+      const bounded = yield* f.readResult();
+      assert.equal(bounded?.status === "available" && bounded.content.status, "output");
+      if (bounded?.status === "available" && bounded.content.status === "output") {
+        assert.equal(bounded.content.preview.length, 2048);
+        assert.isTrue(bounded.content.truncated);
+      }
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect("reads the actual canonical terminal-failure producer but not a retry record", () =>
+  Effect.gen(function* () {
+    const f = yield* resultFixture;
+    yield* f.writeFailure();
+    const failed = yield* f.readResult();
+    assert.equal(failed?.status === "available" && failed.content.status, "failure");
+    if (failed?.status === "available" && failed.content.status === "failure")
+      assert.deepEqual(failed.content.failure, {
+        class: "provider_error",
+        code: "FIXTURE_FAILURE",
+        message: "Persisted structured failure",
+      });
+    yield* f.sql`DELETE FROM orchestration_v2_projection_turn_items WHERE type='error'`;
+    yield* f.writeFailure(true);
+    const retry = yield* f.readResult();
+    assert.equal(retry?.status === "available" && retry.runStatus, "failed");
+    assert.equal(retry?.status === "available" && retry.content.status, "unknown");
+    assert.isFalse(encodeEvidence(retry).includes("Persisted structured failure"));
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect.each(["running", "cancelled", "interrupted", "rolled_back"] as const)(
+  "keeps %s status without claiming a completed result",
+  (status) =>
+    Effect.gen(function* () {
+      const f = yield* resultFixture;
+      yield* f.setStatus(status);
+      const result = yield* f.readResult();
+      assert.equal(result?.status === "available" && result.runStatus, status);
+      assert.equal(result?.status === "available" && result.content.status, "unknown");
+      assert.isFalse(encodeEvidence(result).includes("Persisted fixture output"));
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect.each([
+  "missing-turn",
+  "unstarted-turn",
+  "pending-turn",
+  "streaming",
+  "empty-output",
+  "no-output",
+  "nested",
+  "sibling",
+  "old-turn",
+  "cross-thread",
+  "cross-provider-thread",
+  "payload-run",
+  "ordinal",
+  "malformed",
+  "attempt-root",
+  "provider-driver",
+  "turn-completion",
+  "payload-thread",
+  "payload-node",
+  "payload-provider-turn",
+  "payload-provider-thread",
+  "payload-status",
+  "attempt-payload",
+  "turn-attempt",
+  "run-turn-disagreement",
+  "provider-instance",
+  "generic-artifact",
+  "legacy-item-fields",
+  "completion-before-start",
+])("does not disclose %s output", (scenario) =>
+  Effect.gen(function* () {
+    const f = yield* resultFixture;
+    if (scenario === "missing-turn")
+      yield* f.sql`DELETE FROM orchestration_v2_projection_provider_turns`;
+    if (scenario === "unstarted-turn")
+      yield* f.sql`UPDATE orchestration_v2_projection_provider_turns SET started_at=NULL,payload_json=${encodeEvidence({ ...f.turn, startedAt: null })}`;
+    if (scenario === "pending-turn")
+      yield* f.sql`UPDATE orchestration_v2_projection_provider_turns SET status='pending',payload_json=${encodeEvidence({ ...f.turn, status: "pending" })}`;
+    if (scenario === "streaming")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET payload_json=${encodeEvidence({ ...f.item, streaming: true })}`;
+    if (scenario === "empty-output")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET payload_json=${encodeEvidence({ ...f.item, text: "   " })}`;
+    if (scenario === "no-output") yield* f.sql`DELETE FROM orchestration_v2_projection_turn_items`;
+    if (scenario === "nested")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET parent_item_id='tool',payload_json=${encodeEvidence({ ...f.item, parentItemId: "tool" })}`;
+    if (scenario === "sibling")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET node_id='sibling',payload_json=${encodeEvidence({ ...f.item, nodeId: "sibling" })}`;
+    if (scenario === "old-turn")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET provider_turn_id='old-turn',payload_json=${encodeEvidence({ ...f.item, providerTurnId: "old-turn" })}`;
+    if (scenario === "cross-thread")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET thread_id='another-thread',payload_json=${encodeEvidence({ ...f.item, threadId: "another-thread" })}`;
+    if (scenario === "cross-provider-thread")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET provider_thread_id='another-provider-thread',payload_json=${encodeEvidence({ ...f.item, providerThreadId: "another-provider-thread" })}`;
+    if (scenario === "payload-run")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET payload_json=${encodeEvidence({ ...f.item, runId: "another-run" })}`;
+    if (scenario === "ordinal")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET ordinal=99`;
+    if (scenario === "malformed")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET payload_json='{broken-secret'`;
+    if (scenario === "attempt-root")
+      yield* f.sql`UPDATE orchestration_v2_projection_run_attempts SET root_node_id='another-root'`;
+    if (scenario === "provider-driver")
+      yield* f.sql`UPDATE orchestration_v2_projection_provider_threads SET driver='another-driver'`;
+    if (scenario === "turn-completion")
+      yield* f.sql`UPDATE orchestration_v2_projection_provider_turns SET completed_at='2026-10-14T00:00:00Z'`;
+    if (scenario === "payload-thread")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET payload_json=${encodeEvidence({ ...f.item, threadId: "another-thread" })}`;
+    if (scenario === "payload-node")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET payload_json=${encodeEvidence({ ...f.item, nodeId: "another-node" })}`;
+    if (scenario === "payload-provider-turn")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET payload_json=${encodeEvidence({ ...f.item, providerTurnId: "another-turn" })}`;
+    if (scenario === "payload-provider-thread")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET payload_json=${encodeEvidence({ ...f.item, providerThreadId: "another-provider-thread" })}`;
+    if (scenario === "payload-status")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET payload_json=${encodeEvidence({ ...f.item, status: "running" })}`;
+    if (scenario === "attempt-payload")
+      yield* f.sql`UPDATE orchestration_v2_projection_run_attempts SET payload_json=${encodeEvidence({ ...f.attempt, runId: "another-run" })}`;
+    if (scenario === "turn-attempt")
+      yield* f.sql`UPDATE orchestration_v2_projection_provider_turns SET payload_json=${encodeEvidence({ ...f.turn, runAttemptId: "another-attempt" })}`;
+    if (scenario === "run-turn-disagreement")
+      yield* f.sql`UPDATE orchestration_v2_projection_provider_turns SET status='running',payload_json=${encodeEvidence({ ...f.turn, status: "running" })}`;
+    if (scenario === "provider-instance")
+      yield* f.sql`UPDATE orchestration_v2_projection_provider_threads SET provider_instance_id='another-provider'`;
+    if (scenario === "generic-artifact")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET type='command_execution'`;
+    if (scenario === "legacy-item-fields")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET payload_json=${encodeEvidence({ type: "assistant_message", text: "unattributed secret" })}`;
+    if (scenario === "completion-before-start")
+      yield* f.sql`UPDATE orchestration_v2_projection_turn_items SET payload_json=${encodeEvidence({ ...f.item, completedAt: "2026-10-12T00:00:00Z" })}`;
+    const result = yield* f.readResult();
+    assert.equal(result?.status === "available" && result.runStatus, "completed");
+    assert.equal(result?.status === "available" && result.content.status, "unknown");
+    assert.isFalse(encodeEvidence(result).includes("Persisted fixture output"));
+    assert.isFalse(encodeEvidence(result).includes("broken-secret"));
+    assert.isFalse(encodeEvidence(result).includes("unattributed secret"));
+    if (scenario === "run-turn-disagreement") {
+      assert.equal(result?.status === "available" && result.providerTurnStatus, "running");
+      assert.equal(
+        result?.status === "available" &&
+          result.content.status === "unknown" &&
+          result.content.reason,
+        "run_turn_disagreement",
+      );
+    }
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect(
+  "never borrows a previous run or older valid item when the latest evidence is missing or malformed",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* resultFixture;
+      yield* f.sql`INSERT INTO orchestration_v2_projection_turn_items VALUES ('latest-broken','thread-1','run-1','node-1','provider-thread-1','turn-1',NULL,2,'assistant_message','completed',${f.item.updatedAt},'{broken')`;
+      const malformed = yield* f.readResult();
+      assert.equal(malformed?.status === "available" && malformed.content.status, "unknown");
+      yield* f.sql`INSERT INTO orchestration_v2_projection_runs VALUES ('run-2','thread-1',2,'provider-codex','queued',${encodeEvidence({ ...f.run, id: "run-2", ordinal: 2, userMessageId: "message-2", activeAttemptId: null, status: "queued" })})`;
+      const latest = yield* f.readResult();
+      assert.equal(latest?.status === "available" && latest.runId, "run-2");
+      assert.equal(latest?.status === "available" && latest.runStatus, "queued");
+      assert.equal(latest?.status === "available" && latest.content.status, "unknown");
+      assert.isFalse(encodeEvidence(latest).includes("Persisted fixture output"));
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect(
+  "ignores generic history and session lastError when no canonical terminal failure is persisted",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* resultFixture;
+      yield* f.setStatus("failed");
+      yield* f.sql`UPDATE orchestration_v2_projection_runs SET payload_json=${encodeEvidence({ ...f.run, status: "failed", lastError: "session-secret" })}`;
+      yield* f.sql`INSERT INTO orchestration_v2_projection_turn_items VALUES ('generic-error','thread-1','run-1','node-1','provider-thread-1','turn-1',NULL,3,'error','failed',${f.item.updatedAt},${encodeEvidence({ ...f.item, id: "generic-error", ordinal: 3, type: "error", status: "failed", failure: { class: "unknown", message: "generic-secret", code: null, retryable: null } })})`;
+      const result = yield* f.readResult();
+      assert.equal(result?.status === "available" && result.runStatus, "failed");
+      assert.equal(result?.status === "available" && result.content.status, "unknown");
+      assert.isFalse(encodeEvidence(result).includes("secret"));
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect(
+  "result evidence fails closed for another principal, project, canonical provider, malformed thread or legacy items",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* resultFixture;
+      assert.equal((yield* readCollaborationSnapshot(f.sql, "another-principal")).tasks.length, 0);
+      yield* f.sql`UPDATE orchestration_v2_projection_threads SET project_id='another-project'`;
+      assert.deepEqual(yield* f.readResult(), {
+        status: "unavailable",
+        reason: "invalid_thread_link",
+      });
+      yield* f.sql`UPDATE orchestration_v2_projection_threads SET project_id='project-a',payload_json='{broken'`;
+      assert.deepEqual(yield* f.readResult(), {
+        status: "unavailable",
+        reason: "invalid_thread_evidence",
+      });
+      yield* f.sql`UPDATE orchestration_v2_projection_threads SET payload_json='{}'`;
+      yield* f.sql`UPDATE orchestration_v2_projection_runs SET provider_instance_id='another-provider',payload_json=${encodeEvidence({ ...f.run, providerInstanceId: "another-provider", modelSelection: { instanceId: "another-provider", model: "secret-model" } })}`;
+      assert.deepEqual(yield* f.readResult(), { status: "unavailable", reason: "invalid_run" });
+      yield* f.sql`UPDATE orchestration_v2_projection_runs SET provider_instance_id='provider-codex',payload_json=${encodeEvidence(f.run)}`;
+      yield* f.sql`DROP TABLE orchestration_v2_projection_turn_items`;
+      const legacy = yield* f.readResult();
+      assert.equal(legacy?.status === "available" && legacy.runStatus, "completed");
+      assert.equal(legacy?.status === "available" && legacy.content.status, "unknown");
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
 
 it.effect(
   "separates immutable selection, configured runtime and matching provider-turn start",
