@@ -432,7 +432,7 @@ export function TaskReviewControls(props: {
       {pending ? (
         <p role="status">{editor ? "Editing paused instructions…" : "Review decision pending…"}</p>
       ) : null}
-      {notice !== null && noticeRevision === readout.contract.revision ? (
+      {notice !== null && (blocked || noticeRevision === readout.contract.revision) ? (
         <p role={blocked ? "alert" : "status"}>{notice}</p>
       ) : null}
       <AlertDialog

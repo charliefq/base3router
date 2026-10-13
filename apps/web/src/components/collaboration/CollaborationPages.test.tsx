@@ -2412,6 +2412,8 @@ it.each([
   "stale-preview",
   "stale-confirmation",
   "commit-lost-response",
+  "commit-refresh-late-failure",
+  "commit-refresh-late-rejection",
   "commit-environment",
   "commit-refresh-navigation",
 ] as const)(
@@ -2547,6 +2549,12 @@ it.each([
                     await receipt.promise;
                     return result;
                   });
+                if (mode.startsWith("commit-refresh-late-"))
+                  state.reviewDecide.mockImplementationOnce(async (args) => {
+                    await save(args);
+                    await receipt.promise;
+                    return { _tag: "Failure", cause: "Lost committed reply after refresh" };
+                  });
                 if (mode === "commit-refresh-navigation")
                   state.load.mockReturnValueOnce(refresh.promise);
                 const confirm = button("Save new revision")!;
@@ -2555,6 +2563,39 @@ it.each([
                   confirm.props.onClick();
                 });
                 expect(state.reviewDecide).toHaveBeenCalledTimes(1);
+                if (mode.startsWith("commit-refresh-late-")) {
+                  expect(button("Resume under this contract")).toBeUndefined();
+                  await click("Refresh tasks");
+                  expect(text()).toContain("Race-edited parser goal");
+                  expect(
+                    renderer.root
+                      .findByProps({ "data-task-contract-phase": "redirected" })
+                      .children.join(""),
+                  ).toContain("Revision 2");
+                  expect(button("Resume under this contract")).toBeUndefined();
+                  await act(async () => {
+                    if (mode === "commit-refresh-late-rejection")
+                      receipt.reject(new Error("Lost committed reply after refresh"));
+                    else receipt.resolve({ _tag: "Success", value: { sequence: 1 } });
+                  });
+                  expect(text()).toMatch(/uncertain|could not be confirmed/);
+                  expect(text()).toMatch(/Refresh task facts/);
+                  expect(text()).not.toContain("Revision 2 saved");
+                  expect(button("Revise paused instructions")).toBeUndefined();
+                  expect(button("Resume under this contract")).toBeUndefined();
+                  expect(state.reviewDecide).toHaveBeenCalledTimes(1);
+                  await click("Refresh tasks");
+                  expect(button("Revise paused instructions")).toBeDefined();
+                  expect(button("Resume under this contract")).toBeDefined();
+                  expect(text()).not.toMatch(/uncertain|could not be confirmed/);
+                  expect(state.reviewDecide).toHaveBeenCalledTimes(1);
+                  const freshTask = (await EffectForFixture.runPromise(fixture.readSnapshot()))
+                    .tasks[0]!;
+                  expect(
+                    freshTask.contractReadout?.status === "available" &&
+                      freshTask.contractReadout.contract.revision,
+                  ).toBe(2);
+                }
                 if (mode === "commit-environment") {
                   await retire();
                   await act(async () =>
