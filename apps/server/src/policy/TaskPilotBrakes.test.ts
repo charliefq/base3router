@@ -7,6 +7,9 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   AuthOrchestrationOperateScope,
+  CommandId,
+  RunId,
+  ThreadId,
   childConstraintConflict,
   EnvironmentId,
   ProviderDriverKind,
@@ -19,6 +22,7 @@ import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -41,6 +45,16 @@ import {
   reserveGovernedStart,
   reserveProviderHandoff,
 } from "./TaskContract.ts";
+import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
+import * as RunFinalizationService from "../orchestration-v2/RunFinalizationService.ts";
+import * as CheckpointRollbackService from "../orchestration-v2/CheckpointRollbackService.ts";
+import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
+import * as ProviderTurnControlService from "../orchestration-v2/ProviderTurnControlService.ts";
+import * as ProviderTurnStartService from "../orchestration-v2/ProviderTurnStartService.ts";
+import * as RuntimeRequestService from "../orchestration-v2/RuntimeRequestService.ts";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as ThreadTitleRegenerationService from "../orchestration-v2/ThreadTitleRegenerationService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { recordTaskUsage } from "./TaskUsageAccounting.ts";
 
 const provider: ServerProvider = {
@@ -925,3 +939,138 @@ it.effect("a reopened sqlite file keeps bounds and recovers an expired lease", (
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
   );
 });
+
+const queuedStartExecutorLayer = (starts: Ref.Ref<number>) =>
+  EffectWorker.executorLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(RunFinalizationService.RunFinalizationService)({}),
+        Layer.mock(CheckpointRollbackService.CheckpointRollbackServiceV2)({}),
+        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({}),
+        Layer.mock(ProviderTurnControlService.ProviderTurnControlServiceV2)({}),
+        Layer.mock(RuntimeRequestService.RuntimeRequestServiceV2)({}),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+        Layer.mock(ThreadTitleRegenerationService.ThreadTitleRegenerationService)({}),
+        Layer.mock(ServerSettings.ServerSettingsService)({}),
+        Layer.mock(ProviderTurnStartService.ProviderTurnStartServiceV2)({
+          start: () => Ref.update(starts, (count) => count + 1),
+        }),
+      ),
+    ),
+  );
+
+it.effect.each([
+  {
+    name: "original command before deadline",
+    effectCommandId: "queued-admission",
+    startAt: "2020-05-31T23:59:59.999Z",
+    expired: false,
+  },
+  {
+    name: "system queued command before deadline",
+    effectCommandId: "command:system:start-queued:run-queued",
+    startAt: "2020-05-31T23:59:59.999Z",
+    expired: false,
+  },
+  {
+    name: "original command at deadline",
+    effectCommandId: "queued-admission",
+    startAt: "2020-06-01T00:00:00.000Z",
+    expired: true,
+  },
+  {
+    name: "system queued command after deadline",
+    effectCommandId: "command:system:start-queued:run-queued",
+    startAt: "2020-06-01T00:00:00.001Z",
+    expired: true,
+  },
+])(
+  "covered $name rechecks the frozen deadline before fake provider start",
+  ({ effectCommandId, startAt, expired }) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const deadline = "2020-06-01T00:00:00.000Z";
+      yield* TestClock.setTime(Date.parse("2019-01-01T00:00:00.000Z"));
+      yield* insertThread(sql, "thread-queued", "thread-queued", null, {
+        ...pilotContract,
+        brake: { ...pilotBrake, deadlineAt: deadline },
+      });
+      yield* dispatchMessage("thread-queued", "queued-admission", "message-queued");
+      yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, payload_json) VALUES ('run-queued', 'thread-queued', 1, 'codex', 'starting', '2019-01-01T00:00:00.000Z', ${JSON.stringify({ userMessageId: "message-queued" })})`;
+      const starts = yield* Ref.make(0);
+      yield* Effect.gen(function* () {
+        const executor = yield* EffectWorker.OrchestrationEffectExecutorV2;
+        const now = "2019-01-01T00:00:00.000Z";
+        const effect = {
+          id: "effect:queued-start",
+          commandId: CommandId.make(effectCommandId),
+          threadId: ThreadId.make("thread-queued"),
+          request: { type: "provider-turn.start" as const, runId: RunId.make("run-queued") },
+          status: "running" as const,
+          attemptCount: 1,
+          availableAt: now,
+          leaseOwner: "fake-worker",
+          leaseExpiresAt: null,
+          createdAt: now,
+          updatedAt: now,
+          completedAt: null,
+          lastError: null,
+        };
+        expect(yield* admissionCount(sql, "thread-queued")).toBe(1);
+        expect((yield* leaseFlags(sql, "thread-queued"))[0]?.interrupt_requested).toBe(0);
+        // A later payload may not move the persisted deadline used by covered starts.
+        yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=${payloadFor("thread-queued", "thread-queued", null, pilotContract)} WHERE thread_id='thread-queued'`;
+        yield* TestClock.setTime(Date.parse(startAt));
+        const outcome = yield* Effect.result(executor.execute(effect));
+        expect(yield* Ref.get(starts)).toBe(expired ? 0 : 1);
+        expect(outcome._tag).toBe(expired ? "Failure" : "Success");
+        if (outcome._tag === "Failure")
+          expect(String(outcome.failure.cause)).toContain(`Absolute deadline ${deadline}`);
+        expect(yield* admissionCount(sql, "thread-queued")).toBe(1);
+        const frozen = yield* sql<{
+          deadline_at: string;
+        }>`SELECT deadline_at FROM task_contract_deadlines WHERE root_thread_id='thread-queued'`;
+        expect(frozen[0]?.deadline_at).toBe(deadline);
+        expect((yield* leaseFlags(sql, "thread-queued"))[0]?.interrupt_requested).toBe(
+          expired ? 1 : 0,
+        );
+        expect((yield* leaseFlags(sql, "thread-queued"))[0]?.released_at).toBeNull();
+        yield* noteUnconfirmedDisconnect({ threadId: "thread-queued" });
+        expect((yield* leaseFlags(sql, "thread-queued"))[0]?.released_at).toBeNull();
+        yield* sql`UPDATE orchestration_v2_projection_runs SET status='cancelled' WHERE run_id='run-queued'`;
+        yield* confirmProviderTermination({
+          threadId: "thread-queued",
+          messageId: "message-queued",
+        });
+        expect((yield* leaseFlags(sql, "thread-queued"))[0]?.released_at).not.toBeNull();
+      }).pipe(
+        Effect.provide(queuedStartExecutorLayer(starts)),
+        Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
+      );
+    }).pipe(Effect.provide(gateLayer)),
+);
+
+it.effect("a covered start still refuses a stale reservation revision before its deadline", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* TestClock.setTime(Date.parse("2019-01-01T00:00:00.000Z"));
+    yield* insertThread(sql, "thread-stale-covered", "thread-stale-covered", null);
+    yield* dispatchMessage("thread-stale-covered", "stale-admission", "message-stale-covered");
+    const state = yield* loadTaskState(sql, "thread-stale-covered");
+    const denied = yield* Effect.flip(
+      reserveProviderHandoff({
+        sql,
+        state: { ...state, contract: { ...pilotContract, revision: 2 } },
+        commandId: "system-queued-stale",
+        threadId: "thread-stale-covered",
+        messageId: "message-stale-covered",
+        effectType: "provider-turn.start",
+        attemptCount: 1,
+      }),
+    );
+    expect(denied.message).toContain("reserved for contract revision 1");
+    expect(yield* admissionCount(sql, "thread-stale-covered")).toBe(1);
+    expect((yield* leaseFlags(sql, "thread-stale-covered"))[0]?.interrupt_requested).toBe(1);
+    expect((yield* leaseFlags(sql, "thread-stale-covered"))[0]?.released_at).toBeNull();
+  }).pipe(Effect.provide(gateLayer)),
+);

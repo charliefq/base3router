@@ -875,6 +875,21 @@ export const reserveProviderHandoff = (input: {
           `This queued start was reserved for contract revision ${reservation.contract_revision} and was not reused for revision ${contract.revision}.`,
         );
       }
+      // Reusing a slot must not let queued work outlive its frozen deadline.
+      const bounds = yield* input.sql<{ readonly deadline_at: string }>`
+        SELECT deadline_at FROM task_contract_deadlines
+        WHERE root_thread_id = ${input.state.rootThreadId}
+        LIMIT 1
+      `;
+      const deadline = bounds[0]?.deadline_at;
+      const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
+      if (deadline !== undefined && deadline <= now) {
+        yield* requestTaskCancellation(input.sql, input.state.rootThreadId, input.threadId);
+        return yield* deny(
+          input.effectType,
+          `Absolute deadline ${deadline} is already past. Restart does not extend it. ${PINNED_LEASE}`,
+        );
+      }
       return;
     }
     const key = `handoff:${input.effectType}:${input.messageId ?? input.commandId}:${input.attemptCount}`;
