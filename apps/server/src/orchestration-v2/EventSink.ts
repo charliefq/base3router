@@ -1,6 +1,7 @@
 import {
   CommandId,
   CollaborationCommand,
+  type TaskEnrollmentOutcome,
   type OrchestrationV2Run,
   OrchestrationV2DomainEvent,
   OrchestrationV2StoredEvent,
@@ -22,6 +23,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import * as OwnedChat from "../collaboration/ownedChat.ts";
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import { enrollGovernedTask } from "../collaboration/store.ts";
 
@@ -130,6 +132,8 @@ export interface EventSinkV2Shape {
     readonly threadId: ThreadId;
     readonly commandType: string;
     readonly governedTaskOwner?: string;
+    readonly ordinaryRootOwner?: string;
+    readonly contractSetActor?: string;
     readonly acceptedAt: DateTime.Utc;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
@@ -143,6 +147,7 @@ export interface EventSinkV2Shape {
       readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
       readonly committed: boolean;
       readonly cancelledEffectCount: number;
+      readonly taskEnrollment?: TaskEnrollmentOutcome;
     },
     EventSinkV2Error
   >;
@@ -522,6 +527,26 @@ const baseLayer: Layer.Layer<
               existing.receipt.commandType !== input.commandType
             )
               return yield* refuse();
+            let taskEnrollment: TaskEnrollmentOutcome | undefined;
+            if (
+              existing.receipt.commandType === "thread.create" ||
+              existing.receipt.commandType === "thread.task-contract.set"
+            ) {
+              const context = yield* PolicyExecutionContext;
+              const actorId = context.kind === "session" ? context.actorId : "";
+              if (existing.receipt.commandType === "thread.create")
+                yield* OwnedChat.verifyOriginReplay(sql, {
+                  threadId: existing.receipt.threadId,
+                  commandId: existing.receipt.commandId,
+                  actorId,
+                });
+              else
+                taskEnrollment = yield* OwnedChat.readOutcome(sql, {
+                  threadId: existing.receipt.threadId,
+                  commandId: existing.receipt.commandId,
+                  actorId,
+                });
+            }
             if (existing.receipt.commandType === "thread.create") {
               const rows = yield* sql<{
                 payload_json: string;
@@ -543,25 +568,54 @@ const baseLayer: Layer.Layer<
                   return yield* refuse();
               }
             }
-            return { ...existing, committed: false as const, cancelledEffectIds: [] };
+            return {
+              ...existing,
+              committed: false as const,
+              cancelledEffectIds: [],
+              ...(taskEnrollment === undefined ? {} : { taskEnrollment }),
+            };
           }
 
-          if (input.commandType === "thread.create" || input.governedTaskOwner !== undefined) {
+          if (
+            input.commandType === "thread.create" ||
+            input.governedTaskOwner !== undefined ||
+            input.ordinaryRootOwner !== undefined
+          ) {
             const existing =
               yield* sql`SELECT thread_id FROM orchestration_v2_projection_threads WHERE thread_id=${input.threadId}`;
             const enrollment = yield* sql`SELECT command_id FROM collaboration_commands
-              WHERE json_extract(payload_json,'$.type')='task.enroll'
-                AND json_extract(payload_json,'$.threadId')=${input.threadId} LIMIT 1`;
+              WHERE CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.type')='task.enroll'
+                AND json_extract(payload_json,'$.threadId')=${input.threadId} ELSE 0 END LIMIT 1`;
             if (
               input.commandType !== "thread.create" ||
               enrollment.length > 0 ||
-              (existing.length > 0 && input.governedTaskOwner !== undefined)
+              (yield* OwnedChat.hasOrigin(sql, input.threadId)) ||
+              (existing.length > 0 &&
+                (input.governedTaskOwner !== undefined || input.ordinaryRootOwner !== undefined))
             )
               return yield* new EventSinkWriteError({
                 commandId: input.commandId,
                 eventCount: input.events.length,
               });
           }
+          const context = yield* PolicyExecutionContext;
+          if (
+            input.contractSetActor !== undefined &&
+            (input.commandType !== "thread.task-contract.set" ||
+              context.kind !== "session" ||
+              context.actorId !== input.contractSetActor)
+          )
+            return yield* new EventSinkWriteError({
+              commandId: input.commandId,
+              eventCount: input.events.length,
+            });
+          const upgrade =
+            input.contractSetActor === undefined
+              ? undefined
+              : yield* OwnedChat.upgradeEligibility(sql, {
+                  threadId: input.threadId,
+                  actorId: input.contractSetActor,
+                });
           const normalized = yield* normalizeEvents(input.events);
           const storedEvents = yield* eventStore.append({
             commandId: input.commandId,
@@ -580,6 +634,55 @@ const baseLayer: Layer.Layer<
               threadId: input.threadId,
               creationCommandId: input.commandId,
             });
+          if (input.ordinaryRootOwner !== undefined)
+            yield* OwnedChat.captureOrigin(sql, {
+              threadId: input.threadId,
+              creationCommandId: input.commandId,
+              actorId: input.ordinaryRootOwner,
+            });
+          let taskEnrollment: TaskEnrollmentOutcome | undefined;
+          if (input.contractSetActor !== undefined && upgrade !== undefined) {
+            if ("origin" in upgrade && upgrade.origin !== undefined) {
+              const event = storedEvents.find(
+                (stored) =>
+                  stored.event.type === "thread.metadata-updated" &&
+                  stored.event.threadId === input.threadId,
+              )?.event;
+              if (
+                !event ||
+                event.type !== "thread.metadata-updated" ||
+                event.payload.taskContract == null ||
+                event.payload.taskDecisions?.at(-1)?.actorId !== input.contractSetActor
+              )
+                return yield* new EventSinkWriteError({
+                  commandId: input.commandId,
+                  eventCount: input.events.length,
+                });
+              yield* enrollGovernedTask(sql, {
+                principalId: input.contractSetActor,
+                threadId: input.threadId,
+                creationCommandId: input.commandId,
+                originCommandId: upgrade.origin.creationCommandId,
+                upgradeCommandId: input.commandId,
+                upgradeEventId: event.id,
+              });
+              taskEnrollment = {
+                status: "enrolled",
+                taskId: `task:governed:thread:${input.threadId}`,
+              };
+            } else taskEnrollment = upgrade.outcome;
+            if (taskEnrollment === undefined)
+              return yield* new EventSinkWriteError({
+                commandId: input.commandId,
+                eventCount: input.events.length,
+              });
+            yield* OwnedChat.recordOutcome(sql, {
+              commandId: input.commandId,
+              threadId: input.threadId,
+              actorId: input.contractSetActor,
+              taskEnrollment,
+            });
+          }
           yield* effectOutbox.enqueue(input.effects);
           const receipt: CommandReceiptStore.CommandReceiptV2 = {
             commandId: input.commandId,
@@ -591,6 +694,12 @@ const baseLayer: Layer.Layer<
             error: null,
           };
           yield* commandReceipts.upsert(receipt);
+          if (taskEnrollment?.status === "enrolled" && input.contractSetActor !== undefined)
+            yield* OwnedChat.verifyCommittedUpgrade(sql, {
+              commandId: input.commandId,
+              threadId: input.threadId,
+              actorId: input.contractSetActor,
+            });
           const cancelledEffectIds =
             input.cancelUnsettledEffects === undefined
               ? []
@@ -598,7 +707,13 @@ const baseLayer: Layer.Layer<
                   threadId: input.threadId,
                   ...input.cancelUnsettledEffects,
                 });
-          return { receipt, storedEvents, committed: true as const, cancelledEffectIds };
+          return {
+            receipt,
+            storedEvents,
+            committed: true as const,
+            cancelledEffectIds,
+            ...(taskEnrollment === undefined ? {} : { taskEnrollment }),
+          };
         }),
       );
       yield* effectOutbox.signalCancellations(result.cancelledEffectIds);
@@ -614,6 +729,7 @@ const baseLayer: Layer.Layer<
         storedEvents: result.storedEvents,
         committed: result.committed,
         cancelledEffectCount: result.cancelledEffectIds.length,
+        ...(result.taskEnrollment === undefined ? {} : { taskEnrollment: result.taskEnrollment }),
       };
     });
 

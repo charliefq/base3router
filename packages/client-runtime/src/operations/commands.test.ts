@@ -15,6 +15,7 @@ import {
   ThreadId,
   TurnItemId,
   WS_METHODS,
+  type OrchestrationV2DispatchCommandResult,
   type OrchestrationV2Command,
   type OrchestrationV2ThreadLaunchInput,
   type OrchestrationV2ThreadProjection,
@@ -37,6 +38,7 @@ import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import { v2Now, v2Projection, v2ThreadId } from "../state/orchestrationV2TestFixtures.ts";
 import {
+  decideTaskContract,
   archiveThread,
   cancelQueuedRun,
   createProject,
@@ -72,6 +74,7 @@ const TARGET = new PrimaryConnectionTarget({
 });
 
 const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(function* (input: {
+  readonly dispatchResult?: OrchestrationV2DispatchCommandResult;
   readonly commands: OrchestrationV2Command[];
   readonly projects: ProjectMutation[];
   readonly launches?: OrchestrationV2ThreadLaunchInput[];
@@ -83,7 +86,7 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
     [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
       Effect.sync(() => {
         input.commands.push(command);
-        return { sequence: input.commands.length };
+        return input.dispatchResult ?? { sequence: input.commands.length };
       }),
     [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: (requestInput: {
       readonly threadId: ThreadId;
@@ -970,3 +973,30 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 });
+
+it.effect(
+  "propagates durable enrollment feedback through the existing contract-set operation",
+  () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const dispatchResult = {
+        sequence: 7,
+        taskEnrollment: { status: "not-enrolled" as const, reason: "origin-unavailable" as const },
+      };
+      const supervisor = yield* makeSupervisor({ commands, projects: [], dispatchResult });
+      const result = yield* decideTaskContract({
+        commandId: CommandId.make("contract-command"),
+        threadId: v2ThreadId,
+        action: "set",
+        goal: "Goal",
+        redirect: "Ask",
+        acceptance: "Owner checks",
+        maxProviderStarts: 2,
+        stopConditions: "Scope changed",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      expect(result).toEqual(dispatchResult);
+      expect(commands).toHaveLength(1);
+      expect(commands[0]?.type).toBe("thread.task-contract.set");
+      expect(commands[0]?.commandId).toBe("contract-command");
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+);

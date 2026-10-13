@@ -41,6 +41,7 @@ import {
   type OrchestrationV2TurnItem,
   AuthOrchestrationOperateScope,
   CollaborationCommand,
+  type TaskEnrollmentOutcome,
   childConstraintConflict,
   incompleteTaskContractMessage,
   ProviderInstanceId,
@@ -119,6 +120,7 @@ import {
 import { planThreadDeletion } from "./ThreadDeletion.ts";
 import { authorizeDispatch } from "../policy/Base3PolicyGate.ts";
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
+import * as OwnedChat from "../collaboration/ownedChat.ts";
 import {
   nextTaskContractThread,
   requestTaskCancellation,
@@ -252,6 +254,7 @@ export type OrchestratorV2Error = typeof OrchestratorV2Error.Type;
 export interface OrchestratorV2DispatchResult {
   readonly sequence: number;
   readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
+  readonly taskEnrollment?: TaskEnrollmentOutcome;
 }
 
 export interface OrchestratorV2Shape {
@@ -9170,6 +9173,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
       readonly effects: ReadonlyArray<PendingOrchestrationEffectV2>;
       readonly governedTaskOwner?: string;
+      readonly ordinaryRootOwner?: string;
+      readonly contractSetActor?: string;
       readonly cancelUnsettledEffects?: {
         readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
         readonly reason: string;
@@ -9192,6 +9197,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (command.taskContract !== undefined || command.taskGovernance === "required") &&
       command.creationSource !== "provider" &&
       context.kind === "session"
+        ? context.actorId
+        : undefined;
+    const ordinaryRootOwner =
+      command.type === "thread.create" &&
+      command.taskContract === undefined &&
+      command.taskGovernance !== "required" &&
+      command.creationSource !== "provider" &&
+      context.kind === "session"
+        ? context.actorId
+        : undefined;
+    const contractSetActor =
+      command.type === "thread.task-contract.set" && context.kind === "session"
         ? context.actorId
         : undefined;
     if (governedTaskOwner !== undefined && !governedTaskOwner.trim())
@@ -9454,6 +9471,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       events: yield* Ref.get(events),
       effects: yield* Ref.get(effects),
       ...(governedTaskOwner === undefined ? {} : { governedTaskOwner }),
+      ...(ordinaryRootOwner === undefined ? {} : { ordinaryRootOwner }),
+      ...(contractSetActor === undefined ? {} : { contractSetActor }),
       ...(cancelUnsettledEffects === undefined ? {} : { cancelUnsettledEffects }),
     };
   });
@@ -9507,6 +9526,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           commandThreadId: dispatchThreadId,
         });
       }
+      let taskEnrollment: TaskEnrollmentOutcome | undefined;
+      if (
+        receipt.commandType === "thread.create" ||
+        receipt.commandType === "thread.task-contract.set"
+      ) {
+        const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
+        const context = yield* PolicyExecutionContext;
+        if (Option.isSome(sqlOption)) {
+          if (receipt.commandType === "thread.create")
+            yield* OwnedChat.verifyOriginReplay(sqlOption.value, {
+              threadId: receipt.threadId,
+              commandId: receipt.commandId,
+              actorId: context.kind === "session" ? context.actorId : "",
+            }).pipe(mapDispatchError(command));
+          else
+            taskEnrollment = yield* OwnedChat.readOutcome(sqlOption.value, {
+              threadId: receipt.threadId,
+              commandId: receipt.commandId,
+              actorId: context.kind === "session" ? context.actorId : "",
+            }).pipe(mapDispatchError(command));
+        }
+      }
       if (receipt.commandType === "thread.create") {
         const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
         if (Option.isSome(sqlOption)) {
@@ -9552,6 +9593,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return {
         sequence: receipt.resultSequence,
         storedEvents,
+        ...(taskEnrollment === undefined ? {} : { taskEnrollment }),
       } satisfies OrchestratorV2DispatchResult;
     }
 
@@ -9645,6 +9687,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(plan.governedTaskOwner === undefined
           ? {}
           : { governedTaskOwner: plan.governedTaskOwner }),
+        ...(plan.ordinaryRootOwner === undefined
+          ? {}
+          : { ordinaryRootOwner: plan.ordinaryRootOwner }),
+        ...(plan.contractSetActor === undefined ? {} : { contractSetActor: plan.contractSetActor }),
         ...(plan.cancelUnsettledEffects === undefined
           ? {}
           : { cancelUnsettledEffects: plan.cancelUnsettledEffects }),
@@ -9680,6 +9726,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     return {
       sequence: committed.receipt.resultSequence,
       storedEvents: committed.storedEvents,
+      ...(committed.taskEnrollment === undefined
+        ? {}
+        : { taskEnrollment: committed.taskEnrollment }),
     } satisfies OrchestratorV2DispatchResult;
   });
 

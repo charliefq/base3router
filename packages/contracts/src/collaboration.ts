@@ -245,6 +245,9 @@ export const CollaborationCommand = Schema.Struct({
   threadId: Schema.optional(TrimmedNonEmptyString),
   admittedBy: Schema.optional(TrimmedNonEmptyString),
   admissionSource: Schema.optional(Schema.Literal("server")),
+  originCommandId: Schema.optionalKey(TrimmedNonEmptyString),
+  upgradeCommandId: Schema.optionalKey(TrimmedNonEmptyString),
+  upgradeEventId: Schema.optionalKey(TrimmedNonEmptyString),
   gateDecision: Schema.optional(CollaborationGateDecision),
   revision: Schema.optional(Schema.Number),
 });
