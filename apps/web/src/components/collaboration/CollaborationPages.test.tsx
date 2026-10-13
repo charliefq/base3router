@@ -9,6 +9,7 @@ import * as SqliteForFixture from "@t3tools/shared/nodeSqliteClient";
 import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import {
+  CommandId,
   ProviderInstanceId,
   HYBRID_TASK_ROUTER_POLICY_VERSION,
   ProviderDriverKind,
@@ -117,6 +118,7 @@ vi.mock("../ui/alert-dialog", () => ({
   AlertDialogDescription: "p",
 }));
 vi.mock("../ui/button", () => ({ Button: "button" }));
+vi.mock("../ui/textarea", () => ({ Textarea: "textarea" }));
 vi.mock("../ui/sidebar", () => ({ SidebarInset: "main" }));
 vi.mock("../WorkspacePageHeader", () => ({ WorkspacePageHeader: "header" }));
 vi.mock("../WorkspacePageContainer", () => ({ WorkspacePageContainer: "div" }));
@@ -1919,7 +1921,14 @@ const loadTaskReviewFixture = async () =>
         readSnapshot: (
           canOperate?: boolean,
         ) => EffectForFixture.Effect<CollaborationSnapshot, Error>;
+        saveInstructions: (
+          input: Extract<
+            import("@t3tools/contracts").OrchestrationV2Command,
+            { type: "thread.task-contract.set" }
+          >,
+        ) => EffectForFixture.Effect<unknown, Error>;
         createAdditional: () => EffectForFixture.Effect<unknown, Error>;
+        pauseUnbound: () => EffectForFixture.Effect<unknown, Error>;
         revise: () => EffectForFixture.Effect<unknown, Error>;
         readReview: (
           input: import("@t3tools/contracts").TaskContractReviewInput,
@@ -1941,6 +1950,7 @@ const loadTaskReviewFixture = async () =>
           Error
         >;
       }) => EffectForFixture.Effect<void, Error>,
+      options?: { readonly brake?: import("@t3tools/contracts").TaskContractBrake },
     ) => EffectForFixture.Effect<void, Error>;
   };
 
@@ -2238,3 +2248,408 @@ it("isolates explicitly confirmed decisions on two actual governed Tasks roots",
     ),
   );
 }, 60_000);
+
+it("opens an instruction editor only after an actual owned root is explicitly paused", async () => {
+  const module = await loadTaskReviewFixture();
+  await EffectForFixture.runPromise(
+    module.withTaskReviewFixture((fixture) =>
+      EffectForFixture.promise(async () => {
+        state.load.mockImplementation(() => EffectForFixture.runPromise(fixture.readSnapshot()));
+        state.reviewRead.mockImplementation(async ({ input }) => ({
+          _tag: "Success",
+          value: await EffectForFixture.runPromise(fixture.readReview(input)),
+        }));
+        state.reviewDecide.mockImplementation(async ({ input }) => ({
+          _tag: "Success",
+          value: await EffectForFixture.runPromise(fixture.decide(input)),
+        }));
+        await act(async () => {
+          renderer = create(<TasksPage />);
+        });
+        await act(async () =>
+          renderer.root
+            .findAllByType("button")
+            .find((b) => b.props["data-task-contract-redirect-action"] !== undefined)!
+            .props.onClick(),
+        );
+        await act(async () =>
+          renderer.root
+            .findAllByType("button")
+            .find((b) => b.children.includes("Confirm decision"))!
+            .props.onClick(),
+        );
+        expect((await EffectForFixture.runPromise(fixture.facts())).phase).toBe("redirected");
+        expect(
+          renderer.root
+            .findAllByType("button")
+            .find((b) => b.children.includes("Revise paused instructions")),
+        ).toBeDefined();
+      }),
+    ),
+  );
+}, 60_000);
+
+it("pauses, previews and saves new instructions still paused, then separately resumes through actual services with full Brake retention", async () => {
+  const module = await loadTaskReviewFixture();
+  const brake = {
+    maxProviderStarts: 2,
+    stopConditions: "Scope changed",
+    maxTokens: 1000,
+    maxCostUsd: 1,
+    deadlineAt: "2030-01-01T00:00:00.000Z",
+  };
+  await EffectForFixture.runPromise(
+    module.withTaskReviewFixture(
+      (fixture) =>
+        EffectForFixture.promise(async () => {
+          state.load.mockImplementation(() => EffectForFixture.runPromise(fixture.readSnapshot()));
+          state.reviewRead.mockImplementation(async ({ input }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(fixture.readReview(input)),
+          }));
+          state.reviewDecide.mockImplementation(async ({ input }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(
+              input.action === "set"
+                ? fixture.saveInstructions({
+                    type: "thread.task-contract.set",
+                    commandId: CommandId.make(
+                      `instruction-ui-set:${state.reviewDecide.mock.calls.length}`,
+                    ),
+                    ...input,
+                  })
+                : fixture.decide(input),
+            ),
+          }));
+          const button = (name: string) =>
+            renderer.root.findAllByType("button").find((b) => b.children.includes(name));
+          const click = async (name: string) => {
+            await act(async () => button(name)!.props.onClick());
+          };
+          await act(async () => {
+            renderer = create(<TasksPage />);
+          });
+          expect(button("Revise paused instructions")).toBeUndefined();
+          await act(async () =>
+            renderer.root
+              .findAllByType("button")
+              .find((b) => b.props["data-task-contract-redirect-action"] !== undefined)!
+              .props.onClick(),
+          );
+          await click("Confirm decision");
+          await click("Revise paused instructions");
+          expect(text()).toContain("Brake is read-only");
+          expect(text()).toContain("2030-01-01");
+          expect(button("Resume under this contract")).toBeUndefined();
+          expect(button("Preview instruction changes")!.props.disabled).toBe(true);
+          for (const [field, value] of [
+            ["goal", "New parser goal"],
+            ["redirect", "Ask before scope expansion"],
+            ["acceptance", "Owner checks new evidence"],
+          ] as const)
+            await act(async () =>
+              renderer.root
+                .findByProps({ "aria-label": `${field} instruction` })
+                .props.onChange({ target: { value } }),
+            );
+          await click("Preview instruction changes");
+          expect(text()).toContain("Save revision 2?");
+          expect(text()).toContain("Task remains paused");
+          expect(text()).toContain("separate Resume");
+          expect(text()).toContain("New parser goal");
+          expect(state.reviewDecide).toHaveBeenCalledTimes(1);
+          await click("Cancel");
+          expect(renderer.root.findByProps({ "aria-label": "goal instruction" }).props.value).toBe(
+            "New parser goal",
+          );
+          await click("Preview instruction changes");
+          await click("Save new revision");
+          const snapshot = await EffectForFixture.runPromise(fixture.readSnapshot());
+          expect(snapshot.tasks[0]?.contractReadout).toMatchObject({
+            status: "available",
+            phase: "redirected",
+            acceptedRevision: null,
+            contract: {
+              revision: 2,
+              goal: "New parser goal",
+              redirect: "Ask before scope expansion",
+              acceptance: "Owner checks new evidence",
+              brake,
+            },
+          });
+          expect(snapshot.tasks[0]?.state).toBe("blocked");
+          expect(text()).toContain("Task remains paused");
+          expect(state.reviewDecide).toHaveBeenCalledTimes(2);
+          await click("Resume under this contract");
+          expect(state.reviewDecide).toHaveBeenCalledTimes(2);
+          await click("Confirm decision");
+          expect(state.reviewDecide).toHaveBeenCalledTimes(3);
+          expect(await EffectForFixture.runPromise(fixture.facts())).toEqual({
+            phase: "active",
+            acceptedRevision: null,
+            runs: 0,
+            grants: 0,
+            outbox: 0,
+          });
+          expect(state.create).not.toHaveBeenCalled();
+          expect(state.bind).not.toHaveBeenCalled();
+        }),
+      { brake },
+    ),
+  );
+}, 60_000);
+
+it.each([
+  "open-unmount",
+  "open-environment",
+  "open-refresh",
+  "editor-cancel",
+  "confirmation-close",
+  "preview-cancel-late",
+  "preview-unmount",
+  "preview-environment",
+  "preview-refresh",
+  "stale-preview",
+  "stale-confirmation",
+  "commit-lost-response",
+  "commit-environment",
+  "commit-refresh-navigation",
+] as const)(
+  "retires paused instruction edits safely across %s",
+  async (mode) => {
+    const module = await loadTaskReviewFixture();
+    await EffectForFixture.runPromise(
+      module.withTaskReviewFixture((fixture) =>
+        EffectForFixture.promise(async () => {
+          const task = (await EffectForFixture.runPromise(fixture.readSnapshot())).tasks[0]!;
+          const target = {
+            environmentId: "environment-a",
+            taskId: task.id,
+            projectId: task.projectId,
+            threadId: task.threadId!,
+            revision: 1,
+          };
+          const initial = await EffectForFixture.runPromise(fixture.readReview(target));
+          if (initial.status !== "available") throw new Error("Fixture root unavailable");
+          await EffectForFixture.runPromise(
+            fixture.decide({
+              threadId: target.threadId,
+              action: "redirect",
+              revision: 1,
+              reviewTask: initial.reference,
+            }),
+          );
+          state.load.mockImplementation(() => EffectForFixture.runPromise(fixture.readSnapshot()));
+          const read = async ({
+            input,
+          }: {
+            input: import("@t3tools/contracts").TaskContractReviewInput;
+          }) => ({
+            _tag: "Success" as const,
+            value: await EffectForFixture.runPromise(fixture.readReview(input)),
+          });
+          const save = async ({
+            input,
+          }: {
+            input: Parameters<typeof fixture.saveInstructions>[0];
+          }) => ({
+            _tag: "Success" as const,
+            value: await EffectForFixture.runPromise(
+              fixture.saveInstructions({
+                ...input,
+                type: "thread.task-contract.set",
+                commandId: CommandId.make("instruction-race-save"),
+              }),
+            ),
+          });
+          state.reviewRead.mockImplementation(read);
+          state.reviewDecide.mockImplementation(save);
+          const preflight = deferred<Awaited<ReturnType<typeof read>>>();
+          const receipt = deferred<Awaited<ReturnType<typeof save>>>();
+          const refresh = deferred<CollaborationSnapshot>();
+          if (mode.startsWith("open-"))
+            state.reviewRead.mockImplementationOnce(() => preflight.promise);
+          await act(async () => {
+            renderer = create(<TasksPage />);
+          });
+          const button = (name: string) =>
+            renderer.root.findAllByType("button").find((b) => b.children.includes(name));
+          const click = async (name: string) => {
+            await act(async () => button(name)!.props.onClick());
+          };
+          const retire = async () => {
+            if (mode.endsWith("unmount")) await act(async () => renderer.unmount());
+            else if (mode.endsWith("environment")) {
+              state.environmentId = "environment-b";
+              await act(async () => renderer.update(<TasksPage />));
+            } else await click("Refresh tasks");
+          };
+          const edit = button("Revise paused instructions")!;
+          await act(async () => {
+            edit.props.onClick();
+            edit.props.onClick();
+          });
+          expect(state.reviewRead).toHaveBeenCalledTimes(1);
+          if (mode.startsWith("open-")) {
+            await retire();
+            await act(async () => preflight.resolve(await read({ input: target })));
+          } else {
+            expect(button("Resume under this contract")).toBeUndefined();
+            await act(async () =>
+              renderer.root
+                .findByProps({ "aria-label": "goal instruction" })
+                .props.onChange({ target: { value: "Race-edited parser goal" } }),
+            );
+            if (mode === "editor-cancel") {
+              await click("Cancel editing");
+              expect(button("Revise paused instructions")).toBeDefined();
+            } else {
+              if (mode.startsWith("preview-"))
+                state.reviewRead.mockImplementationOnce(() => preflight.promise);
+              if (mode === "stale-preview") await EffectForFixture.runPromise(fixture.revise());
+              const preview = button("Preview instruction changes")!;
+              await act(async () => {
+                preview.props.onClick();
+                preview.props.onClick();
+              });
+              expect(state.reviewRead).toHaveBeenCalledTimes(2);
+              expect(state.reviewDecide).not.toHaveBeenCalled();
+              if (mode === "stale-preview") {
+                expect(text()).toContain("facts changed");
+                expect(button("Save new revision")).toBeUndefined();
+              } else if (mode === "preview-cancel-late") {
+                await click("Cancel editing");
+                await act(async () => preflight.resolve(await read({ input: target })));
+                expect(button("Save new revision")).toBeUndefined();
+                expect(button("Revise paused instructions")).toBeDefined();
+              } else if (mode.startsWith("preview-")) {
+                await retire();
+                await act(async () => preflight.resolve(await read({ input: target })));
+              } else if (mode === "confirmation-close") {
+                await act(async () =>
+                  renderer.root.findByProps({ "data-review-dialog": "" }).props.onClose(),
+                );
+                expect(
+                  renderer.root.findByProps({ "aria-label": "goal instruction" }).props.value,
+                ).toBe("Race-edited parser goal");
+                await click("Cancel editing");
+              } else {
+                if (mode === "stale-confirmation")
+                  await EffectForFixture.runPromise(fixture.revise());
+                if (mode === "commit-lost-response")
+                  state.reviewDecide.mockImplementationOnce(async (args) => {
+                    await save(args);
+                    return { _tag: "Failure", cause: "Lost committed reply" };
+                  });
+                if (mode === "commit-environment")
+                  state.reviewDecide.mockImplementationOnce(async (args) => {
+                    const result = await save(args);
+                    await receipt.promise;
+                    return result;
+                  });
+                if (mode === "commit-refresh-navigation")
+                  state.load.mockReturnValueOnce(refresh.promise);
+                const confirm = button("Save new revision")!;
+                await act(async () => {
+                  confirm.props.onClick();
+                  confirm.props.onClick();
+                });
+                expect(state.reviewDecide).toHaveBeenCalledTimes(1);
+                if (mode === "commit-environment") {
+                  await retire();
+                  await act(async () =>
+                    receipt.resolve({ _tag: "Success", value: { sequence: 1 } }),
+                  );
+                  expect(text()).not.toContain("Revision 2 saved");
+                }
+                if (mode === "commit-refresh-navigation") {
+                  state.environmentId = "environment-b";
+                  await act(async () => renderer.update(<TasksPage />));
+                  state.environmentId = "environment-a";
+                  await act(async () => renderer.update(<TasksPage />));
+                  await act(async () =>
+                    refresh.resolve({
+                      ...(await EffectForFixture.runPromise(fixture.readSnapshot())),
+                      tasks: [task],
+                    }),
+                  );
+                  expect(text()).toContain("Race-edited parser goal");
+                  expect(text()).not.toContain("Revision 2 saved");
+                }
+                if (mode === "commit-lost-response" || mode === "stale-confirmation") {
+                  expect(text()).toMatch(/uncertain|could not be confirmed/);
+                  expect(button("Revise paused instructions")).toBeUndefined();
+                  expect(button("Resume under this contract")).toBeUndefined();
+                  await click("Refresh tasks");
+                  expect(state.reviewDecide).toHaveBeenCalledTimes(1);
+                  if (mode === "commit-lost-response") {
+                    expect(button("Revise paused instructions")).toBeDefined();
+                    expect(text()).toContain("Race-edited parser goal");
+                  } else expect(button("Revise paused instructions")).toBeUndefined();
+                }
+              }
+            }
+          }
+          const facts = await EffectForFixture.runPromise(fixture.facts());
+          expect(facts.runs + facts.grants + facts.outbox).toBe(0);
+          expect(facts.acceptedRevision).toBeNull();
+          if (!mode.startsWith("commit-") && mode !== "stale-confirmation")
+            expect(state.reviewDecide).not.toHaveBeenCalled();
+          expect(state.create).not.toHaveBeenCalled();
+          expect(state.bind).not.toHaveBeenCalled();
+        }),
+      ),
+    );
+  },
+  60_000,
+);
+
+it.each(["active", "accepted", "accepted-paused", "paused-readonly"] as const)(
+  "does not expose an instruction editor for actual %s roots",
+  async (mode) => {
+    const module = await loadTaskReviewFixture();
+    await EffectForFixture.runPromise(
+      module.withTaskReviewFixture((fixture) =>
+        EffectForFixture.promise(async () => {
+          const task = (await EffectForFixture.runPromise(fixture.readSnapshot())).tasks[0]!;
+          const input = {
+            environmentId: "environment-a",
+            taskId: task.id,
+            projectId: task.projectId,
+            threadId: task.threadId!,
+            revision: 1,
+          };
+          if (mode.startsWith("accepted")) {
+            const facts = await EffectForFixture.runPromise(fixture.readReview(input));
+            if (facts.status !== "available") throw new Error("Fixture unavailable");
+            await EffectForFixture.runPromise(
+              fixture.decide({
+                threadId: task.threadId!,
+                action: "accept",
+                revision: 1,
+                reviewTask: facts.reference,
+              }),
+            );
+          }
+          if (mode === "accepted-paused" || mode === "paused-readonly")
+            await EffectForFixture.runPromise(fixture.pauseUnbound());
+          state.load.mockImplementation(() =>
+            EffectForFixture.runPromise(fixture.readSnapshot(mode !== "paused-readonly")),
+          );
+          await act(async () => {
+            renderer = create(<TasksPage />);
+          });
+          expect(
+            renderer.root
+              .findAllByType("button")
+              .find((b) => b.children.includes("Revise paused instructions")),
+          ).toBeUndefined();
+          expect(state.reviewRead).not.toHaveBeenCalled();
+          expect(state.reviewDecide).not.toHaveBeenCalled();
+          expect((await EffectForFixture.runPromise(fixture.facts())).runs).toBe(0);
+        }),
+      ),
+    );
+  },
+  60_000,
+);

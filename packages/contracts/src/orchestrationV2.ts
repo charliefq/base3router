@@ -1872,6 +1872,7 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
         revision: PositiveInt,
         actorId: TrimmedNonEmptyString,
         reviewTask: Schema.optionalKey(TaskContractReviewReference),
+        expectedRevision: Schema.optionalKey(PositiveInt),
         at: Schema.DateTimeUtcFromString,
       }),
     ),
@@ -2854,7 +2855,15 @@ export const OrchestrationV2Command = Schema.Union([
     redirect: TrimmedNonEmptyString,
     acceptance: TrimmedNonEmptyString,
     brake: TaskContractFields.fields.brake,
-  }),
+    expectedRevision: Schema.optionalKey(PositiveInt),
+    reviewTask: Schema.optionalKey(TaskContractReviewReference),
+  }).check(
+    Schema.makeFilter(
+      (command) =>
+        (command.expectedRevision === undefined) === (command.reviewTask === undefined) ||
+        "Reviewed set requires both expectedRevision and reviewTask.",
+    ),
+  ),
   Schema.Struct({
     type: Schema.Literal("thread.task-contract.accept"),
     commandId: CommandId,

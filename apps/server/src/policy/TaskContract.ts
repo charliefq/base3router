@@ -20,6 +20,7 @@ import {
   TASK_CONTRACT_HUMAN_DECISION,
   type OrchestrationV2AppThread,
   TaskContract,
+  TaskContractBrake,
   type TaskContractDecision,
   type TaskContractReviewReference,
   type TaskContractFields,
@@ -118,6 +119,8 @@ export const loadTaskState = (
     return taskStateFromUnknown(threadId, payload);
   }).pipe(asPolicyDenial(commandType));
 
+const sameBrake = Schema.toEquivalence(TaskContractBrake);
+
 export function nextTaskContractThread(input: {
   readonly thread: OrchestrationV2AppThread;
   readonly actorId: string;
@@ -129,6 +132,8 @@ export function nextTaskContractThread(input: {
         readonly redirect: string;
         readonly acceptance: string;
         readonly brake: TaskContractFields["brake"];
+        readonly expectedRevision?: number;
+        readonly reviewTask?: TaskContractReviewReference;
       }
     | {
         readonly type: "thread.task-contract.accept";
@@ -157,8 +162,10 @@ export function nextTaskContractThread(input: {
     revision,
     actorId: input.actorId,
     at: input.now,
-    ...(input.command.type !== "thread.task-contract.set" && input.command.reviewTask !== undefined
-      ? { reviewTask: input.command.reviewTask }
+    ...(input.command.reviewTask === undefined ? {} : { reviewTask: input.command.reviewTask }),
+    ...(input.command.type === "thread.task-contract.set" &&
+    input.command.expectedRevision !== undefined
+      ? { expectedRevision: input.command.expectedRevision }
       : {}),
   });
   const withDecision = (
@@ -170,13 +177,50 @@ export function nextTaskContractThread(input: {
     updatedAt: input.now,
   });
   if (input.command.type === "thread.task-contract.set") {
+    const hasRevision = input.command.expectedRevision !== undefined;
+    const hasReview = input.command.reviewTask !== undefined;
+    if (hasRevision !== hasReview)
+      return { error: "Reviewed set requires both expected revision and full review reference." };
+    const reviewed = hasRevision && hasReview;
+    const instructions = {
+      goal: input.command.goal.trim(),
+      redirect: input.command.redirect.trim(),
+      acceptance: input.command.acceptance.trim(),
+    };
+    if (reviewed) {
+      if (
+        !current ||
+        input.thread.taskGovernance !== "required" ||
+        input.thread.taskContractPhase !== "redirected" ||
+        input.thread.taskAcceptedRevision === current.revision ||
+        input.thread.lineage.rootThreadId !== input.thread.id ||
+        input.thread.lineage.parentThreadId !== null ||
+        input.thread.lineage.relationshipToParent !== null ||
+        input.thread.archivedAt !== null ||
+        input.thread.deletedAt !== null ||
+        input.command.expectedRevision !== current.revision
+      )
+        return { error: "Reviewed instructions require the same unaccepted paused root revision." };
+      if (Object.values(instructions).some((value) => value.length === 0))
+        return { error: "Goal, Redirect and Acceptance must be nonblank." };
+      if (
+        instructions.goal === current.goal &&
+        instructions.redirect === current.redirect &&
+        instructions.acceptance === current.acceptance
+      )
+        return { error: "No instruction changes were proposed; no new revision was saved." };
+      if (!sameBrake(input.command.brake, current.brake))
+        return {
+          error: "The entire authoritative Brake must stay unchanged. Refresh the task facts.",
+        };
+    }
     const revision = (current?.revision ?? 0) + 1;
     const contract: TaskContract = {
       revision,
-      goal: input.command.goal,
-      redirect: input.command.redirect,
-      acceptance: input.command.acceptance,
-      brake: input.command.brake,
+      goal: reviewed ? instructions.goal : input.command.goal,
+      redirect: reviewed ? instructions.redirect : input.command.redirect,
+      acceptance: reviewed ? instructions.acceptance : input.command.acceptance,
+      brake: reviewed && current ? current.brake : input.command.brake,
     };
     return {
       rootThreadId: input.thread.lineage.rootThreadId,
@@ -185,7 +229,7 @@ export function nextTaskContractThread(input: {
           ...input.thread,
           taskGovernance: "required",
           taskContract: contract,
-          taskContractPhase: "active",
+          taskContractPhase: reviewed ? "redirected" : "active",
           taskAcceptedRevision: null,
         },
         decision("set", revision),

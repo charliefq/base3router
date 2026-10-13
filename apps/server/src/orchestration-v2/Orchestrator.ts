@@ -9137,7 +9137,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         yield* validateTaskDecision(
           reviewSql.value,
           command.type === "thread.task-contract.set"
-            ? { threadId: command.threadId, action: "set" }
+            ? {
+                threadId: command.threadId,
+                action: "set",
+                ...(command.expectedRevision === undefined
+                  ? {}
+                  : { expectedRevision: command.expectedRevision }),
+                ...(command.reviewTask === undefined ? {} : { reviewTask: command.reviewTask }),
+              }
             : {
                 threadId: command.threadId,
                 action: command.type.slice(
@@ -9147,7 +9154,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 ...(command.reviewTask === undefined ? {} : { reviewTask: command.reviewTask }),
               },
         ).pipe(mapDispatchError(command));
-      else if (command.type !== "thread.task-contract.set" && command.reviewTask !== undefined)
+      else if (
+        command.reviewTask !== undefined ||
+        (command.type === "thread.task-contract.set" && command.expectedRevision !== undefined)
+      )
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
@@ -9194,6 +9204,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       readonly governedTaskOwner?: string;
       readonly ordinaryRootOwner?: string;
       readonly contractSetActor?: string;
+      readonly reviewedSet?: Extract<OrchestrationV2Command, { type: "thread.task-contract.set" }>;
       readonly taskContractDecision?: {
         readonly action: TaskContractReviewAction;
         readonly revision: number;
@@ -9497,6 +9508,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(governedTaskOwner === undefined ? {} : { governedTaskOwner }),
       ...(ordinaryRootOwner === undefined ? {} : { ordinaryRootOwner }),
       ...(contractSetActor === undefined ? {} : { contractSetActor }),
+      ...(command.type === "thread.task-contract.set" &&
+      (command.expectedRevision !== undefined || command.reviewTask !== undefined)
+        ? { reviewedSet: command }
+        : {}),
       ...(command.type === "thread.task-contract.accept" ||
       command.type === "thread.task-contract.redirect" ||
       command.type === "thread.task-contract.resume"
@@ -9574,7 +9589,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           yield* verifyTaskDecisionReplay(
             reviewSql.value,
             command.type === "thread.task-contract.set"
-              ? { commandId: command.commandId, threadId: command.threadId, action: "set" }
+              ? {
+                  commandId: command.commandId,
+                  threadId: command.threadId,
+                  action: "set",
+                  ...(command.expectedRevision === undefined && command.reviewTask === undefined
+                    ? {}
+                    : { reviewedSet: command }),
+                }
               : {
                   commandId: command.commandId,
                   threadId: command.threadId,
@@ -9585,7 +9607,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   ...(command.reviewTask === undefined ? {} : { reviewTask: command.reviewTask }),
                 },
           ).pipe(mapDispatchError(command));
-        else if (command.type !== "thread.task-contract.set" && command.reviewTask !== undefined)
+        else if (
+          command.reviewTask !== undefined ||
+          (command.type === "thread.task-contract.set" && command.expectedRevision !== undefined)
+        )
           return yield* new OrchestratorDispatchError({
             commandId: command.commandId,
             commandType: command.type,
@@ -9757,6 +9782,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ? {}
           : { ordinaryRootOwner: plan.ordinaryRootOwner }),
         ...(plan.contractSetActor === undefined ? {} : { contractSetActor: plan.contractSetActor }),
+        ...(plan.reviewedSet === undefined ? {} : { reviewedSet: plan.reviewedSet }),
         ...(plan.taskContractDecision === undefined
           ? {}
           : { taskContractDecision: plan.taskContractDecision }),

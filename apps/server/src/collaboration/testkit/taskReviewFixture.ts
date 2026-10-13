@@ -8,6 +8,8 @@ import {
   ThreadId,
   type TaskContractReviewInput,
   type TaskContractReviewAction,
+  type TaskContractBrake,
+  type OrchestrationV2Command,
   type TaskContractReviewReference,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -46,7 +48,11 @@ export const withTaskReviewFixture = <E>(
       revision: number;
       reviewTask: TaskContractReviewReference;
     }) => ReturnType<Orchestrator.OrchestratorV2["Service"]["dispatch"]>;
+    saveInstructions: (
+      input: Extract<OrchestrationV2Command, { type: "thread.task-contract.set" }>,
+    ) => ReturnType<Orchestrator.OrchestratorV2["Service"]["dispatch"]>;
     createAdditional: () => ReturnType<Orchestrator.OrchestratorV2["Service"]["dispatch"]>;
+    pauseUnbound: () => ReturnType<Orchestrator.OrchestratorV2["Service"]["dispatch"]>;
     revise: () => ReturnType<Orchestrator.OrchestratorV2["Service"]["dispatch"]>;
     facts: () => Effect.Effect<
       {
@@ -60,6 +66,7 @@ export const withTaskReviewFixture = <E>(
       | import("effect/unstable/sql/SqlError").SqlError
     >;
   }) => Effect.Effect<void, E>,
+  options?: { readonly brake?: TaskContractBrake },
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -88,7 +95,7 @@ export const withTaskReviewFixture = <E>(
             goal: "Fix parser behavior",
             redirect: "Ask before expanding scope",
             acceptance: "Owner checks the result",
-            brake: { maxProviderStarts: 2, stopConditions: "Scope changed" },
+            brake: options?.brake ?? { maxProviderStarts: 2, stopConditions: "Scope changed" },
           },
         })
         .pipe(Effect.provideService(PolicyExecutionContext, actor));
@@ -118,6 +125,14 @@ export const withTaskReviewFixture = <E>(
               Effect.provideService(ServerEnvironment.ServerEnvironment, environment),
               Effect.provideService(SqlClient.SqlClient, sql),
             ),
+        saveInstructions: (input) =>
+          orchestrator
+            .dispatch(input)
+            .pipe(
+              Effect.provideService(PolicyExecutionContext, actor),
+              Effect.provideService(ServerEnvironment.ServerEnvironment, environment),
+              Effect.provideService(SqlClient.SqlClient, sql),
+            ),
         createAdditional: () =>
           orchestrator
             .dispatch({
@@ -140,6 +155,18 @@ export const withTaskReviewFixture = <E>(
                 acceptance: "Owner review",
                 brake: { maxProviderStarts: 2, stopConditions: "Scope changed" },
               },
+            })
+            .pipe(
+              Effect.provideService(PolicyExecutionContext, actor),
+              Effect.provideService(SqlClient.SqlClient, sql),
+            ),
+        pauseUnbound: () =>
+          orchestrator
+            .dispatch({
+              type: "thread.task-contract.redirect",
+              commandId: CommandId.make(`fixture-unbound-pause:${++command}`),
+              threadId,
+              revision: 1,
             })
             .pipe(
               Effect.provideService(PolicyExecutionContext, actor),

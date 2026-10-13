@@ -1055,3 +1055,50 @@ it.effect(
       );
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
 );
+
+it.effect(
+  "forwards a complete read-only Brake and both reviewed instruction-set preconditions exactly once",
+  () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      const brake = {
+        maxProviderStarts: 2,
+        stopConditions: "Scope changed",
+        maxTokens: 100,
+        maxCostUsd: 1,
+        deadlineAt: "2030-01-01T00:00:00.000Z",
+      };
+      const reviewTask = {
+        environmentId: "fixture-env",
+        taskId: "fixture-task",
+        projectId: "fixture-project",
+        threadUpdatedAt: "2026-10-13T00:00:00.000Z",
+        threadSequence: 5,
+      };
+      yield* decideTaskContract({
+        threadId: v2ThreadId,
+        commandId: CommandId.make("reviewed-instruction-set"),
+        action: "set",
+        goal: "Revised goal",
+        redirect: "Ask owner",
+        acceptance: "Owner review",
+        brake,
+        expectedRevision: 1,
+        reviewTask,
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      expect(commands).toEqual([
+        {
+          type: "thread.task-contract.set",
+          commandId: "reviewed-instruction-set",
+          threadId: v2ThreadId,
+          goal: "Revised goal",
+          redirect: "Ask owner",
+          acceptance: "Owner review",
+          brake,
+          expectedRevision: 1,
+          reviewTask,
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+);

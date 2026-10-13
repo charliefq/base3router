@@ -73,6 +73,7 @@ export const TaskContractReviewHint = Schema.Struct({
   reference: TaskContractReviewReference,
   revision: PositiveInt,
   actions: Schema.Array(TaskContractReviewAction),
+  canEditInstructions: Schema.optionalKey(Schema.Boolean),
 });
 export type TaskContractReviewHint = typeof TaskContractReviewHint.Type;
 export const TaskContractReviewInput = Schema.Struct({
@@ -95,6 +96,7 @@ export const TaskContractReviewState = Schema.Union([
     acceptedRevision: Schema.NullOr(PositiveInt),
     reference: TaskContractReviewReference,
     actions: Schema.Array(TaskContractReviewAction),
+    canEditInstructions: Schema.optionalKey(Schema.Boolean),
   }),
   Schema.Struct({ status: Schema.Literal("unavailable"), reason: Schema.String }),
 ]);
@@ -105,6 +107,7 @@ export const TaskContractDecision = Schema.Struct({
   revision: PositiveInt,
   actorId: TrimmedNonEmptyString,
   reviewTask: Schema.optionalKey(TaskContractReviewReference),
+  expectedRevision: Schema.optionalKey(PositiveInt),
   at: Schema.DateTimeUtc,
 });
 export type TaskContractDecision = typeof TaskContractDecision.Type;
