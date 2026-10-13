@@ -334,6 +334,10 @@ describe("explicit task-conditioned policy", () => {
     expect(eight.decision.policyVersion).toBe(HYBRID_TASK_ROUTER_POLICY_VERSION);
     expect(eight.hybrid.policyVersion).toBe(HYBRID_TASK_ROUTER_POLICY_VERSION);
     expect(eight.decision.explanation).toContain("Local task writing");
+    for (const explanation of [eight.decision.explanation, eight.hybrid.explanation]) {
+      expect(explanation).toContain(`Policy: ${HYBRID_TASK_ROUTER_POLICY_VERSION}.`);
+      expect(explanation).not.toContain(`Policy: ${HYBRID_ROUTER_POLICY_VERSION}.`);
+    }
     const missing = routeHybridModel({
       ...input(8),
       catalog: [...conditionedCatalog, entry({ instanceId: "c", model: "c" })],

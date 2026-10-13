@@ -1123,7 +1123,11 @@ it.each(["manual", "auto", "task-debugging"] as const)(
               renderer = create(<TasksPage />);
             });
             expect(text()).toContain(mode === "manual" ? "Manual" : "Auto");
-            if (mode === "task-debugging") expect(text()).toContain("Local task debugging");
+            if (mode === "task-debugging") {
+              expect(text()).toContain("Local task debugging");
+              expect(text()).toContain(`Policy: ${HYBRID_TASK_ROUTER_POLICY_VERSION}.`);
+              expect(text()).not.toContain("Policy: hybrid-router.v1.0.0.");
+            }
             expect(text()).toContain("Selected model");
             expect(text()).toContain("selected-A (codex)");
             expect(text()).toContain("configured-B (codex)");

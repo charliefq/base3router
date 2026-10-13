@@ -651,17 +651,22 @@ const routePolicy = (input: HybridRouterInput): HybridRouterOutput => {
       : { policyLoadFailure: input.policyLoadFailure ?? fallbackReason }),
   });
   if (input.mode === "manual") return result;
+  const appliedPolicyVersion = result.hybrid.usedHybridRanking
+    ? HYBRID_TASK_ROUTER_POLICY_VERSION
+    : result.decision.policyVersion;
+  const policyExplanation = result.hybrid.explanation.replace(
+    `Policy: ${HYBRID_ROUTER_POLICY_VERSION}.`,
+    `Policy: ${appliedPolicyVersion}.`,
+  );
   const explanation =
-    `Local task ${profile?.category ?? "unknown"} (${profile?.classifierVersion ?? LOCAL_TASK_CLASSIFIER_VERSION}); ${result.hybrid.explanation}`.slice(
+    `Local task ${profile?.category ?? "unknown"} (${profile?.classifierVersion ?? LOCAL_TASK_CLASSIFIER_VERSION}); ${policyExplanation}`.slice(
       0,
       512,
     );
   return {
     decision: {
       ...result.decision,
-      policyVersion: result.hybrid.usedHybridRanking
-        ? HYBRID_TASK_ROUTER_POLICY_VERSION
-        : result.decision.policyVersion,
+      policyVersion: appliedPolicyVersion,
       explanation,
     },
     hybrid: { ...result.hybrid, policyVersion: HYBRID_TASK_ROUTER_POLICY_VERSION, explanation },

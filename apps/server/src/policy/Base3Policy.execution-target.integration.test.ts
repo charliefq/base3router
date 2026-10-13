@@ -1187,6 +1187,16 @@ it.live(
               if (appliedPolicy === HYBRID_TASK_ROUTER_POLICY_VERSION) {
                 assert.include(route.modelRoute?.explanation ?? "", `Local task ${category}`);
                 assert.notInclude(route.modelRoute?.explanation ?? "", "fixture text");
+                for (const explanation of [
+                  route.modelRoute?.explanation,
+                  route.hybrid?.explanation,
+                ]) {
+                  assert.include(
+                    explanation ?? "",
+                    `Policy: ${HYBRID_TASK_ROUTER_POLICY_VERSION}.`,
+                  );
+                  assert.notInclude(explanation ?? "", `Policy: ${HYBRID_ROUTER_POLICY_VERSION}.`);
+                }
               }
               const observationRow = (yield* sql<{
                 id: string;
