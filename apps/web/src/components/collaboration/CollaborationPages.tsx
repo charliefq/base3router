@@ -6,6 +6,7 @@ import {
   type CollaborationSnapshot,
   type CollaborationTask,
   type CollaborationTaskRoutingReadout,
+  type CollaborationTaskResultReadout,
   type EnvironmentId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -121,6 +122,79 @@ function TaskRoutingReadout({ readout }: { readout: CollaborationTaskRoutingRead
           Routing evidence is unavailable; no valid persisted dispatch evidence can be confirmed.
         </p>
       )}
+    </div>
+  );
+}
+
+const resultUnknownReason = (reason: string) => {
+  switch (reason) {
+    case "run_turn_disagreement":
+      return "The persisted run, attempt and turn states differ; completion is not confirmed.";
+    case "provider_turn_not_started":
+      return "A matching provider-turn start is not recorded.";
+    case "no_completed_result":
+      return "The matched run and turn do not have confirmed completion evidence.";
+    case "result_not_complete_or_retry":
+      return "The latest item is unfinished, streaming, empty or a retry record.";
+    case "no_attributable_output":
+      return "No matching assistant output or terminal-failure record is stored.";
+    default:
+      return "Matching persisted evidence is missing or inconsistent.";
+  }
+};
+
+function TaskResultReadout({ readout }: { readout: CollaborationTaskResultReadout | undefined }) {
+  return (
+    <div className="mt-4 space-y-2 rounded-lg border border-border/50 p-3">
+      <h3 className="text-sm font-medium">Result evidence</h3>
+      {readout?.status === "available" ? (
+        <>
+          <p className="text-sm">Latest persisted run status: {readout.runStatus}</p>
+          <p className="text-sm">
+            Correlated provider-turn status: {readout.providerTurnStatus ?? "Unknown"}
+          </p>
+          {readout.content.status === "output" ? (
+            <>
+              <h4 className="text-sm font-medium">Latest persisted assistant output</h4>
+              <pre className="whitespace-pre-wrap break-all text-sm">{readout.content.preview}</pre>
+            </>
+          ) : readout.content.status === "failure" ? (
+            <>
+              <h4 className="text-sm font-medium">Persisted terminal failure</h4>
+              <p className="text-xs text-muted-foreground">
+                Class: {readout.content.failure.class}; code:{" "}
+                {readout.content.failure.code ?? "not recorded"}
+              </p>
+              <pre className="whitespace-pre-wrap break-all text-sm">
+                {readout.content.failure.message}
+              </pre>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              No attributable completed output or terminal failure is confirmed.{" "}
+              {resultUnknownReason(readout.content.reason)}
+            </p>
+          )}
+          {readout.content.status !== "unknown" && readout.content.truncated ? (
+            <p className="text-xs text-muted-foreground">
+              Preview truncated; inspect the conversation for more context.
+            </p>
+          ) : null}
+          <p className="break-all text-xs text-muted-foreground">
+            Run {readout.runId}; message {readout.messageId}; attempt{" "}
+            {readout.attemptId ?? "not confirmed"}; turn {readout.providerTurnId ?? "not confirmed"}
+            {readout.content.status !== "unknown" ? `; item ${readout.content.itemId}` : ""}.
+          </p>
+        </>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          No validated persisted result evidence is available in this snapshot.
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">
+        Persisted status and output do not establish a final answer or owner acceptance. Opening the
+        conversation grants no execution.
+      </p>
     </div>
   );
 }
@@ -690,6 +764,7 @@ export function TasksPage() {
                       )}
                     </div>
                     <TaskRoutingReadout readout={task.routingReadout} />
+                    <TaskResultReadout readout={task.resultReadout} />
                     <div className="mt-4 flex flex-col gap-3 border-t border-border/50 pt-4 sm:flex-row sm:items-center sm:justify-between">
                       <div className="space-y-1 text-xs leading-relaxed text-muted-foreground">
                         <p>Gate {task.gateDecision}. This task does not grant execution.</p>

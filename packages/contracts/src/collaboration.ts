@@ -4,6 +4,12 @@
  */
 import * as Schema from "effect/Schema";
 
+import {
+  OrchestrationV2RunStatus,
+  OrchestrationV2ProviderTurn,
+  OrchestrationV2ProviderFailure,
+} from "./orchestrationV2.ts";
+
 import { TaskContract, TaskContractPhase } from "./taskContract.ts";
 import { ModelRouterMode, ModelRouterTarget } from "./modelRouter.ts";
 import { ModelSelection } from "./modelSelection.ts";
@@ -125,6 +131,41 @@ export const CollaborationTaskRoutingReadout = Schema.Union([
 ]);
 export type CollaborationTaskRoutingReadout = typeof CollaborationTaskRoutingReadout.Type;
 
+/** UTF-16 length cap; output is a plain-text preview, not an accepted answer. */
+export const COLLABORATION_RESULT_PREVIEW_MAX_CHARS = 2_048;
+export const CollaborationTaskResultReadout = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("unavailable"), reason: Schema.String }),
+  Schema.Struct({
+    status: Schema.Literal("available"),
+    runId: TrimmedNonEmptyString,
+    messageId: TrimmedNonEmptyString,
+    runStatus: OrchestrationV2RunStatus,
+    attemptId: Schema.NullOr(TrimmedNonEmptyString),
+    providerTurnId: Schema.NullOr(TrimmedNonEmptyString),
+    providerTurnStatus: Schema.NullOr(OrchestrationV2ProviderTurn.fields.status),
+    content: Schema.Union([
+      Schema.Struct({ status: Schema.Literal("unknown"), reason: Schema.String }),
+      Schema.Struct({
+        status: Schema.Literal("output"),
+        itemId: TrimmedNonEmptyString,
+        preview: Schema.String.check(Schema.isMaxLength(COLLABORATION_RESULT_PREVIEW_MAX_CHARS)),
+        truncated: Schema.Boolean,
+      }),
+      Schema.Struct({
+        status: Schema.Literal("failure"),
+        itemId: TrimmedNonEmptyString,
+        failure: Schema.Struct({
+          class: OrchestrationV2ProviderFailure.fields.class,
+          code: OrchestrationV2ProviderFailure.fields.code,
+          message: Schema.String.check(Schema.isMaxLength(COLLABORATION_RESULT_PREVIEW_MAX_CHARS)),
+        }),
+        truncated: Schema.Boolean,
+      }),
+    ]),
+  }),
+]);
+export type CollaborationTaskResultReadout = typeof CollaborationTaskResultReadout.Type;
+
 export const CollaborationTask = Schema.Struct({
   id: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
@@ -141,6 +182,7 @@ export const CollaborationTask = Schema.Struct({
   gateDecision: CollaborationGateDecision,
   contractReadout: Schema.optionalKey(CollaborationTaskContractReadout),
   routingReadout: Schema.optionalKey(CollaborationTaskRoutingReadout),
+  resultReadout: Schema.optionalKey(CollaborationTaskResultReadout),
 });
 export type CollaborationTask = typeof CollaborationTask.Type;
 

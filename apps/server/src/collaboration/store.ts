@@ -1,5 +1,10 @@
 import {
   CollaborationCommand,
+  COLLABORATION_RESULT_PREVIEW_MAX_CHARS,
+  type CollaborationTaskResultReadout,
+  OrchestrationV2ProviderFailure,
+  OrchestrationV2ExecutionNode,
+  OrchestrationV2TurnItemStatus,
   type CollaborationSnapshot,
   type CollaborationTaskContractReadout,
   type CollaborationTaskRoutingReadout,
@@ -15,6 +20,8 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
+
+import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
 
 import { applyCollaboration, foldCollaboration, foldCollaborationState } from "./decide.ts";
 
@@ -282,6 +289,433 @@ const readRoutingEvidence = (
     })),
   );
 
+const StoredResultAttempt = Schema.Struct({
+  ...StoredAttemptEvidence.fields,
+  status: OrchestrationV2RunAttempt.fields.status,
+});
+const StoredResultThread = Schema.Struct({
+  ...StoredProviderThreadEvidence.fields,
+  driver: OrchestrationV2ProviderThread.fields.driver,
+});
+const StoredResultTurn = Schema.Struct({
+  ...StoredTurnEvidence.fields,
+  completedAt: Schema.NullOr(Schema.String),
+});
+const resultItemFields = {
+  id: Schema.String,
+  threadId: Schema.String,
+  runId: Schema.NullOr(Schema.String),
+  nodeId: Schema.NullOr(Schema.String),
+  providerThreadId: Schema.NullOr(Schema.String),
+  providerTurnId: Schema.NullOr(Schema.String),
+  parentItemId: Schema.NullOr(Schema.String),
+  ordinal: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+  status: OrchestrationV2TurnItemStatus,
+  startedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  completedAt: Schema.NullOr(Schema.String),
+  updatedAt: Schema.String,
+};
+const StoredResultItem = Schema.Union([
+  Schema.Struct({
+    ...resultItemFields,
+    type: Schema.Literal("assistant_message"),
+    text: Schema.String,
+    streaming: Schema.Boolean,
+  }),
+  Schema.Struct({
+    ...resultItemFields,
+    type: Schema.Literal("error"),
+    failure: OrchestrationV2ProviderFailure,
+    retry: Schema.optionalKey(Schema.Unknown),
+  }),
+]);
+const StoredResultNode = Schema.Struct({
+  id: OrchestrationV2ExecutionNode.fields.id,
+  threadId: OrchestrationV2ExecutionNode.fields.threadId,
+  runId: OrchestrationV2ExecutionNode.fields.runId,
+  parentNodeId: OrchestrationV2ExecutionNode.fields.parentNodeId,
+  rootNodeId: OrchestrationV2ExecutionNode.fields.rootNodeId,
+  kind: OrchestrationV2ExecutionNode.fields.kind,
+  status: OrchestrationV2ExecutionNode.fields.status,
+  providerThreadId: OrchestrationV2ExecutionNode.fields.providerThreadId,
+  providerTurnId: OrchestrationV2ExecutionNode.fields.providerTurnId,
+  startedAt: Schema.NullOr(Schema.String),
+  completedAt: Schema.NullOr(Schema.String),
+});
+const decodeResultNode = Schema.decodeUnknownOption(Schema.fromJsonString(StoredResultNode));
+
+const decodeResultAttempt = Schema.decodeUnknownOption(Schema.fromJsonString(StoredResultAttempt));
+const decodeResultThread = Schema.decodeUnknownOption(Schema.fromJsonString(StoredResultThread));
+const decodeResultTurn = Schema.decodeUnknownOption(Schema.fromJsonString(StoredResultTurn));
+const decodeResultItem = Schema.decodeUnknownOption(Schema.fromJsonString(StoredResultItem));
+const unknownResult = (reason: string) => ({ status: "unknown" as const, reason });
+const resultPreview = (text: string) => {
+  let end = COLLABORATION_RESULT_PREVIEW_MAX_CHARS;
+  if (text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff) end--;
+  return { preview: text.slice(0, end), truncated: text.length > end };
+};
+
+/** Revalidate the latest run against the already checked execution chain before reading items. */
+const readResultEvidence = (
+  sql: SqlClient.SqlClient,
+  threadId: string,
+  providerId: string,
+  routing: CollaborationTaskRoutingReadout,
+): Effect.Effect<CollaborationTaskResultReadout> =>
+  Effect.gen(function* () {
+    const rows = yield* sql<{
+      run_id: string;
+      thread_id: string;
+      ordinal: number;
+      provider_instance_id: string;
+      status: string;
+      payload_json: string;
+    }>`
+      SELECT run_id, thread_id, ordinal, provider_instance_id, status, payload_json FROM orchestration_v2_projection_runs
+      WHERE thread_id=${threadId} ORDER BY ordinal DESC, run_id DESC LIMIT 1
+    `;
+    const row = rows[0];
+    if (!row) return { status: "unavailable" as const, reason: "no_run" };
+    const parsed = decodeRunEvidence(row.payload_json);
+    if (parsed._tag === "None") return { status: "unavailable" as const, reason: "invalid_run" };
+    const run = parsed.value;
+    if (
+      run.id !== row.run_id ||
+      run.threadId !== threadId ||
+      row.thread_id !== threadId ||
+      run.ordinal !== row.ordinal ||
+      run.providerInstanceId !== providerId ||
+      row.provider_instance_id !== providerId ||
+      run.modelSelection.instanceId !== providerId ||
+      run.status !== row.status
+    )
+      return { status: "unavailable" as const, reason: "invalid_run" };
+    const base = {
+      status: "available" as const,
+      runId: run.id,
+      messageId: run.userMessageId,
+      runStatus: run.status,
+      attemptId: null,
+      providerTurnId: null,
+      providerTurnStatus: null,
+      content: unknownResult("execution_evidence_unavailable"),
+    };
+    // A concurrent newer run or absent/legacy execution proof must not borrow an older result.
+    if (
+      routing.status !== "available" ||
+      routing.runId !== run.id ||
+      routing.messageId !== run.userMessageId
+    )
+      return base;
+    const observedTurnId =
+      routing.execution.status === "observed" ? routing.execution.providerTurnId : null;
+    return yield* Effect.gen(function* () {
+      const attempts = yield* sql<{
+        attempt_id: string;
+        thread_id: string;
+        run_id: string;
+        root_node_id: string;
+        provider_instance_id: string;
+        provider_thread_id: string | null;
+        provider_turn_id: string | null;
+        status: string;
+        payload_json: string;
+      }>`
+        SELECT attempt_id, thread_id, run_id, root_node_id, provider_instance_id, provider_thread_id, provider_turn_id, status, payload_json
+        FROM orchestration_v2_projection_run_attempts WHERE attempt_id=${run.activeAttemptId} AND thread_id=${threadId} AND run_id=${run.id} LIMIT 1
+      `;
+      const attemptRow = attempts[0];
+      const parsedAttempt = attemptRow ? decodeResultAttempt(attemptRow.payload_json) : null;
+      if (!attemptRow || parsedAttempt?._tag !== "Some")
+        return { ...base, content: unknownResult("invalid_attempt") };
+      const attempt = parsedAttempt.value;
+      if (
+        attempt.id !== run.activeAttemptId ||
+        attempt.id !== attemptRow.attempt_id ||
+        attempt.runId !== run.id ||
+        attemptRow.root_node_id !== run.rootNodeId ||
+        attempt.rootNodeId !== run.rootNodeId ||
+        attempt.providerInstanceId !== providerId ||
+        attemptRow.provider_instance_id !== providerId ||
+        attempt.providerThreadId !== run.providerThreadId ||
+        attemptRow.provider_thread_id !== run.providerThreadId ||
+        attempt.providerTurnId !== attemptRow.provider_turn_id ||
+        (observedTurnId !== null && attempt.providerTurnId !== observedTurnId) ||
+        attempt.status !== attemptRow.status
+      )
+        return { ...base, content: unknownResult("invalid_attempt") };
+      if (attempt.providerTurnId === null)
+        return { ...base, attemptId: attempt.id, content: unknownResult("missing_provider_turn") };
+      const currentTurnId = attempt.providerTurnId;
+      const threads = yield* sql<{
+        driver: string;
+        provider_instance_id: string;
+        payload_json: string;
+      }>`
+        SELECT driver, provider_instance_id, payload_json FROM orchestration_v2_projection_provider_threads
+        WHERE provider_thread_id=${run.providerThreadId} AND thread_id=${threadId} LIMIT 1
+      `;
+      const threadRow = threads[0];
+      const parsedThread = threadRow ? decodeResultThread(threadRow.payload_json) : null;
+      if (
+        !threadRow ||
+        parsedThread?._tag !== "Some" ||
+        parsedThread.value.id !== run.providerThreadId ||
+        parsedThread.value.appThreadId !== threadId ||
+        parsedThread.value.providerInstanceId !== providerId ||
+        threadRow.provider_instance_id !== providerId ||
+        parsedThread.value.driver !== threadRow.driver
+      )
+        return { ...base, content: unknownResult("invalid_provider_thread") };
+      const turns = yield* sql<{
+        provider_turn_id: string;
+        provider_thread_id: string;
+        run_attempt_id: string | null;
+        node_id: string;
+        status: string;
+        started_at: string | null;
+        completed_at: string | null;
+        payload_json: string;
+      }>`
+        SELECT provider_turn_id, provider_thread_id, run_attempt_id, node_id, status, started_at, completed_at, payload_json
+        FROM orchestration_v2_projection_provider_turns WHERE provider_turn_id=${currentTurnId} AND thread_id=${threadId} LIMIT 1
+      `;
+      const turnRow = turns[0];
+      const parsedTurn = turnRow ? decodeResultTurn(turnRow.payload_json) : null;
+      if (!turnRow || parsedTurn?._tag !== "Some")
+        return { ...base, content: unknownResult("invalid_provider_turn") };
+      const turn = parsedTurn.value;
+      if (
+        turn.id !== currentTurnId ||
+        turnRow.provider_turn_id !== turn.id ||
+        turn.providerThreadId !== run.providerThreadId ||
+        turnRow.provider_thread_id !== run.providerThreadId ||
+        turn.runAttemptId !== attempt.id ||
+        turnRow.run_attempt_id !== attempt.id ||
+        turn.nodeId !== run.rootNodeId ||
+        turnRow.node_id !== run.rootNodeId ||
+        turn.status !== turnRow.status ||
+        turn.startedAt !== turnRow.started_at ||
+        turn.completedAt !== turnRow.completed_at
+      )
+        return { ...base, content: unknownResult("invalid_provider_turn") };
+      const correlated = {
+        ...base,
+        attemptId: attempt.id,
+        providerTurnId: turn.id,
+        providerTurnStatus: turn.status,
+      };
+      if (run.status !== turn.status || attempt.status !== run.status)
+        return { ...correlated, content: unknownResult("run_turn_disagreement") };
+      if (turn.startedAt === null || !Number.isFinite(Date.parse(turn.startedAt)))
+        return { ...correlated, content: unknownResult("provider_turn_not_started") };
+      if (
+        (run.status !== "completed" && run.status !== "failed") ||
+        turn.completedAt === null ||
+        !Number.isFinite(Date.parse(turn.completedAt)) ||
+        Date.parse(turn.completedAt) < Date.parse(turn.startedAt)
+      )
+        return { ...correlated, content: unknownResult("no_completed_result") };
+      const ids = yield* IdAllocator.IdAllocatorV2.pipe(Effect.provide(IdAllocator.layer));
+      const terminalFailureId = ids.derive.turnItemFromProviderItem({
+        driver: parsedThread.value.driver,
+        nativeItemId: `terminal-failure:${turn.id}`,
+      });
+      return yield* Effect.gen(function* () {
+        const items =
+          run.status === "completed"
+            ? yield* sql<{
+                turn_item_id: string;
+                thread_id: string;
+                run_id: string;
+                node_id: string;
+                provider_thread_id: string;
+                provider_turn_id: string;
+                parent_item_id: string | null;
+                ordinal: number;
+                type: string;
+                status: string;
+                updated_at: string;
+                payload_json: string;
+              }>`
+              SELECT turn_item_id, thread_id, run_id, node_id, provider_thread_id, provider_turn_id, parent_item_id, ordinal, type, status, updated_at, payload_json
+              FROM orchestration_v2_projection_turn_items WHERE thread_id=${threadId} AND run_id=${run.id}
+                AND provider_thread_id=${run.providerThreadId} AND provider_turn_id=${turn.id} AND parent_item_id IS NULL AND type='assistant_message'
+              ORDER BY ordinal DESC, turn_item_id DESC LIMIT 1
+            `
+            : yield* sql<{
+                turn_item_id: string;
+                thread_id: string;
+                run_id: string;
+                node_id: string;
+                provider_thread_id: string;
+                provider_turn_id: string;
+                parent_item_id: string | null;
+                ordinal: number;
+                type: string;
+                status: string;
+                updated_at: string;
+                payload_json: string;
+              }>`
+              SELECT turn_item_id, thread_id, run_id, node_id, provider_thread_id, provider_turn_id, parent_item_id, ordinal, type, status, updated_at, payload_json
+              FROM orchestration_v2_projection_turn_items WHERE turn_item_id=${terminalFailureId} AND thread_id=${threadId} AND run_id=${run.id} AND node_id=${run.rootNodeId}
+                AND provider_thread_id=${run.providerThreadId} AND provider_turn_id=${turn.id} AND parent_item_id IS NULL AND type='error' LIMIT 1
+            `;
+        const itemRow = items[0];
+        if (!itemRow) return { ...correlated, content: unknownResult("no_attributable_output") };
+        const parsedItem = decodeResultItem(itemRow.payload_json);
+        if (parsedItem._tag === "None")
+          return { ...correlated, content: unknownResult("invalid_result_item") };
+        const item = parsedItem.value;
+        if (
+          item.id !== itemRow.turn_item_id ||
+          item.threadId !== threadId ||
+          item.runId !== run.id ||
+          item.nodeId !== itemRow.node_id ||
+          item.providerThreadId !== run.providerThreadId ||
+          item.providerTurnId !== turn.id ||
+          item.parentItemId !== null ||
+          item.ordinal !== itemRow.ordinal ||
+          item.type !== itemRow.type ||
+          item.status !== itemRow.status ||
+          item.updatedAt !== itemRow.updated_at ||
+          item.completedAt === null ||
+          !Number.isFinite(Date.parse(item.completedAt)) ||
+          !Number.isFinite(Date.parse(item.updatedAt)) ||
+          Date.parse(item.completedAt) < Date.parse(turn.startedAt!)
+        )
+          return { ...correlated, content: unknownResult("invalid_result_item") };
+        if (item.type === "assistant_message") {
+          // Select the newest candidate first. A bad node must never uncover an older answer.
+          if (item.nodeId === null || item.nodeId === run.rootNodeId)
+            return { ...correlated, content: unknownResult("invalid_assistant_node") };
+          const readNode = (nodeId: string | null) =>
+            Effect.gen(function* () {
+              const nodes = yield* sql<{
+                node_id: string;
+                thread_id: string;
+                run_id: string | null;
+                parent_node_id: string | null;
+                root_node_id: string;
+                kind: string;
+                status: string;
+                provider_thread_id: string | null;
+                provider_turn_id: string | null;
+                started_at: string | null;
+                completed_at: string | null;
+                payload_json: string;
+              }>`
+              SELECT node_id,thread_id,run_id,parent_node_id,root_node_id,kind,status,provider_thread_id,provider_turn_id,started_at,completed_at,payload_json
+              FROM orchestration_v2_projection_nodes WHERE node_id=${nodeId} AND thread_id=${threadId} AND run_id=${run.id} LIMIT 1
+            `;
+              const row = nodes[0];
+              const parsed = row ? decodeResultNode(row.payload_json) : null;
+              if (!row || parsed?._tag !== "Some") return null;
+              const node = parsed.value;
+              if (
+                node.id !== row.node_id ||
+                node.threadId !== threadId ||
+                node.runId !== run.id ||
+                node.parentNodeId !== row.parent_node_id ||
+                node.rootNodeId !== row.root_node_id ||
+                node.kind !== row.kind ||
+                node.status !== row.status ||
+                node.providerThreadId !== row.provider_thread_id ||
+                node.providerTurnId !== row.provider_turn_id ||
+                node.startedAt !== row.started_at ||
+                node.completedAt !== row.completed_at ||
+                node.startedAt === null ||
+                node.completedAt === null ||
+                !Number.isFinite(Date.parse(node.startedAt)) ||
+                !Number.isFinite(Date.parse(node.completedAt)) ||
+                Date.parse(node.startedAt) > Date.parse(node.completedAt)
+              )
+                return null;
+              return node;
+            });
+          const node = yield* readNode(item.nodeId);
+          const root = yield* readNode(run.rootNodeId);
+          if (
+            !node ||
+            !root ||
+            node.kind !== "assistant_message" ||
+            node.status !== "completed" ||
+            node.rootNodeId !== run.rootNodeId ||
+            node.parentNodeId !== run.rootNodeId ||
+            node.providerThreadId !== run.providerThreadId ||
+            node.providerTurnId !== turn.id ||
+            root.id !== run.rootNodeId ||
+            root.kind !== "root_turn" ||
+            root.status !== "completed" ||
+            root.rootNodeId !== root.id ||
+            root.parentNodeId !== null ||
+            // Captured root records may legitimately omit provider links; child links may not.
+            (root.providerThreadId !== null && root.providerThreadId !== run.providerThreadId) ||
+            (root.providerTurnId !== null && root.providerTurnId !== turn.id)
+          )
+            return { ...correlated, content: unknownResult("invalid_assistant_node") };
+          if (
+            item.startedAt == null ||
+            !Number.isFinite(Date.parse(item.startedAt)) ||
+            Date.parse(item.startedAt) !== Date.parse(node.startedAt!) ||
+            Date.parse(item.completedAt) !== Date.parse(node.completedAt!) ||
+            Date.parse(item.updatedAt) < Date.parse(item.completedAt) ||
+            Date.parse(node.startedAt!) < Date.parse(turn.startedAt!) ||
+            Date.parse(node.completedAt!) > Date.parse(turn.completedAt!) ||
+            Date.parse(node.startedAt!) < Date.parse(root.startedAt!) ||
+            Date.parse(node.completedAt!) > Date.parse(root.completedAt!)
+          )
+            return { ...correlated, content: unknownResult("invalid_assistant_node_times") };
+        }
+        if (
+          item.type === "assistant_message" &&
+          run.status === "completed" &&
+          item.status === "completed" &&
+          !item.streaming &&
+          item.text.trim().length > 0
+        )
+          return {
+            ...correlated,
+            content: { status: "output" as const, itemId: item.id, ...resultPreview(item.text) },
+          };
+        if (
+          item.type === "error" &&
+          run.status === "failed" &&
+          item.status === "failed" &&
+          item.id === terminalFailureId &&
+          item.nodeId === run.rootNodeId &&
+          item.retry === undefined
+        ) {
+          const preview = resultPreview(item.failure.message);
+          return {
+            ...correlated,
+            content: {
+              status: "failure" as const,
+              itemId: item.id,
+              failure: {
+                class: item.failure.class,
+                code: item.failure.code,
+                message: preview.preview,
+              },
+              truncated: preview.truncated,
+            },
+          };
+        }
+        return { ...correlated, content: unknownResult("result_not_complete_or_retry") };
+      }).pipe(
+        Effect.orElseSucceed(() => ({
+          ...correlated,
+          content: unknownResult("items_unavailable"),
+        })),
+      );
+    }).pipe(Effect.orElseSucceed(() => base));
+  }).pipe(
+    Effect.orElseSucceed(() => ({
+      status: "unavailable" as const,
+      reason: "evidence_unavailable",
+    })),
+  );
+
 const CommandJson = Schema.fromJsonString(CollaborationCommand);
 const decodeCommand = Schema.decodeUnknownEffect(CommandJson);
 const encodeCommand = Schema.encodeEffect(CommandJson);
@@ -443,6 +877,7 @@ const validateThreadLinks = (
                 waitReason: "The thread link is invalid. Explicit repair is required.",
               }),
           routingReadout: { status: "unavailable" as const, reason: "invalid_thread_link" },
+          resultReadout: { status: "unavailable" as const, reason: "invalid_thread_link" },
           contractReadout: {
             status: "unavailable" as const,
             reason: "invalid_thread_link" as const,
@@ -475,10 +910,14 @@ const validateThreadLinks = (
             threadEvidence.value.projectId === task.projectId) &&
           (threadEvidence.value.providerInstanceId === undefined ||
             threadEvidence.value.providerInstanceId === task.assigneeAgentId);
+        const routingReadout = validThreadEvidence
+          ? yield* readRoutingEvidence(sql, task.threadId)
+          : { status: "unavailable" as const, reason: "invalid_thread_evidence" };
         return {
           ...task,
-          routingReadout: validThreadEvidence
-            ? yield* readRoutingEvidence(sql, task.threadId)
+          routingReadout,
+          resultReadout: validThreadEvidence
+            ? yield* readResultEvidence(sql, task.threadId, task.assigneeAgentId, routingReadout)
             : { status: "unavailable" as const, reason: "invalid_thread_evidence" },
           contractReadout: contractReadout({
             thread_id: task.threadId,
