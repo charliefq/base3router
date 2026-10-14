@@ -397,10 +397,10 @@ function useCollaboration(environmentId: EnvironmentId | null) {
     refreshing: readState.context === context && readState.refreshing,
     fresh: loaded?.context === context && readState.context === context && readState.fresh,
     canOperate,
-    captureRead: () => {
-      const generation = readGeneration.current;
-      return () => isCurrent() && generation === readGeneration.current;
-    },
+    captureRead:
+      (generation = readGeneration.current) =>
+      () =>
+        isCurrent() && generation === readGeneration.current,
     isCurrent,
     connected: !!environmentId && session !== null,
     context,
@@ -430,6 +430,7 @@ export function AgentsPage() {
     fresh,
     canOperate,
     captureRead,
+    readVersion,
     isCurrent,
     connected,
     invalidateReads,
@@ -632,7 +633,8 @@ export function AgentsPage() {
     }
   };
 
-  const ownsDisplayedRead = captureRead();
+  // A disabled render still displays the previous snapshot, never the active GET generation.
+  const ownsDisplayedRead = captureRead(readVersion);
   const openTask = async (task: CollaborationTask, agentId: string) => {
     if (
       !canOperate() ||

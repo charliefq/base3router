@@ -5551,3 +5551,21 @@ it("Agents task navigation uses actual governed tasks on disposable disk SQLite 
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+it("Agents task navigation retires the callback saved from a refreshing disabled render after that same read finishes", async () => {
+  state.snapshot = taskNavigationSnapshot();
+  await mount();
+  const read = deferred<CollaborationSnapshot>();
+  state.load.mockReturnValueOnce(read.promise);
+  await taskNavigationRefresh();
+  expect(taskNavigationAction()!.props.disabled).toBe(true);
+  const disabledCallback = taskNavigationAction()!.props.onClick;
+  await act(async () => read.resolve(state.snapshot));
+  expect(taskNavigationAction()!.props.disabled).toBe(false);
+  await act(async () => disabledCallback());
+  expect(state.load).toHaveBeenCalledTimes(2);
+  expect(state.navigate).not.toHaveBeenCalled();
+  await openTaskForProof();
+  expect(state.load).toHaveBeenCalledTimes(3);
+  expect(state.navigate).toHaveBeenCalledTimes(1);
+});
