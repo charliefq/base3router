@@ -4624,3 +4624,71 @@ it("ignores a deferred old-session feedback preview and never opens its confirma
     expect(state.feedbackSubmit).not.toHaveBeenCalled();
   });
 });
+
+it("keeps persistent feedback read failures stable until explicit refresh and recovers successfully", async () => {
+  await feedbackFixture(async (f) => {
+    const before = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
+    const unexpectedRetry = deferred<import("@t3tools/contracts").TaskResultFeedbackState>();
+    // Bound a broken automatic retry loop without sleeps or an endless rejected-promise chain.
+    state.feedbackRead.mockImplementation(() =>
+      state.feedbackRead.mock.calls.length <= 2
+        ? Promise.reject(new Error("persistent read failure"))
+        : unexpectedRetry.promise,
+    );
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    expect(state.feedbackRead).toHaveBeenCalledTimes(1);
+    expect(text()).toContain("Feedback could not be read");
+    expect(feedbackButton("Helpful")).toBeUndefined();
+    await act(async () => renderer.update(<TasksPage />));
+    expect(state.feedbackRead).toHaveBeenCalledTimes(1);
+    await clickFeedback("Refresh feedback");
+    expect(state.feedbackRead).toHaveBeenCalledTimes(2);
+    expect(text()).toContain("Feedback could not be read");
+    state.feedbackRead.mockImplementation(f.readHttp);
+    await clickFeedback("Refresh feedback");
+    expect(state.feedbackRead).toHaveBeenCalledTimes(3);
+    expect(feedbackButton("Helpful")).toBeDefined();
+    expect(text()).not.toContain("Feedback could not be read");
+    expect(state.feedbackSubmit).not.toHaveBeenCalled();
+    expect(await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`)).toEqual(before);
+  });
+});
+
+it.each(["success", "failure"] as const)(
+  "retires a late %s from an old context while a new context read failure stays stable",
+  async (outcome) => {
+    await feedbackFixture(async (f) => {
+      const before = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
+      const oldReply = deferred<import("@t3tools/contracts").TaskResultFeedbackState>();
+      const oldFacts = await f.readHttp();
+      const unexpectedRetry = deferred<import("@t3tools/contracts").TaskResultFeedbackState>();
+      state.feedbackRead
+        .mockReturnValueOnce(oldReply.promise)
+        .mockRejectedValueOnce(new Error("new context read failure"))
+        .mockReturnValue(unexpectedRetry.promise);
+      await act(async () => {
+        renderer = create(<TasksPage />);
+      });
+      expect(state.feedbackRead).toHaveBeenCalledTimes(1);
+      state.sessionIdentity = {};
+      await act(async () => renderer.update(<TasksPage />));
+      await act(async () => {
+        if (outcome === "success") oldReply.resolve(oldFacts);
+        else oldReply.reject(new Error("obsolete read failure"));
+      });
+      expect(state.feedbackRead).toHaveBeenCalledTimes(2);
+      expect(feedbackButton("Helpful")).toBeUndefined();
+      expect(text()).toContain("Feedback could not be read");
+      await act(async () => renderer.update(<TasksPage />));
+      expect(state.feedbackRead).toHaveBeenCalledTimes(2);
+      state.feedbackRead.mockImplementation(f.readHttp);
+      await clickFeedback("Refresh feedback");
+      expect(state.feedbackRead).toHaveBeenCalledTimes(3);
+      expect(feedbackButton("Helpful")).toBeDefined();
+      expect(state.feedbackSubmit).not.toHaveBeenCalled();
+      expect(await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`)).toEqual(before);
+    });
+  },
+);

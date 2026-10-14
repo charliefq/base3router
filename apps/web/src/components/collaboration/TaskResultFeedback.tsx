@@ -176,7 +176,11 @@ export function TaskResultFeedback(props: {
       blocked.current = false;
       setNotice(null);
     } catch {
-      if (current(g, k, c)) setNotice("Feedback could not be read. Refresh feedback to try again.");
+      if (current(g, k, c)) {
+        blocked.current = true;
+        setLoaded(null);
+        setNotice("Feedback could not be read. Refresh feedback to try again.");
+      }
     } finally {
       pendingRef.current = false;
       if (mounted.current) setPending(false);
