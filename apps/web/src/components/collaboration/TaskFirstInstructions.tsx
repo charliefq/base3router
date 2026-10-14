@@ -1,4 +1,6 @@
 import {
+  TaskAutoPreviewInput,
+  type TaskAutoPreviewState,
   TaskContract,
   TaskContractReviewState,
   ThreadId,
@@ -27,6 +29,7 @@ import {
 } from "../ui/alert-dialog";
 
 type Review = Extract<TaskContractReviewState, { status: "available" }>;
+const samePreviewInput = Schema.toEquivalence(TaskAutoPreviewInput);
 const sameContract = Schema.toEquivalence(TaskContract);
 const sameReview = Schema.toEquivalence(TaskContractReviewState);
 const encodeContract = Schema.encodeSync(Schema.fromJsonString(TaskContract));
@@ -89,6 +92,15 @@ export function TaskFirstInstructions(props: {
   readonly readVersion: number;
   readonly onOpen: () => void;
 }) {
+  const previewAuto = useAtomCommand(threadEnvironment.readAutoPreview, { reportFailure: false });
+  const [preview, setPreview] = useState<Extract<
+    TaskAutoPreviewState,
+    { status: "available" }
+  > | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const previewOwner = useRef<object | null>(null);
+  const textEpoch = useRef(0);
+  const promptRef = useRef("");
   const readReview = useAtomCommand(threadEnvironment.readTaskReview, { reportFailure: false });
   const readProjection = useAtomCommand(threadEnvironment.readProjection, { reportFailure: false });
   const session = Option.getOrNull(usePreparedConnection(props.environmentId));
@@ -113,6 +125,9 @@ export function TaskFirstInstructions(props: {
       context.current = { key, session };
       epoch.current++;
       owner.current = null;
+      previewOwner.current = null;
+      setPreview(null);
+      setPreviewBusy(false);
       reviewRef.current = null;
       setReview(null);
       setBusy(false);
@@ -123,6 +138,7 @@ export function TaskFirstInstructions(props: {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      previewOwner.current = null;
       epoch.current++;
       owner.current = null;
       reviewRef.current = null;
@@ -187,6 +203,11 @@ export function TaskFirstInstructions(props: {
       }
       reviewRef.current = facts;
       setReview(facts);
+      promptRef.current = facts.contract.goal;
+      textEpoch.current++;
+      previewOwner.current = null;
+      setPreview(null);
+      setPreviewBusy(false);
       setPrompt(facts.contract.goal);
     } catch {
       if (current(generation))
@@ -197,6 +218,68 @@ export function TaskFirstInstructions(props: {
       if (owner.current === token) {
         owner.current = null;
         if (mounted.current) setBusy(false);
+      }
+    }
+  };
+  const previewRoute = async () => {
+    const facts = reviewRef.current;
+    if (
+      !facts ||
+      facts !== review ||
+      !available ||
+      previewOwner.current ||
+      !promptRef.current.trim()
+    )
+      return;
+    const token = {};
+    previewOwner.current = token;
+    setPreviewBusy(true);
+    setPreview(null);
+    setNotice(null);
+    const generation = epoch.current;
+    const textGeneration = textEpoch.current;
+    const input: TaskAutoPreviewInput = {
+      environmentId: props.environmentId,
+      taskId: facts.taskId,
+      projectId: facts.projectId,
+      threadId: facts.threadId,
+      revision: facts.contract.revision,
+      reference: facts.reference,
+      text: promptRef.current,
+    };
+    try {
+      const result = await previewAuto({ environmentId: props.environmentId, input });
+      if (
+        !current(generation) ||
+        textEpoch.current !== textGeneration ||
+        reviewRef.current !== facts ||
+        previewOwner.current !== token
+      )
+        return;
+      if (
+        result._tag !== "Success" ||
+        result.value.status !== "available" ||
+        !samePreviewInput(result.value.request, input) ||
+        !samePreviewInput({ ...input, reference: result.value.reference }, input)
+      ) {
+        setNotice(
+          "Auto preview unavailable for these exact task facts. No draft or model was changed.",
+        );
+        return;
+      }
+      setPreview(result.value);
+    } catch {
+      if (
+        current(generation) &&
+        textEpoch.current === textGeneration &&
+        reviewRef.current === facts &&
+        previewOwner.current === token
+      )
+        setNotice("Auto preview failed. No draft or model was changed.");
+    } finally {
+      if (previewOwner.current === token) {
+        previewOwner.current = null;
+        if (mounted.current) setPreviewBusy(false);
       }
     }
   };
@@ -229,6 +312,9 @@ export function TaskFirstInstructions(props: {
         return;
       }
       reviewRef.current = null;
+      previewOwner.current = null;
+      setPreview(null);
+      setPreviewBusy(false);
       setReview(null);
       setNotice(
         "Prepared a local draft only. No work started. Edit it, choose existing Manual/Auto and press Send separately.",
@@ -265,6 +351,9 @@ export function TaskFirstInstructions(props: {
           if (!open) {
             epoch.current++;
             owner.current = null;
+            previewOwner.current = null;
+            setPreview(null);
+            setPreviewBusy(false);
             reviewRef.current = null;
             setReview(null);
             setBusy(false);
@@ -320,8 +409,76 @@ export function TaskFirstInstructions(props: {
                 aria-label="Initial instructions"
                 value={prompt}
                 disabled={busy}
-                onChange={(event) => setPrompt(event.target.value)}
+                onChange={(event) => {
+                  promptRef.current = event.target.value;
+                  textEpoch.current++;
+                  previewOwner.current = null;
+                  setPreview(null);
+                  setPreviewBusy(false);
+                  setPrompt(event.target.value);
+                }}
               />
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy || previewBusy || !prompt.trim()}
+                onClick={() => void previewRoute()}
+              >
+                Preview Auto
+              </Button>
+              {preview ? (
+                <section aria-label="Auto selection preview">
+                  <p>
+                    Selection snapshot, not permission or a guaranteed later target. Send
+                    recalculates the authoritative decision. No work started.
+                  </p>
+                  <p>
+                    Deterministic local classification: {preview.profile.category} (
+                    {preview.profile.classifierVersion}). This is local rules, not LLM semantics.
+                  </p>
+                  <p>
+                    Active policy: {preview.activePolicyVersion}. Applied selector:{" "}
+                    {preview.decision.policyVersion}.
+                  </p>
+                  <p>
+                    Candidate:{" "}
+                    {preview.decision.selected
+                      ? `${preview.decision.selected.target.instanceId} / ${preview.decision.selected.target.model}`
+                      : "No eligible model"}
+                    .
+                  </p>
+                  <p>{preview.decision.explanation}</p>
+                  <p>{preview.hybrid?.explanation}</p>
+                  {preview.policyFallbackReason ? (
+                    <p>Policy fallback: {preview.policyFallbackReason}</p>
+                  ) : null}
+                  {preview.hybrid?.fallbackReason ? (
+                    <p>Task/policy fallback: {preview.hybrid.fallbackReason}</p>
+                  ) : null}
+                  <p>
+                    Estimated cost:{" "}
+                    {preview.decision.estimatedCostUsd.status === "known"
+                      ? preview.decision.estimatedCostUsd.value
+                      : "unknown"}
+                    . Latency:{" "}
+                    {preview.decision.estimatedLatencyMs.status === "known"
+                      ? preview.decision.estimatedLatencyMs.value
+                      : "unknown"}
+                    . Quality:{" "}
+                    {preview.decision.estimatedQuality.status === "known"
+                      ? preview.decision.estimatedQuality.value
+                      : "unknown"}
+                    .
+                  </p>
+                  <ul>
+                    {preview.decision.candidates.map((c) => (
+                      <li key={`${c.target.instanceId}:${c.target.model}`}>
+                        {c.target.instanceId} / {c.target.model}: {c.reasonCodes.join(", ")}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
             </>
           ) : null}
           <AlertDialogFooter>
@@ -331,6 +488,9 @@ export function TaskFirstInstructions(props: {
               onClick={() => {
                 epoch.current++;
                 owner.current = null;
+                previewOwner.current = null;
+                setPreview(null);
+                setPreviewBusy(false);
                 reviewRef.current = null;
                 setReview(null);
                 setBusy(false);

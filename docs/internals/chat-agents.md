@@ -28,6 +28,8 @@ resuming remain separate decisions.
 
 For an owned active, unaccepted governed task with no messages or runs, **Prepare first instructions** reviews current task facts and the full contract, then fills only an empty local composer draft on explicit confirmation. Existing text, attachments, contexts and queued edits are preserved. This is preparation from observed reads, not an atomic server execution guarantee. Open the existing conversation, edit, choose the existing Manual/Auto option and press Send separately; preparation grants no execution or acceptance.
 
+Auto preview reads existing policy and outcome evidence without initializing defaults or persisting proposed text. It shares the dispatch calculation, but its result is only a snapshot: dispatch recalculates from current facts and separately enforces governed admission. Missing policy data uses an explicit ephemeral V0; unavailable ownership or task facts never become a fallback. Local task classification is deterministic and is not an LLM interpretation.
+
 If a response is lost, **Recover task creation** reads the original identity;
 it does not resend creation or allocate another task. An unresolved attempt is
 retained in this browser session across navigation and reload. Return to its

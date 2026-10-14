@@ -779,6 +779,52 @@ function applySelectedModelSelection(
   };
 }
 
+export function calculateDispatcherModelRoute(input: {
+  readonly mode: "auto" | "manual";
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly preferredTargets: ReadonlyArray<import("@t3tools/contracts").ModelRouterTarget>;
+  readonly preferredModelSelection?: ModelSelection;
+  readonly constraints?: import("@t3tools/contracts").ModelRouterConstraints;
+  readonly cooldowns?: ReadonlyArray<ModelRouterAvailabilityCooldown>;
+  readonly nowMs: number;
+  readonly localTaskProfile: LocalTaskProfile;
+  readonly hybrid?: Omit<
+    import("@t3tools/shared/hybridRouter").HybridRouterInput,
+    | "mode"
+    | "catalog"
+    | "preferredTargets"
+    | "constraints"
+    | "manualOverride"
+    | "executionStatus"
+    | "localTaskProfile"
+  >;
+  readonly executionStatus?: "bound" | "not-started";
+}) {
+  const base = {
+    mode: input.mode,
+    catalog: applyModelRouterCooldowns(
+      modelRouterCatalogForMode(modelRouterCatalogFromProviders(input.providers), input.mode),
+      input.cooldowns ?? [],
+      input.nowMs,
+    ),
+    preferredTargets: input.preferredTargets,
+    ...(input.constraints === undefined ? {} : { constraints: input.constraints }),
+    ...(input.mode === "manual" && input.preferredModelSelection
+      ? {
+          manualOverride: {
+            instanceId: input.preferredModelSelection.instanceId,
+            model: input.preferredModelSelection.model,
+          },
+        }
+      : {}),
+    executionStatus: input.executionStatus ?? ("bound" as const),
+  };
+  const routedDecision = input.hybrid
+    ? routeHybridModel({ ...base, ...input.hybrid, localTaskProfile: input.localTaskProfile })
+    : null;
+  return { decision: routedDecision?.decision ?? routeModel(base), hybrid: routedDecision?.hybrid };
+}
+
 /**
  * Adds the server-owned route fact before the command enters the decider.
  * Provider snapshots are cached presentation state; this function never asks
@@ -874,62 +920,23 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
             ]
           : []),
       ];
-      const routedDecision = dependencies.hybrid
-        ? routeHybridModel({
-            mode: routingMode,
-            catalog: applyModelRouterCooldowns(
-              modelRouterCatalogForMode(
-                modelRouterCatalogFromProviders(resolution.providers),
-                routingMode,
-              ),
-              dependencies.availabilityCooldowns ?? [],
-              dependencies.availabilityNowMs ?? (yield* Clock.currentTimeMillis),
-            ),
-            preferredTargets,
-            ...(command.modelRouteConstraints === undefined
-              ? {}
-              : { constraints: command.modelRouteConstraints }),
-            ...(routingMode === "manual" && preferredModelSelection !== undefined
-              ? {
-                  manualOverride: {
-                    instanceId: preferredModelSelection.instanceId,
-                    model: preferredModelSelection.model,
-                  },
-                }
-              : {}),
-            executionStatus: "bound",
-            ...dependencies.hybrid,
-            localTaskProfile,
-            challengerEnabled: dependencies.hybrid.challengerEnabled,
-            evidenceByTarget: dependencies.hybrid.evidenceByTarget,
-          })
-        : null;
-      const decision =
-        routedDecision?.decision ??
-        routeModel({
-          mode: routingMode,
-          catalog: applyModelRouterCooldowns(
-            modelRouterCatalogForMode(
-              modelRouterCatalogFromProviders(resolution.providers),
-              routingMode,
-            ),
-            dependencies.availabilityCooldowns ?? [],
-            dependencies.availabilityNowMs ?? (yield* Clock.currentTimeMillis),
-          ),
-          preferredTargets,
-          ...(command.modelRouteConstraints === undefined
-            ? {}
-            : { constraints: command.modelRouteConstraints }),
-          ...(routingMode === "manual" && preferredModelSelection !== undefined
-            ? {
-                manualOverride: {
-                  instanceId: preferredModelSelection.instanceId,
-                  model: preferredModelSelection.model,
-                },
-              }
-            : {}),
-          executionStatus: "bound",
-        });
+      const calculation = calculateDispatcherModelRoute({
+        mode: routingMode,
+        providers: resolution.providers,
+        preferredTargets,
+        nowMs: dependencies.availabilityNowMs ?? (yield* Clock.currentTimeMillis),
+        localTaskProfile,
+        ...(preferredModelSelection === undefined ? {} : { preferredModelSelection }),
+        ...(command.modelRouteConstraints === undefined
+          ? {}
+          : { constraints: command.modelRouteConstraints }),
+        ...(dependencies.availabilityCooldowns === undefined
+          ? {}
+          : { cooldowns: dependencies.availabilityCooldowns }),
+        ...(dependencies.hybrid === undefined ? {} : { hybrid: dependencies.hybrid }),
+      });
+      const decision = calculation.decision;
+      const routedDecision = calculation;
       if (routingMode === "auto" && decision.selected === null) {
         return yield* new OrchestrationDispatchCommandError({
           message: `Auto Route could not select a model (${decision.reasonCodes.join(",")}).`,

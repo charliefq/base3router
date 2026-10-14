@@ -80,6 +80,7 @@ import {
   snoozeThread,
   decideTaskContract,
   readTaskReview,
+  readTaskAutoPreview,
   readThreadProjection,
   readAgentsCreationStatus,
   readTaskUsage,
@@ -158,6 +159,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     readCreationStatus: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:read-creation-status",
       execute: readAgentsCreationStatus,
+      scheduler,
+      concurrency: { mode: "parallel" },
+    }),
+    readAutoPreview: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:read-auto-preview",
+      execute: readTaskAutoPreview,
       scheduler,
       concurrency: { mode: "parallel" },
     }),

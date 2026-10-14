@@ -6,7 +6,6 @@ import * as NodeCrypto from "node:crypto";
 import {
   type AuthEnvironmentScope,
   MODEL_ROUTER_POLICY_VERSION,
-  HYBRID_TASK_ROUTER_POLICY_VERSION,
   AuthOrchestrationOperateScope,
   defaultConcurrencyBudgetPolicy,
   EnvironmentId,
@@ -18,6 +17,12 @@ import {
   ThreadId,
   contractGrantFields,
   type TaskContractFields,
+  TaskContract,
+  TaskContractReviewState,
+  TaskContractReviewReference,
+  TaskAutoPreviewInput,
+  type TaskAutoPreviewState,
+  type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -27,6 +32,8 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ActionGateService } from "../actionGate/ActionGateService.ts";
 import {
+  calculateDispatcherModelRoute,
+  readDispatcherProjectedState,
   bindDispatcherTurnStartCommand,
   bindingForExplicitTarget,
   deleteDispatcherTaskRoutesByThread,
@@ -38,6 +45,8 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as RouterEvaluation from "../routerEvaluation/RouterEvaluationService.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { readTaskReview } from "../collaboration/store.ts";
+import type { ProjectionStoreV2Error } from "../orchestration-v2/ProjectionStore.ts";
 import { PolicyExecutionContext } from "./executionContext.ts";
 import { Base3PolicyDeniedError } from "./Base3PolicyDeniedError.ts";
 import { classifyCommand, commandNeedsCapacity, type OperationClass } from "./operationPolicy.ts";
@@ -130,6 +139,13 @@ const environmentId = Effect.gen(function* () {
   return yield* environment.value.getEnvironmentId.pipe(
     Effect.orElseSucceed(() => EnvironmentId.make("local")),
   );
+});
+
+const unavailableRoutingPolicy = () => ({
+  activePolicyVersion: MODEL_ROUTER_POLICY_VERSION,
+  challengerEnabled: false,
+  evidenceByTarget: new Map(),
+  policyLoadFailure: "Policy snapshot unavailable; Router V0 was used.",
 });
 
 const providersForBind = Effect.gen(function* () {
@@ -518,43 +534,11 @@ const bindRoute = (input: {
     };
     const localTaskProfile = classifyLocalTask(input.command.text ?? "");
     const evaluation = yield* Effect.serviceOption(RouterEvaluation.RouterEvaluationService);
-    const fallback = {
-      activePolicyVersion: MODEL_ROUTER_POLICY_VERSION,
-      challengerEnabled: false,
-      evidenceByTarget: new Map(),
-      policyLoadFailure: "Policy snapshot unavailable; Router V0 was used.",
-    };
+    const fallback = unavailableRoutingPolicy();
     const hybrid = Option.isNone(evaluation)
       ? fallback
       : yield* evaluation.value.routingSnapshot(input.environmentId, localTaskProfile).pipe(
-          Effect.map((snapshot) => {
-            const shadow = snapshot.challengerPolicy;
-            return {
-              activePolicyVersion: snapshot.active.policyVersion,
-              weights: snapshot.active.weights,
-              shrinkageK: snapshot.active.shrinkageK,
-              minSampleRate: snapshot.active.minSampleRate,
-              challengerEnabled: snapshot.challengerEnabled,
-              evidenceByTarget:
-                snapshot.active.policyVersion === HYBRID_TASK_ROUTER_POLICY_VERSION
-                  ? snapshot.taskEvidenceByTarget
-                  : snapshot.evidenceByTarget,
-              ...(shadow === undefined
-                ? {}
-                : {
-                    shadowPolicy: {
-                      policyVersion: shadow.policyVersion,
-                      weights: shadow.weights,
-                      shrinkageK: shadow.shrinkageK,
-                      minSampleRate: shadow.minSampleRate,
-                      evidenceByTarget:
-                        shadow.policyVersion === HYBRID_TASK_ROUTER_POLICY_VERSION
-                          ? snapshot.taskEvidenceByTarget
-                          : snapshot.evidenceByTarget,
-                    },
-                  }),
-            };
-          }),
+          Effect.map(RouterEvaluation.routingPolicyInput),
           Effect.orElseSucceed(() => fallback),
         );
     const bound = yield* bindDispatcherTurnStartCommand(turn, {
@@ -1161,3 +1145,139 @@ export const actorForThread = (threadId: string) =>
     const scopes = JSON.parse(row.scopes_json) as ReadonlyArray<AuthEnvironmentScope>;
     return { actorId: row.actor_id, sessionId: "grant", scopes };
   });
+
+const isPreviewInput = Schema.is(TaskAutoPreviewInput);
+const samePreviewContract = Schema.toEquivalence(TaskContract);
+const samePreviewReview = Schema.toEquivalence(TaskContractReviewState);
+const samePreviewReference = Schema.toEquivalence(TaskContractReviewReference);
+
+/** Read-only service implementation: identity failure never becomes a routing fallback. */
+export const readTaskAutoPreview = Effect.fn("Base3.readTaskAutoPreview")(
+  function* (
+    sql: SqlClient.SqlClient,
+    input: TaskAutoPreviewInput,
+    readProjection: (
+      id: ThreadId,
+    ) => Effect.Effect<OrchestrationV2ThreadProjection, ProjectionStoreV2Error>,
+  ) {
+    const unavailable: TaskAutoPreviewState = {
+      status: "unavailable",
+      reason: "task-preview-unavailable",
+    };
+    if (!isPreviewInput(input)) return unavailable;
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const before = yield* readTaskReview(sql, input);
+        if (
+          before.status !== "available" ||
+          before.phase !== "active" ||
+          before.acceptedRevision !== null ||
+          !before.actions.includes("accept") ||
+          !samePreviewReference(before.reference, input.reference)
+        )
+          return unavailable;
+        const projection = yield* readProjection(ThreadId.make(input.threadId));
+        const after = yield* readTaskReview(sql, input);
+        const t = projection.thread;
+        if (
+          after.status !== "available" ||
+          !samePreviewReview(before, after) ||
+          t.id !== input.threadId ||
+          t.projectId !== input.projectId ||
+          t.title !== after.title ||
+          t.taskGovernance !== "required" ||
+          !t.taskContract ||
+          !samePreviewContract(after.contract, t.taskContract) ||
+          t.taskContractPhase !== "active" ||
+          t.taskAcceptedRevision !== null ||
+          t.archivedAt !== null ||
+          t.deletedAt !== null ||
+          t.forkedFrom !== null ||
+          t.lineage.rootThreadId !== t.id ||
+          t.lineage.parentThreadId !== null ||
+          t.lineage.relationshipToParent !== null ||
+          t.activeProviderThreadId !== null ||
+          DateTime.formatIso(t.updatedAt) !== after.reference.threadUpdatedAt ||
+          projection.messages.length !== 0 ||
+          projection.runs.length !== 0 ||
+          projection.attempts.length !== 0 ||
+          projection.nodes.length !== 0 ||
+          projection.providerThreads.length !== 0 ||
+          projection.providerTurns.length !== 0 ||
+          projection.providerSessions.length !== 0 ||
+          projection.runtimeRequests.length !== 0
+        )
+          return unavailable;
+        const env = EnvironmentId.make(input.environmentId);
+        const profile = classifyLocalTask(input.text);
+        const providers = yield* providersForBind;
+        const settings = yield* Effect.serviceOption(ServerSettingsService);
+        const defaultSelection = Option.isNone(settings)
+          ? null
+          : yield* settings.value.getSettings.pipe(
+              Effect.map((s) => s.defaultModelSelection),
+              Effect.orElseSucceed(() => null),
+            );
+        const projected = yield* readDispatcherProjectedState({ threadId: t.id }).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+        );
+        const project = projected.projects.find((p) => p.id === input.projectId);
+        if (
+          !project ||
+          !projected.threads.some((p) => p.id === t.id && p.projectId === input.projectId)
+        )
+          return unavailable;
+        const evaluation = yield* Effect.serviceOption(RouterEvaluation.RouterEvaluationService);
+        const existing = Option.isNone(evaluation)
+          ? { snapshot: Option.none(), unavailable: true }
+          : yield* evaluation.value.existingRoutingSnapshot(env, profile).pipe(
+              Effect.match({
+                onFailure: () => ({ snapshot: Option.none(), unavailable: true }),
+                onSuccess: (snapshot) => ({ snapshot, unavailable: false }),
+              }),
+            );
+        const snapshot = existing.snapshot;
+        const policyFallbackReason = Option.isSome(snapshot)
+          ? null
+          : existing.unavailable
+            ? "Policy snapshot unavailable; ephemeral Router V0 used without initialization."
+            : "Policy snapshot uninitialized; ephemeral Router V0 used without initialization.";
+        const hybrid = Option.isSome(snapshot)
+          ? RouterEvaluation.routingPolicyInput(snapshot.value)
+          : existing.unavailable
+            ? unavailableRoutingPolicy()
+            : {
+                activePolicyVersion: MODEL_ROUTER_POLICY_VERSION,
+                challengerEnabled: false,
+                evidenceByTarget: new Map(),
+              };
+        const calculation = calculateDispatcherModelRoute({
+          mode: "auto",
+          providers,
+          preferredTargets: [
+            ...(project.defaultModelSelection ? [project.defaultModelSelection] : []),
+            ...(defaultSelection ? [defaultSelection] : []),
+          ],
+          nowMs: DateTime.toEpochMillis(yield* DateTime.now),
+          localTaskProfile: profile,
+          hybrid,
+          executionStatus: "not-started",
+          ...(input.constraints === undefined ? {} : { constraints: input.constraints }),
+        });
+        return {
+          status: "available" as const,
+          request: input,
+          reference: after.reference,
+          profile,
+          activePolicyVersion: hybrid.activePolicyVersion,
+          policyFallbackReason,
+          decision: calculation.decision,
+          ...(calculation.hybrid === undefined ? {} : { hybrid: calculation.hybrid }),
+        };
+      }),
+    );
+  },
+  Effect.catch(() =>
+    Effect.succeed({ status: "unavailable" as const, reason: "task-preview-unavailable" as const }),
+  ),
+);
