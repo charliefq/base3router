@@ -53,6 +53,26 @@ const enough = (successRate: number, latency: number): LocalModelEvidence =>
   });
 
 describe("routeHybridModel", () => {
+  it.each([
+    { requiredCapabilities: ["vision" as const] },
+    { excludedInstanceIds: [instance("codex")] },
+    { allowedModels: [] },
+  ])("Manual bypasses Hybrid ranking while enforcing %j", (constraints) => {
+    const result = routeHybridModel({
+      mode: "manual",
+      catalog,
+      manualOverride: { instanceId: instance("codex"), model: "gpt-5.5" },
+      constraints,
+      evidenceByTarget: new Map([
+        ["codex\u0000gpt-5.5", enough(1, 10)],
+        ["claude\u0000claude-sonnet-4-6", enough(1, 1)],
+      ]),
+    });
+    expect(result.decision.selected).toBeNull();
+    expect(result.decision.executed).toBeNull();
+    expect(result.hybrid.usedHybridRanking).toBe(false);
+    expect(result.hybrid.selected).toBeNull();
+  });
   it("falls back to Router V0 when evidence is insufficient", () => {
     const result = routeHybridModel({
       mode: "auto",

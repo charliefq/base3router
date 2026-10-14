@@ -35,6 +35,7 @@ import {
   applyModelRouterCooldowns,
   modelRouterCatalogForMode,
   modelRouterCatalogFromProviders,
+  manualModelRouterConstraintReasons,
   routeModel,
 } from "@t3tools/shared/modelRouter";
 import { routeHybridModel, type LocalModelEvidence } from "@t3tools/shared/hybridRouter";
@@ -819,10 +820,14 @@ export function calculateDispatcherModelRoute(input: {
       : {}),
     executionStatus: input.executionStatus ?? ("bound" as const),
   };
-  const routedDecision = input.hybrid
-    ? routeHybridModel({ ...base, ...input.hybrid, localTaskProfile: input.localTaskProfile })
-    : null;
-  return { decision: routedDecision?.decision ?? routeModel(base), hybrid: routedDecision?.hybrid };
+  const effectiveInput = { ...base, ...input.hybrid, localTaskProfile: input.localTaskProfile };
+  const routedDecision = input.hybrid ? routeHybridModel(effectiveInput) : null;
+  return {
+    decision: routedDecision?.decision ?? routeModel(base),
+    hybrid: routedDecision?.hybrid,
+    manualConstraintReasons:
+      input.mode === "manual" ? manualModelRouterConstraintReasons(effectiveInput) : [],
+  };
 }
 
 /**
@@ -937,6 +942,11 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
       });
       const decision = calculation.decision;
       const routedDecision = calculation;
+      if (routingMode === "manual" && calculation.manualConstraintReasons.length > 0) {
+        return yield* new OrchestrationDispatchCommandError({
+          message: `Manual Route denied turn start (${calculation.manualConstraintReasons.join(",")}). No model was selected.`,
+        });
+      }
       if (routingMode === "auto" && decision.selected === null) {
         return yield* new OrchestrationDispatchCommandError({
           message: `Auto Route could not select a model (${decision.reasonCodes.join(",")}).`,

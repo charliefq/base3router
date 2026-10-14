@@ -92,6 +92,7 @@ const capabilities = CodexProviderCapabilitiesV2;
 const encodeModelSelection = Schema.encodeEffect(Schema.fromJsonString(ModelSelection));
 const decodeRoute = Schema.decodeEffect(Schema.fromJsonString(DispatcherTaskRouteBinding));
 const isDispatchError = Schema.is(Orchestrator.OrchestratorDispatchError);
+const isPreviouslyRejected = Schema.is(Orchestrator.OrchestratorCommandPreviouslyRejectedError);
 const isPolicyDenied = Schema.is(Base3PolicyDeniedError);
 const decodeCommand = Schema.decodeEffect(OrchestrationV2Command);
 const decodeUnknownCommand = Schema.decodeUnknownSync(OrchestrationV2Command);
@@ -233,9 +234,110 @@ interface BoundTargetScenario {
   readonly constraints?: ModelRouterConstraints;
   readonly unknownEstimates?: boolean;
   readonly denied?: boolean;
+  readonly expectedTarget?: ModelSelection;
+  readonly rejectionReason?: string;
 }
 
 const scenarios: ReadonlyArray<BoundTargetScenario> = [
+  {
+    name: "manual required vision rejected",
+    mode: "manual",
+    queued: false,
+    sameTarget: false,
+    omitted: false,
+    options: true,
+    constraints: { requiredCapabilities: ["vision"] },
+    unknownEstimates: true,
+    denied: true,
+    rejectionReason: "REQUIRED_CAPABILITY_MISSING",
+  },
+  ...[
+    { name: "instance allow mismatch", constraints: { allowedInstanceIds: [a.instanceId] } },
+    { name: "instance exclude match", constraints: { excludedInstanceIds: [b.instanceId] } },
+    {
+      name: "driver allow mismatch",
+      constraints: { allowedDrivers: [ProviderDriverKind.make("claudeAgent")] },
+    },
+    { name: "driver exclude match", constraints: { excludedDrivers: [driver] } },
+    { name: "model allow mismatch", constraints: { allowedModels: [a.model] } },
+    { name: "model exclude match", constraints: { excludedModels: [b.model] } },
+    { name: "empty instance allow", constraints: { allowedInstanceIds: [] } },
+    { name: "empty driver allow", constraints: { allowedDrivers: [] } },
+    { name: "empty model allow", constraints: { allowedModels: [] } },
+    {
+      name: "overlapping model lists",
+      constraints: { allowedModels: [b.model], excludedModels: [b.model] },
+    },
+  ].flatMap((row) =>
+    [false, true].map((queued): BoundTargetScenario => ({
+      ...row,
+      name: `manual ${row.name}${queued ? " queued" : ""}`,
+      mode: "manual",
+      queued,
+      sameTarget: false,
+      omitted: false,
+      options: true,
+      unknownEstimates: true,
+      denied: true,
+      rejectionReason: "CONSTRAINT_EXCLUDED",
+    })),
+  ),
+  {
+    name: "manual required vision rejected queued",
+    mode: "manual",
+    queued: true,
+    sameTarget: false,
+    omitted: false,
+    options: true,
+    unknownEstimates: true,
+    denied: true,
+    constraints: { requiredCapabilities: ["vision"] },
+    rejectionReason: "REQUIRED_CAPABILITY_MISSING",
+  },
+  {
+    name: "manual explicit metadata allowed",
+    mode: "manual",
+    queued: false,
+    sameTarget: false,
+    omitted: false,
+    options: true,
+    unknownEstimates: true,
+    constraints: {
+      requiredCapabilities: ["tools", "code", "code"],
+      allowedInstanceIds: [b.instanceId, b.instanceId],
+      excludedInstanceIds: [a.instanceId],
+      allowedDrivers: [driver],
+      excludedDrivers: [ProviderDriverKind.make("claudeAgent")],
+      allowedModels: [b.model],
+      excludedModels: [a.model],
+    },
+  },
+  {
+    name: "manual empty excludes and capabilities",
+    mode: "manual",
+    queued: true,
+    sameTarget: false,
+    omitted: false,
+    options: true,
+    unknownEstimates: true,
+    constraints: {
+      requiredCapabilities: [],
+      excludedInstanceIds: [],
+      excludedDrivers: [],
+      excludedModels: [],
+    },
+  },
+  {
+    name: "auto allows the other target",
+    mode: "auto",
+    queued: false,
+    sameTarget: false,
+    omitted: false,
+    options: true,
+    unknownEstimates: true,
+    constraints: { allowedModels: [a.model], excludedInstanceIds: [b.instanceId] },
+    expectedTarget: a,
+  },
   { name: "auto", mode: "auto", queued: false, sameTarget: false, omitted: false, options: false },
   {
     name: "manual",
@@ -360,7 +462,19 @@ const scenarios: ReadonlyArray<BoundTargetScenario> = [
 
 it.live.each(scenarios)(
   "server-bound $name preserves target, options, grant and replay",
-  ({ name, mode, queued, sameTarget, omitted, options, constraints, unknownEstimates, denied }) =>
+  ({
+    name,
+    mode,
+    queued,
+    sameTarget,
+    omitted,
+    options,
+    constraints,
+    unknownEstimates,
+    denied,
+    expectedTarget,
+    rejectionReason,
+  }) =>
     Effect.scoped(
       Effect.gen(function* () {
         const cwd = yield* checkpointWorkspace(`bound-target-${name}`);
@@ -494,7 +608,21 @@ it.live.each(scenarios)(
             constraints,
             "wire decode retains exact constraints",
           );
+          if (queued) {
+            yield* orchestrator.dispatch({
+              ...command,
+              commandId: CommandId.make("active-foreground"),
+              messageId: MessageId.make("active-foreground"),
+              routingMode: "manual",
+              modelRouteConstraints: undefined,
+              dispatchMode: { type: "start_immediately" },
+            });
+          }
           if (denied) {
+            const priorRuns = (yield* orchestrator.getThreadProjection(threadId)).runs;
+            const priorLeases =
+              yield* sql`SELECT lease_id FROM base3_capacity_leases WHERE thread_id=${threadId} AND released_at IS NULL`;
+            assert.equal(priorRuns.length, queued ? 1 : 0);
             const error = yield* Effect.flip(orchestrator.dispatch(decoded));
             assert.isTrue(isDispatchError(error));
             if (!isDispatchError(error)) return;
@@ -502,8 +630,11 @@ it.live.each(scenarios)(
             if (!isPolicyDenied(error.cause)) return;
             assert.equal(error.cause.reason, "binding");
             assert.include(error.cause.message, "Route");
+            if (rejectionReason) assert.include(error.cause.message, rejectionReason);
+            const replayed = yield* Effect.flip(orchestrator.dispatch(decoded));
+            assert.isTrue(isPreviouslyRejected(replayed));
             assert.deepEqual(yield* Ref.get(started), []);
-            assert.deepEqual((yield* orchestrator.getThreadProjection(threadId)).runs, []);
+            assert.deepEqual((yield* orchestrator.getThreadProjection(threadId)).runs, priorRuns);
             const effects = yield* sql<{
               count: number;
             }>`SELECT count(*) AS count FROM orchestration_v2_effect_outbox WHERE command_id=${command.commandId}`;
@@ -516,16 +647,11 @@ it.live.each(scenarios)(
             assert.equal(effects[0]?.count, 0);
             assert.equal(grants[0]?.count, 0);
             assert.equal(routes[0]?.count, 0);
+            assert.deepEqual(
+              yield* sql`SELECT lease_id FROM base3_capacity_leases WHERE thread_id=${threadId} AND released_at IS NULL`,
+              priorLeases,
+            );
             return;
-          }
-          if (queued) {
-            yield* orchestrator.dispatch({
-              ...command,
-              commandId: CommandId.make("active-foreground"),
-              messageId: MessageId.make("active-foreground"),
-              routingMode: "manual",
-              dispatchMode: { type: "start_immediately" },
-            });
           }
           const completed = queued
             ? null
@@ -543,8 +669,14 @@ it.live.each(scenarios)(
             yield* Fiber.join(completed);
             yield* worker.drain();
           }
+          const expectedIdentity =
+            expectedTarget ??
+            (constraints !== undefined ? b : mode === "auto" && !sameTarget ? a : sourceSelection);
           const expected =
-            constraints !== undefined ? b : mode === "auto" && !sameTarget ? a : sourceSelection;
+            expectedIdentity.instanceId === sourceSelection.instanceId &&
+            expectedIdentity.model === sourceSelection.model
+              ? sourceSelection
+              : expectedIdentity;
           assert.deepEqual(
             command.modelSelection,
             omitted ? undefined : sourceSelection,
@@ -607,7 +739,7 @@ it.live.each(scenarios)(
               route.modelRoute?.executed?.target,
               route.modelRoute?.selected?.target,
             );
-            if (mode === "auto") {
+            if (mode === "auto" && !unknownEstimates) {
               const excluded = route.modelRoute?.candidates.find(
                 (candidate) =>
                   candidate.target.instanceId === a.instanceId &&
@@ -639,8 +771,10 @@ it.live.each(scenarios)(
               );
               assert.equal(changed.reason, "argument-mismatch");
             }
+            const alternateTarget =
+              expected.instanceId === a.instanceId && expected.model === a.model ? b : a;
             const changedTarget = yield* Effect.flip(
-              authorizeDispatch({ ...effective, modelSelection: a }).pipe(
+              authorizeDispatch({ ...effective, modelSelection: alternateTarget }).pipe(
                 Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
               ),
             );
@@ -650,7 +784,7 @@ it.live.each(scenarios)(
                 ...decoded,
                 commandId: CommandId.make(`changed:${mode}`),
                 modelRouteConstraints: undefined,
-                modelSelection: a,
+                modelSelection: alternateTarget,
                 routingMode: "manual",
               }),
             );

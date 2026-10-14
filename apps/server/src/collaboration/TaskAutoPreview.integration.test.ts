@@ -100,6 +100,122 @@ it.live(
 );
 
 it.live.each([
+  {
+    name: "legal capabilities and identity",
+    constraints: {
+      requiredCapabilities: ["code" as const],
+      allowedInstanceIds: [agentsCreationProvider.instanceId],
+    },
+    eligible: true,
+  },
+  { name: "empty model allow", constraints: { allowedModels: [] }, eligible: false },
+])("matches Auto preview and fresh dispatch under $name", ({ constraints, eligible }) =>
+  withAgentsTaskCreationFixture((f) =>
+    Effect.gen(function* () {
+      const c = previewCreationCommand(`constraints-${eligible}`);
+      yield* f.dispatch(c);
+      const task = (yield* f.readSnapshot()).tasks[0]!;
+      const input: TaskAutoPreviewInput = {
+        environmentId: "environment-a",
+        taskId: task.id,
+        projectId: c.projectId,
+        threadId: c.threadId,
+        revision: 1,
+        reference: task.review!.reference,
+        text: "Implement parser regression tests",
+        constraints,
+      };
+      const before = yield* f.sql`SELECT total_changes() AS n`;
+      const effects = yield* f.noExecution();
+      const preview = yield* f.previewAuto(input);
+      assert.strictEqual(preview.status, "available");
+      if (preview.status !== "available") return;
+      assert.deepStrictEqual(yield* f.sql`SELECT total_changes() AS n`, before);
+      assert.deepStrictEqual(yield* f.noExecution(), effects);
+      assert.equal(preview.decision.selected !== null, eligible);
+      const command = {
+        type: "message.dispatch" as const,
+        commandId: CommandId.make(`constraints-send:${eligible}`),
+        threadId: c.threadId,
+        messageId: MessageId.make(`constraints-message:${eligible}`),
+        text: input.text,
+        attachments: [],
+        dispatchMode: { type: "start_immediately" as const },
+        routingMode: "auto" as const,
+        modelRouteConstraints: constraints,
+        createdBy: "user" as const,
+        creationSource: "web" as const,
+      };
+      if (!eligible) {
+        yield* Effect.flip(f.dispatch(command));
+        assert.deepStrictEqual(yield* f.noExecution(), effects);
+        assert.deepStrictEqual(
+          yield* f.sql`SELECT binding_json FROM projection_dispatcher_task_routes`,
+          [],
+        );
+        return;
+      }
+      yield* f.dispatch(command);
+      const rows = yield* f.sql<{
+        binding_json: string;
+      }>`SELECT binding_json FROM projection_dispatcher_task_routes`;
+      assert.deepStrictEqual(
+        decodeBinding(rows[0]!.binding_json).modelRoute?.selected,
+        preview.decision.selected,
+      );
+    }),
+  ),
+);
+
+it.live(
+  "recalculates Auto constraints after a legal preview when the provider becomes unavailable",
+  () =>
+    withAgentsTaskCreationFixture((f) =>
+      Effect.gen(function* () {
+        const c = previewCreationCommand("constraints-fresh-send");
+        yield* f.dispatch(c);
+        const task = (yield* f.readSnapshot()).tasks[0]!;
+        const constraints = { allowedModels: ["fake-model"] };
+        const preview = yield* f.previewAuto({
+          environmentId: "environment-a",
+          taskId: task.id,
+          projectId: c.projectId,
+          threadId: c.threadId,
+          revision: 1,
+          reference: task.review!.reference,
+          text: "Implement parser regression tests",
+          constraints,
+        });
+        assert.strictEqual(preview.status, "available");
+        if (preview.status !== "available") return;
+        assert.isNotNull(preview.decision.selected);
+        const before = yield* f.noExecution();
+        f.setProviders([{ ...agentsCreationProvider, installed: false }]);
+        yield* Effect.flip(
+          f.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("constraints-fresh-send"),
+            threadId: c.threadId,
+            messageId: MessageId.make("constraints-fresh-message"),
+            text: "Implement parser regression tests",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+            routingMode: "auto",
+            modelRouteConstraints: constraints,
+            createdBy: "user",
+            creationSource: "web",
+          }),
+        );
+        assert.deepStrictEqual(yield* f.noExecution(), before);
+        assert.deepStrictEqual(
+          yield* f.sql`SELECT binding_json FROM projection_dispatcher_task_routes`,
+          [],
+        );
+      }),
+    ),
+);
+
+it.live.each([
   "readonly",
   "foreign",
   "environment",
