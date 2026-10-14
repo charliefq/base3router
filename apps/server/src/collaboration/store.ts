@@ -1,3 +1,18 @@
+import { RouterObservationEventV0 } from "@t3tools/contracts";
+import { verifiedSingleStartV2 } from "../routerEvaluation/persistTurnOutcome.ts";
+import { ThreadId, RunId, MessageId, ProviderDriverKind } from "@t3tools/contracts";
+import * as NodeCrypto from "node:crypto";
+import * as Context from "effect/Context";
+import * as Layer from "effect/Layer";
+import {
+  TaskResultFeedbackState,
+  TaskResultFeedbackSubmit,
+  TaskResultFeedbackInput,
+  TurnOutcomeObservationV0,
+  ObservationId,
+  EnvironmentId,
+} from "@t3tools/contracts";
+import * as RouterEvaluation from "../routerEvaluation/RouterEvaluationService.ts";
 import {
   CollaborationCommand,
   type OrchestrationV2Command,
@@ -6,7 +21,7 @@ import {
   type CollaborationTask,
   type TaskContractReviewInput,
   type TaskContractReviewState,
-  type TaskContractReviewReference,
+  TaskContractReviewReference,
   type TaskContractReviewAction,
   RawEventId,
   OrchestrationV2AppThreadJson,
@@ -29,7 +44,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as OwnedChat from "./ownedChat.ts";
 
@@ -1779,4 +1794,405 @@ export const verifyTaskDecisionReplay = Effect.fn("collaboration.verifyTaskDecis
       if (current.status !== "available") return yield* deny();
     }
   },
+);
+
+const canonicalFeedback = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonicalFeedback);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => [k, canonicalFeedback(v)]),
+  );
+};
+const decodeFeedbackWire = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+const feedbackWire = (value: string) => {
+  const decoded = decodeFeedbackWire(value);
+  if (decoded._tag !== "Some") throw new Error("Malformed result context");
+  return decoded.value;
+};
+const feedbackHash = (value: unknown) =>
+  NodeCrypto.createHash("sha256")
+    .update(JSON.stringify(canonicalFeedback(JSON.parse(JSON.stringify(value)))))
+    .digest("hex");
+const decodeFeedbackObservation = Schema.decodeUnknownOption(
+  Schema.fromJsonString(TurnOutcomeObservationV0),
+);
+const sameFeedbackReference = Schema.toEquivalence(TaskContractReviewReference);
+const feedbackUnavailable = (reason: string): TaskResultFeedbackState => ({
+  status: "unavailable",
+  reason,
+});
+
+const decodeInitialFeedbackAttempt = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({ attemptOrdinal: Schema.Literal(1), reason: Schema.Literal("initial") }),
+  ),
+);
+const decodeFeedbackProviderContext = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      id: OrchestrationV2ProviderThread.fields.id,
+      providerSessionId: OrchestrationV2ProviderThread.fields.providerSessionId,
+      nativeThreadRef: OrchestrationV2ProviderThread.fields.nativeThreadRef,
+      nativeConversationHeadRef: OrchestrationV2ProviderThread.fields.nativeConversationHeadRef,
+    }),
+  ),
+);
+const decodeFeedbackAudit = Schema.decodeUnknownOption(
+  Schema.fromJsonString(RouterObservationEventV0),
+);
+const decodeFeedbackAuditDetail = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({ kind: Schema.String, taskResultFingerprint: Schema.String }),
+  ),
+);
+const decodeFeedbackSubmit = Schema.decodeUnknownOption(TaskResultFeedbackSubmit);
+const taskFeedbackFacts = Effect.fn("collaboration.taskFeedbackFacts")(function* (
+  sql: SqlClient.SqlClient,
+  input: TaskResultFeedbackInput,
+) {
+  const context = yield* reviewContext;
+  if (!context) return { state: feedbackUnavailable("operate-session-required") };
+  const environment = yield* Effect.serviceOption(ServerEnvironment.ServerEnvironment);
+  if (
+    environment._tag !== "Some" ||
+    (yield* environment.value.getEnvironmentId) !== input.environmentId
+  )
+    return { state: feedbackUnavailable("wrong-environment") };
+  const commands = yield* readCommands(sql);
+  const scoped = scopedSnapshot(commands, context.actorId);
+  const targets = scoped.tasks.filter(
+    (task) =>
+      task.id === input.taskId &&
+      task.projectId === input.projectId &&
+      task.threadId === input.threadId,
+  );
+  if (targets.length !== 1) return { state: feedbackUnavailable("task-link-unavailable") };
+  // A per-card read must not revalidate and decode every other task's result.
+  const validated = yield* validateThreadLinks(
+    sql,
+    {
+      ...scoped,
+      tasks: targets,
+      agents: scoped.agents.filter(
+        (a) =>
+          a.threadId === input.threadId ||
+          (a.id === targets[0]!.assigneeAgentId && a.projectId === input.projectId),
+      ),
+      messages: [],
+    },
+    commands,
+    context.actorId,
+  );
+  const task = validated.tasks[0];
+  if (!task) return { state: feedbackUnavailable("task-link-unavailable") };
+  const review = yield* reviewFacts(sql, commands, task, context.actorId, input.environmentId);
+  if (review.status !== "available") return { state: feedbackUnavailable(review.reason) };
+  if (review.contract.revision !== input.revision)
+    return { state: feedbackUnavailable("stale-revision") };
+  const routing = yield* readRoutingEvidence(sql, input.threadId);
+  if (
+    routing.status !== "available" ||
+    routing.execution.status !== "observed" ||
+    !routing.configuredModel
+  )
+    return { state: feedbackUnavailable("execution-unavailable") };
+  const result = yield* readResultEvidence(
+    sql,
+    input.threadId,
+    routing.configuredModel.instanceId,
+    routing,
+  );
+  if (
+    result.status !== "available" ||
+    result.runStatus !== "completed" ||
+    result.providerTurnStatus !== "completed" ||
+    !result.attemptId ||
+    !result.providerTurnId ||
+    result.content.status !== "output"
+  )
+    return { state: feedbackUnavailable("completed-output-required") };
+  // All rows are considered. Malformed siblings cannot disappear behind a JSON predicate.
+  const runs = yield* sql<{
+    run_id: string;
+    payload_json: string;
+  }>`SELECT run_id,payload_json FROM orchestration_v2_projection_runs WHERE thread_id=${input.threadId}`;
+  const parsedRuns = runs.map((r) => decodeRunEvidence(r.payload_json));
+  if (
+    parsedRuns.some((r) => r._tag !== "Some") ||
+    parsedRuns.filter((r) => r._tag === "Some" && r.value.userMessageId === result.messageId)
+      .length !== 1
+  )
+    return { state: feedbackUnavailable("ambiguous-message-runs") };
+  const runRow = runs.find((r) => r.run_id === result.runId);
+  if (!runRow) return { state: feedbackUnavailable("run-unavailable") };
+  const attempts = yield* sql<{
+    attempt_id: string;
+    attempt_ordinal: number;
+    payload_json: string;
+  }>`SELECT attempt_id,attempt_ordinal,payload_json FROM orchestration_v2_projection_run_attempts WHERE run_id=${result.runId}`;
+  const attempt = attempts[0];
+  if (
+    attempts.length !== 1 ||
+    attempt?.attempt_id !== result.attemptId ||
+    attempt.attempt_ordinal !== 1
+  )
+    return { state: feedbackUnavailable("ambiguous-attempts") };
+  const initialAttempt = decodeInitialFeedbackAttempt(attempt.payload_json);
+  if (initialAttempt._tag !== "Some")
+    return { state: feedbackUnavailable("initial-attempt-required") };
+  const turns = yield* sql<{
+    provider_turn_id: string;
+    completed_at: string;
+    payload_json: string;
+  }>`SELECT provider_turn_id,completed_at,payload_json FROM orchestration_v2_projection_provider_turns WHERE run_attempt_id=${result.attemptId}`;
+  const turn = turns[0];
+  if (turns.length !== 1 || turn?.provider_turn_id !== result.providerTurnId)
+    return { state: feedbackUnavailable("ambiguous-provider-turns") };
+  const starts = yield* sql<{
+    environment_id: string;
+    provider_turn_id: string;
+    root_thread_id: string;
+    thread_id: string;
+    run_id: string;
+    message_id: string;
+    contract_revision: number;
+    provider_instance_id: string;
+    status: string;
+    attempt_role: string;
+  }>`
+    SELECT environment_id,provider_turn_id,root_thread_id,thread_id,run_id,message_id,contract_revision,provider_instance_id,status,attempt_role FROM task_usage_attempts
+    WHERE environment_id=${input.environmentId} AND (message_id=${result.messageId} OR run_id=${result.runId} OR provider_turn_id=${result.providerTurnId})`;
+  const start = starts[0];
+  if (
+    starts.length !== 1 ||
+    !start ||
+    start.root_thread_id !== input.threadId ||
+    start.thread_id !== input.threadId ||
+    start.run_id !== result.runId ||
+    start.message_id !== result.messageId ||
+    start.provider_turn_id !== result.providerTurnId ||
+    start.contract_revision !== input.revision ||
+    start.provider_instance_id !== routing.configuredModel.instanceId ||
+    start.status !== "completed" ||
+    start.attempt_role !== "primary"
+  )
+    return { state: feedbackUnavailable("single-start-evidence-required") };
+  const routeRows = yield* sql<{
+    binding_json: string;
+  }>`SELECT binding_json FROM projection_dispatcher_task_routes WHERE thread_id=${input.threadId} AND message_id=${result.messageId}`;
+  const binding = routeRows[0] ? decodeRouteEvidence(routeRows[0].binding_json) : null;
+  if (
+    binding?._tag !== "Some" ||
+    !(yield* verifiedSingleStartV2({
+      environmentId: EnvironmentId.make(input.environmentId),
+      threadId: ThreadId.make(input.threadId),
+      runId: RunId.make(result.runId),
+      messageId: MessageId.make(result.messageId),
+      providerTurnId: result.providerTurnId,
+      providerInstanceId: routing.configuredModel.instanceId,
+      driver: ProviderDriverKind.make(binding.value.driver),
+      binding: binding.value,
+    }).pipe(Effect.provideService(SqlClient.SqlClient, sql)))
+  )
+    return { state: feedbackUnavailable("route-attribution-unavailable") };
+  const observations = yield* sql<{
+    observation_id: string;
+    environment_id: string;
+    thread_id: string;
+    message_id: string;
+    recorded_at: string;
+    schema_version: string;
+    payload_json: string;
+  }>`
+    SELECT observation_id,environment_id,thread_id,message_id,recorded_at,schema_version,payload_json FROM router_turn_observations
+    WHERE thread_id=${input.threadId} AND message_id=${result.messageId}`;
+  const row = observations[0];
+  const parsed = row ? decodeFeedbackObservation(row.payload_json) : null;
+  if (observations.length !== 1 || !row || parsed?._tag !== "Some")
+    return { state: feedbackUnavailable("observation-unavailable") };
+  const obs = parsed.value;
+  const target = binding.value.target;
+  if (
+    row.environment_id !== input.environmentId ||
+    obs.environmentId !== row.environment_id ||
+    obs.observationId !== row.observation_id ||
+    obs.version !== row.schema_version ||
+    obs.recordedAt !== row.recorded_at ||
+    !Number.isFinite(Date.parse(obs.recordedAt)) ||
+    Date.parse(obs.recordedAt) < Date.parse(turn.completed_at) ||
+    obs.terminalCategory !== "success" ||
+    obs.cancelled ||
+    obs.timedOut ||
+    obs.providerAttempts !== 1 ||
+    obs.fallbackCount !== 0 ||
+    obs.model !== target.model ||
+    obs.instanceId !== target.instanceId ||
+    obs.driver !== binding.value.driver ||
+    obs.actualExecutionModel !== (binding.value.openRouter?.actualExecutionModel ?? target.model) ||
+    obs.routingMode !== (binding.value.modelRoute?.mode ?? "auto") ||
+    target.model !== routing.configuredModel.model ||
+    target.instanceId !== routing.configuredModel.instanceId
+  )
+    return { state: feedbackUnavailable("observation-attribution-conflict") };
+  const items = yield* sql<{
+    payload_json: string;
+  }>`SELECT payload_json FROM orchestration_v2_projection_turn_items WHERE turn_item_id=${result.content.itemId}`;
+  const nodes = yield* sql<{
+    node_id: string;
+    payload_json: string;
+  }>`SELECT node_id,payload_json FROM orchestration_v2_projection_nodes WHERE thread_id=${input.threadId} AND run_id=${result.runId} ORDER BY node_id`;
+  const currentTurn = decodeResultTurn(turn.payload_json);
+  if (currentTurn._tag !== "Some")
+    return { state: feedbackUnavailable("turn-context-unavailable") };
+  const providerContexts = yield* sql<{
+    payload_json: string;
+  }>`SELECT payload_json FROM orchestration_v2_projection_provider_threads WHERE provider_thread_id=${currentTurn.value.providerThreadId}`;
+  const decodedProviderContext = providerContexts[0]
+    ? decodeFeedbackProviderContext(providerContexts[0].payload_json)
+    : null;
+  if (decodedProviderContext?._tag !== "Some")
+    return { state: feedbackUnavailable("provider-context-unavailable") };
+  const userMessages = yield* sql<{
+    payload_json: string;
+  }>`SELECT payload_json FROM orchestration_v2_projection_messages WHERE thread_id=${input.threadId} AND message_id=${result.messageId}`;
+  if (nodes.some((n) => decodeFeedbackWire(n.payload_json)._tag !== "Some"))
+    return { state: feedbackUnavailable("node-context-unavailable") };
+  const fingerprint = feedbackHash({
+    reference: {
+      environmentId: input.environmentId,
+      taskId: input.taskId,
+      projectId: input.projectId,
+    },
+    revision: input.revision,
+    contract: review.contract,
+    run: feedbackWire(runRow.payload_json),
+    attempt: feedbackWire(attempt.payload_json),
+    turn: decodeResultTurn(turn.payload_json),
+    providerContext: decodedProviderContext.value,
+    userMessage: userMessages[0] ? feedbackWire(userMessages[0].payload_json) : null,
+    item: items[0] ? feedbackWire(items[0].payload_json) : null,
+    nodes: nodes.map((n) => ({ id: n.node_id, payload: feedbackWire(n.payload_json) })),
+    binding: routeRows[0] ? feedbackWire(routeRows[0].binding_json) : null,
+    observation: {
+      id: row.observation_id,
+      environment: row.environment_id,
+      thread: row.thread_id,
+      message: row.message_id,
+      model: obs.model,
+      instance: obs.instanceId,
+      driver: obs.driver,
+    },
+  });
+  const feedbackEvents = yield* sql<{
+    event_id: string;
+    environment_id: string;
+    observation_id: string;
+    event_type: string;
+    recorded_at: string;
+    payload_json: string;
+  }>`
+    SELECT event_id,environment_id,observation_id,event_type,recorded_at,payload_json FROM router_observation_events WHERE environment_id=${input.environmentId} AND observation_id=${obs.observationId} AND event_type='explicit_feedback'`;
+  if (feedbackEvents.length > 0 && obs.evidence.explicitFeedback.length === 0)
+    return { state: feedbackUnavailable("feedback-audit-conflict") };
+  let feedbackForResult = false;
+  if (obs.evidence.explicitFeedback.length === 1 && feedbackEvents.length === 1) {
+    const er = feedbackEvents[0]!,
+      parsedEvent = decodeFeedbackAudit(er.payload_json);
+    if (parsedEvent._tag === "Some") {
+      const e = parsedEvent.value;
+      const detail = e.detail ? decodeFeedbackAuditDetail(e.detail) : null;
+      feedbackForResult =
+        e.eventId === er.event_id &&
+        e.environmentId === er.environment_id &&
+        e.observationId === er.observation_id &&
+        e.eventType === er.event_type &&
+        e.recordedAt === er.recorded_at &&
+        e.actor === context.actorId &&
+        e.recordedAt === obs.evidence.explicitFeedback[0]?.recordedAt &&
+        detail?._tag === "Some" &&
+        detail.value.kind === obs.evidence.explicitFeedback[0]?.kind &&
+        detail.value.taskResultFingerprint === fingerprint;
+    }
+  }
+  const state: TaskResultFeedbackState = {
+    status: "available",
+    target: input,
+    reference: review.reference,
+    fingerprint,
+    contextKey: feedbackHash({
+      actor: context.actorId,
+      session: context.sessionId,
+      expiry: context.expiresAt,
+      environment: input.environmentId,
+    }),
+    title: review.title,
+    model: routing.configuredModel,
+    result,
+    feedback: obs.evidence.explicitFeedback,
+    feedbackForResult,
+  };
+  return { state, observationId: obs.observationId, actor: context.actorId };
+});
+
+class TaskResultFeedbackError extends Schema.TaggedError<TaskResultFeedbackError>()(
+  "TaskResultFeedbackError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Task result feedback could not be recorded. Refresh authenticated facts before another decision.";
+  }
+}
+export class TaskResultFeedbackService extends Context.Service<
+  TaskResultFeedbackService,
+  {
+    readonly read: (
+      input: TaskResultFeedbackInput,
+    ) => Effect.Effect<TaskResultFeedbackState, TaskResultFeedbackError>;
+    readonly submit: (
+      input: TaskResultFeedbackSubmit,
+    ) => Effect.Effect<TaskResultFeedbackState, TaskResultFeedbackError>;
+  }
+>()("t3/collaboration/store/TaskResultFeedbackService") {}
+export const taskResultFeedbackLayer = Layer.effect(
+  TaskResultFeedbackService,
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const evaluation = yield* RouterEvaluation.RouterEvaluationService;
+    const read = (input: TaskResultFeedbackInput) =>
+      taskFeedbackFacts(sql, input).pipe(
+        Effect.map((f) => f.state),
+        Effect.orElseSucceed(() => feedbackUnavailable("persisted-facts-unavailable")),
+      );
+    const submit = (input: TaskResultFeedbackSubmit) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            // Decode even direct service calls: transport and UI snapshots confer no authority.
+            const decoded = decodeFeedbackSubmit(input);
+            if (decoded._tag !== "Some") return feedbackUnavailable("invalid-confirmation");
+            const facts = yield* taskFeedbackFacts(sql, input);
+            if (facts.state.status !== "available" || !facts.observationId || !facts.actor)
+              return facts.state;
+            if (
+              !sameFeedbackReference(facts.state.reference, input.reference) ||
+              facts.state.fingerprint !== input.fingerprint ||
+              facts.state.contextKey !== input.contextKey
+            )
+              return feedbackUnavailable("stale-result-or-session");
+            if (facts.state.feedback.length > 0) return facts.state;
+            yield* evaluation.submitFeedback(
+              EnvironmentId.make(input.environmentId),
+              { observationId: ObservationId.make(facts.observationId), kind: input.kind },
+              DateTime.formatIso(yield* DateTime.now),
+              facts.actor,
+              facts.state.fingerprint,
+            );
+            return yield* read(input);
+          }),
+        )
+        .pipe(Effect.mapError((cause) => new TaskResultFeedbackError({ cause })));
+    return TaskResultFeedbackService.of({ read, submit });
+  }),
 );

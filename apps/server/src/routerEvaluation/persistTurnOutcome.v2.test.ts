@@ -1,3 +1,8 @@
+import * as Schema from "effect/Schema";
+import { DispatcherTaskRouteBinding as BindingSchema } from "@t3tools/contracts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { withTaskResultFeedbackEffects } from "../collaboration/testkit/taskResultFeedbackFixture.ts";
+import { expect } from "vite-plus/test";
 import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
 import { emptyLocalEvidence, routeHybridModel } from "@t3tools/shared/hybridRouter";
 import { assert, it } from "@effect/vitest";
@@ -38,6 +43,7 @@ import * as ProviderEventIngestor from "../orchestration-v2/ProviderEventIngesto
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { RouterEvaluationService, layer as evaluationLayer } from "./RouterEvaluationService.ts";
 
+const decodeOutcomeBinding = Schema.decodeUnknownEffect(Schema.fromJsonString(BindingSchema));
 const environmentId = EnvironmentId.make("lab-environment");
 const driver = ProviderDriverKind.make("codex");
 const providerInstanceId = ProviderInstanceId.make("codex");
@@ -509,5 +515,183 @@ it.effect(
         assert.equal(latest.value.taskProfile.macroCategory, "unknown");
         assert.equal(yield* evaluation.observationCount(environmentId), 1);
       }),
+    ),
+);
+
+it.effect("certifies an actual empty-bound dispatcher outcome at the running capture phase", () =>
+  withTaskResultFeedbackEffects((f) =>
+    Effect.gen(function* () {
+      expect(f.capturePhase).toEqual({ run: "running", attempt: "running", attemptTurn: null });
+      const capturedBinding = yield* decodeOutcomeBinding(f.bindingBefore);
+      expect(capturedBinding.modelRoute?.attempts).toEqual([]);
+      expect(f.observation.providerAttempts).toBe(1);
+      expect(f.observation.fallbackCount).toBe(0);
+      const route = yield* f.sql<{
+        binding_json: string;
+      }>`SELECT binding_json FROM projection_dispatcher_task_routes`;
+      expect(route[0]?.binding_json).toBe(f.bindingBefore);
+    }),
+  ),
+);
+
+type CaptureIds = { run: string; attempt: string; turn: string; thread: string; message: string };
+type MutateCapture = (
+  sql: SqlClient.SqlClient,
+  ids: CaptureIds,
+) => Effect.Effect<void, import("effect/unstable/sql/SqlError").SqlError>;
+const certificationFailures: {
+  name: string;
+  phase: "beforeCapture" | "afterProjection";
+  mutate: MutateCapture;
+}[] = [
+  {
+    name: "a second run for the message",
+    phase: "beforeCapture",
+    mutate: (sql, id) =>
+      Effect.gen(function* () {
+        yield* sql`INSERT INTO orchestration_v2_projection_runs SELECT run_id||':extra',thread_id,ordinal+1,provider,provider_thread_id,status,requested_at,completed_at,json_set(payload_json,'$.id',run_id||':extra','$.ordinal',ordinal+1),provider_instance_id FROM orchestration_v2_projection_runs WHERE run_id=${id.run}`;
+      }),
+  },
+  ...["retry", "provider_recovery"].map((reason) => ({
+    name: `an extra ${reason} attempt`,
+    phase: "beforeCapture" as const,
+    mutate: (sql: SqlClient.SqlClient, id: CaptureIds) =>
+      Effect.gen(function* () {
+        yield* sql`INSERT INTO orchestration_v2_projection_run_attempts SELECT attempt_id||':extra',thread_id,run_id,2,root_node_id,provider,provider_thread_id,NULL,'pending',json_set(payload_json,'$.id',attempt_id||':extra','$.attemptOrdinal',2,'$.reason',${reason},'$.status','pending'),provider_instance_id FROM orchestration_v2_projection_run_attempts WHERE run_id=${id.run}`;
+      }),
+  })),
+  {
+    name: "mismatched attempt root",
+    phase: "beforeCapture",
+    mutate: (sql, id) =>
+      Effect.gen(function* () {
+        yield* sql`UPDATE orchestration_v2_projection_run_attempts SET root_node_id='forged' WHERE run_id=${id.run}`;
+      }),
+  },
+  {
+    name: "mismatched provider instance",
+    phase: "beforeCapture",
+    mutate: (sql, id) =>
+      Effect.gen(function* () {
+        yield* sql`UPDATE orchestration_v2_projection_run_attempts SET provider_instance_id='forged' WHERE run_id=${id.run}`;
+      }),
+  },
+  {
+    name: "a changed configured model",
+    phase: "beforeCapture",
+    mutate: (sql, id) =>
+      Effect.gen(function* () {
+        yield* sql`UPDATE orchestration_v2_projection_runs SET payload_json=json_set(payload_json,'$.modelSelection.model','forged') WHERE run_id=${id.run}`;
+      }),
+  },
+  {
+    name: "malformed run payload",
+    phase: "beforeCapture",
+    mutate: (sql, id) =>
+      Effect.gen(function* () {
+        yield* sql`UPDATE orchestration_v2_projection_runs SET payload_json='malformed' WHERE run_id=${id.run}`;
+      }),
+  },
+  {
+    name: "a child rather than governed root",
+    phase: "beforeCapture",
+    mutate: (sql, id) =>
+      Effect.gen(function* () {
+        yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.lineage.rootThreadId','foreign-root','$.lineage.parentThreadId','foreign-root','$.lineage.relationshipToParent','subagent') WHERE thread_id=${id.thread}`;
+      }),
+  },
+  {
+    name: "mismatched root times",
+    phase: "beforeCapture",
+    mutate: (sql, id) =>
+      Effect.gen(function* () {
+        yield* sql`UPDATE orchestration_v2_projection_nodes SET started_at='malformed' WHERE thread_id=${id.thread} AND kind='root_turn'`;
+      }),
+  },
+  {
+    name: "missing usage start",
+    phase: "afterProjection",
+    mutate: (sql, id) =>
+      Effect.gen(function* () {
+        yield* sql`DELETE FROM task_usage_attempts WHERE provider_turn_id=${id.turn}`;
+      }),
+  },
+  {
+    name: "wrong usage environment",
+    phase: "afterProjection",
+    mutate: (sql, id) =>
+      Effect.gen(function* () {
+        yield* sql`UPDATE task_usage_attempts SET environment_id='foreign-environment' WHERE provider_turn_id=${id.turn}`;
+      }),
+  },
+  {
+    name: "wrong usage root",
+    phase: "afterProjection",
+    mutate: (sql, id) =>
+      Effect.gen(function* () {
+        yield* sql`UPDATE task_usage_attempts SET root_thread_id='foreign-root' WHERE provider_turn_id=${id.turn}`;
+      }),
+  },
+  {
+    name: "contradictory failover usage",
+    phase: "afterProjection",
+    mutate: (sql, id) =>
+      Effect.gen(function* () {
+        yield* sql`UPDATE task_usage_attempts SET attempt_role='failover' WHERE provider_turn_id=${id.turn}`;
+      }),
+  },
+  {
+    name: "unresolved extra start evidence",
+    phase: "afterProjection",
+    mutate: (sql, id) =>
+      Effect.gen(function* () {
+        yield* sql`INSERT INTO task_usage_attempts (environment_id,provider_turn_id,root_thread_id,thread_id,run_id,message_id,contract_revision,provider_instance_id,status,attempt_role,usage_status,basis,updated_at) SELECT environment_id,provider_turn_id||':unresolved',root_thread_id,thread_id,NULL,NULL,contract_revision,provider_instance_id,'running','primary',usage_status,basis,updated_at FROM task_usage_attempts WHERE provider_turn_id=${id.turn}`;
+      }),
+  },
+  {
+    name: "malformed turn physical identity",
+    phase: "afterProjection",
+    mutate: (sql, id) =>
+      Effect.gen(function* () {
+        yield* sql`UPDATE orchestration_v2_projection_provider_turns SET node_id='background-node' WHERE provider_turn_id=${id.turn}`;
+      }),
+  },
+  {
+    name: "a second provider turn",
+    phase: "afterProjection",
+    mutate: (sql, id) =>
+      Effect.gen(function* () {
+        yield* sql`INSERT INTO orchestration_v2_projection_provider_turns SELECT provider_turn_id||':second',thread_id,provider_thread_id,node_id,run_attempt_id,ordinal+1,status,started_at,completed_at,json_set(payload_json,'$.id',provider_turn_id||':second','$.ordinal',ordinal+1) FROM orchestration_v2_projection_provider_turns WHERE provider_turn_id=${id.turn}`;
+      }),
+  },
+];
+it.effect.each(certificationFailures)("does not certify $name", (scenario) =>
+  withTaskResultFeedbackEffects(
+    (f) =>
+      Effect.gen(function* () {
+        expect(f.observation?.providerAttempts ?? 0).toBe(0);
+        expect((yield* Effect.promise(() => f.read())).status).toBe("unavailable");
+        const route = yield* f.sql<{
+          binding_json: string;
+        }>`SELECT binding_json FROM projection_dispatcher_task_routes`;
+        expect(route[0]?.binding_json).toBe(f.bindingBefore);
+      }),
+    { [scenario.phase]: scenario.mutate },
+  ),
+);
+it.effect(
+  "leaves historical zero-count observations unchanged through actual fresh terminal replay",
+  () =>
+    withTaskResultFeedbackEffects(
+      (f) =>
+        Effect.gen(function* () {
+          expect(f.observation.providerAttempts).toBe(0);
+          const before = yield* f.evaluation.exportObservations(f.observation.environmentId);
+          yield* Effect.promise(f.replay);
+          const after = yield* f.evaluation.exportObservations(f.observation.environmentId);
+          expect(after.records).toEqual(before.records);
+          expect((yield* Effect.promise(() => f.read())).status).toBe("unavailable");
+        }),
+      { legacyZero: true },
     ),
 );

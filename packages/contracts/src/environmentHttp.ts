@@ -1,3 +1,8 @@
+import {
+  TaskResultFeedbackInput,
+  TaskResultFeedbackSubmit,
+  TaskResultFeedbackState,
+} from "./collaboration.ts";
 import * as Context from "effect/Context";
 import type * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
@@ -656,6 +661,24 @@ class EnvironmentCollaborationHttpApi extends HttpApiGroup.make("collaboration")
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
+class EnvironmentTaskResultFeedbackHttpApi extends HttpApiGroup.make("taskResultFeedback")
+  .add(
+    HttpApiEndpoint.post("readTaskResultFeedback", "/api/collaboration/task/result-feedback/read", {
+      headers: OptionalBearerHeaders,
+      payload: TaskResultFeedbackInput,
+      success: TaskResultFeedbackState,
+      error: [EnvironmentAuthInvalidError, EnvironmentScopeRequiredError, EnvironmentInternalError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("submitTaskResultFeedback", "/api/collaboration/task/result-feedback", {
+      headers: OptionalBearerHeaders,
+      payload: TaskResultFeedbackSubmit,
+      success: TaskResultFeedbackState,
+      error: [EnvironmentAuthInvalidError, EnvironmentScopeRequiredError, EnvironmentInternalError],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 class EnvironmentProjectsHttpApi extends HttpApiGroup.make("projects")
   .add(
     HttpApiEndpoint.get("snapshot", "/api/projects", {
@@ -757,5 +780,6 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentProjectsHttpApi)
   .add(EnvironmentCollaborationHttpApi)
+  .add(EnvironmentTaskResultFeedbackHttpApi)
   .add(EnvironmentRouterPolicyHttpApi)
   .add(EnvironmentConnectHttpApi) {}

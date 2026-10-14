@@ -1,3 +1,5 @@
+import * as DateTime from "effect/DateTime";
+import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
@@ -26,7 +28,12 @@ import {
   sealCollaborationCommand,
   type CollaborationProviderFact,
 } from "./admit.ts";
-import { readCollaborationSnapshot, submitCollaborationCommand } from "./store.ts";
+import {
+  TaskResultFeedbackService,
+  taskResultFeedbackLayer,
+  readCollaborationSnapshot,
+  submitCollaborationCommand,
+} from "./store.ts";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as CollaborationThreads from "./CollaborationThreads.ts";
@@ -46,7 +53,7 @@ const providerFact = (provider: ServerProvider): CollaborationProviderFact => ({
     provider.models.length > 0,
 });
 
-export const collaborationHttpApiLayer = HttpApiBuilder.group(
+const directoryHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "collaboration",
   Effect.fnUntraced(function* (handlers) {
@@ -134,3 +141,38 @@ export const collaborationHttpApiLayer = HttpApiBuilder.group(
       );
   }),
 ).pipe(Layer.provide(CollaborationThreads.layer));
+
+export const taskResultFeedbackHttpApiLayer = HttpApiBuilder.group(
+  EnvironmentHttpApi,
+  "taskResultFeedback",
+  Effect.fnUntraced(function* (handlers) {
+    const feedback = yield* TaskResultFeedbackService;
+    const feedbackRequest = <I, E>(
+      run: (input: I) => Effect.Effect<import("@t3tools/contracts").TaskResultFeedbackState, E>,
+    ) =>
+      Effect.fn("environment.collaboration.taskFeedback")(function* (args: {
+        endpoint: { name: string };
+        payload: I;
+      }) {
+        yield* annotateEnvironmentRequest(args.endpoint.name);
+        const principal = yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+        return yield* run(args.payload).pipe(
+          Effect.provideService(PolicyExecutionContext, {
+            kind: "session",
+            actorId: principal.subject,
+            sessionId: principal.sessionId,
+            scopes: [...principal.scopes],
+            ...(principal.expiresAt ? { expiresAt: DateTime.formatIso(principal.expiresAt) } : {}),
+          }),
+          Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
+        );
+      });
+    return handlers
+      .handle("readTaskResultFeedback", feedbackRequest(feedback.read))
+      .handle("submitTaskResultFeedback", feedbackRequest(feedback.submit));
+  }),
+).pipe(Layer.provide(taskResultFeedbackLayer));
+export const collaborationHttpApiLayer = Layer.merge(
+  directoryHttpApiLayer,
+  taskResultFeedbackHttpApiLayer,
+);

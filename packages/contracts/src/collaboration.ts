@@ -10,7 +10,14 @@ import {
   OrchestrationV2ProviderFailure,
 } from "./orchestrationV2.ts";
 
-import { TaskContract, TaskContractPhase, TaskContractReviewHint } from "./taskContract.ts";
+import {
+  TaskContract,
+  TaskContractPhase,
+  TaskContractReviewHint,
+  TaskContractReviewInput,
+  TaskContractReviewReference,
+} from "./taskContract.ts";
+import { ExplicitUserFeedbackV0 } from "./routerEvaluation.ts";
 import { ModelRouterMode, ModelRouterTarget } from "./modelRouter.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
@@ -281,3 +288,31 @@ export const CollaborationOpenThreadInput = Schema.Struct({
   providerId: TrimmedNonEmptyString,
 });
 export type CollaborationOpenThreadInput = typeof CollaborationOpenThreadInput.Type;
+
+export const TaskResultFeedbackInput = TaskContractReviewInput;
+export type TaskResultFeedbackInput = typeof TaskResultFeedbackInput.Type;
+export const TaskResultFeedbackState = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("unavailable"), reason: Schema.String }),
+  Schema.Struct({
+    status: Schema.Literal("available"),
+    target: TaskResultFeedbackInput,
+    reference: TaskContractReviewReference,
+    fingerprint: TrimmedNonEmptyString,
+    contextKey: TrimmedNonEmptyString,
+    title: Schema.String,
+    model: ModelSelection,
+    result: CollaborationTaskResultReadout,
+    feedback: Schema.Array(ExplicitUserFeedbackV0),
+    feedbackForResult: Schema.Boolean,
+  }),
+]);
+export type TaskResultFeedbackState = typeof TaskResultFeedbackState.Type;
+export const TaskResultFeedbackSubmit = Schema.Struct({
+  ...TaskResultFeedbackInput.fields,
+  reference: TaskContractReviewReference,
+  fingerprint: TrimmedNonEmptyString,
+  contextKey: TrimmedNonEmptyString,
+  kind: Schema.Literals(["helpful", "not_helpful"]),
+  confirm: Schema.Literal(true),
+});
+export type TaskResultFeedbackSubmit = typeof TaskResultFeedbackSubmit.Type;
