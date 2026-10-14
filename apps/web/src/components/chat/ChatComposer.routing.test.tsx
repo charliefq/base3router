@@ -1,3 +1,5 @@
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Crypto from "effect/Crypto";
 import { it as effectIt } from "@effect/vitest";
@@ -5,7 +7,12 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { EnvironmentSupervisor } from "@t3tools/client-runtime/connection";
-import { startThreadTurn, editQueuedRun } from "@t3tools/client-runtime/operations";
+import {
+  startThreadTurn,
+  editQueuedRun,
+  type StartThreadTurnInput,
+  type EditQueuedRunInput,
+} from "@t3tools/client-runtime/operations";
 import {
   CommandId,
   MessageId,
@@ -13,7 +20,7 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
-import { readComposerSendContextForTarget } from "../ChatView.logic";
+import { captureComposerSendDispatch } from "../ChatView.logic";
 import { act, createElement, createRef } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -283,99 +290,150 @@ it("restores explicit choice after remount and retains it when providers disappe
 });
 
 effectIt.effect(
-  "forwards actual normal, queued and fan-out commands from captured mounted contexts",
+  "binds production send requests before delayed navigation, toggles, fan-out and queue edits",
   () =>
     Effect.gen(function* () {
+      const commands: { environment: EnvironmentId; command: OrchestrationV2Command }[] = [];
+      const makeSupervisor = (environment: EnvironmentId) =>
+        Effect.gen(function* () {
+          const session = yield* SubscriptionRef.make(
+            Option.some({
+              client: {
+                [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
+                  Effect.sync(() => {
+                    commands.push({ environment, command });
+                    return { sequence: commands.length };
+                  }),
+              },
+              initialConfig: Effect.succeed({
+                environment: { capabilities: { serverResolvedCommandContext: true } },
+              }),
+            } as never),
+          );
+          return EnvironmentSupervisor.EnvironmentSupervisor.of({
+            target: { environmentId: environment, label: "Fake only" },
+            session,
+          } as never);
+        });
+      const envA = EnvironmentId.make("env-a"),
+        envB = EnvironmentId.make("env-b");
+      const supervisors = new Map([
+        [envA, yield* makeSupervisor(envA)],
+        [envB, yield* makeSupervisor(envB)],
+      ]);
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const operations = {
+        startTurn: ({
+          environmentId,
+          input,
+        }: {
+          environmentId: EnvironmentId;
+          input: StartThreadTurnInput;
+        }) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(release);
+            return yield* startThreadTurn(input).pipe(
+              Effect.provideService(
+                EnvironmentSupervisor.EnvironmentSupervisor,
+                supervisors.get(environmentId)!,
+              ),
+            );
+          }),
+        editQueuedRun: ({
+          environmentId,
+          input,
+        }: {
+          environmentId: EnvironmentId;
+          input: EditQueuedRunInput;
+        }) =>
+          editQueuedRun(input).pipe(
+            Effect.provideService(
+              EnvironmentSupervisor.EnvironmentSupervisor,
+              supervisors.get(environmentId)!,
+            ),
+          ),
+      };
       yield* Effect.promise(() =>
         act(async () => {
           renderer = create(<ChatComposer {...propsFor()} />);
         }),
       );
       yield* Effect.promise(() => act(async () => toggle().props.onClick()));
-      const target = scopeThreadRef(EnvironmentId.make("env-a"), ThreadId.make("a"));
-      const captured = readComposerSendContextForTarget(
-        target,
-        target.environmentId,
-        handle.current,
-      )!;
+      const targetA = scopeThreadRef(envA, ThreadId.make("a"));
+      const dispatchA = captureComposerSendDispatch(targetA, envA, handle.current, operations)!;
+      // Input fixtures omit routing. The production seam owns mode/environment binding.
+      const input = (id: string, thread: string, dispatchMode: "auto" | "queue" = "auto") => ({
+        commandId: CommandId.make(id),
+        threadId: ThreadId.make(thread),
+        message: {
+          messageId: MessageId.make(id),
+          role: "user" as const,
+          text: "Fixture prompt",
+          attachments: [],
+        },
+        modelSelection: dispatchA.context.selectedModelSelection,
+        runtimeMode: "approval-required" as const,
+        interactionMode: "default" as const,
+        dispatchMode,
+      });
+      const pending = yield* dispatchA
+        .startTurn({ environmentId: envA, input: input("normal-a", "a") })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
       yield* Effect.promise(() =>
-        act(async () => renderer.update(<ChatComposer {...propsFor("env-a", "b")} />)),
+        act(async () => renderer.update(<ChatComposer {...propsFor("env-b", "b")} />)),
       );
       expect(
-        readComposerSendContextForTarget(target, target.environmentId, handle.current),
+        captureComposerSendDispatch(targetA, envA, handle.current, operations),
       ).toBeUndefined();
-      const b = handle.current!.getSendContext();
+      const targetB = scopeThreadRef(envB, ThreadId.make("b"));
+      const dispatchB = captureComposerSendDispatch(targetB, envB, handle.current, operations)!;
       yield* Effect.promise(() => act(async () => toggle().props.onClick()));
-      useComposerDraftStore.getState().setRoutingMode(target, "manual");
-      const commands: OrchestrationV2Command[] = [];
-      const session = yield* SubscriptionRef.make(
-        Option.some({
-          client: {
-            [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (c: OrchestrationV2Command) =>
-              Effect.sync(() => {
-                commands.push(c);
-                return { sequence: commands.length };
-              }),
-          },
-          initialConfig: Effect.succeed({
-            environment: { capabilities: { serverResolvedCommandContext: true } },
-          }),
-        } as never),
+      yield* Effect.promise(() =>
+        act(async () => useComposerDraftStore.getState().setRoutingMode(targetA, "manual")),
       );
-      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
-        target: { environmentId: target.environmentId, label: "Fake only" },
-        session,
-      } as never);
-      const send = (
-        id: string,
-        thread: string,
-        context: typeof captured,
-        mode: "auto" | "queue" = "auto",
-      ) =>
-        startThreadTurn({
-          commandId: CommandId.make(id),
-          threadId: ThreadId.make(thread),
-          message: {
-            messageId: MessageId.make(id),
-            role: "user",
-            text: "Fixture prompt",
-            attachments: [],
-          },
-          modelSelection: context.selectedModelSelection,
-          runtimeMode: "approval-required",
-          interactionMode: "default",
-          routingMode: context.routingMode,
-          dispatchMode: mode,
-        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
-      yield* send("normal-a", "a", captured);
-      yield* send("normal-b", "b", b);
-      yield* send("queued-a", "a", captured, "queue");
-      for (const id of ["fanout-one", "fanout-two"]) yield* send(id, id, captured);
-      yield* editQueuedRun({
-        commandId: CommandId.make("edit-queued"),
-        threadId: target.threadId,
-        runId: RunId.make("queued-run"),
-        text: "Edited queued text",
-      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(pending);
+      yield* dispatchB.startTurn({ environmentId: envB, input: input("normal-b", "b") });
+      yield* dispatchA.startTurn({ environmentId: envA, input: input("queued-a", "a", "queue") });
+      for (const id of ["fanout-one", "fanout-two"]) {
+        yield* dispatchA.startTurn({ environmentId: envA, input: input(id, id) });
+      }
+      yield* dispatchA.editQueuedRun({
+        environmentId: envA,
+        input: {
+          commandId: CommandId.make("edit-queued"),
+          threadId: targetA.threadId,
+          runId: RunId.make("queued-run"),
+          text: "Edited queued text",
+        },
+      });
       expect(
         commands
           .slice(0, 5)
-          .map((c) =>
-            c.type === "message.dispatch" ? { thread: c.threadId, mode: c.routingMode } : null,
+          .map(({ environment, command }) =>
+            command.type === "message.dispatch"
+              ? { environment, thread: command.threadId, mode: command.routingMode }
+              : null,
           ),
       ).toEqual([
-        { thread: "a", mode: "auto" },
-        { thread: "b", mode: "manual" },
-        { thread: "a", mode: "auto" },
-        { thread: "fanout-one", mode: "auto" },
-        { thread: "fanout-two", mode: "auto" },
+        { environment: envA, thread: "a", mode: "auto" },
+        { environment: envB, thread: "b", mode: "manual" },
+        { environment: envA, thread: "a", mode: "auto" },
+        { environment: envA, thread: "fanout-one", mode: "auto" },
+        { environment: envA, thread: "fanout-two", mode: "auto" },
       ]);
-      expect(commands[2]).toMatchObject({
+      expect(commands[2]?.command).toMatchObject({
         type: "message.dispatch",
         dispatchMode: { type: "queue_after_active" },
       });
-      expect(commands[5]).toMatchObject({ type: "queued-run.edit", text: "Edited queued text" });
-      expect(commands[5]).not.toHaveProperty("routingMode");
+      expect(commands[5]).toMatchObject({
+        environment: envA,
+        command: { type: "queued-run.edit", threadId: "a", text: "Edited queued text" },
+      });
+      expect(commands[5]?.command).not.toHaveProperty("routingMode");
     }).pipe(
       Effect.provide(
         Layer.succeed(

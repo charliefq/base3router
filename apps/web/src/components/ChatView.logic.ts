@@ -1,3 +1,4 @@
+import type { StartThreadTurnInput, EditQueuedRunInput } from "@t3tools/client-runtime/operations";
 import { composerTargetKey, type ComposerThreadTarget } from "../composerDraftStore";
 import * as Option from "effect/Option";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -1391,4 +1392,42 @@ export function readComposerSendContextForTarget<
     context.composerEnvironmentId === environmentId
     ? context
     : undefined;
+}
+
+/** Bind outgoing requests once, before uploads or other asynchronous composer work. */
+export function captureComposerSendDispatch<
+  C extends {
+    composerDraftTargetKey: string;
+    composerEnvironmentId: EnvironmentId;
+    routingMode: "auto" | "manual";
+  },
+  StartResult,
+  EditResult,
+>(
+  target: ComposerThreadTarget,
+  environmentId: EnvironmentId,
+  composer: { getSendContext: () => C } | null,
+  operations: {
+    startTurn: (request: {
+      environmentId: EnvironmentId;
+      input: StartThreadTurnInput;
+    }) => StartResult;
+    editQueuedRun: (request: {
+      environmentId: EnvironmentId;
+      input: EditQueuedRunInput;
+    }) => EditResult;
+  },
+) {
+  const context = readComposerSendContextForTarget(target, environmentId, composer);
+  if (!context) return undefined;
+  const routingMode = context.routingMode;
+  return {
+    context,
+    startTurn: (request: {
+      environmentId: EnvironmentId;
+      input: Omit<StartThreadTurnInput, "routingMode">;
+    }) => operations.startTurn({ environmentId, input: { ...request.input, routingMode } }),
+    editQueuedRun: (request: { environmentId: EnvironmentId; input: EditQueuedRunInput }) =>
+      operations.editQueuedRun({ environmentId, input: request.input }),
+  };
 }
