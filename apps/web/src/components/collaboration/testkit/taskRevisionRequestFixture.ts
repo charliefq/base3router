@@ -82,6 +82,16 @@ export async function withTaskRevisionRequestFixture(
       projection: OrchestrationV2ThreadProjection;
       readOwnedReviewAsync: () => Promise<TaskContractReviewState>;
       dbChangesAsync: () => Promise<ReadonlyArray<Record<string, unknown>>>;
+      freshFactsAsync: () => Promise<{
+        snapshot: CollaborationSnapshot;
+        projection: OrchestrationV2ThreadProjection;
+      }>;
+      setSelectedThreadStatusAsync: (status: "active" | "idle") => Promise<void>;
+      insertRecoveryItemAsync: (
+        type: "command_execution" | "dynamic_tool" | "subagent",
+        status: "pending" | "running" | "waiting",
+        historical?: boolean,
+      ) => Promise<void>;
     },
   ) => Promise<void>,
 ) {
@@ -271,6 +281,54 @@ export async function withTaskRevisionRequestFixture(
               }),
             ),
           dbChangesAsync: () => Effect.runPromise(f.sql`SELECT total_changes() AS n`),
+          freshFactsAsync: async () => ({
+            snapshot: await Effect.runPromise(f.readSnapshot()),
+            projection: await Effect.runPromise(
+              f.orchestrator.getThreadProjection(command.threadId),
+            ),
+          }),
+          setSelectedThreadStatusAsync: async (status) => {
+            await Effect.runPromise(
+              sql`UPDATE orchestration_v2_projection_provider_threads SET status=${status},payload_json=json_set(payload_json,'$.status',${status}) WHERE provider_thread_id=${thread.id}`,
+            );
+          },
+          insertRecoveryItemAsync: async (type, status, historical = false) => {
+            const recovery = await Effect.runPromise(
+              decodeItem({
+                id: "revision-recovery",
+                threadId: command.threadId,
+                runId: run.id,
+                nodeId: root.id,
+                providerThreadId: thread.id,
+                providerTurnId: historical ? "earlier-provider-turn" : turn.id,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 2,
+                type,
+                status,
+                title: null,
+                startedAt: start,
+                completedAt: null,
+                updatedAt: end,
+                ...(type === "command_execution"
+                  ? { input: "fixture-only command" }
+                  : type === "dynamic_tool"
+                    ? { toolName: "fixture-only", input: {} }
+                    : {
+                        subagentId: child.id,
+                        origin: "provider_native",
+                        driver: "codex",
+                        providerInstanceId: "codex",
+                        childThreadId: null,
+                        prompt: "fixture-only",
+                        result: null,
+                      }),
+              }),
+            );
+            await Effect.runPromise(
+              sql`INSERT OR REPLACE INTO orchestration_v2_projection_turn_items (turn_item_id,thread_id,run_id,node_id,provider_thread_id,provider_turn_id,parent_item_id,ordinal,type,status,updated_at,payload_json) VALUES (${recovery.id},${command.threadId},${run.id},${root.id},${thread.id},${recovery.providerTurnId},NULL,2,${type},${status},${end},${await Effect.runPromise(encodeItem(recovery))})`,
+            );
+          },
           command,
           snapshot: await Effect.runPromise(f.readSnapshot()),
           projection: await Effect.runPromise(f.orchestrator.getThreadProjection(command.threadId)),

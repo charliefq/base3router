@@ -229,3 +229,70 @@ it("requires the exact current owned root and latest completed attributed identi
     expect(await f.dbChangesAsync()).toEqual(before);
   });
 });
+
+it.each([
+  "active-thread",
+  "command_execution:pending",
+  "command_execution:running",
+  "command_execution:waiting",
+  "dynamic_tool:pending",
+  "dynamic_tool:running",
+  "dynamic_tool:waiting",
+  "subagent:pending",
+  "subagent:running",
+  "subagent:waiting",
+] as const)(
+  "refuses current completed-result preparation with %s execution evidence",
+  async (mode) => {
+    await withTaskRevisionRequestFixture(async (f) => {
+      const env = EnvironmentId.make("environment-a");
+      expect(
+        revisionRequestFacts(
+          f.snapshot.tasks[0]!,
+          env,
+          await f.readOwnedReviewAsync(),
+          f.projection,
+        ),
+      ).not.toBeNull();
+      if (mode === "active-thread") await f.setSelectedThreadStatusAsync("active");
+      else {
+        const [type, status] = mode.split(":") as [
+          "command_execution" | "dynamic_tool" | "subagent",
+          "pending" | "running" | "waiting",
+        ];
+        await f.insertRecoveryItemAsync(type, status);
+      }
+      const marker = await f.dbChangesAsync();
+      const facts = await f.freshFactsAsync(),
+        review = await f.readOwnedReviewAsync();
+      expect(facts.snapshot.tasks[0]?.resultReadout).toMatchObject({
+        status: "available",
+        runStatus: "completed",
+        providerTurnStatus: "completed",
+        content: { status: "output" },
+      });
+      expect(review.status).toBe("available");
+      expect(
+        revisionRequestFacts(facts.snapshot.tasks[0]!, env, review, facts.projection),
+      ).toBeNull();
+      expect(await f.dbChangesAsync()).toEqual(marker);
+    });
+  },
+);
+
+it("keeps historical recovery items separate from the selected completed result turn", async () => {
+  await withTaskRevisionRequestFixture(async (f) => {
+    await f.insertRecoveryItemAsync("command_execution", "running", true);
+    const marker = await f.dbChangesAsync(),
+      facts = await f.freshFactsAsync();
+    expect(
+      revisionRequestFacts(
+        facts.snapshot.tasks[0]!,
+        EnvironmentId.make("environment-a"),
+        await f.readOwnedReviewAsync(),
+        facts.projection,
+      ),
+    ).not.toBeNull();
+    expect(await f.dbChangesAsync()).toEqual(marker);
+  });
+});

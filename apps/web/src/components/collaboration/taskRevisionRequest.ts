@@ -188,6 +188,19 @@ export function revisionRequestFacts(
       .sort((a, b) => b.ordinal - a.ordinal)[0]?.id !== turn.id
   )
     return null;
+  // A completed run cannot override conflicting execution evidence for its current thread/turn.
+  if (
+    provider.status === "active" ||
+    projection.turnItems.some(
+      (item) =>
+        item.runId === run.id &&
+        item.providerThreadId === provider.id &&
+        item.providerTurnId === turn.id &&
+        ["command_execution", "dynamic_tool", "subagent"].includes(item.type) &&
+        ["pending", "running", "waiting"].includes(item.status),
+    )
+  )
+    return null;
   const items = projection.turnItems
     .filter(
       (v) =>
