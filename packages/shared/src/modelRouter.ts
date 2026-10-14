@@ -368,7 +368,7 @@ function selectionBasisFor(input: {
     selectedScore = score(selected);
     runnerUpScore = input.eligible[1] === undefined ? null : score(input.eligible[1]);
     let tied = input.eligible.filter((candidate) => score(candidate) === selectedScore);
-    if (Number.isNaN(selectedScore) || (runnerUpScore !== null && Number.isNaN(runnerUpScore))) {
+    if (input.eligible.some((candidate) => Number.isNaN(score(candidate)))) {
       outcome = "unknown";
     } else if (tied.length > 1) {
       outcome = "tie";

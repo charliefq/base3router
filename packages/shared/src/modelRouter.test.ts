@@ -1025,4 +1025,20 @@ describe("selection basis", () => {
     });
     expect(decision.explanation).toContain("candidate limit");
   });
+  it("does not claim a decisive score when another selectable candidate has NaN arithmetic", () => {
+    const huge = { quality: known(1e308), costUsd: known(1e308), latencyMs: known(0) };
+    const decision = routeModel({
+      mode: "auto",
+      catalog: [a, b, { ...b, model: "overflow", metrics: huge }],
+      policy: { version: "model-router.v0", qualityWeight: 2, costWeight: 2, latencyWeight: 1 },
+    });
+    expect(decision.selected?.target.model).toBe("a");
+    expect(decision.selectionBasis).toMatchObject({
+      outcome: "unknown",
+      selectedScore: 28,
+      runnerUpScore: 8,
+      tieBreak: [],
+    });
+    expect(decision.explanation).toContain("selection cause is unknown");
+  });
 });
