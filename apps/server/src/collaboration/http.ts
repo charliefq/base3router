@@ -37,6 +37,7 @@ import {
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as CollaborationThreads from "./CollaborationThreads.ts";
+import * as RouterEvaluation from "../routerEvaluation/RouterEvaluationService.ts";
 
 const decodeCommand = Schema.decodeUnknownEffect(CollaborationCommand);
 
@@ -174,5 +175,5 @@ export const taskResultFeedbackHttpApiLayer = HttpApiBuilder.group(
 ).pipe(Layer.provide(taskResultFeedbackLayer));
 export const collaborationHttpApiLayer = Layer.merge(
   directoryHttpApiLayer,
-  taskResultFeedbackHttpApiLayer,
+  taskResultFeedbackHttpApiLayer.pipe(Layer.provide(RouterEvaluation.layer)),
 );
