@@ -11,7 +11,8 @@ import {
   type EnvironmentId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import * as Option from "effect/Option";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import { buildAgentDirectory, providerExecutable } from "./agentDirectory";
@@ -19,6 +20,7 @@ import { buildAgentDirectory, providerExecutable } from "./agentDirectory";
 import { PrimaryEnvironmentHttpClient } from "../../environments/primary/httpClient";
 import { isElectron } from "../../env";
 import { runPrimaryHttp } from "../../lib/runtime";
+import { usePreparedConnection } from "../../state/session";
 import { primaryEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import { useProjects } from "../../state/entities";
 import { primaryServerProvidersAtom } from "../../state/server";
@@ -226,107 +228,188 @@ const recoverThread = (payload: CollaborationOpenThreadInput) =>
   );
 
 function useCollaboration(environmentId: EnvironmentId | null) {
+  const session = Option.getOrNull(usePreparedConnection(environmentId));
+  // Identity changes invalidate even A → B → A and re-pairing on the same server.
+  const context = useMemo(
+    () => Object.freeze({ environmentId, session }),
+    [environmentId, session],
+  );
+  const currentContext = useRef<typeof context | null>(null);
   const [loaded, setLoaded] = useState<{
-    environmentId: EnvironmentId;
+    context: typeof context;
     snapshot: CollaborationSnapshot;
     version: number;
   } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const currentEnvironment = useRef(environmentId);
+  const [readState, setReadState] = useState({
+    context,
+    error: null as string | null,
+    refreshing: false,
+    fresh: false,
+  });
+  const [pendingContext, setPendingContext] = useState<typeof context | null>(null);
+  const setError = useCallback(
+    (error: string | null) => setReadState((state) => ({ ...state, context, error })),
+    [context],
+  );
+  const setRefreshing = useCallback(
+    (refreshing: boolean) => setReadState((state) => ({ ...state, context, refreshing })),
+    [context],
+  );
+  const setFresh = useCallback(
+    (fresh: boolean) => setReadState((state) => ({ ...state, context, fresh })),
+    [context],
+  );
+  const setPending = useCallback(
+    (pending: boolean) => setPendingContext(pending ? context : null),
+    [context],
+  );
+  const freshness = useRef(false);
   const readGeneration = useRef(0);
+  const readOwner = useRef<{ explicit: boolean } | null>(null);
+  const operationOwner = useRef<object | null>(null);
   useLayoutEffect(() => {
+    currentContext.current = context;
     readGeneration.current += 1;
-    currentEnvironment.current = environmentId;
+    readOwner.current = null;
+    operationOwner.current = null;
+    freshness.current = false;
     return () => {
+      currentContext.current = null;
       readGeneration.current += 1;
-      currentEnvironment.current = null;
+      freshness.current = false;
     };
-  }, [environmentId]);
+  }, [context]);
 
-  const read = useCallback(() => {
-    if (!environmentId || currentEnvironment.current !== environmentId) return;
-    const generation = ++readGeneration.current;
-    const isCurrent = () =>
-      generation === readGeneration.current && currentEnvironment.current === environmentId;
-    return loadSnapshot()
-      .then(
-        (snapshot) => {
-          if (isCurrent()) {
+  const isCurrent = useCallback(
+    () => currentContext.current === context && !!environmentId && session !== null,
+    [context, environmentId, session],
+  );
+  const canOperate = () => isCurrent() && freshness.current;
+  const read = useCallback(
+    (explicit = false) => {
+      if (!isCurrent() || (explicit && readOwner.current?.explicit)) return;
+      const owner = { explicit };
+      readOwner.current = owner;
+      const generation = ++readGeneration.current;
+      freshness.current = false;
+      setReadState((state) => ({
+        context,
+        error: state.context === context ? state.error : null,
+        fresh: false,
+        refreshing: explicit,
+      }));
+      const ownsRead = () => isCurrent() && generation === readGeneration.current;
+      return loadSnapshot()
+        .then(
+          (snapshot) => {
+            if (!ownsRead()) return undefined;
             if (snapshot.environmentId !== undefined && snapshot.environmentId !== environmentId) {
               setError(
                 "The response belongs to another environment. Refresh the selected environment.",
               );
               return undefined;
             }
-            setLoaded({ environmentId, snapshot, version: generation });
+            setLoaded({ context, snapshot, version: generation });
             setError(null);
+            freshness.current = true;
+            setFresh(true);
             return snapshot;
+          },
+          (cause) => {
+            if (ownsRead())
+              setError(
+                cause instanceof Error ? cause.message : "The agent directory could not be read.",
+              );
+            return undefined;
+          },
+        )
+        .finally(() => {
+          if (ownsRead() && readOwner.current === owner) {
+            readOwner.current = null;
+            setRefreshing(false);
           }
-          return undefined;
-        },
-        (cause) => {
-          if (isCurrent())
-            setError(
-              cause instanceof Error ? cause.message : "The agent directory could not be read.",
-            );
-          return undefined;
-        },
-      )
-      .finally(() => {
-        if (isCurrent()) setRefreshing(false);
-      });
-  }, [environmentId]);
+        });
+    },
+    [context, environmentId, isCurrent, setError, setFresh, setRefreshing],
+  );
 
   useEffect(() => {
     void read();
   }, [read]);
 
   const execute = useCallback(
-    async (request: () => Promise<CollaborationCommandResult>) => {
+    async (
+      request: () => Promise<CollaborationCommandResult>,
+      acceptsResult: () => boolean = () => true,
+    ) => {
+      if (!isCurrent() || !freshness.current || operationOwner.current) return null;
+      const owner = {};
+      operationOwner.current = owner;
+      const generation = readGeneration.current;
+      const ownsOperation = () => isCurrent() && operationOwner.current === owner;
       setPending(true);
       try {
         const result = await request();
-        if (environmentId && currentEnvironment.current === environmentId) {
-          setLoaded({
-            environmentId,
-            snapshot: result.snapshot,
-            version: ++readGeneration.current,
-          });
+        if (!ownsOperation() || !acceptsResult()) return null;
+        if (generation === readGeneration.current) {
+          if (
+            result.snapshot.environmentId !== undefined &&
+            result.snapshot.environmentId !== environmentId
+          ) {
+            freshness.current = false;
+            setFresh(false);
+            setError(
+              "The response belongs to another environment. Refresh the selected environment.",
+            );
+            return null;
+          }
+          setLoaded({ context, snapshot: result.snapshot, version: generation });
           setError(result.outcome === "rejected" ? result.detail : null);
         }
+        // A mutation receipt remains a fact; a newer GET owns directory freshness.
         return result;
       } catch (cause) {
-        if (currentEnvironment.current === environmentId)
+        if (ownsOperation() && acceptsResult() && generation === readGeneration.current)
           setError(cause instanceof Error ? cause.message : "The command was not recorded.");
         return null;
       } finally {
-        setPending(false);
+        if (ownsOperation()) {
+          operationOwner.current = null;
+          setPending(false);
+        }
       }
     },
-    [environmentId],
+    [context, environmentId, isCurrent, setError, setFresh, setPending],
   );
 
   return {
-    refresh: () => {
-      if (!environmentId || currentEnvironment.current !== environmentId) return;
-      setRefreshing(true);
-      return read();
+    refresh: () => read(true),
+    refreshing: readState.context === context && readState.refreshing,
+    fresh: loaded?.context === context && readState.context === context && readState.fresh,
+    canOperate,
+    captureRead: () => {
+      const generation = readGeneration.current;
+      return () => isCurrent() && generation === readGeneration.current;
     },
-    refreshing,
-    readVersion: loaded?.environmentId === environmentId ? loaded.version : 0,
+    isCurrent,
+    connected: !!environmentId && session !== null,
+    context,
+    readVersion: loaded?.context === context ? loaded.version : 0,
     invalidateReads: () => {
-      if (currentEnvironment.current === environmentId) {
+      if (isCurrent()) {
         readGeneration.current += 1;
+        readOwner.current = null;
         setRefreshing(false);
+        freshness.current = false;
+        setFresh(false);
       }
     },
-    snapshot: loaded?.environmentId === environmentId ? loaded.snapshot : null,
-    error,
-    pending,
+    snapshot: loaded?.context === context ? loaded.snapshot : null,
+    error: readState.context === context ? readState.error : null,
+    pending: pendingContext === context,
     submit: (command: CollaborationCommand) => execute(() => sendCommand(command)),
-    open: (input: CollaborationOpenThreadInput) => execute(() => recoverThread(input)),
+    open: (input: CollaborationOpenThreadInput, acceptsResult: () => boolean) =>
+      execute(() => recoverThread(input), acceptsResult),
   };
 }
 
@@ -335,7 +418,20 @@ export function AgentsPage() {
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const providers = useAtomValue(primaryServerProvidersAtom);
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
-  const { snapshot, error, pending, open, refresh } = useCollaboration(environmentId);
+  const {
+    snapshot,
+    error,
+    pending,
+    open,
+    refresh,
+    refreshing,
+    fresh,
+    canOperate,
+    captureRead,
+    isCurrent,
+    connected,
+    context: directoryContext,
+  } = useCollaboration(environmentId);
   const [creationRequest, setCreationRequest] = useState<{
     providerId: string;
     token: string;
@@ -355,21 +451,67 @@ export function AgentsPage() {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{
     environmentId: EnvironmentId;
+    connection: typeof directoryContext;
     projectId: string;
     message: string;
   } | null>(null);
-  const [opening, setOpening] = useState(false);
-  const openingRef = useRef(false);
+  const [openingContext, setOpeningContext] = useState<symbol | null>(null);
+  const openingRef = useRef<object | null>(null);
   const selectedProject =
     projects.length === 1 ? projects[0] : projects.find((project) => project.id === projectId);
   const selectedProjectId = selectedProject?.id;
-  const context = useRef({ environmentId, projectId: selectedProjectId, mounted: true, providers });
+  const providerContext = providers
+    .map((provider) => `${provider.instanceId}:${providerExecutable(provider)}`)
+    .join(";");
+  const [openScope, setOpenScope] = useState({
+    connection: directoryContext,
+    projectId: selectedProjectId,
+    providers: providerContext,
+    token: Symbol(),
+  });
+  if (
+    openScope.connection !== directoryContext ||
+    openScope.projectId !== selectedProjectId ||
+    openScope.providers !== providerContext
+  ) {
+    // Keep a distinct operation epoch even when a project/provider is removed and restored.
+    setOpenScope({
+      connection: directoryContext,
+      projectId: selectedProjectId,
+      providers: providerContext,
+      token: Symbol(),
+    });
+  }
+  const opening = openingContext === openScope.token;
+  const context = useRef({
+    environmentId,
+    projectId: selectedProjectId,
+    mounted: true,
+    providers,
+    connection: directoryContext,
+    providerContext,
+  });
   useLayoutEffect(() => {
-    context.current = { environmentId, projectId: selectedProjectId, mounted: true, providers };
+    if (
+      context.current.connection !== directoryContext ||
+      context.current.projectId !== selectedProjectId ||
+      context.current.providerContext !== providerContext
+    ) {
+      // Retire only UI ownership; a server mutation may already have committed.
+      openingRef.current = null;
+    }
+    context.current = {
+      environmentId,
+      projectId: selectedProjectId,
+      mounted: true,
+      providers,
+      connection: directoryContext,
+      providerContext,
+    };
     return () => {
       context.current.mounted = false;
     };
-  }, [context, environmentId, selectedProjectId, providers]);
+  }, [context, environmentId, selectedProjectId, providers, directoryContext, providerContext]);
 
   const openThread = (threadId: string) => {
     if (!environmentId) return;
@@ -382,6 +524,8 @@ export function AgentsPage() {
   const openAgent = async (agentId: string) => {
     // A ref closes the same-render double-click window before React updates disabled.
     if (
+      !canOperate() ||
+      error ||
       openingRef.current ||
       creationOwner.current !== null ||
       !snapshot ||
@@ -392,10 +536,22 @@ export function AgentsPage() {
       context.current.projectId !== selectedProject.id
     )
       return;
+    const owner = {};
+    const ownsRead = captureRead();
+    const ownsOpen = () =>
+      isCurrent() &&
+      openingRef.current === owner &&
+      context.current.mounted &&
+      context.current.projectId === selectedProject.id;
     setNotice(null);
     const showNotice = (message: string) => {
-      if (!context.current.mounted) return;
-      setNotice({ environmentId, projectId: selectedProject.id, message });
+      if (!ownsOpen()) return;
+      setNotice({
+        environmentId,
+        connection: directoryContext,
+        projectId: selectedProject.id,
+        message,
+      });
     };
     const bound = snapshot.agents.find(
       (agent) => agent.id === agentId && agent.projectId === selectedProject.id,
@@ -403,10 +559,14 @@ export function AgentsPage() {
     if (agentId === "grokbot" || bound?.origin === "external") return;
     const provider = context.current.providers.find((item) => item.instanceId === agentId);
     if (!provider || !providerExecutable(provider)) return;
-    openingRef.current = true;
-    setOpening(true);
+    openingRef.current = owner;
+    setOpeningContext(openScope.token);
     try {
-      const linked = await open({ projectId: selectedProject.id, providerId: agentId });
+      const linked = await open(
+        { projectId: selectedProject.id, providerId: agentId },
+        () => ownsOpen() && ownsRead(),
+      );
+      if (!ownsOpen() || !ownsRead()) return;
       if (!linked || linked.outcome === "rejected") {
         showNotice(
           linked?.detail ??
@@ -422,7 +582,8 @@ export function AgentsPage() {
         return;
       }
       if (
-        context.current.mounted &&
+        ownsOpen() &&
+        canOperate() &&
         context.current.environmentId === environmentId &&
         context.current.projectId === selectedProject.id &&
         context.current.providers.some(
@@ -435,8 +596,10 @@ export function AgentsPage() {
         "The conversation could not be confirmed. Retry in this project to recover the same request.",
       );
     } finally {
-      openingRef.current = false;
-      if (context.current.mounted) setOpening(false);
+      if (ownsOpen()) {
+        openingRef.current = null;
+        setOpeningContext(null);
+      }
     }
   };
 
@@ -447,7 +610,9 @@ export function AgentsPage() {
   });
   const grokbot = snapshot?.agents.find((agent) => agent.id === "grokbot");
   const visibleNotice =
-    notice?.environmentId === environmentId && notice.projectId === selectedProjectId
+    notice?.connection === directoryContext &&
+    notice.environmentId === environmentId &&
+    notice.projectId === selectedProjectId
       ? notice.message
       : null;
   return (
@@ -523,6 +688,27 @@ export function AgentsPage() {
                   Select a project to open or recover its agent conversations.
                 </AlertDescription>
               </Alert>
+            ) : null}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!connected || refreshing}
+              onClick={() => {
+                void refresh();
+              }}
+            >
+              {refreshing
+                ? "Reading agent directory…"
+                : error
+                  ? "Retry agent directory"
+                  : "Refresh agent directory"}
+            </Button>
+            {snapshot && !fresh ? (
+              <p role="status" className="text-sm text-muted-foreground">
+                Agent directory may be stale. Read the current directory before opening a
+                conversation or creating a task.
+              </p>
             ) : null}
             {environmentId && !snapshot && !error ? (
               <p role="status" className="text-sm text-muted-foreground">
@@ -622,14 +808,23 @@ export function AgentsPage() {
                         ) : (
                           <p className="text-muted-foreground">
                             {selectedProject
-                              ? "No recorded tasks."
+                              ? snapshot
+                                ? "No recorded tasks."
+                                : "Task records have not been read."
                               : "Select a project to view its tasks."}
                           </p>
                         )}
                       </div>
                       <Button
                         disabled={
-                          opening || creating || pending || !snapshot || !ready || !selectedProject
+                          opening ||
+                          creating ||
+                          pending ||
+                          !fresh ||
+                          !!error ||
+                          !snapshot ||
+                          !ready ||
+                          !selectedProject
                         }
                         onClick={() => {
                           void openAgent(entry.id);
@@ -649,6 +844,7 @@ export function AgentsPage() {
                           creating ||
                           pending ||
                           !snapshot ||
+                          !fresh ||
                           !!error ||
                           !ready ||
                           !selectedProject
@@ -656,6 +852,7 @@ export function AgentsPage() {
                         aria-label={`New ${entry.displayName} task`}
                         onClick={() => {
                           if (
+                            !canOperate() ||
                             openingRef.current ||
                             creationOwner.current !== null ||
                             !snapshot ||
@@ -664,6 +861,9 @@ export function AgentsPage() {
                             !selectedProject ||
                             !provider ||
                             !providerExecutable(provider) ||
+                            !context.current.providers.some(
+                              (p) => p.instanceId === entry.id && providerExecutable(p),
+                            ) ||
                             !context.current.mounted ||
                             context.current.environmentId !== environmentId ||
                             context.current.projectId !== selectedProject.id

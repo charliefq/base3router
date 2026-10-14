@@ -68,7 +68,7 @@ const state = vi.hoisted(() => ({
   readProjection: vi.fn(),
   readCreationStatus: vi.fn(),
   autoPreview: vi.fn(),
-  sessionIdentity: {} as object,
+  sessionIdentity: {} as object | null,
   feedbackRead: vi.fn(),
   feedbackSubmit: vi.fn(),
 }));
@@ -78,7 +78,8 @@ vi.mock("@effect/atom-react", () => ({
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
 vi.mock("../../state/primaryEnvironment", () => ({ primaryEnvironmentIdAtom: "environment" }));
 vi.mock("../../state/session", () => ({
-  usePreparedConnection: () => Option.some(state.sessionIdentity),
+  usePreparedConnection: () =>
+    state.sessionIdentity === null ? Option.none() : Option.some(state.sessionIdentity),
 }));
 vi.mock("../../state/server", () => ({ primaryServerProvidersAtom: "providers" }));
 vi.mock("../../state/entities", () => ({ useProjects: () => state.projects }));
@@ -184,6 +185,7 @@ vi.mock("../ui/select", () => ({
 }));
 
 import { AgentsPage, TasksPage } from "./CollaborationPages";
+import { AgentsTaskCreator } from "./AgentsTaskCreator";
 
 let renderer: ReactTestRenderer;
 const deferred = <T,>() => {
@@ -197,8 +199,9 @@ const deferred = <T,>() => {
 };
 const button = () =>
   renderer.root
+    .findByProps({ "data-agent-id": "codex" })
     .findAllByType("button")
-    .find((node) => node.props["aria-label"] === "Open Codex conversation")!;
+    .find((node) => String(node.props["aria-label"]).startsWith("Open "))!;
 const click = async () => {
   await act(async () => {
     button().props.onClick();
@@ -636,8 +639,8 @@ describe("Agents saved identity continuity", () => {
     await mount();
     expect(text()).toContain("NOT_CONNECTED");
     expect(renderer.root.findAllByProps({ "data-agent-id": "grokbot" })).toHaveLength(0);
-    expect(renderer.root.findAllByType("button")).toHaveLength(1);
-    expect(renderer.root.findByType("button").props.disabled).toBe(true);
+    expect(creationButton("Open conversation")!.props.disabled).toBe(true);
+    expect(creationButton("Refresh agent directory")).toBeDefined();
     expect(state.recover).not.toHaveBeenCalled();
   });
 });
@@ -1768,6 +1771,7 @@ const loadAgentsCreationFixture = async () =>
           Error
         >;
       }) => EffectForFixture.Effect<void, Error>,
+      options?: { dbPath?: string },
     ) => EffectForFixture.Effect<void, Error>;
   };
 const creationStorage = () => {
@@ -4690,5 +4694,407 @@ it.each(["success", "failure"] as const)(
       expect(state.feedbackSubmit).not.toHaveBeenCalled();
       expect(await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`)).toEqual(before);
     });
+  },
+);
+
+describe("Agents directory recovery frozen behavior", () => {
+  const retry = () =>
+    renderer.root
+      .findAllByType("button")
+      .find(
+        (b) =>
+          b.children.includes("Retry agent directory") ||
+          b.children.includes("Refresh agent directory"),
+      );
+  const reread = async () => {
+    await act(async () => {
+      const cb = retry()!.props.onClick;
+      cb();
+      cb();
+    });
+  };
+  it("recovers a failed first read explicitly without opening or creating", async () => {
+    const next = deferred<CollaborationSnapshot>();
+    state.load
+      .mockRejectedValueOnce(new Error("Directory denied"))
+      .mockReturnValueOnce(next.promise);
+    await mount();
+    expect(text()).toContain("Directory denied");
+    expect(text()).not.toContain("No recorded tasks.");
+    expect(retry()).toBeDefined();
+    await reread();
+    expect(state.load).toHaveBeenCalledTimes(2);
+    await act(async () => next.resolve(state.snapshot));
+    expect(button().props.disabled).toBe(false);
+    expect(state.recover).not.toHaveBeenCalled();
+    expect(state.create).not.toHaveBeenCalled();
+    expect(state.bind).not.toHaveBeenCalled();
+  });
+  it("rejects saved Open and New callbacks while refreshing and stale", async () => {
+    bindResult({
+      type: "thread.bind",
+      commandId: "seed",
+      projectId: "project-a",
+      threadId: "saved-thread",
+    });
+    await mount();
+    const oldOpen = button().props.onClick;
+    const oldNew = renderer.root.findByProps({ "aria-label": "New Codex task" }).props.onClick;
+    const failed = deferred<CollaborationSnapshot>();
+    state.load.mockReturnValueOnce(failed.promise);
+    // Exercise the existing creation workflow's real directory reread as well as the new Retry UI.
+    await act(async () => {
+      void renderer.root.findByType(AgentsTaskCreator).props.refresh();
+    });
+    await act(async () => {
+      oldOpen();
+      oldNew();
+    });
+    expect(state.recover).not.toHaveBeenCalled();
+    expect(creationButton("Review new task")).toBeUndefined();
+    await act(async () => failed.reject(new Error("Read failed")));
+    expect(text()).toContain("Agent directory may be stale");
+    expect(button().props.disabled).toBe(true);
+    await act(async () => {
+      oldOpen();
+      oldNew();
+    });
+    expect(state.recover).not.toHaveBeenCalled();
+    expect(creationButton("Review new task")).toBeUndefined();
+  });
+  it.each(["success", "failure"] as const)(
+    "isolates an old-session canonical open %s and its finally from the new operation",
+    async (outcome) => {
+      await mount();
+      const old = deferred<CollaborationCommandResult>();
+      const current = deferred<CollaborationCommandResult>();
+      state.recover.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+      await click();
+      state.sessionIdentity = {};
+      await act(async () => renderer.update(<AgentsPage />));
+      await click();
+      expect(state.recover).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        if (outcome === "success")
+          old.resolve({
+            outcome: "applied",
+            code: null,
+            detail: "Fixture receipt",
+            idempotent: true,
+            gateDecision: "DENY",
+            snapshot: {
+              ...state.snapshot,
+              agents: [
+                {
+                  id: "codex",
+                  displayName: "Retired session",
+                  origin: "internal",
+                  role: "provider",
+                  capabilities: [],
+                  connection: "NOT_CONNECTED",
+                  availability: "waiting",
+                  projectId: "project-a",
+                  threadId: "retired-thread",
+                },
+              ],
+            },
+          });
+        else old.reject(new Error("Retired failure"));
+      });
+      expect(state.navigate).not.toHaveBeenCalled();
+      expect(text()).not.toContain("Retired");
+      expect(button().props.disabled).toBe(true);
+      await click();
+      expect(state.recover).toHaveBeenCalledTimes(2);
+      await act(async () =>
+        current.resolve(
+          bindResult({
+            type: "thread.bind",
+            commandId: "current",
+            projectId: "project-a",
+            threadId: "current-thread",
+          }) as CollaborationCommandResult,
+        ),
+      );
+      expect(state.navigate).toHaveBeenCalledWith({
+        to: "/$environmentId/$threadId",
+        params: { environmentId: "environment-a", threadId: "current-thread" },
+      });
+    },
+  );
+  it("never navigates a canonical receipt from a retired prepared session", async () => {
+    await mount();
+    const old = deferred<CollaborationCommandResult>();
+    state.recover.mockReturnValueOnce(old.promise);
+    await click();
+    state.sessionIdentity = {};
+    await act(async () => renderer.update(<AgentsPage />));
+    await act(async () =>
+      old.resolve({
+        outcome: "applied",
+        code: null,
+        detail: "Committed in old session",
+        idempotent: true,
+        gateDecision: "DENY",
+        snapshot: bindResult({
+          type: "thread.bind",
+          commandId: "old-session",
+          projectId: "project-a",
+          threadId: "retired-thread",
+        }).snapshot,
+      }),
+    );
+    expect(state.navigate).not.toHaveBeenCalled();
+    expect(button().props.disabled).toBe(false);
+  });
+});
+
+describe("Agents directory recovery context and fixture", () => {
+  const readButton = () =>
+    creationButton("Retry agent directory") ?? creationButton("Refresh agent directory");
+  const reread = async () => {
+    await act(async () => readButton()!.props.onClick());
+  };
+  const marked = (name: string): CollaborationSnapshot => ({
+    ...state.snapshot,
+    agents: [
+      {
+        id: "codex",
+        displayName: name,
+        origin: "internal",
+        role: "provider",
+        capabilities: [],
+        connection: "NOT_CONNECTED",
+        availability: "waiting",
+        projectId: "project-a",
+        threadId: name,
+      },
+    ],
+  });
+  it.each(
+    (["environment", "session", "disconnect", "unmount"] as const).flatMap((mode) =>
+      (["success", "failure"] as const).map((outcome) => ({ mode, outcome })),
+    ),
+  )("rejects late GET $outcome after $mode invalidation", async ({ mode, outcome }) => {
+    const retired = deferred<CollaborationSnapshot>();
+    state.load.mockReturnValueOnce(retired.promise);
+    await mount();
+    const oldOpen = button().props.onClick;
+    if (mode === "environment") {
+      state.environmentId = "environment-b";
+      await act(async () => renderer.update(<AgentsPage />));
+      state.environmentId = "environment-a";
+    } else if (mode === "session") state.sessionIdentity = {};
+    else if (mode === "disconnect") {
+      state.sessionIdentity = null;
+      await act(async () => renderer.update(<AgentsPage />));
+      expect(readButton()!.props.disabled).toBe(true);
+      expect(state.load).toHaveBeenCalledTimes(1);
+      state.sessionIdentity = {};
+    } else await act(async () => renderer.unmount());
+    state.load.mockResolvedValueOnce(marked("Current persisted identity"));
+    if (mode !== "unmount") await act(async () => renderer.update(<AgentsPage />));
+    await act(async () => {
+      if (outcome === "success") retired.resolve(marked("Retired directory"));
+      else retired.reject(new Error("Retired directory failure"));
+      oldOpen();
+    });
+    expect(text()).not.toContain("Retired directory");
+    if (mode !== "unmount") expect(text()).toContain("Current persisted identity");
+    expect(state.recover).not.toHaveBeenCalled();
+    expect(state.navigate).not.toHaveBeenCalled();
+  });
+  it("keeps the latest explicit read when both initial GET and earlier Open return last", async () => {
+    const initial = deferred<CollaborationSnapshot>();
+    state.load.mockReturnValueOnce(initial.promise).mockResolvedValueOnce(marked("New GET"));
+    await mount();
+    await reread();
+    await act(async () => initial.resolve(marked("Initial old GET")));
+    expect(text()).toContain("New GET");
+    expect(text()).not.toContain("Initial old GET");
+    const opened = deferred<CollaborationCommandResult>();
+    state.recover.mockReturnValueOnce(opened.promise);
+    await click();
+    state.load.mockResolvedValueOnce(marked("Newest GET"));
+    await reread();
+    await act(async () =>
+      opened.resolve({
+        outcome: "applied",
+        code: null,
+        detail: "Fixture receipt",
+        idempotent: true,
+        gateDecision: "DENY",
+        snapshot: marked("Old Open"),
+      }),
+    );
+    expect(text()).toContain("Newest GET");
+    expect(text()).not.toContain("Old Open");
+    expect(state.navigate).not.toHaveBeenCalled();
+  });
+  it("repeated denial and wrong-environment reads stay stale until explicit valid recovery", async () => {
+    state.load.mockRejectedValueOnce(new Error("Read scope denied"));
+    await mount();
+    state.load.mockRejectedValueOnce(new Error("Read scope denied"));
+    await reread();
+    expect(state.load).toHaveBeenCalledTimes(2);
+    state.load.mockResolvedValueOnce({
+      ...marked("Foreign ledger"),
+      environmentId: "environment-b",
+    });
+    await reread();
+    expect(text()).not.toContain("Foreign ledger");
+    expect(button().props.disabled).toBe(true);
+    state.load.mockResolvedValueOnce(marked("Verified directory"));
+    await reread();
+    expect(button().props.disabled).toBe(false);
+    expect(state.recover).not.toHaveBeenCalled();
+  });
+  it("recovers persisted directory through actual disposable SQLite with zero read-phase writes, then explicit Open and reviewed New", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "b3r-directory-"));
+    creationStorage();
+    const module = await loadAgentsCreationFixture();
+    try {
+      await EffectForFixture.runPromise(
+        module.withAgentsTaskCreationFixture(
+          (f) =>
+            EffectForFixture.promise(async () => {
+              const seeded = await EffectForFixture.runPromise(f.openCanonical());
+              const canonicalId = seeded.snapshot.agents.find((a) => a.id === "codex")!.threadId;
+              const before = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
+              const receipts = await EffectForFixture.runPromise(
+                f.sql`SELECT * FROM orchestration_command_receipts ORDER BY command_id`,
+              );
+              const effects = await EffectForFixture.runPromise(f.noExecution());
+              // Fault injection is fixture setup, never a UI operation. The real snapshot service fails its SQL read.
+              await EffectForFixture.runPromise(
+                f.sql`ALTER TABLE collaboration_commands RENAME TO directory_fault_commands`,
+              );
+              state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+              state.recover.mockImplementation(() =>
+                EffectForFixture.runPromise(f.openCanonical()),
+              );
+              state.create.mockImplementation(
+                async ({ input }: { input: OrchestrationV2Command }) => ({
+                  _tag: "Success",
+                  value: await EffectForFixture.runPromise(f.dispatch(input)),
+                }),
+              );
+              state.readProjection.mockImplementation(
+                async ({ input }: { input: { threadId: string } }) => ({
+                  _tag: "Success",
+                  value: await EffectForFixture.runPromise(
+                    f.orchestrator.getThreadProjection(input.threadId),
+                  ),
+                }),
+              );
+              await mount();
+              expect(creationButton("Retry agent directory")).toBeDefined();
+              expect(button().props.disabled).toBe(true);
+              await EffectForFixture.runPromise(
+                f.sql`ALTER TABLE directory_fault_commands RENAME TO collaboration_commands`,
+              );
+              await reread();
+              expect(state.load).toHaveBeenCalledTimes(2);
+              expect(text()).toContain("codex");
+              expect(await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`)).toEqual(
+                before,
+              );
+              expect(
+                await EffectForFixture.runPromise(
+                  f.sql`SELECT * FROM orchestration_command_receipts ORDER BY command_id`,
+                ),
+              ).toEqual(receipts);
+              expect(await EffectForFixture.runPromise(f.noExecution())).toEqual(effects);
+              expect(state.create).not.toHaveBeenCalled();
+              expect(state.bind).not.toHaveBeenCalled();
+              expect(state.recover).not.toHaveBeenCalled();
+              expect(state.navigate).not.toHaveBeenCalled();
+              await click();
+              expect(state.navigate.mock.calls[0]![0].params.threadId).toBe(canonicalId);
+              await creationClick("New task");
+              await fillCreation();
+              expect(state.create).not.toHaveBeenCalled();
+              await creationClick("Review new task");
+              expect(state.create).not.toHaveBeenCalled();
+              await creationClick("Create task");
+              expect(state.create).toHaveBeenCalledTimes(1);
+              expect(await EffectForFixture.runPromise(f.noExecution())).toEqual(effects);
+              await act(async () => renderer.unmount());
+            }),
+          { dbPath: path.join(dir, "state.sqlite") },
+        ),
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+it("directory Retry preserves pending and uncertain creation identity and never reads a receipt or resends", async () => {
+  const records = creationStorage();
+  const creating = deferred<{ _tag: "Failure"; cause: string }>();
+  state.create.mockReturnValueOnce(creating.promise);
+  await mount();
+  await creationClick("New task");
+  await fillCreation();
+  await creationClick("Review new task");
+  await creationClick("Create task");
+  const original = [...records.values()][0]!;
+  expect(decodeCreationStorage(original)).toMatchObject({ status: "pending" });
+  const refresh = async () => {
+    await act(async () =>
+      (creationButton("Retry agent directory") ??
+        creationButton("Refresh agent directory"))!.props.onClick(),
+    );
+  };
+  state.load.mockRejectedValueOnce(new Error("Read lost during creation"));
+  await refresh();
+  await refresh();
+  expect([...records.values()][0]).toBe(original);
+  expect(creationButton("New task")!.props.disabled).toBe(true);
+  await act(async () => creating.resolve({ _tag: "Failure", cause: "Lost receipt" }));
+  const uncertain = [...records.values()][0]!;
+  expect(decodeCreationStorage(uncertain)).toMatchObject({
+    status: "uncertain",
+    command: (decodeCreationStorage(original) as { command: unknown }).command,
+  });
+  await refresh();
+  expect([...records.values()][0]).toBe(uncertain);
+  expect(creationButton("New task")!.props.disabled).toBe(true);
+  expect(state.create).toHaveBeenCalledTimes(1);
+  expect(state.readCreationStatus).not.toHaveBeenCalled();
+  expect(state.readProjection).not.toHaveBeenCalled();
+  expect(state.recover).not.toHaveBeenCalled();
+});
+
+it.each(["success", "failure"] as const)(
+  "retires an Open %s after provider removal and restoration",
+  async (outcome) => {
+    await mount();
+    const old = deferred<CollaborationCommandResult>();
+    state.recover.mockReturnValueOnce(old.promise);
+    await click();
+    state.providers = [];
+    await act(async () => renderer.update(<AgentsPage />));
+    state.providers = [...configuredProviders];
+    await act(async () => renderer.update(<AgentsPage />));
+    await act(async () => {
+      if (outcome === "success")
+        old.resolve({
+          outcome: "applied",
+          code: null,
+          detail: "Fixture receipt",
+          idempotent: true,
+          gateDecision: "DENY",
+          snapshot: { ...state.snapshot, grokbotIntegration: ["Retired provider result"] },
+        });
+      else old.reject(new Error("Retired provider failure"));
+    });
+    expect(state.navigate).not.toHaveBeenCalled();
+    expect(text()).not.toContain("Retired provider");
+    expect(button().props.disabled).toBe(false);
   },
 );
