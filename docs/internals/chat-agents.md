@@ -30,6 +30,8 @@ For an owned active, unaccepted governed task with no messages or runs, **Prepar
 
 Auto preview reads existing policy and outcome evidence without initializing defaults or persisting proposed text. It shares the dispatch calculation, but its result is only a snapshot: dispatch recalculates from current facts and separately enforces governed admission. Missing policy data uses an explicit ephemeral V0; unavailable ownership or task facts never become a fallback. Local task classification is deterministic and is not an LLM interpretation.
 
+Revision-request preparation uses the existing owned-task review and validated completed result readout. Repeated collaboration and projection reads bind the review to the exact latest run, message, attempt, turn and item; a same-item change beyond a truncated excerpt also retires it. Completed run status does not override an active current provider thread or a nonterminal background-capable item in that result turn. Historical items and a connected session alone are not that evidence. This is observed coherence, not atomic execution authorization. Only user-written requested changes enter an empty local draft; the result is context, not outgoing text or an acceptance judgment. Send still uses the existing admission path.
+
 If a response is lost, **Recover task creation** reads the original identity;
 it does not resend creation or allocate another task. An unresolved attempt is
 retained in this browser session across navigation and reload. Return to its

@@ -1,0 +1,304 @@
+import {
+  ThreadId,
+  type CollaborationTask,
+  type CollaborationSnapshot,
+  type EnvironmentId,
+} from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import * as Option from "effect/Option";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { threadEnvironment } from "../../state/threads";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { usePreparedConnection } from "../../state/session";
+import { fillEmptyComposerDraftByRef } from "../../composerDraftStore";
+import { Button } from "../ui/button";
+import { Textarea } from "../ui/textarea";
+import {
+  AlertDialog,
+  AlertDialogPopup,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+} from "../ui/alert-dialog";
+import {
+  hasRevisionOutput,
+  revisionRequestFacts,
+  revisionSnapshotTask,
+  revisionTaskKey,
+  sameRevisionTask,
+  sameRevisionReview,
+  sameRevisionProjection,
+  sameRevisionFacts,
+  type RevisionRequestFacts,
+} from "./taskRevisionRequest";
+
+export function TaskRevisionRequest(props: {
+  readonly task: CollaborationTask;
+  readonly environmentId: EnvironmentId;
+  readonly stale: boolean;
+  readonly readVersion: number;
+  readonly readCollaboration: () => Promise<CollaborationSnapshot>;
+  readonly onOpen: () => void;
+}) {
+  const readReview = useAtomCommand(threadEnvironment.readTaskReview, { reportFailure: false });
+  const readProjection = useAtomCommand(threadEnvironment.readProjection, { reportFailure: false });
+  const session = Option.getOrNull(usePreparedConnection(props.environmentId));
+  const [review, setReview] = useState<RevisionRequestFacts | null>(null);
+  const [changes, setChanges] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const latest = useRef(props),
+    reviewRef = useRef<RevisionRequestFacts | null>(null),
+    changesRef = useRef(""),
+    owner = useRef<object | null>(null),
+    epoch = useRef(0),
+    mounted = useRef(true);
+  const key = `${props.environmentId}:${props.readVersion}:${props.stale}:${revisionTaskKey(props.task)}`;
+  const context = useRef({ key, session });
+  useLayoutEffect(() => {
+    latest.current = props;
+  }, [props]);
+  const retire = useCallback(() => {
+    epoch.current++;
+    owner.current = null;
+    reviewRef.current = null;
+    setReview(null);
+    setBusy(false);
+  }, []);
+  useLayoutEffect(() => {
+    if (context.current.key !== key || context.current.session !== session) {
+      context.current = { key, session };
+      retire();
+      setNotice(null);
+    }
+  }, [key, session, retire]);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      epoch.current++;
+      owner.current = null;
+      reviewRef.current = null;
+    };
+  }, []);
+  const available = !props.stale && session !== null && hasRevisionOutput(props.task);
+  const current = (generation: number, token: object) =>
+    mounted.current &&
+    epoch.current === generation &&
+    owner.current === token &&
+    !latest.current.stale &&
+    context.current.session !== null;
+  const read = async () => {
+    const p = latest.current;
+    if (!p.task.threadId || p.task.contractReadout?.status !== "available") return null;
+    const input = {
+      environmentId: p.environmentId,
+      taskId: p.task.id,
+      projectId: p.task.projectId,
+      threadId: p.task.threadId,
+      revision: p.task.contractReadout.contract.revision,
+    };
+    const first = await readReview({ environmentId: p.environmentId, input });
+    if (first._tag !== "Success" || first.value.status !== "available") return null;
+    const before = revisionSnapshotTask(await p.readCollaboration(), p.environmentId, p.task);
+    if (!before || !sameRevisionTask(before, p.task)) return null;
+    const a = await readProjection({
+      environmentId: p.environmentId,
+      input: { threadId: ThreadId.make(p.task.threadId) },
+    });
+    const b = await readProjection({
+      environmentId: p.environmentId,
+      input: { threadId: ThreadId.make(p.task.threadId) },
+    });
+    const after = revisionSnapshotTask(await p.readCollaboration(), p.environmentId, p.task);
+    const last = await readReview({ environmentId: p.environmentId, input });
+    if (
+      a._tag !== "Success" ||
+      b._tag !== "Success" ||
+      last._tag !== "Success" ||
+      last.value.status !== "available" ||
+      !after ||
+      !sameRevisionTask(before, after) ||
+      !sameRevisionReview(first.value, last.value) ||
+      !sameRevisionProjection(a.value, b.value)
+    )
+      return null;
+    return revisionRequestFacts(after, p.environmentId, last.value, b.value);
+  };
+  const prepare = async () => {
+    if (!available || owner.current || reviewRef.current) return;
+    const token = {};
+    owner.current = token;
+    setBusy(true);
+    setNotice(null);
+    const generation = epoch.current;
+    try {
+      const facts = await read();
+      if (!current(generation, token)) return;
+      if (!facts) {
+        setNotice(
+          "Current owned completed output could not be confirmed. Refresh tasks or open the conversation.",
+        );
+        return;
+      }
+      reviewRef.current = facts;
+      setReview(facts);
+      changesRef.current = "";
+      setChanges("");
+    } catch {
+      if (current(generation, token))
+        setNotice(
+          "Result reads failed. No draft was changed. Refresh tasks or open the conversation.",
+        );
+    } finally {
+      if (owner.current === token) {
+        owner.current = null;
+        if (mounted.current) setBusy(false);
+      }
+    }
+  };
+  const apply = async () => {
+    const observed = reviewRef.current;
+    if (
+      !available ||
+      !observed ||
+      observed !== review ||
+      owner.current ||
+      !changesRef.current.trim()
+    )
+      return;
+    const token = {};
+    owner.current = token;
+    setBusy(true);
+    setNotice(null);
+    const generation = epoch.current,
+      proposed = changesRef.current;
+    try {
+      const facts = await read();
+      if (!current(generation, token) || reviewRef.current !== observed) return;
+      if (changesRef.current !== proposed) {
+        setNotice(
+          "Requested changes changed during the reads. Review them again; no draft was changed.",
+        );
+        return;
+      }
+      if (!facts || !sameRevisionFacts(observed, facts)) {
+        reviewRef.current = null;
+        setReview(null);
+        setNotice(
+          "Task or latest result changed. Refresh and review fresh facts; no draft was changed.",
+        );
+        return;
+      }
+      const target = scopeThreadRef(props.environmentId, ThreadId.make(facts.task.threadId!));
+      if (!fillEmptyComposerDraftByRef(target, proposed)) {
+        reviewRef.current = null;
+        setReview(null);
+        setNotice(
+          "Existing draft content or queued editing was preserved. Open conversation to continue editing it.",
+        );
+        return;
+      }
+      reviewRef.current = null;
+      setReview(null);
+      setNotice(
+        "Prepared a local revision draft only. Edit it, choose Manual/Auto and press Send separately. No work started.",
+      );
+      if (current(generation, token)) props.onOpen();
+    } catch {
+      if (current(generation, token) && reviewRef.current === observed) {
+        reviewRef.current = null;
+        setReview(null);
+        setNotice("Fresh result reads failed. No draft was changed.");
+      }
+    } finally {
+      if (owner.current === token) {
+        owner.current = null;
+        if (mounted.current) setBusy(false);
+      }
+    }
+  };
+  if (!hasRevisionOutput(props.task)) return null;
+  return (
+    <div>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={!available || busy || review !== null}
+        onClick={() => void prepare()}
+      >
+        Prepare revision request
+      </Button>
+      {notice ? <p role="status">{notice}</p> : null}
+      <AlertDialog
+        open={review !== null}
+        onOpenChange={(open) => {
+          if (!open) retire();
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Review revision request</AlertDialogTitle>
+            <AlertDialogDescription>
+              Write the changes you want for this completed output. Preparation does not judge
+              acceptance or start work. Manual/Auto and Send remain separate.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {review ? (
+            <>
+              <dl>
+                <dt>Current Goal</dt>
+                <dd>{review.review.contract.goal}</dd>
+                <dt>Current Acceptance</dt>
+                <dd>{review.review.contract.acceptance}</dd>
+              </dl>
+              <p>Attributed completed output excerpt</p>
+              <pre className="whitespace-pre-wrap break-all text-sm">
+                {review.result.content.preview}
+              </pre>
+              {review.result.content.truncated ? (
+                <p>Excerpt truncated. Open conversation for full context.</p>
+              ) : (
+                <p>Open conversation for full context.</p>
+              )}
+              <p>
+                Run {review.result.runId}; message {review.result.messageId}; attempt{" "}
+                {review.result.attemptId}; turn {review.result.providerTurnId}; item{" "}
+                {review.result.content.itemId}.
+              </p>
+              <Textarea
+                aria-label="Requested changes"
+                value={changes}
+                disabled={busy}
+                onChange={(e) => {
+                  changesRef.current = e.target.value;
+                  setChanges(e.target.value);
+                }}
+              />
+            </>
+          ) : null}
+          <AlertDialogFooter>
+            <Button type="button" variant="outline" onClick={() => retire()}>
+              Cancel revision preparation
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                retire();
+                props.onOpen();
+              }}
+            >
+              Open conversation for full context
+            </Button>
+            <Button type="button" disabled={busy || !changes.trim()} onClick={() => void apply()}>
+              Fill empty draft and open
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+    </div>
+  );
+}

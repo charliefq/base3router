@@ -23,6 +23,7 @@ import { useProjects } from "../../state/entities";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
+import { TaskRevisionRequest } from "./TaskRevisionRequest";
 import { TaskFirstInstructions } from "./TaskFirstInstructions";
 import { TaskReviewControls } from "./TaskReviewControls";
 import { AgentsTaskCreator } from "./AgentsTaskCreator";
@@ -864,6 +865,16 @@ export function TasksPage() {
                     </div>
                     <TaskRoutingReadout readout={task.routingReadout} />
                     <TaskResultReadout readout={task.resultReadout} />
+                    {environmentId ? (
+                      <TaskRevisionRequest
+                        task={task}
+                        environmentId={environmentId}
+                        stale={error !== null || refreshing}
+                        readVersion={readVersion}
+                        readCollaboration={loadSnapshot}
+                        onOpen={() => openTask(task)}
+                      />
+                    ) : null}
                     <div className="mt-4 flex flex-col gap-3 border-t border-border/50 pt-4 sm:flex-row sm:items-center sm:justify-between">
                       <div className="space-y-1 text-xs leading-relaxed text-muted-foreground">
                         <p>Gate {task.gateDecision}. This task does not grant execution.</p>
