@@ -23,6 +23,7 @@ import { useProjects } from "../../state/entities";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
+import { TaskFirstInstructions } from "./TaskFirstInstructions";
 import { TaskReviewControls } from "./TaskReviewControls";
 import { AgentsTaskCreator } from "./AgentsTaskCreator";
 import { randomUUID } from "../../lib/utils";
@@ -872,7 +873,16 @@ export function TasksPage() {
                             : "This task has no project thread."}
                         </p>
                       </div>
-                      <div className="shrink-0">
+                      <div className="shrink-0 space-y-2">
+                        {environmentId ? (
+                          <TaskFirstInstructions
+                            task={task}
+                            environmentId={environmentId}
+                            stale={error !== null || refreshing}
+                            readVersion={readVersion}
+                            onOpen={() => openTask(task)}
+                          />
+                        ) : null}
                         <Button
                           disabled={!task.threadId || !environmentId}
                           onClick={() => openTask(task)}

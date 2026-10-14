@@ -68,6 +68,7 @@ import {
   COMPOSER_DRAFT_STORAGE_KEY,
   clearComposerDraftsEnvironment,
   composerDraftHasUserContent,
+  fillEmptyComposerDraftByRef,
   beginBackgroundDraftSubmissionByRef,
   clearBackgroundDraftSubmissionByRef,
   finalizePromotedDraftThreadByRef,
@@ -3540,5 +3541,200 @@ describe("composerDraftStore attachment references", () => {
     expect(merged.draftsByThreadKey[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]?.prompt).toBe(
       prompt,
     );
+  });
+});
+
+describe("first-instruction empty draft preparation", () => {
+  const storage = useComposerDraftStore.persist.getOptions().storage;
+  beforeEach(async () => {
+    useComposerDraftStore.persist.setOptions({
+      storage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    });
+    await useComposerDraftStore.persist.rehydrate();
+    resetComposerDraftStore();
+  });
+  afterEach(() => useComposerDraftStore.persist.setOptions({ storage }));
+  it("fills only the exact empty scoped target once and retains settings and other drafts", () => {
+    const id = ThreadId.make("same-id");
+    const target = scopeThreadRef(TEST_ENVIRONMENT_ID, id);
+    const other = scopeThreadRef(OTHER_TEST_ENVIRONMENT_ID, id);
+    useComposerDraftStore.getState().setPrompt(other, "Other environment");
+    useComposerDraftStore.getState().setPrompt(target, "Temporary seed");
+    const base = { ...useComposerDraftStore.getState().getComposerDraft(target)!, prompt: "" };
+    useComposerDraftStore.setState({
+      draftsByThreadKey: {
+        ...useComposerDraftStore.getState().draftsByThreadKey,
+        [scopedThreadKey(target)]: {
+          ...base,
+          activeProvider: CODEX_INSTANCE,
+          runtimeMode: "approval-required",
+          modelSelectionExplicit: true,
+        },
+      },
+    });
+    expect(useComposerDraftStore.persist.hasHydrated(), "Draft store hydration").toBe(true);
+    expect(fillEmptyComposerDraftByRef(target, "Reviewed instructions")).toBe(true);
+    expect(fillEmptyComposerDraftByRef(target, "Overwrite")).toBe(false);
+    expect(useComposerDraftStore.getState().getComposerDraft(target)).toMatchObject({
+      prompt: "Reviewed instructions",
+      activeProvider: CODEX_INSTANCE,
+      runtimeMode: "approval-required",
+      modelSelectionExplicit: true,
+    });
+    expect(useComposerDraftStore.getState().getComposerDraft(other)?.prompt).toBe(
+      "Other environment",
+    );
+  });
+  it.each([
+    "text",
+    "whitespace",
+    "image",
+    "file",
+    "upload",
+    "persisted",
+    "terminal",
+    "preview",
+    "review",
+    "thread",
+    "queued",
+    "background",
+    "rewinding",
+    "alias",
+  ] as const)("preserves %s content/state instead of filling", (mode) => {
+    const target = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("preserve"));
+    const key = scopedThreadKey(target);
+    useComposerDraftStore.getState().setPrompt(target, "Temporary seed");
+    const base = { ...useComposerDraftStore.getState().getComposerDraft(target)!, prompt: "" };
+    useComposerDraftStore.setState({ draftsByThreadKey: { [key]: base } });
+    if (mode === "text" || mode === "whitespace")
+      useComposerDraftStore.getState().setPrompt(target, mode === "text" ? "Keep" : " ");
+    if (mode === "image")
+      useComposerDraftStore.setState({
+        draftsByThreadKey: {
+          [key]: { ...base, images: [makeImage({ id: "image", previewUrl: "blob:test" })] },
+        },
+      });
+    if (mode === "file")
+      useComposerDraftStore.setState({
+        draftsByThreadKey: {
+          [key]: {
+            ...base,
+            files: [
+              {
+                type: "file",
+                id: "file",
+                name: "keep.txt",
+                mimeType: "text/plain",
+                sizeBytes: 1,
+                file: null,
+              },
+            ],
+          },
+        },
+      });
+    if (mode === "upload")
+      useComposerDraftStore.setState({
+        draftsByThreadKey: { [key]: { ...base, nonPersistedImageIds: ["upload"] } },
+      });
+    if (mode === "persisted")
+      useComposerDraftStore.setState({
+        draftsByThreadKey: {
+          [key]: {
+            ...base,
+            persistedAttachments: [
+              {
+                id: "image",
+                name: "keep",
+                mimeType: "image/png",
+                sizeBytes: 1,
+                dataUrl: "data:image/png;base64,AA==",
+              },
+            ],
+          },
+        },
+      });
+    if (mode === "terminal")
+      useComposerDraftStore.setState({
+        draftsByThreadKey: {
+          [key]: { ...base, terminalContexts: [makeTerminalContext({ id: "terminal" })] },
+        },
+      });
+    if (mode === "preview")
+      useComposerDraftStore.setState({
+        draftsByThreadKey: {
+          [key]: {
+            ...base,
+            previewAnnotations: [
+              {
+                id: "preview",
+                pageUrl: "https://example.test",
+                pageTitle: null,
+                comment: "Keep",
+                elements: [],
+                regions: [],
+                strokes: [],
+                styleChanges: [],
+                screenshot: null,
+                createdAt: "2026-10-13T00:00:00Z",
+              },
+            ],
+          },
+        },
+      });
+    if (mode === "review")
+      useComposerDraftStore.setState({
+        draftsByThreadKey: {
+          [key]: {
+            ...base,
+            reviewComments: [
+              {
+                id: "review",
+                sectionId: "diff",
+                sectionTitle: "Changes",
+                filePath: "a.ts",
+                startIndex: 0,
+                endIndex: 1,
+                rangeLabel: "L1",
+                text: "Keep",
+                diff: "+Keep",
+              },
+            ],
+          },
+        },
+      });
+    if (mode === "thread")
+      useComposerDraftStore.setState({
+        draftsByThreadKey: {
+          [key]: {
+            ...base,
+            threadContexts: [
+              threadContextRecord(
+                scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("context-thread")),
+                "Keep",
+              ),
+            ],
+          },
+        },
+      });
+    if (mode === "queued")
+      useComposerDraftStore
+        .getState()
+        .setPrompt(DraftId.make(`queued-edit:${key}:run`), "Queued edit");
+    if (mode === "background")
+      useComposerDraftStore.setState({ backgroundSubmissionThreadKeys: { [key]: true } });
+    if (mode === "rewinding")
+      useComposerDraftStore.setState({ rewindingThreadKeys: new Set([key]) });
+    if (mode === "alias")
+      useComposerDraftStore
+        .getState()
+        .setLogicalProjectDraftThreadId(
+          "alias",
+          scopeProjectRef(TEST_ENVIRONMENT_ID, ProjectId.make("project")),
+          DraftId.make("alias"),
+          { threadId: target.threadId },
+        );
+    const before = useComposerDraftStore.getState();
+    expect(fillEmptyComposerDraftByRef(target, "New")).toBe(false);
+    expect(useComposerDraftStore.getState()).toBe(before);
   });
 });
