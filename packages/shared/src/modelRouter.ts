@@ -278,7 +278,7 @@ function metricValue(metric: ModelRouterMetricValue): number {
 }
 
 function policyScore(
-  candidate: ModelRouterCandidate,
+  candidate: Pick<ModelRouterCandidate, "metrics">,
   policy: ModelRouterPolicy,
   qualityActive: boolean,
   costActive: boolean,
@@ -340,7 +340,7 @@ function selectionBasisFor(input: {
           ? ("weighted" as const)
           : ("incomplete" as const),
   });
-  const score = (candidate: ModelRouterCandidate) =>
+  const score = (candidate: Pick<ModelRouterCandidate, "metrics">) =>
     policyScore(
       candidate,
       input.policy,
@@ -368,7 +368,8 @@ function selectionBasisFor(input: {
     selectedScore = score(selected);
     runnerUpScore = input.eligible[1] === undefined ? null : score(input.eligible[1]);
     let tied = input.eligible.filter((candidate) => score(candidate) === selectedScore);
-    if (input.eligible.some((candidate) => Number.isNaN(score(candidate)))) {
+    // The existing sort includes excluded rows before its display/selection cap.
+    if (input.built.some((candidate) => Number.isNaN(score(candidate)))) {
       outcome = "unknown";
     } else if (tied.length > 1) {
       outcome = "tie";

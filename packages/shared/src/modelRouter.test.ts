@@ -1041,4 +1041,97 @@ describe("selection basis", () => {
     });
     expect(decision.explanation).toContain("selection cause is unknown");
   });
+  it("reports unknown cause for the reviewed four-candidate trailing NaN and preferred target", () => {
+    const zero = { quality: known(0), costUsd: known(0), latencyMs: known(0) };
+    const rows = ["a", "b", "c", "d"].map((model) => ({
+      ...a,
+      model,
+      metrics:
+        model === "c"
+          ? { quality: known(1e308), costUsd: known(1e308), latencyMs: known(0) }
+          : zero,
+    }));
+    const decision = routeModel({
+      mode: "auto",
+      catalog: rows,
+      preferredTargets: [rows[3]!],
+      policy: {
+        version: "model-router.v0",
+        qualityWeight: 1e308,
+        costWeight: 1e308,
+        latencyWeight: 0,
+      },
+    });
+    expect(decision.candidates.map((row) => row.target.model)).toEqual(["a", "b", "c", "d"]);
+    expect(decision.selected?.target.model).toBe("a");
+    expect(decision.selectionBasis).toMatchObject({
+      outcome: "unknown",
+      selectedScore: 0,
+      runnerUpScore: 0,
+      tieBreak: [],
+    });
+    expect(decision.reasonCodes).not.toContain("PREFERRED_DEFAULT");
+    expect(decision.reasonCodes).not.toContain("POLICY_TIE_BREAK");
+  });
+  it("reports unknown cause for a NaN eligible row beyond the existing candidate cap", () => {
+    const zero = { quality: known(0), costUsd: known(0), latencyMs: known(0) };
+    const rows = Array.from({ length: 33 }, (_, i) => ({
+      ...a,
+      model: `m${i.toString().padStart(2, "0")}`,
+      metrics:
+        i === 32 ? { quality: known(1e308), costUsd: known(1e308), latencyMs: known(0) } : zero,
+    }));
+    const decision = routeModel({
+      mode: "auto",
+      catalog: rows,
+      policy: {
+        version: "model-router.v0",
+        qualityWeight: 1e308,
+        costWeight: 1e308,
+        latencyWeight: 0,
+      },
+    });
+    expect(decision.candidates).toHaveLength(32);
+    expect(decision.selected?.target.model).toBe("m00");
+    expect(decision.selectionBasis).toMatchObject({
+      outcome: "unknown",
+      eligibleCount: 33,
+      consideredEligibleCount: 32,
+      tieBreak: [],
+    });
+    expect(decision.reasonCodes).not.toContain("POLICY_TIE_BREAK");
+  });
+  it("reports unknown cause when an excluded NaN row disrupts the unchanged candidate sort", () => {
+    const zero = { quality: known(0), costUsd: known(0), latencyMs: known(0) };
+    const rows = [
+      { ...a, model: "a", metrics: zero },
+      {
+        ...a,
+        model: "b",
+        availabilityReasons: ["PROVIDER_DISABLED" as const],
+        metrics: { quality: known(1e308), costUsd: known(1e308), latencyMs: known(0) },
+      },
+      { ...a, model: "c", metrics: { ...zero, quality: known(1) } },
+    ];
+    const decision = routeModel({
+      mode: "auto",
+      catalog: rows,
+      policy: {
+        version: "model-router.v0",
+        qualityWeight: 1e308,
+        costWeight: 1e308,
+        latencyWeight: 0,
+      },
+    });
+    expect(decision.candidates.map((row) => row.target.model)).toEqual(["a", "b", "c"]);
+    expect(decision.selected?.target.model).toBe("a");
+    expect(decision.selectionBasis).toMatchObject({
+      outcome: "unknown",
+      selectedScore: 0,
+      runnerUpScore: 1e308,
+      eligibleCount: 2,
+      excludedCount: 1,
+    });
+    expect(decision.explanation).not.toContain("higher weighted");
+  });
 });

@@ -1261,3 +1261,44 @@ it.effect(
       assert.equal(invalid.selectionBasis, undefined);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
+
+it.effect.each(["instance", "model", "null", "hybrid"] as const)(
+  "selection basis suppresses independently inconsistent %s provenance without a write",
+  (mismatch) =>
+    Effect.gen(function* () {
+      const f = yield* routingFixture;
+      const basis = f.binding.modelRoute.selectionBasis;
+      assert.ok(basis);
+      const original = f.binding.modelRoute;
+      const selectedTarget =
+        mismatch === "null"
+          ? null
+          : {
+              ...original.selected!.target,
+              ...(mismatch === "instance"
+                ? { instanceId: "different-instance" }
+                : mismatch === "model"
+                  ? { model: "different-model" }
+                  : {}),
+            };
+      const persisted = {
+        ...f.binding,
+        modelRoute: {
+          ...original,
+          ...(mismatch === "hybrid" ? { policyVersion: "hybrid-router.v1.0.0" } : {}),
+          selectionBasis: { ...basis, selectedTarget },
+        },
+      };
+      yield* f.sql`UPDATE projection_dispatcher_task_routes SET binding_json=${encodeEvidence(persisted)}`;
+      const beforeRows = yield* f.sql`SELECT * FROM projection_dispatcher_task_routes`;
+      const beforeWrites = yield* f.sql`SELECT total_changes() AS n`;
+      const readout = yield* f.read();
+      assert.equal(readout?.status, "available");
+      if (readout?.status !== "available") throw new Error("Missing readout");
+      assert.deepEqual(readout.selected, original.selected!.target);
+      assert.equal(readout.explanation, original.explanation);
+      assert.equal(readout.selectionBasis, undefined);
+      assert.deepEqual(yield* f.sql`SELECT total_changes() AS n`, beforeWrites);
+      assert.deepEqual(yield* f.sql`SELECT * FROM projection_dispatcher_task_routes`, beforeRows);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
