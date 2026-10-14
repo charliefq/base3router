@@ -1,3 +1,6 @@
+import { readComposerSendContextForTarget } from "./ChatView.logic";
+import { composerTargetKey, DraftId } from "../composerDraftStore";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { taskEnrollmentNotice } from "./ChatView.logic";
 import { findRecordedWorktreeSetup, resolveVisibleWorktreeSetup } from "./ChatView.logic";
 import {
@@ -2162,4 +2165,42 @@ it("explains preserved canonical conversation without implying another task was 
   expect(
     taskEnrollmentNotice({ status: "not-enrolled", reason: "existing-conversation-link" }),
   ).toContain("prevents creating an additional Tasks card");
+});
+
+it("rejects a reused composer ref belonging to another captured send target", () => {
+  const a = scopeThreadRef(EnvironmentId.make("routing-a"), ThreadId.make("same")),
+    b = scopeThreadRef(EnvironmentId.make("routing-b"), a.threadId);
+  const ref = {
+    getSendContext: () => ({
+      composerDraftTargetKey: composerTargetKey(b),
+      composerEnvironmentId: b.environmentId,
+      routingMode: "manual" as const,
+    }),
+  };
+  expect(readComposerSendContextForTarget(a, a.environmentId, ref)).toBeUndefined();
+  expect(readComposerSendContextForTarget(b, b.environmentId, ref)?.routingMode).toBe("manual");
+  expect(
+    readComposerSendContextForTarget(
+      DraftId.make("queued-edit:captured:run"),
+      a.environmentId,
+      ref,
+    ),
+  ).toBeUndefined();
+});
+
+it("rejects old-environment send context when a stable draft moved", () => {
+  const target = DraftId.make("stable-moved");
+  const composer = {
+    getSendContext: () => ({
+      composerDraftTargetKey: composerTargetKey(target),
+      composerEnvironmentId: EnvironmentId.make("new-env"),
+      routingMode: "auto" as const,
+    }),
+  };
+  expect(
+    readComposerSendContextForTarget(target, EnvironmentId.make("old-env"), composer),
+  ).toBeUndefined();
+  expect(
+    readComposerSendContextForTarget(target, EnvironmentId.make("new-env"), composer)?.routingMode,
+  ).toBe("auto");
 });

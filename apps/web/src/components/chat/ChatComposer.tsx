@@ -1531,6 +1531,8 @@ export interface ChatComposerHandle {
     interactionMode: ProviderInteractionMode;
     interactionModeEnabled: boolean;
     routingMode: "auto" | "manual";
+    composerDraftTargetKey: string;
+    composerEnvironmentId: EnvironmentId;
     taskContractError: string | null;
     taskContract: TaskContractFields | null;
   };
@@ -2415,7 +2417,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   useEffect(() => {
     setTaskContractDraft(EMPTY_TASK_CONTRACT_DRAFT);
   }, [draftId, routeKind, activeThreadId]);
-  const [routingMode, setRoutingMode] = useState<"auto" | "manual">("manual");
+  const routingMode = composerDraft.routingMode === "auto" ? "auto" : "manual";
+  const setComposerRoutingMode = useComposerDraftStore((store) => store.setRoutingMode);
+  const setRoutingMode = useCallback(
+    (mode: "auto" | "manual") => setComposerRoutingMode(composerDraftTarget, mode),
+    [composerDraftTarget, setComposerRoutingMode],
+  );
   const [stashPulse, setStashPulse] = useState<{ key: number; active: boolean }>({
     key: 0,
     active: false,
@@ -6476,6 +6483,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         interactionMode,
         interactionModeEnabled: planModeUiEnabled,
         routingMode,
+        composerDraftTargetKey,
+        composerEnvironmentId: environmentId,
         ...(() => {
           if (!showTaskContractFormRef.current) {
             return { taskContractError: null, taskContract: null };
@@ -6540,6 +6549,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       interactionMode,
       planModeUiEnabled,
       routingMode,
+      composerDraftTargetKey,
       compactThreadContext,
       restoreAfterTimelineReachedEnd,
       getTimelineScrollableNode,

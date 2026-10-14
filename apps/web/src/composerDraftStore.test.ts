@@ -3738,3 +3738,110 @@ describe("first-instruction empty draft preparation", () => {
     expect(useComposerDraftStore.getState()).toBe(before);
   });
 });
+
+describe("target-scoped routing choice", () => {
+  beforeEach(resetComposerDraftStore);
+  afterEach(resetComposerDraftStore);
+  it("keeps explicit mode-only entries across persistence, clears and task preparation", () => {
+    const a = scopeThreadRef(EnvironmentId.make("routing-a"), ThreadId.make("same")),
+      b = scopeThreadRef(EnvironmentId.make("routing-b"), a.threadId);
+    const store = useComposerDraftStore.getState();
+    store.setRoutingMode(a, "auto");
+    store.setRoutingMode(b, "manual");
+    expect(store.getComposerDraft(a)?.routingMode).toBe("auto");
+    expect(store.getComposerDraft(b)?.routingMode).toBe("manual");
+    const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState());
+    const restored = useComposerDraftStore.persist.getOptions().merge!(
+      persisted,
+      useComposerDraftStore.getInitialState(),
+    );
+    useComposerDraftStore.setState(restored);
+    expect(useComposerDraftStore.getState().getComposerDraft(a)?.routingMode).toBe("auto");
+    useComposerDraftStore.getState().setPrompt(a, "send");
+    useComposerDraftStore.getState().clearComposerPromptAndImages(a);
+    expect(useComposerDraftStore.getState().getComposerDraft(a)?.routingMode).toBe("auto");
+    expect(fillEmptyComposerDraftByRef(a, "Prepared instructions")).toBe(true);
+    expect(useComposerDraftStore.getState().getComposerDraft(a)?.routingMode).toBe("auto");
+    useComposerDraftStore.getState().setRoutingMode(a, undefined);
+    expect(useComposerDraftStore.getState().getComposerDraft(a)?.routingMode).toBeUndefined();
+  });
+  it.each([undefined, null, "AUTO", true, {}, "unknown"])(
+    "does not hydrate malformed mode %j as Auto",
+    (mode) => {
+      const a = scopeThreadRef(EnvironmentId.make("routing-a"), ThreadId.make("same"));
+      const restored = useComposerDraftStore.persist.getOptions().merge!(
+        {
+          draftsByThreadKey: {
+            [scopedThreadKey(a)]: { prompt: "kept", attachments: [], routingMode: mode },
+          },
+        },
+        useComposerDraftStore.getInitialState(),
+      );
+      expect(restored.draftsByThreadKey[scopedThreadKey(a)]?.routingMode).toBeUndefined();
+      expect(restored.draftsByThreadKey[scopedThreadKey(a)]?.prompt).toBe("kept");
+    },
+  );
+  it("promotes only the stable draft into its exact server target and deletes draft choices on reset", () => {
+    const store = useComposerDraftStore.getState(),
+      project = scopeProjectRef(EnvironmentId.make("routing-a"), ProjectId.make("routing-project"));
+    const id = DraftId.make("routing-draft");
+    store.setProjectDraftThreadId(project, id, { threadId: ThreadId.make("routing-draft") });
+    store.setRoutingMode(id, "auto");
+    const promoted = scopeThreadRef(
+      EnvironmentId.make("routing-b"),
+      ThreadId.make("routing-server"),
+    );
+    store.markDraftThreadPromoting(id, promoted);
+    store.finalizePromotedDraftThread(id);
+    expect(store.getComposerDraft(promoted)?.routingMode).toBe("auto");
+    expect(
+      store.getComposerDraft(scopeThreadRef(project.environmentId, promoted.threadId))?.routingMode,
+    ).toBeUndefined();
+    const fresh = DraftId.make("fresh-routing");
+    store.setProjectDraftThreadId(project, fresh, { threadId: ThreadId.make("fresh-routing") });
+    expect(store.getComposerDraft(fresh)?.routingMode).toBeUndefined();
+    store.setRoutingMode(fresh, "auto");
+    store.clearDraftThread(fresh);
+    expect(store.getComposerDraft(fresh)).toBeNull();
+  });
+});
+
+it("retains routing intent on stable draft relocation but resets unrelated and removed drafts", () => {
+  resetComposerDraftStore();
+  const store = useComposerDraftStore.getState(),
+    id = DraftId.make("routing-move"),
+    a = scopeProjectRef(EnvironmentId.make("routing-a"), ProjectId.make("move")),
+    b = scopeProjectRef(EnvironmentId.make("routing-b"), a.projectId);
+  store.setProjectDraftThreadId(a, id, { threadId: ThreadId.make("reserved") });
+  store.setRoutingMode(id, "auto");
+  store.setDraftThreadContext(id, { projectRef: b });
+  expect(store.getDraftSession(id)?.environmentId).toBe(b.environmentId);
+  expect(store.getComposerDraft(id)?.routingMode).toBe("auto");
+  const other = DraftId.make("routing-other");
+  store.setProjectDraftThreadId(a, other, { threadId: ThreadId.make("other") });
+  expect(store.getComposerDraft(other)?.routingMode).toBeUndefined();
+  store.clearProjectDraftThreadId(b);
+  expect(store.getComposerDraft(id)).toBeNull();
+  resetComposerDraftStore();
+});
+
+it("defaults unscoped legacy routing to Manual and clears scoped mode-only entries with an environment", () => {
+  resetComposerDraftStore();
+  const restored = useComposerDraftStore.persist.getOptions().merge!(
+    {
+      draftsByThreadId: {
+        "legacy-routing": { prompt: "Kept legacy prompt", attachments: [], routingMode: "auto" },
+      },
+    },
+    useComposerDraftStore.getInitialState(),
+  );
+  expect(Object.values(restored.draftsByThreadKey).map((d) => d.routingMode)).toEqual([undefined]);
+  const a = scopeThreadRef(EnvironmentId.make("routing-remove-a"), ThreadId.make("same")),
+    b = scopeThreadRef(EnvironmentId.make("routing-remove-b"), a.threadId);
+  useComposerDraftStore.getState().setRoutingMode(a, "auto");
+  useComposerDraftStore.getState().setRoutingMode(b, "auto");
+  clearComposerDraftsEnvironment(a.environmentId);
+  expect(useComposerDraftStore.getState().getComposerDraft(a)).toBeNull();
+  expect(useComposerDraftStore.getState().getComposerDraft(b)?.routingMode).toBe("auto");
+  resetComposerDraftStore();
+});

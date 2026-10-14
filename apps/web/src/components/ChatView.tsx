@@ -1,3 +1,4 @@
+import { readComposerSendContextForTarget, captureComposerSendDispatch } from "./ChatView.logic";
 import { ChatCanvas } from "./chat/ChatCanvas";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import {
@@ -7907,7 +7908,11 @@ export default function ChatView(props: ChatViewProps) {
     if (compactDisabled || !activeThread || !clientSettingsHydrated || sendInFlightRef.current) {
       return;
     }
-    const context = composerRef.current?.getSendContext();
+    const context = readComposerSendContextForTarget(
+      composerDraftTarget,
+      environmentId,
+      composerRef.current,
+    );
     if (!context?.providerAvailable) return;
 
     // Compaction is a standalone command; the draft and its attachments stay local.
@@ -8136,11 +8141,17 @@ export default function ChatView(props: ChatViewProps) {
       onAdvanceActivePendingUserInput();
       return;
     }
-    const sendCtx = composerRef.current?.getSendContext();
-    if (!sendCtx?.providerAvailable) {
+    const sendDispatch = captureComposerSendDispatch(
+      composerDraftTarget,
+      environmentId,
+      composerRef.current,
+      { startTurn: startThreadTurn, editQueuedRun: editQueuedRunCommand },
+    );
+    if (!sendDispatch?.context.providerAvailable) {
       notifyDirectAnnotationAttached();
       return;
     }
+    const sendCtx = sendDispatch.context;
     if (sendCtx.taskContractError) {
       setThreadError(activeThread.id, sendCtx.taskContractError);
       return;
@@ -8184,7 +8195,6 @@ export default function ChatView(props: ChatViewProps) {
       selectedModelSelection: ctxSelectedModelSelection,
       interactionMode: sendInteractionMode,
       interactionModeEnabled: sendInteractionModeEnabled,
-      routingMode: sendRoutingMode,
     } = sendCtx;
     const annotationImageAlreadyAttached =
       directAnnotation?.image !== undefined &&
@@ -8287,7 +8297,7 @@ export default function ChatView(props: ChatViewProps) {
             return uploaded;
           },
         });
-        const result = await editQueuedRunCommand({
+        const result = await sendDispatch.editQueuedRun({
           environmentId: activeThread.environmentId,
           input: {
             threadId: editingQueuedRun.threadId,
@@ -8810,7 +8820,7 @@ export default function ChatView(props: ChatViewProps) {
                 appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
                   .capabilities.inlineMessageContext === true;
               requestMayHaveStarted = true;
-              const result = await startThreadTurn({
+              const result = await sendDispatch.startTurn({
                 environmentId,
                 input: {
                   threadId: targetThreadId,
@@ -8831,7 +8841,6 @@ export default function ChatView(props: ChatViewProps) {
                   titleSeed: title,
                   runtimeMode,
                   interactionMode: target.interactionMode,
-                  routingMode: sendRoutingMode,
                   bootstrap: {
                     createThread: {
                       projectId: activeProject.id,
@@ -9215,7 +9224,7 @@ export default function ChatView(props: ChatViewProps) {
       const startPromise =
         failure !== null
           ? Promise.resolve(failure)
-          : startThreadTurn({
+          : sendDispatch.startTurn({
               environmentId,
               input: {
                 threadId: threadIdForSend,
@@ -9255,7 +9264,6 @@ export default function ChatView(props: ChatViewProps) {
                 titleSeed: title,
                 runtimeMode,
                 interactionMode: sendInteractionMode,
-                routingMode: sendRoutingMode,
                 dispatchMode,
                 ...(bootstrap ? { bootstrap } : {}),
                 createdAt: messageCreatedAt,
@@ -9686,7 +9694,11 @@ export default function ChatView(props: ChatViewProps) {
       return false;
     }
 
-    const sendCtx = composerRef.current?.getSendContext();
+    const sendCtx = readComposerSendContextForTarget(
+      composerDraftTarget,
+      environmentId,
+      composerRef.current,
+    );
     if (!sendCtx?.providerAvailable || !sendCtx.interactionModeEnabled) {
       return false;
     }
@@ -9825,7 +9837,11 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
 
-    const sendCtx = composerRef.current?.getSendContext();
+    const sendCtx = readComposerSendContextForTarget(
+      composerDraftTarget,
+      environmentId,
+      composerRef.current,
+    );
     if (!sendCtx?.providerAvailable || !sendCtx.interactionModeEnabled) {
       return;
     }
@@ -9967,6 +9983,7 @@ export default function ChatView(props: ChatViewProps) {
     defaultRuntimeMode,
     startThreadTurn,
     environmentId,
+    composerDraftTarget,
     composerRef,
   ]);
 
