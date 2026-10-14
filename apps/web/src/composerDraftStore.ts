@@ -4390,6 +4390,40 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
 
 export const useComposerDraftStore = composerDraftStore;
 
+/** Local preparation only; one synchronous check preserves anything written during a task read. */
+export function fillEmptyComposerDraftByRef(threadRef: ScopedThreadRef, prompt: string): boolean {
+  if (!prompt.trim() || !composerDraftStore.persist.hasHydrated()) return false;
+  const key = scopedThreadKey(threadRef);
+  let filled = false;
+  composerDraftStore.setState((state) => {
+    const draft = state.draftsByThreadKey[key];
+    if (
+      state.backgroundSubmissionThreadKeys[key] ||
+      state.rewindingThreadKeys.has(key) ||
+      Object.keys(state.draftsByThreadKey).some((k) => k.startsWith(`queued-edit:${key}:`)) ||
+      Object.values(state.draftThreadsByThreadKey).some(
+        (d) =>
+          (d.environmentId === threadRef.environmentId && d.threadId === threadRef.threadId) ||
+          (d.promotedTo?.environmentId === threadRef.environmentId &&
+            d.promotedTo.threadId === threadRef.threadId),
+      ) ||
+      (draft &&
+        (draft.prompt !== "" ||
+          draft.nonPersistedImageIds.length > 0 ||
+          composerDraftHasUserContent(draft)))
+    )
+      return state;
+    filled = true;
+    return {
+      draftsByThreadKey: {
+        ...state.draftsByThreadKey,
+        [key]: { ...(draft ?? createEmptyThreadDraft()), prompt },
+      },
+    };
+  });
+  return filled;
+}
+
 export function beginBackgroundDraftSubmissionByRef(threadRef: ScopedThreadRef): void {
   const threadKey = scopedThreadKey(threadRef);
   useComposerDraftStore.setState((state) => ({

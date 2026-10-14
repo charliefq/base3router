@@ -10,6 +10,8 @@ import * as SqliteForFixture from "@t3tools/shared/nodeSqliteClient";
 import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import {
+  EnvironmentId,
+  ThreadId,
   CommandId,
   ProviderInstanceId,
   HYBRID_TASK_ROUTER_POLICY_VERSION,
@@ -27,6 +29,8 @@ import {
   type TaskContractReviewInput,
   type TaskContractReviewState,
 } from "@t3tools/contracts";
+import { useComposerDraftStore } from "../../composerDraftStore";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
@@ -3554,4 +3558,354 @@ it.each([
       ),
     );
   },
+);
+
+it("prepares reviewed first instructions for an actual owned empty root without starting it", async () => {
+  const module = await loadAgentsCreationFixture();
+  await EffectForFixture.runPromise(
+    module.withAgentsTaskCreationFixture((f) =>
+      EffectForFixture.promise(async () => {
+        const command: Extract<OrchestrationV2Command, { type: "thread.create" }> = {
+          type: "thread.create",
+          commandId: CommandId.make("first-instructions"),
+          threadId: ThreadId.make("first-instructions-root"),
+          projectId: "project-a" as Extract<
+            OrchestrationV2Command,
+            { type: "thread.create" }
+          >["projectId"],
+          title: "Initial parser task",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "fake-model" },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+          taskGovernance: "required",
+          taskContract: {
+            goal: "Fix parser",
+            redirect: "Ask before expanding",
+            acceptance: "Parser tests pass",
+            brake: {
+              maxProviderStarts: 2,
+              stopConditions: "Scope changed",
+              maxTokens: 900,
+              maxCostUsd: 0.1,
+              deadlineAt: "2026-10-14T00:00:00Z",
+            },
+          },
+          taskCreationReview: {
+            environmentId: EnvironmentId.make("environment-a"),
+            projectId: "project-a" as Extract<
+              OrchestrationV2Command,
+              { type: "thread.create" }
+            >["projectId"],
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "fake-model" },
+          },
+        };
+        await EffectForFixture.runPromise(f.dispatch(command));
+        state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+        state.reviewRead.mockImplementation(
+          async ({ input }: { input: TaskContractReviewInput }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(f.readReview(input)),
+          }),
+        );
+        state.readProjection.mockImplementation(
+          async ({ input }: { input: { threadId: string } }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(
+              f.orchestrator.getThreadProjection(input.threadId),
+            ),
+          }),
+        );
+        const target = scopeThreadRef(EnvironmentId.make("environment-a"), command.threadId);
+        useComposerDraftStore.setState({
+          draftsByThreadKey: {},
+          draftThreadsByThreadKey: {},
+          backgroundSubmissionThreadKeys: {},
+          rewindingThreadKeys: new Set(),
+        });
+        await act(async () => {
+          renderer = create(<TasksPage />);
+        });
+        const before = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
+        expect(creationButton("Prepare first instructions")).toBeDefined();
+        await creationClick("Prepare first instructions", true);
+        expect(text()).toContain("Ask before expanding");
+        expect(text()).toContain("Parser tests pass");
+        expect(text()).toContain("900");
+        expect(text()).toContain("0.1");
+        expect(text()).toContain("2026-10-14T00:00:00Z");
+        const editor = renderer.root.findByProps({ "aria-label": "Initial instructions" });
+        expect(editor.props.value).toBe("Fix parser");
+        await act(async () => editor.props.onChange({ target: { value: "Fix parser carefully" } }));
+        expect(useComposerDraftStore.getState().getComposerDraft(target)).toBeNull();
+        expect(state.navigate).not.toHaveBeenCalled();
+        await creationClick("Fill empty draft and open", true);
+        expect(useComposerDraftStore.getState().getComposerDraft(target)?.prompt).toBe(
+          "Fix parser carefully",
+        );
+        expect(state.navigate).toHaveBeenCalledTimes(1);
+        expect(state.navigate).toHaveBeenCalledWith({
+          to: "/$environmentId/$threadId",
+          params: { environmentId: "environment-a", threadId: command.threadId },
+        });
+        expect(await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`)).toEqual(
+          before,
+        );
+        expect(await EffectForFixture.runPromise(f.noExecution())).toEqual({
+          runs: 0,
+          grants: 0,
+          outbox: 0,
+          messages: 0,
+        });
+        expect(state.create).not.toHaveBeenCalled();
+        expect(state.reviewDecide).not.toHaveBeenCalled();
+        expect(state.bind).not.toHaveBeenCalled();
+      }),
+    ),
+  );
+});
+
+it.each([
+  "typed-during-read",
+  "attachment",
+  "context",
+  "queued-edit",
+  "session",
+  "environment",
+  "project",
+  "unmount",
+  "reload",
+  "cancel-new-review",
+  "revision",
+  "pause",
+  "accept",
+  "delete",
+  "message",
+  "run",
+  "foreign",
+  "review-failure",
+  "projection-failure",
+  "incoherent-review",
+] as const)(
+  "preserves drafts and retires first-instruction preparation across %s",
+  async (mode) => {
+    const module = await loadAgentsCreationFixture();
+    await EffectForFixture.runPromise(
+      module.withAgentsTaskCreationFixture((f) =>
+        EffectForFixture.promise(async () => {
+          const c: Extract<OrchestrationV2Command, { type: "thread.create" }> = {
+            type: "thread.create",
+            commandId: CommandId.make(`prepare:${mode}`),
+            threadId: ThreadId.make(`prepare-${mode}`),
+            projectId: "project-a" as Extract<
+              OrchestrationV2Command,
+              { type: "thread.create" }
+            >["projectId"],
+            title: "Prepare this task",
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "fake-model" },
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            createdBy: "user",
+            creationSource: "web",
+            taskGovernance: "required",
+            taskContract: {
+              goal: "Fix parser",
+              redirect: "Ask",
+              acceptance: "Owner checks",
+              brake: { maxProviderStarts: 2, stopConditions: "Scope changed" },
+            },
+            taskCreationReview: {
+              environmentId: EnvironmentId.make("environment-a"),
+              projectId: "project-a" as Extract<
+                OrchestrationV2Command,
+                { type: "thread.create" }
+              >["projectId"],
+              modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "fake-model" },
+            },
+          };
+          await EffectForFixture.runPromise(f.dispatch(c));
+          state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+          const read = async ({ input }: { input: TaskContractReviewInput }) => ({
+            _tag: "Success" as const,
+            value: await EffectForFixture.runPromise(f.readReview(input)),
+          });
+          state.reviewRead.mockImplementation(read);
+          state.readProjection.mockImplementation(
+            async ({ input }: { input: { threadId: string } }) => ({
+              _tag: "Success",
+              value: await EffectForFixture.runPromise(
+                f.orchestrator.getThreadProjection(input.threadId),
+              ),
+            }),
+          );
+          const target = scopeThreadRef(EnvironmentId.make("environment-a"), c.threadId);
+          const key = scopedThreadKey(target);
+          useComposerDraftStore.setState({
+            draftsByThreadKey: {},
+            draftThreadsByThreadKey: {},
+            backgroundSubmissionThreadKeys: {},
+            rewindingThreadKeys: new Set(),
+          });
+          await act(async () => {
+            renderer = create(<TasksPage />);
+          });
+          await creationClick("Prepare first instructions");
+          expect(creationButton("Fill empty draft and open")).toBeDefined();
+          const gated = deferred<{ _tag: "Success"; value: TaskContractReviewState }>();
+          state.reviewRead.mockImplementationOnce(() => gated.promise);
+          const oldApply = creationButton("Fill empty draft and open")!.props.onClick;
+          await act(async () => oldApply());
+          if (mode === "typed-during-read")
+            useComposerDraftStore.getState().setPrompt(target, "My own instructions");
+          if (mode === "attachment" || mode === "context" || mode === "queued-edit") {
+            useComposerDraftStore.getState().setPrompt(target, "Temporary seed");
+            const base = {
+              ...useComposerDraftStore.getState().getComposerDraft(target)!,
+              prompt: "",
+            };
+            useComposerDraftStore.setState({ draftsByThreadKey: { [key]: base } });
+            useComposerDraftStore.setState({
+              draftsByThreadKey: {
+                ...useComposerDraftStore.getState().draftsByThreadKey,
+                [mode === "queued-edit" ? `queued-edit:${key}:existing-run` : key]: {
+                  ...base,
+                  ...(mode === "attachment"
+                    ? { nonPersistedImageIds: ["pending-upload"] }
+                    : mode === "context"
+                      ? {
+                          terminalContexts: [
+                            {
+                              id: "context",
+                              threadId: c.threadId,
+                              terminalId: "terminal",
+                              terminalLabel: "Terminal",
+                              lineStart: 1,
+                              lineEnd: 2,
+                              text: "Existing context",
+                              createdAt: "2026-10-13T00:00:00Z",
+                            },
+                          ],
+                        }
+                      : { prompt: "Queued edit" }),
+                },
+              },
+            });
+          }
+          if (mode === "session") {
+            state.sessionIdentity = {};
+            await act(async () => renderer.update(<TasksPage />));
+          }
+          if (mode === "environment") {
+            state.environmentId = "environment-b";
+            await act(async () => renderer.update(<TasksPage />));
+          }
+          if (mode === "project") {
+            state.load.mockResolvedValue({
+              ...(await EffectForFixture.runPromise(f.readSnapshot())),
+              tasks: [],
+            });
+            await creationClick("Refresh tasks");
+          }
+          if (mode === "unmount" || mode === "reload") {
+            await act(async () => renderer.unmount());
+            if (mode === "reload")
+              await act(async () => {
+                renderer = create(<TasksPage />);
+              });
+          }
+          if (mode === "cancel-new-review") {
+            await creationClick("Cancel preparation");
+            await creationClick("Prepare first instructions");
+            expect(creationButton("Fill empty draft and open")).toBeDefined();
+          }
+          if (["revision", "pause", "accept", "delete"].includes(mode)) {
+            if (mode === "delete")
+              await EffectForFixture.runPromise(
+                f.sql`UPDATE orchestration_v2_projection_threads SET deleted_at='2026-10-14T00:00:00Z' WHERE thread_id=${c.threadId}`,
+              );
+            else
+              await EffectForFixture.runPromise(
+                f.sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,${mode === "revision" ? "$.taskContract.revision" : mode === "pause" ? "$.taskContractPhase" : "$.taskAcceptedRevision"},${mode === "revision" ? 2 : mode === "pause" ? "redirected" : 1}) WHERE thread_id=${c.threadId}`,
+              );
+          }
+          if (mode === "foreign")
+            await EffectForFixture.runPromise(
+              f.sql`UPDATE collaboration_commands SET payload_json=json_set(payload_json,'$.admittedBy','foreign') WHERE command_id=${`task:enroll:${c.commandId}`}`,
+            );
+          if (mode === "message" || mode === "run")
+            state.readProjection.mockImplementationOnce(async () => {
+              const p = await EffectForFixture.runPromise(
+                f.orchestrator.getThreadProjection(c.threadId),
+              );
+              return {
+                _tag: "Success",
+                value: { ...p, [mode === "message" ? "messages" : "runs"]: [{ id: "existing" }] },
+              };
+            });
+          if (mode === "review-failure")
+            state.reviewRead.mockRejectedValueOnce(new Error("Read failed"));
+          if (mode === "projection-failure")
+            state.readProjection.mockResolvedValueOnce({
+              _tag: "Failure",
+              cause: "Projection unavailable",
+            });
+          if (mode === "incoherent-review")
+            state.reviewRead.mockImplementationOnce(async (input) => {
+              const r = await read(input);
+              return r.value.status === "available"
+                ? {
+                    _tag: "Success",
+                    value: {
+                      ...r.value,
+                      reference: {
+                        ...r.value.reference,
+                        threadSequence: r.value.reference.threadSequence + 1,
+                      },
+                    },
+                  }
+                : r;
+            });
+          const retained = useComposerDraftStore.getState().draftsByThreadKey;
+          await act(async () =>
+            gated.resolve(
+              await read({
+                input: {
+                  environmentId: "environment-a",
+                  taskId: `task:governed:thread:${c.threadId}`,
+                  projectId: c.projectId,
+                  threadId: c.threadId,
+                  revision: 1,
+                },
+              }),
+            ),
+          );
+          expect(useComposerDraftStore.getState().draftsByThreadKey).toEqual(retained);
+          expect(state.navigate).not.toHaveBeenCalled();
+          expect(state.create).not.toHaveBeenCalled();
+          expect(state.reviewDecide).not.toHaveBeenCalled();
+          expect(state.bind).not.toHaveBeenCalled();
+          if (mode === "cancel-new-review") {
+            expect(creationButton("Fill empty draft and open")!.props.disabled).toBe(false);
+            await creationClick("Fill empty draft and open");
+            expect(state.navigate).toHaveBeenCalledTimes(1);
+            expect(useComposerDraftStore.getState().getComposerDraft(target)?.prompt).toBe(
+              "Fix parser",
+            );
+          }
+          expect(await EffectForFixture.runPromise(f.noExecution())).toEqual({
+            runs: 0,
+            grants: 0,
+            outbox: 0,
+            messages: 0,
+          });
+        }),
+      ),
+    );
+  },
+  60_000,
 );
