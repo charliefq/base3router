@@ -46,6 +46,7 @@ import * as RouterEvaluation from "../routerEvaluation/RouterEvaluationService.t
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { readTaskReview } from "../collaboration/store.ts";
+import type { ProjectionStoreV2Error } from "../orchestration-v2/ProjectionStore.ts";
 import { PolicyExecutionContext } from "./executionContext.ts";
 import { Base3PolicyDeniedError } from "./Base3PolicyDeniedError.ts";
 import { classifyCommand, commandNeedsCapacity, type OperationClass } from "./operationPolicy.ts";
@@ -138,6 +139,13 @@ const environmentId = Effect.gen(function* () {
   return yield* environment.value.getEnvironmentId.pipe(
     Effect.orElseSucceed(() => EnvironmentId.make("local")),
   );
+});
+
+const unavailableRoutingPolicy = () => ({
+  activePolicyVersion: MODEL_ROUTER_POLICY_VERSION,
+  challengerEnabled: false,
+  evidenceByTarget: new Map(),
+  policyLoadFailure: "Policy snapshot unavailable; Router V0 was used.",
 });
 
 const providersForBind = Effect.gen(function* () {
@@ -526,12 +534,7 @@ const bindRoute = (input: {
     };
     const localTaskProfile = classifyLocalTask(input.command.text ?? "");
     const evaluation = yield* Effect.serviceOption(RouterEvaluation.RouterEvaluationService);
-    const fallback = {
-      activePolicyVersion: MODEL_ROUTER_POLICY_VERSION,
-      challengerEnabled: false,
-      evidenceByTarget: new Map(),
-      policyLoadFailure: "Policy snapshot unavailable; Router V0 was used.",
-    };
+    const fallback = unavailableRoutingPolicy();
     const hybrid = Option.isNone(evaluation)
       ? fallback
       : yield* evaluation.value.routingSnapshot(input.environmentId, localTaskProfile).pipe(
@@ -1153,7 +1156,9 @@ export const readTaskAutoPreview = Effect.fn("Base3.readTaskAutoPreview")(
   function* (
     sql: SqlClient.SqlClient,
     input: TaskAutoPreviewInput,
-    readProjection: (id: ThreadId) => Effect.Effect<OrchestrationV2ThreadProjection, unknown>,
+    readProjection: (
+      id: ThreadId,
+    ) => Effect.Effect<OrchestrationV2ThreadProjection, ProjectionStoreV2Error>,
   ) {
     const unavailable: TaskAutoPreviewState = {
       status: "unavailable",
@@ -1223,21 +1228,29 @@ export const readTaskAutoPreview = Effect.fn("Base3.readTaskAutoPreview")(
         )
           return unavailable;
         const evaluation = yield* Effect.serviceOption(RouterEvaluation.RouterEvaluationService);
-        const snapshot = Option.isNone(evaluation)
-          ? Option.none()
-          : yield* evaluation.value
-              .existingRoutingSnapshot(env, profile)
-              .pipe(Effect.orElseSucceed(() => Option.none()));
+        const existing = Option.isNone(evaluation)
+          ? { snapshot: Option.none(), unavailable: true }
+          : yield* evaluation.value.existingRoutingSnapshot(env, profile).pipe(
+              Effect.match({
+                onFailure: () => ({ snapshot: Option.none(), unavailable: true }),
+                onSuccess: (snapshot) => ({ snapshot, unavailable: false }),
+              }),
+            );
+        const snapshot = existing.snapshot;
         const policyFallbackReason = Option.isSome(snapshot)
           ? null
-          : "Policy snapshot unavailable or uninitialized; ephemeral Router V0 used without initialization.";
+          : existing.unavailable
+            ? "Policy snapshot unavailable; ephemeral Router V0 used without initialization."
+            : "Policy snapshot uninitialized; ephemeral Router V0 used without initialization.";
         const hybrid = Option.isSome(snapshot)
           ? RouterEvaluation.routingPolicyInput(snapshot.value)
-          : {
-              activePolicyVersion: MODEL_ROUTER_POLICY_VERSION,
-              challengerEnabled: false,
-              evidenceByTarget: new Map(),
-            };
+          : existing.unavailable
+            ? unavailableRoutingPolicy()
+            : {
+                activePolicyVersion: MODEL_ROUTER_POLICY_VERSION,
+                challengerEnabled: false,
+                evidenceByTarget: new Map(),
+              };
         const calculation = calculateDispatcherModelRoute({
           mode: "auto",
           providers,

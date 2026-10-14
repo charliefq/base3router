@@ -269,7 +269,12 @@ export function TaskFirstInstructions(props: {
       }
       setPreview(result.value);
     } catch {
-      if (current(generation) && textEpoch.current === textGeneration)
+      if (
+        current(generation) &&
+        textEpoch.current === textGeneration &&
+        reviewRef.current === facts &&
+        previewOwner.current === token
+      )
         setNotice("Auto preview failed. No draft or model was changed.");
     } finally {
       if (previewOwner.current === token) {

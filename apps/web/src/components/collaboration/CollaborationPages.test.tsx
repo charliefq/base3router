@@ -3944,6 +3944,7 @@ it.each([
   "unmount",
   "error",
   "mismatch",
+  "apply-error",
 ] as const)("retires Auto preview across %s without draft or execution mutations", async (mode) => {
   const module = await loadAgentsCreationFixture();
   await EffectForFixture.runPromise(
@@ -4076,7 +4077,12 @@ it.each([
         }
         if (mode === "cancel") await creationClick("Cancel preparation");
         if (mode === "unmount") await act(async () => renderer.unmount());
-        if (mode === "error") gated.reject(new Error("controlled preview failure"));
+        if (mode === "apply-error") {
+          await creationClick("Fill empty draft and open");
+          expect(text()).toContain("Prepared a local draft only");
+        }
+        if (mode === "error" || mode === "apply-error")
+          gated.reject(new Error("controlled preview failure"));
         else {
           const value = result.value;
           gated.resolve({
@@ -4096,8 +4102,17 @@ it.each([
           if (mode === "error" || mode === "mismatch")
             expect(text()).toContain("No draft or model was changed");
         }
-        expect(useComposerDraftStore.getState().getComposerDraft(target)).toBeNull();
-        expect(state.navigate).not.toHaveBeenCalled();
+        if (mode === "apply-error") {
+          expect(text()).toContain("Prepared a local draft only");
+          expect(text()).not.toContain("Auto preview failed");
+          expect(useComposerDraftStore.getState().getComposerDraft(target)?.prompt).toBe(
+            "Fix parser",
+          );
+          expect(state.navigate).toHaveBeenCalledTimes(1);
+        } else {
+          expect(useComposerDraftStore.getState().getComposerDraft(target)).toBeNull();
+          expect(state.navigate).not.toHaveBeenCalled();
+        }
         expect(state.create).not.toHaveBeenCalled();
         expect(state.reviewDecide).not.toHaveBeenCalled();
         expect(state.bind).not.toHaveBeenCalled();

@@ -29,6 +29,17 @@ import {
   withAgentsTaskCreationFixture,
 } from "./testkit/agentsTaskCreationFixture.ts";
 
+const previewCreationCommand = (id: string) => {
+  const command = agentsCreationCommand(id);
+  return {
+    ...command,
+    taskContract: {
+      ...command.taskContract!,
+      brake: { maxProviderStarts: 2, stopConditions: "Scope changed" },
+    },
+  };
+};
+
 const isPreviewState = Schema.is(TaskAutoPreviewState);
 const decodeBinding = Schema.decodeUnknownSync(Schema.fromJsonString(DispatcherTaskRouteBinding));
 it.live(
@@ -36,11 +47,7 @@ it.live(
   () =>
     withAgentsTaskCreationFixture((f) =>
       Effect.gen(function* () {
-        const c = agentsCreationCommand("auto-preview");
-        c.taskContract = {
-          ...c.taskContract!,
-          brake: { maxProviderStarts: 2, stopConditions: "Scope changed" },
-        };
+        const c = previewCreationCommand("auto-preview");
         yield* f.dispatch(c);
         const task = (yield* f.readSnapshot()).tasks[0]!;
         const input: TaskAutoPreviewInput = {
@@ -184,11 +191,7 @@ it.live.each([
 ] as const)("reads %s snapshot without writes and matches authoritative dispatch", (mode) =>
   withAgentsTaskCreationFixture((f) =>
     Effect.gen(function* () {
-      const c = agentsCreationCommand(`policy-${mode}`);
-      c.taskContract = {
-        ...c.taskContract!,
-        brake: { maxProviderStarts: 2, stopConditions: "Scope changed" },
-      };
+      const c = previewCreationCommand(`policy-${mode}`);
       yield* f.dispatch(c);
       const task = (yield* f.readSnapshot()).tasks[0]!;
       const input: TaskAutoPreviewInput = {
@@ -295,7 +298,6 @@ it.live.each([
       }
       if (mode === "unavailable-policy") {
         assert.include(preview.policyFallbackReason!, "ephemeral");
-        return;
       }
       if (mode === "unavailable-provider" || mode === "constraints") {
         assert.equal(preview.decision.selected, null);
@@ -321,8 +323,11 @@ it.live.each([
         assert.equal(actual.modelRoute?.selected?.target.instanceId, "codex");
         assert.notEqual(actual.modelRoute?.explanation, preview.decision.explanation);
       } else {
-        assert.deepStrictEqual(actual.modelRoute?.selected, preview.decision.selected);
-        assert.equal(actual.modelRoute?.explanation, preview.decision.explanation);
+        assert.deepStrictEqual(
+          { ...actual.modelRoute, executionStatus: "not-started" },
+          preview.decision,
+        );
+        assert.deepStrictEqual(actual.hybrid, preview.hybrid);
       }
     }),
   ),
@@ -331,11 +336,7 @@ it.live.each([
 it.live("refuses a populated root even with a freshly read matching reference", () =>
   withAgentsTaskCreationFixture((f) =>
     Effect.gen(function* () {
-      const c = agentsCreationCommand("populated-preview");
-      c.taskContract = {
-        ...c.taskContract!,
-        brake: { maxProviderStarts: 2, stopConditions: "Scope changed" },
-      };
+      const c = previewCreationCommand("populated-preview");
       yield* f.dispatch(c);
       const task = (yield* f.readSnapshot()).tasks[0]!;
       const target = {
