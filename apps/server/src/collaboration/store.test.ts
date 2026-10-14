@@ -1207,6 +1207,14 @@ it.effect(
           (yield* readCollaborationSnapshot(sql, "principal-owner")).tasks[0]?.contractReadout,
           { status: "unavailable", reason },
         );
+        if (reason === "ordinary_chat")
+          assert.deepEqual(
+            (yield* readCollaborationSnapshot(sql, "principal-owner", {
+              environmentId: "fixture-env",
+              canOperate: false,
+            })).tasks[0]?.budgetReadout,
+            { status: "unavailable", reason: "ordinary_chat" },
+          );
       }
       yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json='invalid JSON' WHERE thread_id='thread-1'`;
       assert.deepEqual(

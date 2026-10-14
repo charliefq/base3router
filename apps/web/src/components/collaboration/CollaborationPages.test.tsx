@@ -5569,3 +5569,125 @@ it("Agents task navigation retires the callback saved from a refreshing disabled
   expect(state.load).toHaveBeenCalledTimes(3);
   expect(state.navigate).toHaveBeenCalledTimes(1);
 });
+
+const budgetText = () =>
+  renderer.root
+    .findAll((n) => ["p", "dd", "dt", "h3"].includes(String(n.type)))
+    .map((n) => n.children.join(""))
+    .join("\n");
+
+it("Tasks budget frozen behavior preserves partial and frozen evidence on failed refresh without execution", async () => {
+  state.snapshot = {
+    ...state.snapshot,
+    tasks: [
+      {
+        id: "budget-task",
+        title: "Read budget",
+        projectId: "project-a",
+        threadId: "budget-root",
+        ownerAgentId: "owner",
+        assigneeAgentId: "codex",
+        state: "blocked",
+        waitReason: null,
+        acceptance: "Inspect evidence",
+        gateDecision: "DENY",
+        correlationId: "budget",
+        revision: 1,
+        pendingClarificationId: null,
+        budgetReadout: {
+          status: "available",
+          taskId: "budget-task",
+          threadId: "budget-root",
+          rootThreadId: "budget-root",
+          environmentId: "environment-a",
+          contractRevision: 3,
+          observedAt: "2026-10-14T20:00:00.000Z",
+          reservedStarts: 4,
+          declaredStarts: 2,
+          remainingStarts: 0,
+          declared: { tokens: null, costUsd: null, deadline: null },
+          frozen: {
+            tokens: 100,
+            costUsd: 5,
+            deadline: "2026-10-15T00:00:00.000Z",
+            frozenAt: "2026-10-14T00:00:00.000Z",
+          },
+          usage: {
+            status: "partial",
+            attempts: 4,
+            reportedTokens: 150,
+            reportedCostUsd: null,
+            priceStatus: "unverified",
+            remainingTokens: null,
+            verifiedRemainingCostUsd: null,
+          },
+          issues: [
+            "start_exhausted",
+            "usage_incomplete",
+            "unverified_price",
+            "unsettled_reservation",
+          ],
+        },
+      },
+    ],
+  };
+  await act(async () => {
+    renderer = create(<TasksPage />);
+  });
+  expect(budgetText()).toContain("Task tree budget evidence");
+  expect(budgetText()).toContain("Reserved provider starts / declared limit / remaining");
+  expect(budgetText()).toContain("4 / 2 / 0");
+  expect(budgetText()).toContain("Not declared / Not declared / Not declared");
+  expect(budgetText()).toContain("100 / 5 / 2026-10-15");
+  expect(budgetText()).toContain("Reported tree usage (partial; 4 attempts)");
+  expect(budgetText()).toContain("150 tokens / Unknown USD");
+  expect(budgetText()).toContain("Unknown / Unknown");
+  expect(budgetText()).toContain("unsettled_reservation");
+  expect(budgetText()).toContain("Reservations are not confirmed execution");
+  expect(budgetText()).toContain("a turn may exceed a remaining consumption cap");
+  state.load.mockRejectedValueOnce(new Error("Budget refresh failed"));
+  await act(async () => {
+    renderer.root
+      .findAllByType("button")
+      .find((n) => n.children.includes("Refresh tasks"))!
+      .props.onClick();
+  });
+  expect(budgetText()).toContain("Stale budget evidence");
+  expect(budgetText()).toContain("150 tokens / Unknown USD");
+  expect(state.bind).not.toHaveBeenCalled();
+  expect(state.recover).not.toHaveBeenCalled();
+  expect(state.create).not.toHaveBeenCalled();
+});
+
+it.each(["ordinary_chat", "budget_read_failed", "inconsistent_tree_accounting"])(
+  "Tasks budget unknown %s does not fabricate zero usage",
+  async (reason) => {
+    state.snapshot = {
+      ...state.snapshot,
+      tasks: [
+        {
+          id: "unknown-budget",
+          title: "Read unknown",
+          projectId: "project-a",
+          threadId: "unknown-root",
+          ownerAgentId: "owner",
+          assigneeAgentId: "codex",
+          state: "blocked",
+          waitReason: null,
+          acceptance: "Inspect",
+          gateDecision: "DENY",
+          correlationId: "unknown",
+          revision: 1,
+          pendingClarificationId: null,
+          budgetReadout: { status: "unavailable", reason },
+        },
+      ],
+    };
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    expect(budgetText()).toContain(`Budget evidence unknown: ${reason}`);
+    expect(budgetText()).not.toContain("0 tokens");
+    expect(budgetText()).not.toContain("None observed in this snapshot");
+  },
+);

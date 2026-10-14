@@ -20,7 +20,7 @@ import {
 import { ExplicitUserFeedbackV0 } from "./routerEvaluation.ts";
 import { ModelRouterMode, ModelRouterTarget } from "./modelRouter.ts";
 import { ModelSelection } from "./modelSelection.ts";
-import { PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const CollaborationConnection = Schema.Literals(["NOT_CONNECTED", "SIMULATED"]);
 export type CollaborationConnection = typeof CollaborationConnection.Type;
@@ -173,6 +173,48 @@ export const CollaborationTaskResultReadout = Schema.Union([
 ]);
 export type CollaborationTaskResultReadout = typeof CollaborationTaskResultReadout.Type;
 
+/** Snapshot evidence only. Neither availability nor remaining budget grants execution. */
+const BudgetAmount = Schema.Number.check(Schema.isGreaterThanOrEqualTo(0));
+export const CollaborationTaskBudgetReadout = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("unavailable"), reason: Schema.String }),
+  Schema.Struct({
+    status: Schema.Literal("available"),
+    taskId: TrimmedNonEmptyString,
+    threadId: TrimmedNonEmptyString,
+    rootThreadId: TrimmedNonEmptyString,
+    environmentId: TrimmedNonEmptyString,
+    contractRevision: PositiveInt,
+    observedAt: TrimmedNonEmptyString,
+    reservedStarts: NonNegativeInt,
+    declaredStarts: PositiveInt,
+    remainingStarts: NonNegativeInt,
+    declared: Schema.Struct({
+      tokens: Schema.NullOr(Schema.Number),
+      costUsd: Schema.NullOr(BudgetAmount),
+      deadline: Schema.NullOr(Schema.String),
+    }),
+    frozen: Schema.NullOr(
+      Schema.Struct({
+        tokens: Schema.NullOr(Schema.Number),
+        costUsd: Schema.NullOr(BudgetAmount),
+        deadline: Schema.String,
+        frozenAt: Schema.String,
+      }),
+    ),
+    usage: Schema.Struct({
+      status: Schema.Literals(["complete", "partial", "unknown"]),
+      attempts: NonNegativeInt,
+      reportedTokens: Schema.NullOr(NonNegativeInt),
+      reportedCostUsd: Schema.NullOr(BudgetAmount),
+      priceStatus: Schema.Literals(["synthetic_verified", "unverified", "no_attempts"]),
+      remainingTokens: Schema.NullOr(NonNegativeInt),
+      verifiedRemainingCostUsd: Schema.NullOr(BudgetAmount),
+    }),
+    issues: Schema.Array(Schema.String),
+  }),
+]);
+export type CollaborationTaskBudgetReadout = typeof CollaborationTaskBudgetReadout.Type;
+
 export const CollaborationTask = Schema.Struct({
   id: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
@@ -191,6 +233,7 @@ export const CollaborationTask = Schema.Struct({
   review: Schema.optionalKey(TaskContractReviewHint),
   routingReadout: Schema.optionalKey(CollaborationTaskRoutingReadout),
   resultReadout: Schema.optionalKey(CollaborationTaskResultReadout),
+  budgetReadout: Schema.optionalKey(CollaborationTaskBudgetReadout),
 });
 export type CollaborationTask = typeof CollaborationTask.Type;
 

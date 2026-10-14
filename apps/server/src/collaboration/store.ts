@@ -47,6 +47,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as OwnedChat from "./ownedChat.ts";
+import { readBudgetEvidence } from "./budgetEvidence.ts";
 
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -1024,6 +1025,7 @@ const validateThreadLinks = (
             status: "unavailable" as const,
             reason: "invalid_thread_link" as const,
           },
+          budgetReadout: { status: "unavailable" as const, reason: "invalid_thread_link" },
         });
         const enrollment = commands.find(
           (command) =>
@@ -1258,12 +1260,44 @@ export const readCollaborationSnapshot = (
 ) =>
   Effect.gen(function* () {
     const commands = yield* readCommands(sql);
-    const snapshot = yield* validateThreadLinks(
+    const linkedSnapshot = yield* validateThreadLinks(
       sql,
       scopedSnapshot(commands, principalId),
       commands,
       principalId,
     );
+    const budgetTasks = yield* Effect.forEach(linkedSnapshot.tasks, (task) =>
+      Effect.gen(function* () {
+        const budgetReadout =
+          task.threadId === null
+            ? { status: "unavailable" as const, reason: "invalid_thread_link" }
+            : task.contractReadout?.status === "unavailable" &&
+                task.contractReadout.reason === "ordinary_chat"
+              ? { status: "unavailable" as const, reason: "ordinary_chat" }
+              : reviewContext === undefined
+                ? { status: "unavailable" as const, reason: "environment_unknown" }
+                : yield* readBudgetEvidence(sql, {
+                    taskId: task.id,
+                    threadId: task.threadId,
+                    projectId: task.projectId,
+                    environmentId: reviewContext.environmentId,
+                    owns: (id) => {
+                      if (
+                        primaryTaskLinks(commands, id).some(
+                          (link) => link.projectId !== task.projectId,
+                        )
+                      )
+                        return false;
+                      const sealed = sealedTaskOwner(commands, id);
+                      return id === task.threadId
+                        ? sealed === principalId
+                        : sealed === null || sealed === principalId;
+                    },
+                  });
+        return { ...task, budgetReadout };
+      }),
+    );
+    const snapshot = { ...linkedSnapshot, tasks: budgetTasks };
     if (!reviewContext) return snapshot;
     if (!reviewContext.canOperate)
       return { ...snapshot, environmentId: reviewContext.environmentId };
@@ -1290,7 +1324,7 @@ export const readCollaborationSnapshot = (
       }),
     );
     return { ...snapshot, environmentId: reviewContext.environmentId, tasks };
-  });
+  }).pipe(sql.withTransaction);
 
 class TaskReviewDeniedError extends Schema.TaggedError<TaskReviewDeniedError>()(
   "TaskReviewDeniedError",
