@@ -230,7 +230,16 @@ function constraintReasons(
   if (hasId(constraints?.excludedInstanceIds, entry.instanceId)) {
     reasons.push("CONSTRAINT_EXCLUDED");
   }
-  if (entry.driver !== null) {
+  if (entry.driver === null) {
+    if (constraints?.allowedDrivers !== undefined && constraints.allowedDrivers.length === 0) {
+      reasons.push("CONSTRAINT_EXCLUDED");
+    } else if (
+      constraints?.allowedDrivers !== undefined ||
+      (constraints?.excludedDrivers?.length ?? 0) > 0
+    ) {
+      reasons.push("CONSTRAINT_METADATA_UNKNOWN");
+    }
+  } else {
     if (
       hasId(constraints?.allowedDrivers, entry.driver) === false &&
       constraints?.allowedDrivers !== undefined
@@ -386,6 +395,40 @@ function estimatedLimitReasons(
   return reasons;
 }
 
+function manualCatalogEntry(
+  catalog: ReadonlyArray<ModelRouterCatalogEntry>,
+  target: ModelRouterTarget,
+): ModelRouterCatalogEntry {
+  return (
+    catalog.find(
+      (entry) => entry.instanceId === target.instanceId && entry.model === target.model,
+    ) ?? {
+      instanceId: target.instanceId,
+      driver: null,
+      model: target.model,
+      isDefault: false,
+      capabilities: [],
+      availabilityReasons: ["MODEL_NOT_FOUND"],
+    }
+  );
+}
+
+/** Check the explicit Manual target, independently of ranking, availability and display truncation. */
+export function manualModelRouterConstraintReasons(
+  input: Pick<ModelRouterInput, "catalog" | "manualOverride" | "constraints" | "task">,
+): ReadonlyArray<ModelRouterReasonCode> {
+  if (!input.manualOverride) return [];
+  const entry = manualCatalogEntry(input.catalog, input.manualOverride);
+  const required = uniqueCapabilities([
+    ...(input.task?.requiredCapabilities ?? []),
+    ...(input.constraints?.requiredCapabilities ?? []),
+  ]);
+  return uniqueReasons([
+    ...estimatedLimitReasons(entry.metrics, input.constraints),
+    ...constraintReasons(entry, input.constraints, required),
+  ]);
+}
+
 function toCandidate(
   entry: ModelRouterCatalogEntry,
   input: {
@@ -445,14 +488,7 @@ export function routeModel(input: ModelRouterInput): ModelRouterDecision {
   if (input.mode === "manual" && input.manualOverride) {
     const key = targetKey(input.manualOverride);
     if (!seen.has(key)) {
-      const overrideEntry: ModelRouterCatalogEntry = {
-        instanceId: input.manualOverride.instanceId,
-        driver: null,
-        model: input.manualOverride.model,
-        isDefault: false,
-        capabilities: [],
-        availabilityReasons: ["MODEL_NOT_FOUND"],
-      };
+      const overrideEntry = manualCatalogEntry(input.catalog, input.manualOverride);
       built.push(
         toCandidate(overrideEntry, {
           constraints: input.constraints,
@@ -486,16 +522,16 @@ export function routeModel(input: ModelRouterInput): ModelRouterDecision {
   const eligible = withIndex.filter((candidate) => candidate.eligible);
   let selected: ModelRouterCandidate | null = null;
   let selectionReasons: Array<ModelRouterReasonCode> = [];
-  let manualLimitReasons: ReadonlyArray<ModelRouterReasonCode> = [];
+  let manualRejectionReasons: ReadonlyArray<ModelRouterReasonCode> = [];
 
   if (input.mode === "manual") {
     const override = input.manualOverride;
     if (override) {
       const match =
         withIndex.find((candidate) => targetKey(candidate.target) === targetKey(override)) ?? null;
-      manualLimitReasons = match ? estimatedLimitReasons(match.metrics, input.constraints) : [];
-      selected = manualLimitReasons.length > 0 ? null : match;
-      selectionReasons = ["MANUAL_OVERRIDE", ...manualLimitReasons];
+      manualRejectionReasons = manualModelRouterConstraintReasons(input);
+      selected = manualRejectionReasons.length > 0 ? null : match;
+      selectionReasons = ["MANUAL_OVERRIDE", ...manualRejectionReasons];
       if (selected) {
         selected = {
           ...selected,
@@ -524,9 +560,11 @@ export function routeModel(input: ModelRouterInput): ModelRouterDecision {
   const fallbacks = [...distinctInstanceFallbacks(eligible, selected)];
   const decisionReasons = uniqueReasons([
     ...selectionReasons,
-    ...(selected === null
-      ? withIndex.flatMap((candidate) => candidate.reasonCodes)
-      : selected.reasonCodes),
+    ...(manualRejectionReasons.some((reason) => !reason.startsWith("ESTIMATED_"))
+      ? []
+      : selected === null
+        ? withIndex.flatMap((candidate) => candidate.reasonCodes)
+        : selected.reasonCodes),
   ]);
 
   const decision: ModelRouterDecision = {
@@ -544,8 +582,10 @@ export function routeModel(input: ModelRouterInput): ModelRouterDecision {
           ? ["NO_ELIGIBLE_CANDIDATES"]
           : ["SELECTED"],
     explanation:
-      manualLimitReasons.length > 0
-        ? "Manual override could not satisfy the supplied estimated cost or latency limits. No model was selected."
+      manualRejectionReasons.length > 0
+        ? manualRejectionReasons.every((reason) => reason.startsWith("ESTIMATED_"))
+          ? "Manual override could not satisfy the supplied estimated cost or latency limits. No model was selected."
+          : "Manual selection could not satisfy the supplied capabilities or allow/exclude constraints. No model was selected."
         : explanationFor({
             mode: input.mode,
             selected,

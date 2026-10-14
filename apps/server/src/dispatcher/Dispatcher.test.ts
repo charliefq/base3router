@@ -17,6 +17,7 @@ import {
   ThreadId,
   type DispatcherRoutePreviewRequest,
   type ModelSelection,
+  type ModelRouterConstraints,
   type ServerProvider,
 } from "@t3tools/contracts";
 import { modelRouterDecisionOmitsSecrets } from "@t3tools/shared/modelRouter";
@@ -354,6 +355,92 @@ it.effect("manual routing keeps the user model and still records a route decisio
       expect(bound.routeBinding?.openRouter).toBeUndefined();
     }
   }).pipe(Effect.provide(SqlitePersistenceMemory)),
+);
+
+it.effect.each([
+  { name: "required capability", constraints: { requiredCapabilities: ["vision" as const] } },
+  {
+    name: "instance excluded",
+    constraints: { excludedInstanceIds: [ProviderInstanceId.make("thread_provider")] },
+  },
+  { name: "empty driver allow", constraints: { allowedDrivers: [] } },
+  { name: "model excluded", constraints: { excludedModels: ["custom-model"] } },
+  { name: "unknown driver", constraints: { allowedDrivers: [ProviderDriverKind.make("codex")] } },
+])("does not erase $name refusal with legacy explicit Manual fallback", (row) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const target: ModelSelection = {
+      ...selection("thread_provider", "custom-model"),
+      options: [{ id: "reasoningEffort", value: "high" }],
+    };
+    const command = {
+      type: "thread.turn.start" as const,
+      commandId: CommandId.make(`manual-constraint:${row.name}`),
+      threadId: threadA,
+      message: {
+        messageId: MessageId.make(`manual-constraint:${row.name}`),
+        text: "Keep this exact target",
+      },
+      modelSelection: target,
+      routingMode: "manual" as const,
+      modelRouteConstraints: row.constraints,
+    };
+    const denied = yield* bindDispatcherTurnStartCommand(command, {
+      enabled: true,
+      environmentId: Effect.succeed(environmentId),
+      providers: Effect.succeed([provider({ instanceId: "thread_provider", models: [] })]),
+      environmentDefaultModelSelection: Effect.succeed(null),
+      sql,
+    }).pipe(Effect.exit);
+    expect(Exit.isFailure(denied)).toBe(true);
+    expect(yield* sql`SELECT binding_json FROM projection_dispatcher_task_routes`).toEqual([]);
+  }).pipe(Effect.provide(SqlitePersistenceMemory)),
+);
+
+it.effect.each([
+  undefined,
+  {},
+  {
+    allowedInstanceIds: [ProviderInstanceId.make("thread_provider")],
+    allowedModels: ["custom-model"],
+    excludedDrivers: [],
+    requiredCapabilities: [],
+  },
+] as ReadonlyArray<ModelRouterConstraints | undefined>)(
+  "keeps compatible unknown-catalog Manual target and options for %j",
+  (constraints) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const target: ModelSelection = {
+        ...selection("thread_provider", "custom-model"),
+        options: [{ id: "reasoningEffort", value: "high" }],
+      };
+      const command = {
+        type: "thread.turn.start" as const,
+        commandId: CommandId.make("manual-legacy-compatible"),
+        threadId: threadA,
+        message: {
+          messageId: MessageId.make("manual-legacy-compatible"),
+          text: "Keep this exact target",
+        },
+        modelSelection: target,
+        routingMode: "manual" as const,
+        ...(constraints === undefined ? {} : { modelRouteConstraints: constraints }),
+      };
+      const bound = yield* bindDispatcherTurnStartCommand(command, {
+        enabled: true,
+        environmentId: Effect.succeed(environmentId),
+        providers: Effect.succeed([provider({ instanceId: "thread_provider", models: [] })]),
+        environmentDefaultModelSelection: Effect.succeed(null),
+        sql,
+      });
+      expect(bound.modelSelection).toEqual(target);
+      if (bound.type === "thread.turn.start")
+        expect(bound.routeBinding?.target).toEqual({
+          instanceId: target.instanceId,
+          model: target.model,
+        });
+    }).pipe(Effect.provide(SqlitePersistenceMemory)),
 );
 
 it.effect("OpenRouter Off and Shadow leave Auto Route execution unchanged", () =>

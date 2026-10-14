@@ -325,6 +325,239 @@ describe("estimated hard limits", () => {
   );
 });
 
+describe("Manual explicit hard constraints", () => {
+  const target = { instanceId: instance("manual"), model: "manual-model" };
+  const manual = entry({
+    instanceId: "manual",
+    model: target.model,
+    driver: driver("codex"),
+    metrics: {
+      quality: { status: "known", value: 1 },
+      costUsd: { status: "known", value: 0.5 },
+      latencyMs: { status: "known", value: 100 },
+    },
+  });
+  const peer = entry({
+    instanceId: "peer",
+    model: "peer-model",
+    driver: driver("claudeAgent"),
+    capabilities: ["code", "tools", "vision"],
+  });
+  const rejected: ReadonlyArray<{
+    name: string;
+    constraints: ModelRouterConstraints;
+    reason: string;
+  }> = [
+    {
+      name: "missing capability",
+      constraints: { requiredCapabilities: ["vision"] },
+      reason: "REQUIRED_CAPABILITY_MISSING",
+    },
+    {
+      name: "instance allow mismatch",
+      constraints: { allowedInstanceIds: [instance("peer")] },
+      reason: "CONSTRAINT_EXCLUDED",
+    },
+    {
+      name: "instance exclude match",
+      constraints: { excludedInstanceIds: [target.instanceId] },
+      reason: "CONSTRAINT_EXCLUDED",
+    },
+    {
+      name: "driver allow mismatch",
+      constraints: { allowedDrivers: [driver("claudeAgent")] },
+      reason: "CONSTRAINT_EXCLUDED",
+    },
+    {
+      name: "driver exclude match",
+      constraints: { excludedDrivers: [driver("codex")] },
+      reason: "CONSTRAINT_EXCLUDED",
+    },
+    {
+      name: "model allow mismatch",
+      constraints: { allowedModels: [peer.model] },
+      reason: "CONSTRAINT_EXCLUDED",
+    },
+    {
+      name: "model exclude match",
+      constraints: { excludedModels: [target.model] },
+      reason: "CONSTRAINT_EXCLUDED",
+    },
+    {
+      name: "empty instance allow",
+      constraints: { allowedInstanceIds: [] },
+      reason: "CONSTRAINT_EXCLUDED",
+    },
+    {
+      name: "empty driver allow",
+      constraints: { allowedDrivers: [] },
+      reason: "CONSTRAINT_EXCLUDED",
+    },
+    {
+      name: "empty model allow",
+      constraints: { allowedModels: [] },
+      reason: "CONSTRAINT_EXCLUDED",
+    },
+    {
+      name: "intersecting include/exclude",
+      constraints: { allowedModels: [target.model, peer.model], excludedModels: [target.model] },
+      reason: "CONSTRAINT_EXCLUDED",
+    },
+    {
+      name: "capability with numeric limits",
+      constraints: { requiredCapabilities: ["vision"], maxCostUsd: 0.5, maxLatencyMs: 100 },
+      reason: "REQUIRED_CAPABILITY_MISSING",
+    },
+    {
+      name: "instance mismatch and exceeded cost",
+      constraints: { allowedInstanceIds: [instance("peer")], maxCostUsd: 0.4 },
+      reason: "CONSTRAINT_EXCLUDED",
+    },
+  ];
+  it.each(rejected)("rejects $name without switching to a peer", ({ constraints, reason }) => {
+    const decision = routeModel({
+      mode: "manual",
+      catalog: [manual, peer],
+      manualOverride: target,
+      constraints,
+    });
+    expect(decision.mode).toBe("manual");
+    expect(decision.selected).toBeNull();
+    expect(decision.executed).toBeNull();
+    expect(decision.attempts).toEqual([]);
+    expect(decision.reasonCodes).toContain("MANUAL_OVERRIDE");
+    expect(decision.reasonCodes).toContain(reason);
+  });
+  const allowed: ReadonlyArray<ModelRouterConstraints | undefined> = [
+    undefined,
+    {},
+    { requiredCapabilities: [], excludedInstanceIds: [], excludedDrivers: [], excludedModels: [] },
+    { requiredCapabilities: ["code", "tools", "code"] },
+    { allowedInstanceIds: [target.instanceId], excludedInstanceIds: [instance("peer")] },
+    { allowedDrivers: [driver("codex")], excludedDrivers: [driver("claudeAgent")] },
+    { allowedModels: [target.model], excludedModels: [peer.model] },
+    {
+      allowedInstanceIds: [instance("peer"), target.instanceId, target.instanceId],
+      allowedDrivers: [driver("codex"), driver("codex")],
+      allowedModels: [peer.model, target.model, target.model],
+      maxCostUsd: 0.5,
+      maxLatencyMs: 100,
+    },
+  ];
+  it.each(allowed)("keeps a legal explicit target for %j", (constraints) => {
+    const decision = routeModel({
+      mode: "manual",
+      catalog: [manual, peer],
+      manualOverride: target,
+      ...(constraints === undefined ? {} : { constraints }),
+    });
+    expect(decision.selected?.target).toEqual(target);
+    expect(decision.executed?.target).toEqual(target);
+  });
+  it("does not turn availability hints into Manual hard constraints", () => {
+    const decision = routeModel({
+      mode: "manual",
+      catalog: [{ ...manual, availabilityReasons: ["PROVIDER_UNAVAILABLE"] }, peer],
+      manualOverride: target,
+      constraints: { allowedInstanceIds: [target.instanceId] },
+    });
+    expect(decision.selected?.target).toEqual(target);
+    expect(decision.selected?.eligible).toBe(false);
+  });
+  it("ignores ordering and duplicates in constraint lists", () => {
+    const base = { mode: "manual" as const, catalog: [manual, peer], manualOverride: target };
+    const left = routeModel({
+      ...base,
+      constraints: {
+        allowedModels: [target.model, peer.model],
+        excludedModels: ["other", "other"],
+        requiredCapabilities: ["code", "tools"],
+      },
+    });
+    const right = routeModel({
+      ...base,
+      constraints: {
+        allowedModels: [peer.model, target.model, target.model],
+        excludedModels: ["other"],
+        requiredCapabilities: ["tools", "code", "code"],
+      },
+    });
+    expect(left.selected?.target).toEqual(right.selected?.target);
+    expect(left.reasonCodes).toEqual(right.reasonCodes);
+  });
+  it("checks the requested target even when it falls outside the bounded candidate display", () => {
+    const catalog = [
+      ...Array.from({ length: 70 }, (_, i) => entry({ instanceId: `first-${i}`, model: "first" })),
+      entry({ instanceId: "zz-manual", model: "last" }),
+    ];
+    const decision = routeModel({
+      mode: "manual",
+      catalog,
+      manualOverride: { instanceId: instance("zz-manual"), model: "last" },
+      constraints: { excludedModels: ["last"] },
+    });
+    expect(
+      decision.candidates.some((candidate) => candidate.target.instanceId === "zz-manual"),
+    ).toBe(false);
+    expect(decision.selected).toBeNull();
+    expect(decision.reasonCodes).toContain("CONSTRAINT_EXCLUDED");
+  });
+  it.each([
+    { constraints: { allowedDrivers: [driver("codex")] }, reason: "CONSTRAINT_METADATA_UNKNOWN" },
+    {
+      constraints: { excludedDrivers: [driver("claudeAgent")] },
+      reason: "CONSTRAINT_METADATA_UNKNOWN",
+    },
+    { constraints: { allowedDrivers: [] }, reason: "CONSTRAINT_EXCLUDED" },
+    {
+      constraints: { requiredCapabilities: ["code" as const] },
+      reason: "REQUIRED_CAPABILITY_MISSING",
+    },
+  ])("does not invent unknown metadata for $reason", ({ constraints, reason }) => {
+    const unknown = { ...manual, driver: null, capabilities: [] };
+    const decision = routeModel({
+      mode: "manual",
+      catalog: [unknown],
+      manualOverride: target,
+      constraints,
+    });
+    expect(decision.selected).toBeNull();
+    expect(decision.executed).toBeNull();
+    expect(decision.reasonCodes).toContain(reason);
+    expect(decision.candidates[0]?.driver).toBeNull();
+    expect(decision.candidates[0]?.capabilities).toEqual([]);
+  });
+  it("does not reject unrelated identity constraints because metadata is unknown", () => {
+    const unknown = { ...manual, driver: null, capabilities: [] };
+    const decision = routeModel({
+      mode: "manual",
+      catalog: [unknown],
+      manualOverride: target,
+      constraints: {
+        allowedInstanceIds: [target.instanceId],
+        allowedModels: [target.model],
+        excludedDrivers: [],
+        requiredCapabilities: [],
+      },
+    });
+    expect(decision.selected?.target).toEqual(target);
+    expect(decision.selected?.driver).toBeNull();
+  });
+  it("Auto excludes only related unknown-driver conditions", () => {
+    const unknown = { ...manual, driver: null };
+    const decision = routeModel({
+      mode: "auto",
+      catalog: [unknown, peer],
+      constraints: { excludedDrivers: [driver("codex")] },
+    });
+    expect(decision.selected?.target.instanceId).toBe(peer.instanceId);
+    expect(
+      decision.candidates.find((candidate) => candidate.target.instanceId === target.instanceId)
+        ?.reasonCodes,
+    ).toContain("CONSTRAINT_METADATA_UNKNOWN");
+  });
+});
+
 const known = (value: number): ModelRouterMetrics => ({
   quality: { status: "known", value },
   costUsd: { status: "known", value: 1 },
