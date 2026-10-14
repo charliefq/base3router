@@ -549,9 +549,10 @@ function routeHybridV1(input: HybridRouterInput): HybridRouterOutput {
       : fallbackToV0
         ? "Insufficient local evidence; Router V0 was used."
         : "Hybrid is not the active policy; Router V0 executed.");
+  const { selectionBasis: _v0Basis, ...replacementBaseline } = v0;
   const decision: ModelRouterDecision = applyHybrid
     ? {
-        ...v0,
+        ...replacementBaseline,
         policyVersion: applyHybrid ? HYBRID_ROUTER_POLICY_VERSION : v0.policyVersion,
         selected: {
           ...hybridSelected,

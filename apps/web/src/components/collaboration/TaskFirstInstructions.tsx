@@ -1,3 +1,4 @@
+import { SelectionBasisReadout } from "./SelectionBasisReadout";
 import {
   TaskAutoPreviewInput,
   type TaskAutoPreviewState,
@@ -448,6 +449,7 @@ export function TaskFirstInstructions(props: {
                     .
                   </p>
                   <p>{preview.decision.explanation}</p>
+                  <SelectionBasisReadout basis={preview.decision.selectionBasis} />
                   <p>{preview.hybrid?.explanation}</p>
                   {preview.policyFallbackReason ? (
                     <p>Policy fallback: {preview.policyFallbackReason}</p>

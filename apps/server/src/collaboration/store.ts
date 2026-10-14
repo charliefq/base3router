@@ -33,6 +33,7 @@ import {
   type CollaborationSnapshot,
   type CollaborationTaskContractReadout,
   type CollaborationTaskRoutingReadout,
+  MODEL_ROUTER_POLICY_VERSION,
   DispatcherTaskRouteBinding,
   OrchestrationV2Run,
   OrchestrationV2RunAttempt,
@@ -240,6 +241,16 @@ const readRoutingEvidence = (
       (selected === null ||
         (selected.instanceId === binding.target.instanceId &&
           selected.model === binding.target.model));
+    const basis = decision?.selectionBasis;
+    const basisConsistent =
+      routeConsistent &&
+      decision?.policyVersion === MODEL_ROUTER_POLICY_VERSION &&
+      basis !== undefined &&
+      (selected === null
+        ? basis.selectedTarget === null
+        : basis.selectedTarget !== null &&
+          basis.selectedTarget.instanceId === selected.instanceId &&
+          basis.selectedTarget.model === selected.model);
     const result = {
       status: "available" as const,
       threadId,
@@ -250,6 +261,7 @@ const readRoutingEvidence = (
       source: routeConsistent ? binding.source : null,
       reasons: routeConsistent ? (decision?.reasonCodes ?? binding.gate.reasonCodes) : [],
       explanation: routeConsistent ? (decision?.explanation ?? null) : null,
+      ...(basisConsistent ? { selectionBasis: basis } : {}),
       selectionUnknownReason:
         routeRow === undefined
           ? "route_missing"

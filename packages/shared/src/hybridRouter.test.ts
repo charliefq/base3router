@@ -514,3 +514,59 @@ it("selects debugging A and writing B from distinct exact task cohorts on the sa
   expect(result("writing").decision.selected?.target.instanceId).toBe("b");
   expect(result("writing").decision.policyVersion).toBe(HYBRID_TASK_ROUTER_POLICY_VERSION);
 });
+
+describe("selection basis hybrid provenance", () => {
+  const evidenceByTarget = new Map([
+    ["codex\u0000gpt-5.5", enough(0.4, 800)],
+    ["claude\u0000claude-sonnet-4-6", enough(0.95, 120)],
+  ]);
+  it.each([HYBRID_ROUTER_POLICY_VERSION, HYBRID_TASK_ROUTER_POLICY_VERSION])(
+    "omits replaced V0 basis for active %s",
+    (activePolicyVersion) => {
+      const result = routeHybridModel({
+        mode: "auto",
+        catalog,
+        activePolicyVersion,
+        evidenceByTarget,
+        localTaskProfile: {
+          category: "debugging",
+          source: "local-heuristic",
+          classifierVersion: LOCAL_TASK_CLASSIFIER_VERSION,
+        },
+      });
+      expect(result.hybrid.usedHybridRanking).toBe(true);
+      expect(result.decision.selected?.target.model).toBe("claude-sonnet-4-6");
+      expect(result.decision.selectionBasis).toBeUndefined();
+      expect(result.decision.explanation).toContain("Policy:");
+    },
+  );
+  it.each(["fallback", "shadow", "task-fallback"])("retains actual V0 basis for %s", (path) => {
+    const result = routeHybridModel({
+      mode: "auto",
+      catalog,
+      activePolicyVersion:
+        path === "task-fallback"
+          ? HYBRID_TASK_ROUTER_POLICY_VERSION
+          : path === "fallback"
+            ? HYBRID_ROUTER_POLICY_VERSION
+            : MODEL_ROUTER_POLICY_VERSION,
+      ...(path === "shadow"
+        ? {
+            evidenceByTarget,
+            shadowPolicy: {
+              policyVersion: HYBRID_ROUTER_POLICY_VERSION,
+              weights: DEFAULT_HYBRID_ROUTER_WEIGHTS,
+              shrinkageK: 10,
+              minSampleRate: 8,
+              evidenceByTarget,
+            },
+          }
+        : {}),
+    });
+    expect(result.hybrid.usedHybridRanking).toBe(false);
+    expect(result.decision.selectionBasis).toMatchObject({
+      outcome: "tie",
+      selectedTarget: result.decision.selected?.target,
+    });
+  });
+});

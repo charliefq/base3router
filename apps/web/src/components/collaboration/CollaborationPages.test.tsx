@@ -1235,6 +1235,75 @@ it.each(["manual", "auto", "task-debugging"] as const)(
             expect(text()).toContain("selected-A (codex)");
             expect(text()).toContain("configured-B (codex)");
             expect(text()).toContain(decision.explanation);
+            expect(text()).toContain("Detailed ranking basis");
+            if (mode !== "task-debugging") {
+              expect(text()).toContain(
+                mode === "manual"
+                  ? "Manual selection; automatic ranking did not decide the target."
+                  : "Only one eligible candidate remained in the selectable ranking.",
+              );
+            }
+            if (mode === "auto") {
+              const known = (value: number) => ({ status: "known" as const, value });
+              const winner = {
+                ...baselineDecision.candidates[0]!,
+                ...target,
+                isDefault: true,
+                availabilityReasons: [],
+                metrics: { quality: known(20), costUsd: known(1), latencyMs: known(10) },
+              };
+              const other = {
+                ...winner,
+                instanceId: ProviderInstanceId.make("other"),
+                model: "alternative",
+                driver: ProviderDriverKind.make("claudeAgent"),
+                metrics: { ...winner.metrics, quality: known(10) },
+              };
+              for (const incomplete of [false, true]) {
+                const persisted = routeModel({
+                  mode: "auto",
+                  catalog: [
+                    winner,
+                    {
+                      ...other,
+                      metrics: {
+                        ...other.metrics,
+                        ...(incomplete ? { quality: { status: "unknown" as const } } : {}),
+                      },
+                    },
+                  ],
+                  preferredTargets: [target],
+                  policy: {
+                    version: "model-router.v0",
+                    qualityWeight: 1,
+                    costWeight: incomplete ? 0 : 1,
+                    latencyWeight: 1,
+                  },
+                });
+                await EffectForFixture.runPromise(
+                  sql`UPDATE projection_dispatcher_task_routes SET binding_json=${encodeEvidence({ ...binding, modelRoute: { ...persisted, executionStatus: "bound" } })}`,
+                );
+                await creationClick("Refresh tasks");
+                expect(text()).toContain(
+                  incomplete
+                    ? "Equal weighted scores (-10); tie-break stages used: preferred."
+                    : "Higher weighted catalog-estimate score decided the selection (9 vs -1).",
+                );
+                expect(text()).toContain(
+                  "Catalog estimates are not measured quality, verified spend, or a prediction of success.",
+                );
+              }
+              expect(text()).toContain("incomplete eligible-candidate estimates");
+              expect(text()).toContain("zero weight");
+            }
+            const legacyExplanation = "Original historical explanation retained verbatim.";
+            await EffectForFixture.runPromise(
+              sql`UPDATE projection_dispatcher_task_routes SET binding_json=json_set(json_remove(${encodeEvidence(binding)},'$.modelRoute.selectionBasis'),'$.modelRoute.explanation',${legacyExplanation})`,
+            );
+            await creationClick("Refresh tasks");
+            expect(text()).toContain("Detailed ranking basis not recorded");
+            expect(text()).toContain(legacyExplanation);
+
             expect(text()).toContain("not provider-attested");
             expect(text()).toContain("Execution evidence:");
             expect(text()).toContain("No matching provider turn is recorded.");
@@ -3597,7 +3666,7 @@ it.each([
   },
 );
 
-it("prepares reviewed first instructions for an actual owned empty root without starting it", async () => {
+it("selection basis preview prepares reviewed first instructions for an actual owned empty root without starting it", async () => {
   const module = await loadAgentsCreationFixture();
   await EffectForFixture.runPromise(
     module.withAgentsTaskCreationFixture((f) =>
@@ -3688,8 +3757,85 @@ it("prepares reviewed first instructions for an actual owned empty root without 
         await creationClick("Preview Auto", true);
         expect(state.autoPreview).toHaveBeenCalledTimes(1);
         expect(text()).toContain("Deterministic local classification");
+        expect(text()).toContain("Detailed ranking basis");
+        expect(text()).toContain("Only one eligible candidate remained in the selectable ranking.");
         expect(text()).toContain("unknown");
         expect(text()).toContain("not permission");
+        const estimatedCatalog = [
+          {
+            instanceId: ProviderInstanceId.make("codex"),
+            driver: ProviderDriverKind.make("codex"),
+            model: "estimate-a",
+            isDefault: true,
+            capabilities: ["code" as const],
+            availabilityReasons: [],
+            metrics: {
+              quality: { status: "known" as const, value: 20 },
+              costUsd: { status: "known" as const, value: 1 },
+              latencyMs: { status: "known" as const, value: 10 },
+            },
+          },
+          {
+            instanceId: ProviderInstanceId.make("other"),
+            driver: ProviderDriverKind.make("claudeAgent"),
+            model: "estimate-b",
+            isDefault: false,
+            capabilities: ["code" as const],
+            availabilityReasons: [],
+            metrics: {
+              quality: { status: "known" as const, value: 10 },
+              costUsd: { status: "known" as const, value: 1 },
+              latencyMs: { status: "known" as const, value: 10 },
+            },
+          },
+        ];
+        const displayCases = [
+          {
+            decision: routeModel({
+              mode: "auto",
+              catalog: estimatedCatalog,
+              preferredTargets: [estimatedCatalog[0]!],
+            }),
+            expected: "Higher weighted catalog-estimate score decided the selection (9 vs -1).",
+          },
+          {
+            decision: routeModel({
+              mode: "auto",
+              catalog: [
+                estimatedCatalog[0]!,
+                {
+                  ...estimatedCatalog[1]!,
+                  metrics: { ...estimatedCatalog[1]!.metrics, quality: { status: "unknown" } },
+                },
+              ],
+              policy: {
+                version: "model-router.v0",
+                qualityWeight: 1,
+                costWeight: 0,
+                latencyWeight: 1,
+              },
+            }),
+            expected: "Equal weighted scores (-10); tie-break stages used: driver.",
+          },
+        ];
+        for (const display of displayCases) {
+          state.autoPreview.mockImplementation(
+            async ({ input }: { input: TaskAutoPreviewInput }) => {
+              const actual = await EffectForFixture.runPromise(f.previewAuto(input));
+              return {
+                _tag: "Success",
+                value: { ...actual, decision: display.decision, hybrid: undefined },
+              };
+            },
+          );
+          await creationClick("Preview Auto", true);
+          expect(text()).toContain(display.expected);
+          expect(text()).toContain(
+            "Catalog estimates are not measured quality, verified spend, or a prediction of success.",
+          );
+        }
+        expect(text()).toContain("incomplete eligible-candidate estimates");
+        expect(text()).toContain("zero weight");
         expect(useComposerDraftStore.getState().getComposerDraft(target)).toBeNull();
         expect(state.navigate).not.toHaveBeenCalled();
         await creationClick("Fill empty draft and open", true);

@@ -1,3 +1,4 @@
+import { SelectionBasisReadout } from "./SelectionBasisReadout";
 import { TaskResultFeedback } from "./TaskResultFeedback";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -215,6 +216,7 @@ function TaskRoutingReadout({ readout }: { readout: CollaborationTaskRoutingRead
               </dd>
             </div>
           </dl>
+          <SelectionBasisReadout basis={readout.selectionBasis} />
           <p className="text-xs text-muted-foreground">
             The configured runtime model is not provider-attested.
           </p>
