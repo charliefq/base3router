@@ -69,6 +69,8 @@ const state = vi.hoisted(() => ({
   readCreationStatus: vi.fn(),
   autoPreview: vi.fn(),
   sessionIdentity: {} as object,
+  feedbackRead: vi.fn(),
+  feedbackSubmit: vi.fn(),
 }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: string) => (atom === "environment" ? state.environmentId : state.providers),
@@ -117,6 +119,18 @@ vi.mock("../../environments/primary/httpClient", async () => {
   const Effect = await import("effect/Effect");
   return {
     PrimaryEnvironmentHttpClient: Effect.succeed({
+      taskResultFeedback: {
+        readTaskResultFeedback: ({
+          payload,
+        }: {
+          payload: import("@t3tools/contracts").TaskResultFeedbackInput;
+        }) => Effect.promise(() => state.feedbackRead(payload)),
+        submitTaskResultFeedback: ({
+          payload,
+        }: {
+          payload: import("@t3tools/contracts").TaskResultFeedbackSubmit;
+        }) => Effect.promise(() => state.feedbackSubmit(payload)),
+      },
       collaboration: {
         openThread: ({ payload }: { payload: { projectId: string; providerId: string } }) =>
           Effect.promise(() => state.recover(payload)),
@@ -252,6 +266,10 @@ beforeEach(() => {
   state.reviewDecide.mockReset();
   state.readProjection.mockReset();
   state.readCreationStatus.mockReset();
+  state.feedbackRead
+    .mockReset()
+    .mockResolvedValue({ status: "unavailable", reason: "fixture-default" });
+  state.feedbackSubmit.mockReset();
   state.autoPreview.mockReset();
   state.sessionIdentity = {};
 });
@@ -4409,3 +4427,268 @@ it.each([
     expect(state.autoPreview).not.toHaveBeenCalled();
   });
 });
+
+type FeedbackFixture = {
+  sql: SqlClientForFixture.SqlClient;
+  input: import("@t3tools/contracts").TaskResultFeedbackInput;
+  read: (
+    input?: import("@t3tools/contracts").TaskResultFeedbackInput,
+  ) => Promise<import("@t3tools/contracts").TaskResultFeedbackState>;
+  submit: (
+    input: import("@t3tools/contracts").TaskResultFeedbackSubmit,
+  ) => Promise<import("@t3tools/contracts").TaskResultFeedbackState>;
+  snapshot: () => Promise<CollaborationSnapshot>;
+  baseline: () => Promise<unknown>;
+  readHttp: (
+    input?: import("@t3tools/contracts").TaskResultFeedbackInput,
+  ) => Promise<import("@t3tools/contracts").TaskResultFeedbackState>;
+  submitHttp: (
+    input: import("@t3tools/contracts").TaskResultFeedbackSubmit,
+  ) => Promise<import("@t3tools/contracts").TaskResultFeedbackState>;
+};
+async function feedbackFixture(check: (f: FeedbackFixture) => Promise<void>) {
+  const module = (await import(
+    /* @vite-ignore */ new URL(
+      "../../../../server/src/collaboration/testkit/taskResultFeedbackFixture.ts",
+      import.meta.url,
+    ).href
+  )) as {
+    withTaskResultFeedbackFixture: (check: (f: FeedbackFixture) => Promise<void>) => Promise<void>;
+  };
+  await module.withTaskResultFeedbackFixture(async (f) => {
+    state.snapshot = await f.snapshot();
+    state.feedbackRead.mockImplementation(f.readHttp);
+    state.feedbackSubmit.mockImplementation(f.submitHttp);
+    await check(f);
+  });
+}
+const feedbackButton = (label: string) =>
+  renderer.root.findAllByType("button").find((b) => b.children.join("") === label);
+const clickFeedback = async (label: string, wait = true) => {
+  await act(async () => {
+    const receipt = feedbackButton(label)!.props.onClick();
+    if (wait) await receipt;
+  });
+};
+it("shows mounted Tasks result feedback through the authenticated SQLite service and persists after remount", async () => {
+  await feedbackFixture(async (f) => {
+    const before = await f.baseline();
+    const changes = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    expect(feedbackButton("Helpful")).toBeDefined();
+    expect(feedbackButton("Not helpful")).toBeDefined();
+    expect(await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`)).toEqual(changes);
+    await clickFeedback("Helpful");
+    expect(text()).toContain("does not accept");
+    expect(text()).toContain("environment-a");
+    expect(text()).toContain("fake-model");
+    await clickFeedback("Cancel feedback");
+    expect(state.feedbackSubmit).not.toHaveBeenCalled();
+    expect(await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`)).toEqual(changes);
+    await clickFeedback("Helpful");
+    await clickFeedback("Confirm feedback");
+    expect(text()).toContain("Recorded: Helpful");
+    await act(async () => renderer.unmount());
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    expect(text()).toContain("Recorded: Helpful");
+    expect(feedbackButton("Helpful")).toBeUndefined();
+    expect(await f.baseline()).toEqual(before);
+  });
+});
+
+it("records Not helpful only after explicit confirmation", async () => {
+  await feedbackFixture(async (f) => {
+    const before = await f.baseline();
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    await clickFeedback("Not helpful");
+    expect(state.feedbackSubmit).not.toHaveBeenCalled();
+    await clickFeedback("Confirm feedback");
+    expect(text()).toContain("Recorded: Not helpful");
+    expect(state.feedbackSubmit).toHaveBeenCalledTimes(1);
+    expect(await f.baseline()).toEqual(before);
+  });
+});
+it("guards same-render double clicks and recovers a committed lost response through authenticated refresh", async () => {
+  await feedbackFixture(async (f) => {
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    await clickFeedback("Helpful");
+    state.feedbackSubmit.mockImplementationOnce(async (input) => {
+      await f.submit(input);
+      throw new Error("fixture-response-lost");
+    });
+    const confirm = feedbackButton("Confirm feedback")!.props.onClick;
+    await act(async () => {
+      await Promise.all([confirm(), confirm()]);
+    });
+    expect(state.feedbackSubmit).toHaveBeenCalledTimes(1);
+    expect(text()).toContain("Recording outcome unknown");
+    expect(text()).not.toContain("Recorded: Helpful");
+    expect(feedbackButton("Helpful")).toBeUndefined();
+    await clickFeedback("Refresh feedback");
+    expect(text()).toContain("Recorded: Helpful");
+    expect(state.feedbackSubmit).toHaveBeenCalledTimes(1);
+  });
+});
+it.each(["environment", "session", "result", "deletion"])(
+  "retires feedback confirmation when %s changes",
+  async (scenario) => {
+    await feedbackFixture(async (f) => {
+      await act(async () => {
+        renderer = create(<TasksPage />);
+      });
+      await clickFeedback("Helpful");
+      const retainedConfirm = feedbackButton("Confirm feedback")!.props.onClick;
+      if (scenario === "environment") {
+        state.environmentId = "environment-b";
+        state.snapshot = { ...state.snapshot, environmentId: "environment-b", tasks: [] };
+        await act(async () => renderer.update(<TasksPage />));
+      }
+      if (scenario === "session") {
+        state.sessionIdentity = {};
+        await act(async () => renderer.update(<TasksPage />));
+      }
+      if (scenario === "result") {
+        await EffectForFixture.runPromise(
+          f.sql`UPDATE orchestration_v2_projection_turn_items SET payload_json=json_set(payload_json,'$.text',json_extract(payload_json,'$.text') || 'changed beyond preview') WHERE type='assistant_message'`,
+        );
+        state.snapshot = await f.snapshot();
+        await clickFeedback("Refresh tasks");
+      }
+      if (scenario === "deletion") {
+        await EffectForFixture.runPromise(
+          f.sql`UPDATE orchestration_v2_projection_threads SET deleted_at='2026-10-14T00:00:03Z',payload_json=json_set(payload_json,'$.deletedAt','2026-10-14T00:00:03Z')`,
+        );
+        state.snapshot = await f.snapshot();
+        await clickFeedback("Refresh tasks");
+      }
+      await act(async () => retainedConfirm());
+      expect(feedbackButton("Confirm feedback")).toBeUndefined();
+      expect(state.feedbackSubmit).not.toHaveBeenCalled();
+    });
+  },
+);
+it.each(["success", "failure"])("ignores late feedback %s after navigation", async (outcome) => {
+  await feedbackFixture(async (f) => {
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    await clickFeedback("Helpful");
+    const reply = deferred<import("@t3tools/contracts").TaskResultFeedbackState>(),
+      entered = deferred<void>();
+    let saved: import("@t3tools/contracts").TaskResultFeedbackState | undefined;
+    state.feedbackSubmit.mockImplementationOnce(async (input) => {
+      saved = await f.submit(input);
+      entered.resolve();
+      return reply.promise;
+    });
+    await clickFeedback("Confirm feedback", false);
+    await entered.promise;
+    state.environmentId = "environment-b";
+    state.snapshot = { ...state.snapshot, environmentId: "environment-b", tasks: [] };
+    await act(async () => renderer.update(<TasksPage />));
+    await act(async () => {
+      if (outcome === "success") reply.resolve(saved!);
+      else reply.reject(new Error("late old request"));
+    });
+    expect(text()).not.toContain("Recorded: Helpful");
+    expect(text()).not.toContain("Recording outcome unknown");
+    expect(state.feedbackSubmit).toHaveBeenCalledTimes(1);
+  });
+});
+it("ignores a deferred old-session feedback preview and never opens its confirmation", async () => {
+  await feedbackFixture(async (f) => {
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    const preview = deferred<import("@t3tools/contracts").TaskResultFeedbackState>();
+    state.feedbackRead.mockReturnValueOnce(preview.promise);
+    const choose = feedbackButton("Helpful")!.props.onClick;
+    const reads = state.feedbackRead.mock.calls.length;
+    await act(async () => {
+      choose();
+      choose();
+    });
+    expect(state.feedbackRead.mock.calls.length).toBe(reads + 1);
+    state.sessionIdentity = {};
+    await act(async () => renderer.update(<TasksPage />));
+    await act(async () => preview.resolve(await f.read()));
+    expect(feedbackButton("Confirm feedback")).toBeUndefined();
+    expect(state.feedbackSubmit).not.toHaveBeenCalled();
+  });
+});
+
+it("keeps persistent feedback read failures stable until explicit refresh and recovers successfully", async () => {
+  await feedbackFixture(async (f) => {
+    const before = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
+    const unexpectedRetry = deferred<import("@t3tools/contracts").TaskResultFeedbackState>();
+    // Bound a broken automatic retry loop without sleeps or an endless rejected-promise chain.
+    state.feedbackRead.mockImplementation(() =>
+      state.feedbackRead.mock.calls.length <= 2
+        ? Promise.reject(new Error("persistent read failure"))
+        : unexpectedRetry.promise,
+    );
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    expect(state.feedbackRead).toHaveBeenCalledTimes(1);
+    expect(text()).toContain("Feedback could not be read");
+    expect(feedbackButton("Helpful")).toBeUndefined();
+    await act(async () => renderer.update(<TasksPage />));
+    expect(state.feedbackRead).toHaveBeenCalledTimes(1);
+    await clickFeedback("Refresh feedback");
+    expect(state.feedbackRead).toHaveBeenCalledTimes(2);
+    expect(text()).toContain("Feedback could not be read");
+    state.feedbackRead.mockImplementation(f.readHttp);
+    await clickFeedback("Refresh feedback");
+    expect(state.feedbackRead).toHaveBeenCalledTimes(3);
+    expect(feedbackButton("Helpful")).toBeDefined();
+    expect(text()).not.toContain("Feedback could not be read");
+    expect(state.feedbackSubmit).not.toHaveBeenCalled();
+    expect(await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`)).toEqual(before);
+  });
+});
+
+it.each(["success", "failure"] as const)(
+  "retires a late %s from an old context while a new context read failure stays stable",
+  async (outcome) => {
+    await feedbackFixture(async (f) => {
+      const before = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
+      const oldReply = deferred<import("@t3tools/contracts").TaskResultFeedbackState>();
+      const oldFacts = await f.readHttp();
+      const unexpectedRetry = deferred<import("@t3tools/contracts").TaskResultFeedbackState>();
+      state.feedbackRead
+        .mockReturnValueOnce(oldReply.promise)
+        .mockRejectedValueOnce(new Error("new context read failure"))
+        .mockReturnValue(unexpectedRetry.promise);
+      await act(async () => {
+        renderer = create(<TasksPage />);
+      });
+      expect(state.feedbackRead).toHaveBeenCalledTimes(1);
+      state.sessionIdentity = {};
+      await act(async () => renderer.update(<TasksPage />));
+      await act(async () => {
+        if (outcome === "success") oldReply.resolve(oldFacts);
+        else oldReply.reject(new Error("obsolete read failure"));
+      });
+      expect(state.feedbackRead).toHaveBeenCalledTimes(2);
+      expect(feedbackButton("Helpful")).toBeUndefined();
+      expect(text()).toContain("Feedback could not be read");
+      await act(async () => renderer.update(<TasksPage />));
+      expect(state.feedbackRead).toHaveBeenCalledTimes(2);
+      state.feedbackRead.mockImplementation(f.readHttp);
+      await clickFeedback("Refresh feedback");
+      expect(state.feedbackRead).toHaveBeenCalledTimes(3);
+      expect(feedbackButton("Helpful")).toBeDefined();
+      expect(state.feedbackSubmit).not.toHaveBeenCalled();
+      expect(await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`)).toEqual(before);
+    });
+  },
+);

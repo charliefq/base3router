@@ -1,3 +1,4 @@
+import { TaskResultFeedback } from "./TaskResultFeedback";
 import { useAtomValue } from "@effect/atom-react";
 import {
   type CollaborationCommand,
@@ -865,6 +866,14 @@ export function TasksPage() {
                     </div>
                     <TaskRoutingReadout readout={task.routingReadout} />
                     <TaskResultReadout readout={task.resultReadout} />
+                    {environmentId ? (
+                      <TaskResultFeedback
+                        task={task}
+                        environmentId={environmentId}
+                        stale={error !== null || refreshing}
+                        readVersion={readVersion}
+                      />
+                    ) : null}
                     {environmentId ? (
                       <TaskRevisionRequest
                         task={task}

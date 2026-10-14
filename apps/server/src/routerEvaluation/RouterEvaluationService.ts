@@ -99,6 +99,7 @@ export class RouterEvaluationService extends Context.Service<
       input: RouterSubmitFeedbackRequest,
       now: string,
       actor?: string,
+      taskResultFingerprint?: string,
     ) => Effect.Effect<RouterSubmitFeedbackResult, RouterEvaluationError>;
     readonly recordReworkProxy: (
       environmentId: EnvironmentId,
@@ -245,6 +246,12 @@ const hybridCandidateSnapshot = (
   minSampleRate: HYBRID_MIN_SAMPLE_RATE,
   recencyDecayImplemented: false,
 });
+
+const encodeTaskResultAudit = Schema.encodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({ kind: Schema.String, taskResultFingerprint: Schema.String }),
+  ),
+);
 
 const make = Effect.gen(function* () {
   const store = yield* ObservationRepository;
@@ -546,50 +553,60 @@ const make = Effect.gen(function* () {
     input,
     now,
     actor,
+    taskResultFingerprint,
   ) =>
-    Effect.gen(function* () {
-      const existing = yield* store.get(input.observationId);
-      if (Option.isNone(existing) || existing.value.environmentId !== environmentId) {
-        return yield* new RouterEvaluationError({
-          reason: "not_found",
-          detail: "Observation not found in this environment.",
-        });
-      }
-      const already = existing.value.evidence.explicitFeedback.some(
-        (entry) => entry.kind === input.kind && entry.recordedAt === now,
-      );
-      if (already) {
-        return { observationId: input.observationId, recorded: true };
-      }
-      const next = {
-        ...existing.value,
-        evidence: {
-          ...existing.value.evidence,
-          explicitFeedback: [
-            ...existing.value.evidence.explicitFeedback,
-            {
-              kind: input.kind,
-              ...(input.reasonCategory !== undefined
-                ? { reasonCategory: input.reasonCategory }
-                : {}),
-              recordedAt: now,
-              freeTextIncluded: false as const,
+    store
+      .transaction(
+        Effect.gen(function* () {
+          const existing = yield* store.get(input.observationId);
+          if (Option.isNone(existing) || existing.value.environmentId !== environmentId) {
+            return yield* new RouterEvaluationError({
+              reason: "not_found",
+              detail: "Observation not found in this environment.",
+            });
+          }
+          if (existing.value.evidence.explicitFeedback.length > 0) {
+            return {
+              observationId: input.observationId,
+              recorded:
+                existing.value.evidence.explicitFeedback.length === 1 &&
+                existing.value.evidence.explicitFeedback[0]?.kind === input.kind,
+            };
+          }
+          const next = {
+            ...existing.value,
+            evidence: {
+              ...existing.value.evidence,
+              explicitFeedback: [
+                ...existing.value.evidence.explicitFeedback,
+                {
+                  kind: input.kind,
+                  ...(input.reasonCategory !== undefined
+                    ? { reasonCategory: input.reasonCategory }
+                    : {}),
+                  recordedAt: now,
+                  freeTextIncluded: false as const,
+                },
+              ].slice(-8),
             },
-          ].slice(-8),
-        },
-      };
-      yield* store.replaceEvidence(next);
-      yield* appendAudit({
-        environmentId,
-        eventType: "explicit_feedback",
-        recordedAt: now,
-        idempotencyKey: `feedback:${input.observationId}:${input.kind}`,
-        observationId: input.observationId,
-        ...(actor !== undefined ? { actor } : {}),
-        detail: input.kind,
-      });
-      return { observationId: input.observationId, recorded: true };
-    }).pipe(Effect.mapError(toEvalError));
+          };
+          yield* store.replaceEvidence(next);
+          yield* appendAudit({
+            environmentId,
+            eventType: "explicit_feedback",
+            recordedAt: now,
+            idempotencyKey: `feedback:${input.observationId}:${input.kind}`,
+            observationId: input.observationId,
+            ...(actor !== undefined ? { actor } : {}),
+            detail:
+              taskResultFingerprint === undefined
+                ? input.kind
+                : yield* encodeTaskResultAudit({ kind: input.kind, taskResultFingerprint }),
+          });
+          return { observationId: input.observationId, recorded: true };
+        }),
+      )
+      .pipe(Effect.mapError(toEvalError));
 
   const recordReworkProxy: RouterEvaluationService["Service"]["recordReworkProxy"] = (
     environmentId,

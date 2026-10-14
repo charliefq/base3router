@@ -10,7 +10,8 @@ import {
   type EnvironmentId,
   type MessageId,
   type ObservationId,
-  type ReworkSignalV0,
+  ReworkSignalV0,
+  VerificationEvidenceV0,
   type RouterObservationEventV0,
   type RouterPolicySnapshotV0,
   type ThreadId,
@@ -306,23 +307,51 @@ const make = Effect.gen(function* () {
       )
       .pipe(Effect.mapError(toRepoError("ObservationRepository.upsert")));
 
+  const appendUniqueEvidence = <A>(
+    current: ReadonlyArray<A>,
+    incoming: ReadonlyArray<A>,
+    same: (a: A, b: A) => boolean,
+  ) =>
+    [
+      ...current,
+      ...incoming.filter((value) => !current.some((existing) => same(existing, value))),
+    ].slice(-16);
   const replaceEvidence: ObservationRepository["Service"]["replaceEvidence"] = (observation) =>
-    encodeObservationPayload(observation).pipe(
-      Effect.flatMap(
-        (payloadJson) =>
-          sql`
-            UPDATE router_turn_observations
-            SET payload_json = CASE
-              WHEN json_extract(payload_json, '$.terminalCategory') = ${observation.terminalCategory}
-              THEN ${payloadJson}
-              ELSE payload_json
-            END
-            WHERE observation_id = ${observation.observationId}
-          `,
-      ),
-      Effect.asVoid,
-      Effect.mapError(toRepoError("ObservationRepository.replaceEvidence")),
-    );
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const stored = yield* get(observation.observationId);
+          if (
+            Option.isNone(stored) ||
+            stored.value.environmentId !== observation.environmentId ||
+            stored.value.terminalCategory !== observation.terminalCategory
+          )
+            return;
+          const current = stored.value;
+          const next = {
+            ...current,
+            evidence: {
+              explicitFeedback:
+                current.evidence.explicitFeedback.length > 0
+                  ? current.evidence.explicitFeedback
+                  : observation.evidence.explicitFeedback,
+              reworkProxies: appendUniqueEvidence(
+                current.evidence.reworkProxies,
+                observation.evidence.reworkProxies,
+                Schema.toEquivalence(ReworkSignalV0),
+              ),
+              verification: appendUniqueEvidence(
+                current.evidence.verification,
+                observation.evidence.verification,
+                Schema.toEquivalence(VerificationEvidenceV0),
+              ),
+            },
+          };
+          const payloadJson = yield* encodeObservationPayload(next);
+          yield* sql`UPDATE router_turn_observations SET payload_json=json_set(payload_json,'$.evidence',json_extract(${payloadJson},'$.evidence')) WHERE observation_id=${observation.observationId}`;
+        }),
+      )
+      .pipe(Effect.mapError(toRepoError("ObservationRepository.replaceEvidence")));
 
   const listByEnvironment: ObservationRepository["Service"]["listByEnvironment"] = (
     environmentId,
