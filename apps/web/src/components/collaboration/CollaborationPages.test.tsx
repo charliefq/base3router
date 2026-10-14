@@ -31,6 +31,7 @@ import {
   type TaskAutoPreviewInput,
   type TaskAutoPreviewState,
 } from "@t3tools/contracts";
+import { withTaskRevisionRequestFixture } from "./testkit/taskRevisionRequestFixture";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -4128,4 +4129,283 @@ it.each([
       }),
     ),
   );
+});
+
+it("prepares a requested revision for a validated completed owned output without execution", async () => {
+  await withTaskRevisionRequestFixture(async (f) => {
+    const task = f.snapshot.tasks[0]!;
+    expect(task.resultReadout).toMatchObject({
+      status: "available",
+      runStatus: "completed",
+      providerTurnStatus: "completed",
+      content: { status: "output", truncated: true },
+    });
+    state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+    state.reviewRead.mockImplementation(async ({ input }: { input: TaskContractReviewInput }) => ({
+      _tag: "Success",
+      value: await EffectForFixture.runPromise(f.readReview(input)),
+    }));
+    state.readProjection.mockImplementation(async () => ({
+      _tag: "Success",
+      value: await EffectForFixture.runPromise(
+        f.orchestrator.getThreadProjection(f.command.threadId),
+      ),
+    }));
+    const target = scopeThreadRef(EnvironmentId.make("environment-a"), f.command.threadId);
+    useComposerDraftStore.setState({
+      draftsByThreadKey: {},
+      draftThreadsByThreadKey: {},
+      backgroundSubmissionThreadKeys: {},
+      rewindingThreadKeys: new Set(),
+    });
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    const before = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
+    const effects = await EffectForFixture.runPromise(f.noExecution());
+    expect(creationButton("Prepare revision request")).toBeDefined();
+    await creationClick("Prepare revision request", true);
+    expect(text()).toContain("Fix parser");
+    expect(text()).toContain(f.command.taskContract!.acceptance);
+    expect(text()).toContain("Attributed parser output");
+    expect(text()).toContain("Excerpt truncated");
+    const editor = renderer.root.findByProps({ "aria-label": "Requested changes" });
+    expect(editor.props.value).toBe("");
+    expect(creationButton("Fill empty draft and open")!.props.disabled).toBe(true);
+    await act(async () =>
+      editor.props.onChange({ target: { value: "Add the missing parser regression" } }),
+    );
+    expect(useComposerDraftStore.getState().getComposerDraft(target)).toBeNull();
+    await creationClick("Fill empty draft and open", true);
+    expect(useComposerDraftStore.getState().getComposerDraft(target)?.prompt).toBe(
+      "Add the missing parser regression",
+    );
+    expect(state.navigate).toHaveBeenCalledTimes(1);
+    expect(await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`)).toEqual(before);
+    expect(await EffectForFixture.runPromise(f.noExecution())).toEqual(effects);
+    expect(state.create).not.toHaveBeenCalled();
+    expect(state.bind).not.toHaveBeenCalled();
+    expect(state.reviewDecide).not.toHaveBeenCalled();
+    expect(state.autoPreview).not.toHaveBeenCalled();
+  });
+});
+
+it.each([
+  "typed",
+  "file",
+  "image",
+  "upload-marker",
+  "context",
+  "queued",
+  "background",
+  "rewind",
+  "changes-edit",
+  "session",
+  "environment",
+  "navigation",
+  "unmount",
+  "cancel",
+  "pause",
+  "accept",
+  "delete",
+  "revision",
+  "foreign",
+  "new-output",
+  "same-item-tail",
+  "newer-run",
+  "projection-failure",
+  "late-failure",
+  "late-response",
+] as const)("retires revision preparation and preserves local content across %s", async (mode) => {
+  await withTaskRevisionRequestFixture(async (f) => {
+    const task = f.snapshot.tasks[0]!;
+    state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+    const read = async ({ input }: { input: TaskContractReviewInput }) => ({
+      _tag: "Success" as const,
+      value: await EffectForFixture.runPromise(f.readReview(input)),
+    });
+    state.reviewRead.mockImplementation(read);
+    state.readProjection.mockImplementation(async () => ({
+      _tag: "Success",
+      value: await EffectForFixture.runPromise(
+        f.orchestrator.getThreadProjection(f.command.threadId),
+      ),
+    }));
+    const target = scopeThreadRef(EnvironmentId.make("environment-a"), f.command.threadId),
+      key = scopedThreadKey(target);
+    useComposerDraftStore.setState({
+      draftsByThreadKey: {},
+      draftThreadsByThreadKey: {},
+      backgroundSubmissionThreadKeys: {},
+      rewindingThreadKeys: new Set(),
+    });
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    await creationClick("Prepare revision request");
+    const edit = () => renderer.root.findByProps({ "aria-label": "Requested changes" });
+    await act(async () =>
+      edit().props.onChange({ target: { value: "Requested parser revision" } }),
+    );
+    const before = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`),
+      effects = await EffectForFixture.runPromise(f.noExecution());
+    const gated = deferred<{ _tag: "Success"; value: TaskContractReviewState }>();
+    const old = await read({
+      input: {
+        environmentId: "environment-a",
+        taskId: task.id,
+        projectId: task.projectId,
+        threadId: f.command.threadId,
+        revision: 1,
+      },
+    });
+    state.reviewRead.mockImplementationOnce(() => gated.promise);
+    await creationClick("Fill empty draft and open", true);
+    if (mode === "typed") useComposerDraftStore.getState().setPrompt(target, "My own draft");
+    if (["file", "image", "upload-marker", "context", "queued"].includes(mode)) {
+      useComposerDraftStore.getState().setPrompt(target, "Temporary seed");
+      const base = { ...useComposerDraftStore.getState().getComposerDraft(target)!, prompt: "" };
+      useComposerDraftStore.setState({
+        draftsByThreadKey: {
+          [mode === "queued" ? `queued-edit:${key}:existing-run` : key]: {
+            ...base,
+            ...(mode === "file"
+              ? {
+                  files: [
+                    {
+                      type: "file" as const,
+                      id: "kept-file",
+                      name: "notes.txt",
+                      mimeType: "text/plain",
+                      sizeBytes: 3,
+                      file: null,
+                      uploadedAttachmentId: "kept-upload",
+                      uploadEnvironmentId: target.environmentId,
+                    },
+                  ],
+                }
+              : mode === "image"
+                ? {
+                    images: [
+                      {
+                        type: "image" as const,
+                        id: "kept-image",
+                        name: "x.png",
+                        mimeType: "image/png",
+                        sizeBytes: 3,
+                        previewUrl: "blob:kept",
+                        file: new File(["png"], "x.png"),
+                      },
+                    ],
+                  }
+                : mode === "upload-marker"
+                  ? { nonPersistedImageIds: ["pending-image"] }
+                  : mode === "context"
+                    ? {
+                        terminalContexts: [
+                          {
+                            id: "kept-context",
+                            threadId: f.command.threadId,
+                            terminalId: "term",
+                            terminalLabel: "Terminal",
+                            lineStart: 1,
+                            lineEnd: 2,
+                            text: "Existing context",
+                            createdAt: "2026-10-14T00:00:00Z",
+                          },
+                        ],
+                      }
+                    : { prompt: "Queued instructions" }),
+          },
+        },
+      });
+    }
+    if (mode === "background")
+      useComposerDraftStore.setState({ backgroundSubmissionThreadKeys: { [key]: true } });
+    if (mode === "rewind") useComposerDraftStore.setState({ rewindingThreadKeys: new Set([key]) });
+    if (mode === "changes-edit")
+      await act(async () => edit().props.onChange({ target: { value: "New user changes" } }));
+    if (mode === "session") {
+      state.sessionIdentity = {};
+      await act(async () => renderer.update(<TasksPage />));
+    }
+    if (mode === "environment") {
+      state.environmentId = "environment-b";
+      await act(async () => renderer.update(<TasksPage />));
+    }
+    if (mode === "navigation") await creationClick("Open conversation for full context");
+    if (mode === "cancel") await creationClick("Cancel revision preparation");
+    if (mode === "unmount") await act(async () => renderer.unmount());
+    if (["pause", "accept", "revision"].includes(mode))
+      await EffectForFixture.runPromise(
+        f.sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,${mode === "pause" ? "$.taskContractPhase" : mode === "accept" ? "$.taskAcceptedRevision" : "$.taskContract.revision"},${mode === "pause" ? "redirected" : mode === "accept" ? 1 : 2}) WHERE thread_id=${f.command.threadId}`,
+      );
+    if (mode === "delete")
+      await EffectForFixture.runPromise(
+        f.sql`UPDATE orchestration_v2_projection_threads SET deleted_at='2026-10-14T01:00:00Z' WHERE thread_id=${f.command.threadId}`,
+      );
+    if (mode === "foreign")
+      await EffectForFixture.runPromise(
+        f.sql`UPDATE collaboration_commands SET payload_json=json_set(payload_json,'$.admittedBy','foreign') WHERE command_id=${`task:enroll:${f.command.commandId}`}`,
+      );
+    if (mode === "new-output")
+      await EffectForFixture.runPromise(
+        f.sql`UPDATE orchestration_v2_projection_turn_items SET turn_item_id='new-output',ordinal=2,payload_json=json_set(payload_json,'$.id','new-output','$.ordinal',2) WHERE turn_item_id='revision-output'`,
+      );
+    if (mode === "same-item-tail")
+      await EffectForFixture.runPromise(
+        f.sql`UPDATE orchestration_v2_projection_turn_items SET payload_json=json_set(payload_json,'$.text',json_extract(payload_json,'$.text') || 'new suffix') WHERE turn_item_id='revision-output'`,
+      );
+    if (mode === "newer-run")
+      await EffectForFixture.runPromise(
+        f.sql`UPDATE orchestration_v2_projection_runs SET ordinal=2,status='queued',payload_json=json_set(payload_json,'$.ordinal',2,'$.status','queued') WHERE thread_id=${f.command.threadId}`,
+      );
+    if (mode === "projection-failure")
+      state.readProjection.mockResolvedValueOnce({
+        _tag: "Failure",
+        cause: "projection unavailable",
+      });
+    if (mode === "late-failure" || mode === "late-response") {
+      await creationClick("Cancel revision preparation");
+      await creationClick("Prepare revision request");
+      await act(async () =>
+        edit().props.onChange({ target: { value: "Current requested changes" } }),
+      );
+      await creationClick("Fill empty draft and open");
+      expect(text()).toContain("Prepared a local revision draft only");
+    }
+    const marker = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`),
+      retained = useComposerDraftStore.getState().draftsByThreadKey;
+    await act(async () => {
+      if (mode === "late-failure") gated.reject(new Error("obsolete result failure"));
+      else gated.resolve(old);
+    });
+    expect(useComposerDraftStore.getState().draftsByThreadKey).toEqual(retained);
+    if (mode === "late-failure" || mode === "late-response") {
+      expect(text()).toContain("Prepared a local revision draft only");
+      expect(text()).not.toContain("Fresh result reads failed");
+      expect(state.navigate).toHaveBeenCalledTimes(1);
+    } else if (mode === "navigation") expect(state.navigate).toHaveBeenCalledTimes(1);
+    else expect(state.navigate).not.toHaveBeenCalled();
+    if (mode === "changes-edit") expect(edit().props.value).toBe("New user changes");
+    expect(await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`)).toEqual(marker);
+    if (
+      ![
+        "pause",
+        "accept",
+        "revision",
+        "delete",
+        "foreign",
+        "new-output",
+        "same-item-tail",
+        "newer-run",
+      ].includes(mode)
+    )
+      expect(marker).toEqual(before);
+    expect(await EffectForFixture.runPromise(f.noExecution())).toEqual(effects);
+    expect(state.create).not.toHaveBeenCalled();
+    expect(state.bind).not.toHaveBeenCalled();
+    expect(state.reviewDecide).not.toHaveBeenCalled();
+    expect(state.autoPreview).not.toHaveBeenCalled();
+  });
 });
