@@ -382,28 +382,30 @@ function useCollaboration(environmentId: EnvironmentId | null) {
     [context, environmentId, isCurrent, setError, setFresh, setPending],
   );
 
+  const invalidateReads = useCallback(() => {
+    if (isCurrent()) {
+      readGeneration.current += 1;
+      readOwner.current = null;
+      setRefreshing(false);
+      freshness.current = false;
+      setFresh(false);
+    }
+  }, [isCurrent, setRefreshing, setFresh]);
+
   return {
     refresh: () => read(true),
     refreshing: readState.context === context && readState.refreshing,
     fresh: loaded?.context === context && readState.context === context && readState.fresh,
     canOperate,
-    captureRead: () => {
-      const generation = readGeneration.current;
-      return () => isCurrent() && generation === readGeneration.current;
-    },
+    captureRead:
+      (generation = readGeneration.current) =>
+      () =>
+        isCurrent() && generation === readGeneration.current,
     isCurrent,
     connected: !!environmentId && session !== null,
     context,
     readVersion: loaded?.context === context ? loaded.version : 0,
-    invalidateReads: () => {
-      if (isCurrent()) {
-        readGeneration.current += 1;
-        readOwner.current = null;
-        setRefreshing(false);
-        freshness.current = false;
-        setFresh(false);
-      }
-    },
+    invalidateReads,
     snapshot: loaded?.context === context ? loaded.snapshot : null,
     error: readState.context === context ? readState.error : null,
     pending: pendingContext === context,
@@ -428,8 +430,10 @@ export function AgentsPage() {
     fresh,
     canOperate,
     captureRead,
+    readVersion,
     isCurrent,
     connected,
+    invalidateReads,
     context: directoryContext,
   } = useCollaboration(environmentId);
   const [creationRequest, setCreationRequest] = useState<{
@@ -457,6 +461,7 @@ export function AgentsPage() {
   } | null>(null);
   const [openingContext, setOpeningContext] = useState<symbol | null>(null);
   const openingRef = useRef<object | null>(null);
+  const taskReadOwner = useRef<object | null>(null);
   const selectedProject =
     projects.length === 1 ? projects[0] : projects.find((project) => project.id === projectId);
   const selectedProjectId = selectedProject?.id;
@@ -482,7 +487,20 @@ export function AgentsPage() {
       token: Symbol(),
     });
   }
-  const opening = openingContext === openScope.token;
+  const [taskScope, setTaskScope] = useState({
+    connection: directoryContext,
+    projectId: selectedProjectId,
+    token: Symbol(),
+  });
+  if (taskScope.connection !== directoryContext || taskScope.projectId !== selectedProjectId) {
+    setTaskScope({ connection: directoryContext, projectId: selectedProjectId, token: Symbol() });
+  }
+  const [taskOpeningScope, setTaskOpeningScope] = useState<typeof taskScope | null>(null);
+  const opening = openingContext === openScope.token || taskOpeningScope === taskScope;
+  const navigationEpoch = useRef(taskScope);
+  useLayoutEffect(() => {
+    navigationEpoch.current = taskScope;
+  }, [taskScope]);
   const context = useRef({
     environmentId,
     projectId: selectedProjectId,
@@ -495,9 +513,13 @@ export function AgentsPage() {
     if (
       context.current.connection !== directoryContext ||
       context.current.projectId !== selectedProjectId ||
-      context.current.providerContext !== providerContext
+      (context.current.providerContext !== providerContext && !taskReadOwner.current)
     ) {
       // Retire only UI ownership; a server mutation may already have committed.
+      if (taskReadOwner.current) {
+        invalidateReads();
+        taskReadOwner.current = null;
+      }
       openingRef.current = null;
     }
     context.current = {
@@ -511,7 +533,15 @@ export function AgentsPage() {
     return () => {
       context.current.mounted = false;
     };
-  }, [context, environmentId, selectedProjectId, providers, directoryContext, providerContext]);
+  }, [
+    context,
+    environmentId,
+    selectedProjectId,
+    providers,
+    directoryContext,
+    providerContext,
+    invalidateReads,
+  ]);
 
   const openThread = (threadId: string) => {
     if (!environmentId) return;
@@ -599,6 +629,94 @@ export function AgentsPage() {
       if (ownsOpen()) {
         openingRef.current = null;
         setOpeningContext(null);
+      }
+    }
+  };
+
+  // A disabled render still displays the previous snapshot, never the active GET generation.
+  const ownsDisplayedRead = captureRead(readVersion);
+  const openTask = async (task: CollaborationTask, agentId: string) => {
+    if (
+      !canOperate() ||
+      !ownsDisplayedRead() ||
+      error ||
+      pending ||
+      openingRef.current ||
+      creationOwner.current !== null ||
+      !snapshot ||
+      !environmentId ||
+      !selectedProject ||
+      navigationEpoch.current !== taskScope ||
+      !context.current.mounted ||
+      context.current.environmentId !== environmentId ||
+      context.current.projectId !== selectedProject.id ||
+      task.projectId !== selectedProject.id ||
+      !task.threadId ||
+      (task.ownerAgentId !== agentId && task.assigneeAgentId !== agentId)
+    )
+      return;
+    // Freeze the displayed identity. A new binding must require another explicit click.
+    const target = {
+      id: task.id,
+      projectId: task.projectId,
+      threadId: task.threadId,
+      ownerAgentId: task.ownerAgentId,
+      assigneeAgentId: task.assigneeAgentId,
+    };
+    const owner = {};
+    const ownsOpen = () =>
+      isCurrent() &&
+      openingRef.current === owner &&
+      context.current.mounted &&
+      navigationEpoch.current === taskScope &&
+      context.current.environmentId === environmentId &&
+      context.current.projectId === target.projectId;
+    openingRef.current = owner;
+    taskReadOwner.current = owner;
+    setTaskOpeningScope(taskScope);
+    setNotice(null);
+    const showNotice = (message: string) => {
+      if (ownsOpen())
+        setNotice({
+          environmentId,
+          connection: directoryContext,
+          projectId: target.projectId,
+          message,
+        });
+    };
+    try {
+      // read() claims its generation synchronously, before a second click can enter.
+      const request = refresh();
+      const ownsRead = captureRead();
+      const current = await request;
+      if (!ownsOpen() || !ownsRead()) return;
+      if (!current) {
+        showNotice(
+          "The task conversation could not be confirmed. Refresh the directory and try again.",
+        );
+        return;
+      }
+      const matches = current.tasks.filter((item) => item.id === target.id);
+      const verified = matches.length === 1 ? matches[0] : undefined;
+      if (
+        current.environmentId !== environmentId ||
+        !verified ||
+        verified.projectId !== target.projectId ||
+        verified.threadId !== target.threadId ||
+        verified.ownerAgentId !== target.ownerAgentId ||
+        verified.assigneeAgentId !== target.assigneeAgentId
+      ) {
+        showNotice(
+          "The task conversation link changed or is no longer valid. Review the directory before opening it again.",
+        );
+        return;
+      }
+      if (ownsOpen() && ownsRead() && canOperate()) openThread(target.threadId);
+    } finally {
+      if (ownsOpen()) {
+        openingRef.current = null;
+        taskReadOwner.current = null;
+        setTaskOpeningScope(null);
       }
     }
   };
@@ -802,6 +920,33 @@ export function AgentsPage() {
                             {tasks.map((task) => (
                               <li key={`${task.projectId}:${task.id}`} className="wrap-anywhere">
                                 {task.title} — ledger {task.state}
+                                <div>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    aria-label={`Open task: ${task.title}`}
+                                    disabled={
+                                      opening ||
+                                      creating ||
+                                      pending ||
+                                      !fresh ||
+                                      !!error ||
+                                      !task.threadId
+                                    }
+                                    onClick={() => {
+                                      void openTask(task, entry.id);
+                                    }}
+                                  >
+                                    Open task
+                                  </Button>
+                                  {!task.threadId ? (
+                                    <p className="text-xs text-muted-foreground">
+                                      This task has no valid conversation link. Explicit repair is
+                                      required.
+                                    </p>
+                                  ) : null}
+                                </div>
                               </li>
                             ))}
                           </ul>
