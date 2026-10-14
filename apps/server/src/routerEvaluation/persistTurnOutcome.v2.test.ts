@@ -31,7 +31,17 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import {
+  DreamMemoryService,
+  layerTest as dreamTestLayer,
+} from "../dreamMemory/DreamMemoryService.ts";
+import {
+  ConcurrencyBudgetService,
+  layer as budgetLayer,
+} from "../concurrencyBudget/ConcurrencyBudgetService.ts";
 
 import { persistDispatcherTaskRoute } from "../dispatcher/Dispatcher.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
@@ -532,6 +542,65 @@ it.effect("certifies an actual empty-bound dispatcher outcome at the running cap
       expect(route[0]?.binding_json).toBe(f.bindingBefore);
     }),
   ),
+);
+
+it.effect(
+  "commits the outcome and permits SQLite writes while optional dream admission waits",
+  () =>
+    provideTestLayer(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const evaluation = yield* RouterEvaluationService;
+        const dream = yield* DreamMemoryService;
+        const budget = yield* ConcurrencyBudgetService;
+        const waiting = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const enqueued = yield* Deferred.make<void>();
+        const gatedBudget: ConcurrencyBudgetService["Service"] = {
+          ...budget,
+          withAdmission: (request, work) =>
+            Effect.gen(function* () {
+              expect(request.workloadClass).toBe("dream-job");
+              yield* Deferred.succeed(waiting, undefined);
+              yield* Deferred.await(release);
+              return yield* budget.withAdmission(request, work);
+            }),
+        };
+        const threadId = ThreadId.make("thread-outcome-admission-wait");
+        const messageId = MessageId.make("message-outcome-admission-wait");
+        const runId = RunId.make("run-outcome-admission-wait");
+        const now = yield* seed({ threadId, messageId, runId });
+        yield* sql`CREATE TEMP TABLE outcome_side_effect_probe (value INTEGER)`;
+        const outcome = yield* ingest({
+          threadId,
+          runId,
+          turn: providerTurn(now, "completed", "admission-wait"),
+        }).pipe(
+          Effect.provideService(ConcurrencyBudgetService, gatedBudget),
+          Effect.provideService(DreamMemoryService, {
+            ...dream,
+            enqueueEligibleTurn: () => Deferred.succeed(enqueued, undefined).pipe(Effect.asVoid),
+          }),
+          Effect.forkChild,
+        );
+        yield* Deferred.await(waiting);
+        // This independent fiber must finish an actual SQL transaction before admission is released.
+        yield* sql.withTransaction(
+          Effect.gen(function* () {
+            const committed = yield* evaluation.latestObservationForThread(environmentId, threadId);
+            expect(committed._tag).toBe("Some");
+            if (committed._tag === "Some") expect(committed.value.providerAttempts).toBe(1);
+            yield* sql`INSERT INTO outcome_side_effect_probe (value) VALUES (1)`;
+          }),
+        );
+        expect(yield* sql`SELECT value FROM outcome_side_effect_probe`).toEqual([{ value: 1 }]);
+        expect(yield* Deferred.isDone(enqueued)).toBe(false);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(outcome);
+        expect(yield* Deferred.isDone(enqueued)).toBe(true);
+        expect(yield* evaluation.observationCount(environmentId)).toBe(1);
+      }).pipe(Effect.provide(Layer.merge(dreamTestLayer, budgetLayer))),
+    ),
 );
 
 type CaptureIds = { run: string; attempt: string; turn: string; thread: string; message: string };

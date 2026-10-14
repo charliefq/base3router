@@ -296,54 +296,58 @@ const persistTurnOutcomeFromRuntimeEvent = Effect.fn("persistTurnOutcomeFromRunt
       threadId: input.threadId,
       messageId: input.messageId,
     });
-    const dream = yield* Effect.serviceOption(DreamMemoryService);
-    const settingsService = yield* Effect.serviceOption(ServerSettingsService);
-    if (Option.isSome(dream) && observation.terminalCategory === "success") {
-      const settings = Option.isSome(settingsService)
-        ? yield* settingsService.value.getSettings.pipe(
-            Effect.catch(() => Effect.succeed({ dreamMemory: DEFAULT_DREAM_MEMORY_SETTINGS })),
-          )
-        : { dreamMemory: DEFAULT_DREAM_MEMORY_SETTINGS };
-      const budget = yield* Effect.serviceOption(ConcurrencyBudgetService);
-      const enqueue = dream.value.enqueueEligibleTurn({
-        viewer: viewerFromSubject(input.environmentId, undefined, input.projectId),
-        settings: settings.dreamMemory,
-        turnSucceeded: true,
-        turnText: `completed turn ${input.messageId}`,
-        nowIso: now,
-        threadId: input.threadId,
-      });
-      yield* (
-        Option.isSome(budget)
-          ? budget.value
-              .withAdmission(
-                {
-                  workloadClass: "dream-job",
-                  environmentId: input.environmentId,
-                  threadId: input.threadId,
-                  requestedAt: now,
-                },
-                enqueue,
-              )
-              .pipe(Effect.catch(() => Effect.void))
-          : enqueue
-      ).pipe(Effect.ignore);
-    }
-    const previous = yield* evaluation.value.latestObservationForThread(
-      input.environmentId,
-      input.threadId,
-      observation.observationId,
-    );
-    if (Option.isSome(previous)) {
-      const proxy = detectReworkProxy({ previous: previous.value, next: observation, nowMs });
-      if (proxy !== undefined) {
-        yield* evaluation.value.recordReworkProxy(
-          input.environmentId,
-          previous.value.observationId,
-          proxy,
-        );
+    // Return optional enrichment work so the caller commits attribution and the outcome first.
+    // Capacity admission must never wait while this observation transaction owns SQLite.
+    return Effect.gen(function* () {
+      const dream = yield* Effect.serviceOption(DreamMemoryService);
+      const settingsService = yield* Effect.serviceOption(ServerSettingsService);
+      if (Option.isSome(dream) && observation.terminalCategory === "success") {
+        const settings = Option.isSome(settingsService)
+          ? yield* settingsService.value.getSettings.pipe(
+              Effect.catch(() => Effect.succeed({ dreamMemory: DEFAULT_DREAM_MEMORY_SETTINGS })),
+            )
+          : { dreamMemory: DEFAULT_DREAM_MEMORY_SETTINGS };
+        const budget = yield* Effect.serviceOption(ConcurrencyBudgetService);
+        const enqueue = dream.value.enqueueEligibleTurn({
+          viewer: viewerFromSubject(input.environmentId, undefined, input.projectId),
+          settings: settings.dreamMemory,
+          turnSucceeded: true,
+          turnText: `completed turn ${input.messageId}`,
+          nowIso: now,
+          threadId: input.threadId,
+        });
+        yield* (
+          Option.isSome(budget)
+            ? budget.value
+                .withAdmission(
+                  {
+                    workloadClass: "dream-job",
+                    environmentId: input.environmentId,
+                    threadId: input.threadId,
+                    requestedAt: now,
+                  },
+                  enqueue,
+                )
+                .pipe(Effect.catch(() => Effect.void))
+            : enqueue
+        ).pipe(Effect.ignore);
       }
-    }
+      const previous = yield* evaluation.value.latestObservationForThread(
+        input.environmentId,
+        input.threadId,
+        observation.observationId,
+      );
+      if (Option.isSome(previous)) {
+        const proxy = detectReworkProxy({ previous: previous.value, next: observation, nowMs });
+        if (proxy !== undefined) {
+          yield* evaluation.value.recordReworkProxy(
+            input.environmentId,
+            previous.value.observationId,
+            proxy,
+          );
+        }
+      }
+    });
   },
 );
 
@@ -409,7 +413,7 @@ export const persistTurnOutcomeFromV2ProviderTurn = Effect.fn(
   const message = yield* input.getRunMessage(input.threadId, input.runId);
   if (message === undefined) return;
   const environmentId = yield* environment.value.getEnvironmentId;
-  yield* sql.value
+  const afterCommit = yield* sql.value
     .withTransaction(
       Effect.gen(function* () {
         const binding = yield* Dispatcher.readDispatcherTaskRoute({
@@ -430,7 +434,7 @@ export const persistTurnOutcomeFromV2ProviderTurn = Effect.fn(
                 binding: binding.value,
               })
             : false;
-        yield* persistTurnOutcomeFromRuntimeEvent({
+        return yield* persistTurnOutcomeFromRuntimeEvent({
           environmentId,
           threadId: input.threadId,
           messageId: message.id,
@@ -441,6 +445,7 @@ export const persistTurnOutcomeFromV2ProviderTurn = Effect.fn(
       }),
     )
     .pipe(Effect.provideService(SqlClient.SqlClient, sql.value));
+  if (afterCommit !== undefined) yield* afterCommit;
 });
 
 const singleRun = Schema.decodeUnknownOption(
