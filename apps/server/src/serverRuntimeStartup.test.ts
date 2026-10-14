@@ -15,6 +15,11 @@ import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 
 import * as ServerConfig from "./config.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import * as EffectWorker from "./orchestration-v2/EffectWorker.ts";
+import * as TaskBrakeWorker from "./policy/TaskBrakeWorker.ts";
+import * as TestClock from "effect/testing/TestClock";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { makeTaskBrakeFixture, seedSilentTask } from "./policy/testkit/taskBrakeWorkerFixture.ts";
 
 it("uses the canonical Codex model for auto-bootstrap", () => {
   assert.deepEqual(ServerRuntimeStartup.getAutoBootstrapThreadModelSelection(), {
@@ -79,6 +84,37 @@ it.effect("queues commands until startup signals readiness", () =>
       assert.equal(yield* Fiber.join(queued), 1);
     }),
   ),
+);
+
+it.effect(
+  "relay startup failure closes the real deadline source with its existing worker fiber",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeTaskBrakeFixture();
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* seedSilentTask({ deadlineAt: "1970-01-01T00:00:10Z" });
+          const watcher = yield* TaskBrakeWorker.TaskBrakeWorker;
+          const workerFiberRef = yield* Ref.make<Fiber.Fiber<void, never> | null>(null);
+          const result = yield* ServerRuntimeStartup.startEffectWorkerWithRelay({
+            runWorker: Effect.all([EffectWorker.runDaemon, watcher.run], {
+              concurrency: "unbounded",
+              discard: true,
+            }),
+            startRelay: TestClock.adjust("5 seconds").pipe(
+              Effect.andThen(Effect.die("injected relay failure")),
+            ),
+            workerFiberRef,
+          }).pipe(Effect.exit);
+          assert.isTrue(Exit.isFailure(result));
+          assert.isNull(yield* Ref.get(workerFiberRef));
+          yield* TestClock.adjust("15 seconds");
+          assert.deepEqual(yield* Ref.get(fixture.calls), []);
+          assert.deepEqual(yield* sql`SELECT effect_id FROM orchestration_v2_effect_outbox`, []);
+        }).pipe(Effect.provide(fixture.dependencies));
+      }),
+    ),
 );
 
 it.effect("enqueueCommand fails queued work when readiness fails", () =>

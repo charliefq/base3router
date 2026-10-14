@@ -43,6 +43,7 @@ import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import { forkParked, forkParkedFiber } from "./serverActivation.ts";
+import * as TaskBrakeWorker from "./policy/TaskBrakeWorker.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -413,6 +414,7 @@ const make = (options?: StartupOptions) =>
     const keybindings = yield* Keybindings.Keybindings;
     const legacyV1ThreadImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
     const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
+    const taskBrakeWorker = yield* TaskBrakeWorker.TaskBrakeWorker;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
@@ -512,7 +514,10 @@ const make = (options?: StartupOptions) =>
         startEffectWorker: runStartupPhase(
           "orchestration-v2.effect-worker.start",
           startEffectWorkerWithRelay({
-            runWorker: EffectWorker.runDaemon,
+            runWorker: Effect.all([EffectWorker.runDaemon, taskBrakeWorker.run], {
+              concurrency: "unbounded",
+              discard: true,
+            }),
             startRelay: agentAwarenessRelay.start(),
             workerFiberRef: effectWorkerFiber,
           }),

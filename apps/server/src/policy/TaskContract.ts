@@ -403,6 +403,7 @@ export const requestTaskCancellation = (
         )
     `;
     const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
+    const effectIds: string[] = [];
     for (const turn of turns) {
       const request = {
         type: "provider-turn.interrupt" as const,
@@ -410,7 +411,7 @@ export const requestTaskCancellation = (
         providerThreadId: ProviderThreadId.make(turn.provider_thread_id),
         providerTurnId: ProviderTurnId.make(turn.provider_turn_id),
       };
-      yield* sql`
+      const inserted = yield* sql<{ readonly effect_id: string }>`
         INSERT INTO orchestration_v2_effect_outbox (
           effect_id, command_id, thread_id, effect_type, payload_json, status,
           attempt_count, available_at, created_at, updated_at
@@ -427,8 +428,11 @@ export const requestTaskCancellation = (
           ${now}
         )
         ON CONFLICT(effect_id) DO NOTHING
+        RETURNING effect_id
       `;
+      effectIds.push(...inserted.map((row) => row.effect_id));
     }
+    return effectIds;
   });
 
 /**
@@ -473,9 +477,9 @@ export const evaluatePersistedBrakes = (sql: SqlClient.SqlClient, rootThreadId?:
           )
         )
     `;
-    for (const row of rows) {
-      yield* requestTaskCancellation(sql, row.root_thread_id, row.root_thread_id);
-    }
+    return yield* Effect.forEach(rows, (row) =>
+      requestTaskCancellation(sql, row.root_thread_id, row.root_thread_id),
+    ).pipe(Effect.map((ids) => ids.flat()));
   });
 
 export const countTaskAdmissions = (sql: SqlClient.SqlClient, rootThreadId: string) =>

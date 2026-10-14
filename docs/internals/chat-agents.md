@@ -78,9 +78,14 @@ Unknown usage, or a price that is missing or unverified, denies the next
 start. Production usage rows stay unverified. The only verified price is a
 fixture row labeled `synthetic-fixture`. A usage update that reaches a frozen
 cap, and database startup when a frozen deadline is already past, request
-interrupt for an occupied lease. That does not require another admission.
-There is no timer: a silent turn is noticed on the next usage update or the
-next time the database opens. The lease stays until an explicit completed or
+interrupt for an occupied lease. The existing Scheduler also checks silent
+running tasks every five seconds, beginning after process-loss recovery.
+The cancellation transaction rechecks persisted bounds and inserts a stable
+turn-level outbox request; only after commit may it notify the same outbox
+instance consumed by the effect worker. A separate availability queue would
+lose this wake-up. The scan source closes with the worker scope.
+That does not require another admission or guarantee a five-second kill.
+The lease stays until an explicit completed or
 aborted confirmation. An interrupt request is not that confirmation, and an
 unknown stream end is not one either.
 

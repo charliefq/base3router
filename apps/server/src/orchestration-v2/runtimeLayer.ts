@@ -1,5 +1,6 @@
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import * as TaskBrakeWorker from "../policy/TaskBrakeWorker.ts";
 import * as Layer from "effect/Layer";
 import * as OrchestrationCommandReceipts from "../persistence/Layers/OrchestrationCommandReceipts.ts";
 import * as OrchestrationEventStore from "../persistence/Layers/OrchestrationEventStore.ts";
@@ -288,6 +289,11 @@ const providerRuntimeRecoveryProvided = providerRuntimeRecoveryLayer.pipe(
   ),
 );
 
+const taskBrakeWorkerProvided = TaskBrakeWorker.layer.pipe(
+  Layer.provide(storesLayer),
+  Layer.provide(Scheduler.layer),
+);
+
 export const OrchestrationV2LayerLive = Layer.mergeAll(
   orchestratorProvided,
   threadManagementProvided,
@@ -295,6 +301,7 @@ export const OrchestrationV2LayerLive = Layer.mergeAll(
   providerSessionManagerProvided,
   providerAuthServiceProvided,
   providerRuntimeRecoveryProvided,
+  taskBrakeWorkerProvided,
   projectionMaintenanceProvided,
   legacyV1ThreadImporterProvided,
 );
