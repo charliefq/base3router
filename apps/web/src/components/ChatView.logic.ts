@@ -1,3 +1,4 @@
+import { composerTargetKey, type ComposerThreadTarget } from "../composerDraftStore";
 import * as Option from "effect/Option";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
@@ -1375,4 +1376,19 @@ export function taskEnrollmentNotice(outcome: TaskEnrollmentOutcome | undefined)
     case "not-root":
       return "Contract saved. Child and fork conversations are not automatically added to Tasks.";
   }
+}
+
+/** An old route callback must not read the newly retargeted shared composer ref. */
+export function readComposerSendContextForTarget<
+  C extends { composerDraftTargetKey: string; composerEnvironmentId: EnvironmentId },
+>(
+  target: ComposerThreadTarget,
+  environmentId: EnvironmentId,
+  composer: { getSendContext: () => C } | null,
+) {
+  const context = composer?.getSendContext();
+  return context?.composerDraftTargetKey === composerTargetKey(target) &&
+    context.composerEnvironmentId === environmentId
+    ? context
+    : undefined;
 }

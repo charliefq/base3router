@@ -110,3 +110,5 @@ frozen bound is spent. Collaboration execution stays `DENY`, and Grokbot stays
 - A provider remaining-budget ceiling. One offline turn can report past the
   frozen cap. The next start is refused after that report. Spend remains
   unknown, and a real paid pilot is not authorized.
+
+The composer routing choice is local intent scoped to its exact conversation or stable draft identity. Promotion transfers that draft choice to its exact server destination; it is not a global default or execution authority. A send captures mode before asynchronous work and rejects a composer context from another target or environment. Queued-message edits preserve the existing queued route.

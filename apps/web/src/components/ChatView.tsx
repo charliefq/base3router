@@ -1,3 +1,4 @@
+import { readComposerSendContextForTarget } from "./ChatView.logic";
 import { ChatCanvas } from "./chat/ChatCanvas";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import {
@@ -7907,7 +7908,11 @@ export default function ChatView(props: ChatViewProps) {
     if (compactDisabled || !activeThread || !clientSettingsHydrated || sendInFlightRef.current) {
       return;
     }
-    const context = composerRef.current?.getSendContext();
+    const context = readComposerSendContextForTarget(
+      composerDraftTarget,
+      environmentId,
+      composerRef.current,
+    );
     if (!context?.providerAvailable) return;
 
     // Compaction is a standalone command; the draft and its attachments stay local.
@@ -8136,7 +8141,11 @@ export default function ChatView(props: ChatViewProps) {
       onAdvanceActivePendingUserInput();
       return;
     }
-    const sendCtx = composerRef.current?.getSendContext();
+    const sendCtx = readComposerSendContextForTarget(
+      composerDraftTarget,
+      environmentId,
+      composerRef.current,
+    );
     if (!sendCtx?.providerAvailable) {
       notifyDirectAnnotationAttached();
       return;
@@ -9686,7 +9695,11 @@ export default function ChatView(props: ChatViewProps) {
       return false;
     }
 
-    const sendCtx = composerRef.current?.getSendContext();
+    const sendCtx = readComposerSendContextForTarget(
+      composerDraftTarget,
+      environmentId,
+      composerRef.current,
+    );
     if (!sendCtx?.providerAvailable || !sendCtx.interactionModeEnabled) {
       return false;
     }
@@ -9825,7 +9838,11 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
 
-    const sendCtx = composerRef.current?.getSendContext();
+    const sendCtx = readComposerSendContextForTarget(
+      composerDraftTarget,
+      environmentId,
+      composerRef.current,
+    );
     if (!sendCtx?.providerAvailable || !sendCtx.interactionModeEnabled) {
       return;
     }
@@ -9967,6 +9984,7 @@ export default function ChatView(props: ChatViewProps) {
     defaultRuntimeMode,
     startThreadTurn,
     environmentId,
+    composerDraftTarget,
     composerRef,
   ]);
 
