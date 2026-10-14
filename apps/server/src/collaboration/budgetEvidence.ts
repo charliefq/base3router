@@ -58,6 +58,21 @@ export const readBudgetEvidence = (
       !input.owns(root.id)
     )
       return no("invalid_root_binding");
+    const members = yield* sql<{
+      thread_id: string;
+      parent_thread_id: string | null;
+    }>`SELECT thread_id,parent_thread_id FROM task_contract_members WHERE root_thread_id=${root.id}`;
+    // SQL includes raw root claims and registered members. A failed codec is
+    // evidence of an incomplete tree, not permission to drop that descendant.
+    const invalidCandidates = decoded.filter((node) => node.decoded._tag === "None");
+    if (invalidCandidates.length > 0)
+      return no(
+        invalidCandidates.every((node) =>
+          members.some((member) => member.thread_id === node.row.thread_id),
+        )
+          ? "invalid_member_binding"
+          : "invalid_tree_binding",
+      );
     const tree = decoded.filter(
       (n) => n.decoded._tag === "Some" && n.decoded.value.lineage.rootThreadId === root.id,
     );
@@ -93,10 +108,6 @@ export const readBudgetEvidence = (
       return false;
     };
     if ([...nodes.keys()].some((id) => !validNode(id))) return no("invalid_tree_binding");
-    const members = yield* sql<{
-      thread_id: string;
-      parent_thread_id: string | null;
-    }>`SELECT thread_id,parent_thread_id FROM task_contract_members WHERE root_thread_id=${root.id}`;
     if (
       members.some((m) => {
         const node = nodes.get(m.thread_id);

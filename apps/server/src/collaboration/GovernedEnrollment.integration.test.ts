@@ -1184,6 +1184,28 @@ it.live(
             assert.equal(synthetic.usage.priceStatus, "synthetic_verified");
             assert.equal(synthetic.usage.remainingTokens, 40);
             assert.equal(synthetic.usage.verifiedRemainingCostUsd, 2);
+            // A persisted descendant is evidence even before it acquires ledger rows.
+            // Its raw lineage claims this tree, but the malformed id fails the codec.
+            const malformedChild = { ...child, id: 123 };
+            yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id,project_id,provider_instance_id,title,default_provider,runtime_mode,interaction_mode,created_at,updated_at,payload_json) SELECT 'untracked-malformed-child',project_id,provider_instance_id,'Malformed child',default_provider,runtime_mode,interaction_mode,created_at,updated_at,${json(malformedChild)} FROM orchestration_v2_projection_threads WHERE thread_id=${command.threadId}`;
+            const malformedMarker = yield* marker();
+            assert.deepEqual((yield* read()).tasks[0]?.budgetReadout, {
+              status: "unavailable",
+              reason: "invalid_tree_binding",
+            });
+            assert.deepEqual(yield* marker(), malformedMarker);
+            yield* sql`INSERT INTO orchestration_v2_projection_provider_threads (provider_thread_id,thread_id,provider_instance_id,provider,status,updated_at,payload_json) VALUES ('malformed-provider','untracked-malformed-child',${selection.instanceId},'codex','closed','2026-10-14T00:00:00.000Z','{}')`;
+            yield* sql`INSERT INTO orchestration_v2_projection_provider_turns (provider_turn_id,thread_id,provider_thread_id,node_id,run_attempt_id,ordinal,status,started_at,payload_json) VALUES ('malformed-turn','untracked-malformed-child','malformed-provider','malformed-node','malformed-attempt',1,'running','2026-10-14T00:00:00.000Z','{}')`;
+            const malformedTurnMarker = yield* marker();
+            assert.deepEqual((yield* read()).tasks[0]?.budgetReadout, {
+              status: "unavailable",
+              reason: "invalid_tree_binding",
+            });
+            assert.deepEqual(yield* marker(), malformedTurnMarker);
+            yield* sql`DELETE FROM orchestration_v2_projection_provider_turns WHERE provider_turn_id='malformed-turn'`;
+            yield* sql`DELETE FROM orchestration_v2_projection_provider_threads WHERE provider_thread_id='malformed-provider'`;
+            yield* sql`DELETE FROM orchestration_v2_projection_threads WHERE thread_id='untracked-malformed-child'`;
+
             const repeated = yield* checkedRead();
             assert.equal(repeated.usage.reportedTokens, 60);
             yield* sql`INSERT INTO orchestration_v2_projection_provider_turns (provider_turn_id,thread_id,provider_thread_id,node_id,run_attempt_id,ordinal,status,started_at,payload_json) VALUES ('unreported-turn',${child.id},'budget-provider-2','budget-node','budget-attempt',4,'running','2026-10-14T00:00:00.000Z','{}')`;
