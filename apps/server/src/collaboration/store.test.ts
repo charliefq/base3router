@@ -1235,3 +1235,29 @@ it.effect(
       );
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
+
+it.effect(
+  "selection basis persists without historical backfill or borrowing an invalid route",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* routingFixture;
+      const before = yield* f.sql`SELECT total_changes() AS n`;
+      const current = yield* f.read();
+      assert.equal(current?.status, "available");
+      if (current?.status !== "available") throw new Error("Missing fixture readout");
+      assert.deepEqual(current.selectionBasis, f.binding.modelRoute.selectionBasis);
+      assert.equal(current.selectionBasis?.outcome, "single");
+      assert.deepEqual(yield* f.sql`SELECT total_changes() AS n`, before);
+      yield* f.sql`UPDATE projection_dispatcher_task_routes SET binding_json=json_remove(binding_json,'$.modelRoute.selectionBasis')`;
+      const historical = yield* f.read();
+      assert.equal(historical?.status, "available");
+      if (historical?.status !== "available") throw new Error("Missing historical readout");
+      assert.equal(historical.selectionBasis, undefined);
+      assert.equal(historical.explanation, f.binding.modelRoute.explanation);
+      yield* f.sql`UPDATE projection_dispatcher_task_routes SET binding_json=${encodeEvidence({ ...f.binding, target: { instanceId: "provider-codex", model: "different" } })}`;
+      const invalid = yield* f.read();
+      assert.equal(invalid?.status, "available");
+      if (invalid?.status !== "available") throw new Error("Missing invalid readout");
+      assert.equal(invalid.selectionBasis, undefined);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);

@@ -16,6 +16,7 @@ import {
   type ModelRouterMode,
   type ModelRouterPolicy,
   type ModelRouterReasonCode,
+  type ModelRouterSelectionBasis,
   type ModelRouterRouteAttempt,
   type ModelRouterTarget,
   type ModelRouterTaskCharacteristics,
@@ -318,29 +319,118 @@ export function compareModelRouterTieBreak(
   return compareStrings(left.target.model, right.target.model);
 }
 
-function explanationFor(input: {
+function selectionBasisFor(input: {
   readonly mode: ModelRouterMode;
   readonly selected: ModelRouterCandidate | null;
+  readonly manualRejected: boolean;
+  readonly eligible: ReadonlyArray<ModelRouterCandidate>;
+  readonly built: ReadonlyArray<Omit<ModelRouterCandidate, "fallbackIndex">>;
+  readonly policy: ModelRouterPolicy;
   readonly qualityActive: boolean;
   readonly costActive: boolean;
   readonly latencyActive: boolean;
-}): string {
-  if (input.selected === null) {
-    return input.mode === "manual"
+}): ModelRouterSelectionBasis {
+  const dimension = (weight: number, complete: boolean) => ({
+    weight,
+    complete,
+    participation:
+      weight === 0
+        ? ("zero-weight" as const)
+        : complete
+          ? ("weighted" as const)
+          : ("incomplete" as const),
+  });
+  const score = (candidate: ModelRouterCandidate) =>
+    policyScore(
+      candidate,
+      input.policy,
+      input.qualityActive,
+      input.costActive,
+      input.latencyActive,
+    );
+  const selected = input.selected;
+  let outcome: ModelRouterSelectionBasis["outcome"] =
+    input.mode === "manual"
+      ? selected !== null
+        ? "manual-accepted"
+        : input.manualRejected
+          ? "manual-rejected"
+          : "manual-missing"
+      : selected === null
+        ? "none"
+        : input.eligible.length === 1
+          ? "single"
+          : "score";
+  const tieBreak: Array<ModelRouterSelectionBasis["tieBreak"][number]> = [];
+  let selectedScore: number | null = null;
+  let runnerUpScore: number | null = null;
+  if (outcome === "score" && selected !== null) {
+    selectedScore = score(selected);
+    runnerUpScore = input.eligible[1] === undefined ? null : score(input.eligible[1]);
+    let tied = input.eligible.filter((candidate) => score(candidate) === selectedScore);
+    if (Number.isNaN(selectedScore) || (runnerUpScore !== null && Number.isNaN(runnerUpScore))) {
+      outcome = "unknown";
+    } else if (tied.length > 1) {
+      outcome = "tie";
+      // Record only stages that actually remove equal-score contenders.
+      const narrow = (
+        stage: ModelRouterSelectionBasis["tieBreak"][number],
+        matches: (candidate: ModelRouterCandidate) => boolean,
+      ) => {
+        const remaining = tied.filter(matches);
+        if (remaining.length < tied.length) tieBreak.push(stage);
+        tied = remaining;
+      };
+      narrow("preferred", (candidate) => candidate.preferredDefault === selected.preferredDefault);
+      narrow(
+        "driver",
+        (candidate) =>
+          driverTieBreakIndex(candidate.driver) === driverTieBreakIndex(selected.driver),
+      );
+      narrow("instance", (candidate) => candidate.target.instanceId === selected.target.instanceId);
+      narrow("model", (candidate) => candidate.target.model === selected.target.model);
+    }
+  }
+  return {
+    version: "model-router.v0.selection-basis.v1",
+    selectedTarget: selected?.target ?? null,
+    outcome,
+    eligibleCount: input.built.filter((candidate) => candidate.eligible).length,
+    consideredEligibleCount: input.eligible.length,
+    excludedCount: input.built.filter((candidate) => !candidate.eligible).length,
+    dimensions: {
+      quality: dimension(input.policy.qualityWeight, input.qualityActive),
+      costUsd: dimension(input.policy.costWeight, input.costActive),
+      latencyMs: dimension(input.policy.latencyWeight, input.latencyActive),
+    },
+    // Preserve the existing arithmetic even if extreme finite inputs overflow.
+    selectedScore: selectedScore !== null && Number.isFinite(selectedScore) ? selectedScore : null,
+    runnerUpScore: runnerUpScore !== null && Number.isFinite(runnerUpScore) ? runnerUpScore : null,
+    tieBreak,
+  };
+}
+
+function explanationFor(
+  mode: ModelRouterMode,
+  selected: ModelRouterCandidate | null,
+  basis: ModelRouterSelectionBasis,
+): string {
+  if (selected === null) {
+    return mode === "manual"
       ? "Manual model selection could not be recorded against the catalog."
-      : "Auto Route found no available, authorized model that meets the required capabilities and constraints.";
+      : basis.eligibleCount > 0
+        ? "Auto Route found no eligible candidate within the policy candidate limit."
+        : "Auto Route found no available, authorized model that meets the required capabilities and constraints.";
   }
-  const target = `${input.selected.target.instanceId} · ${input.selected.target.model}`;
-  if (input.mode === "manual") {
-    return `Manual selection of ${target}. Automatic ranking was not applied.`;
-  }
-  if (input.selected.reasonCodes.includes("PREFERRED_DEFAULT")) {
-    return `Auto Route selected ${target} because it is the configured default and is available.`;
-  }
-  if (input.qualityActive || input.costActive || input.latencyActive) {
-    return `Auto Route selected ${target} using policy ${MODEL_ROUTER_POLICY_VERSION} weights on known metrics.`;
-  }
-  return `Auto Route selected ${target} by policy ${MODEL_ROUTER_POLICY_VERSION} tie-break. Quality, cost, and latency are unknown.`;
+  const target = `${selected.target.instanceId} · ${selected.target.model}`;
+  if (mode === "manual") return `Manual selection of ${target}. Automatic ranking was not applied.`;
+  if (basis.outcome === "unknown")
+    return `Auto Route selected ${target}; ranking arithmetic was not representable, so the detailed selection cause is unknown.`;
+  if (basis.outcome === "single")
+    return `Auto Route selected ${target}: the only eligible candidate in the selectable ranking.`;
+  if (basis.outcome === "score")
+    return `Auto Route selected ${target} by higher weighted catalog-estimate score under policy ${MODEL_ROUTER_POLICY_VERSION}.`;
+  return `Auto Route selected ${target} by equal-score tie-break (${basis.tieBreak.join(" → ")}) under policy ${MODEL_ROUTER_POLICY_VERSION}.`;
 }
 
 function sanitizeText(value: string): string {
@@ -366,7 +456,7 @@ function sanitizeAttempt(attempt: ModelRouterRouteAttempt): ModelRouterRouteAtte
 function sanitizeDecision(decision: ModelRouterDecision): ModelRouterDecision {
   return {
     ...decision,
-    explanation: sanitizeText(decision.explanation),
+    explanation: sanitizeText(decision.explanation).slice(0, 512),
     reasonCodes: decision.reasonCodes,
     candidates: decision.candidates,
     fallbacks: decision.fallbacks,
@@ -535,7 +625,11 @@ export function routeModel(input: ModelRouterInput): ModelRouterDecision {
       if (selected) {
         selected = {
           ...selected,
-          reasonCodes: uniqueReasons([...selected.reasonCodes, "MANUAL_OVERRIDE", "SELECTED"]),
+          reasonCodes: uniqueReasons([
+            ...selected.reasonCodes.filter((code) => code !== "PREFERRED_DEFAULT"),
+            "MANUAL_OVERRIDE",
+            "SELECTED",
+          ]),
         };
       }
     }
@@ -543,13 +637,12 @@ export function routeModel(input: ModelRouterInput): ModelRouterDecision {
     selected = eligible[0] ?? null;
     if (selected) {
       const extras: Array<ModelRouterReasonCode> = ["SELECTED"];
-      if (selected.preferredDefault) extras.push("PREFERRED_DEFAULT");
-      if (!qualityActive && !costActive && !latencyActive)
-        extras.push("METRICS_UNKNOWN", "POLICY_TIE_BREAK");
-      else extras.push("POLICY_TIE_BREAK");
       selected = {
         ...selected,
-        reasonCodes: uniqueReasons([...selected.reasonCodes, ...extras]),
+        reasonCodes: uniqueReasons([
+          ...selected.reasonCodes.filter((code) => code !== "PREFERRED_DEFAULT"),
+          ...extras,
+        ]),
       };
       selectionReasons = extras;
     } else {
@@ -557,15 +650,41 @@ export function routeModel(input: ModelRouterInput): ModelRouterDecision {
     }
   }
 
+  const selectionBasis = selectionBasisFor({
+    mode: input.mode,
+    selected,
+    manualRejected: manualRejectionReasons.length > 0,
+    eligible,
+    built,
+    policy,
+    qualityActive,
+    costActive,
+    latencyActive,
+  });
+  if (input.mode === "auto" && selected !== null) {
+    if (selectionBasis.tieBreak.includes("preferred")) selectionReasons.push("PREFERRED_DEFAULT");
+    if (!qualityActive && !costActive && !latencyActive) selectionReasons.push("METRICS_UNKNOWN");
+    if (selectionBasis.outcome === "tie") selectionReasons.push("POLICY_TIE_BREAK");
+    selected = {
+      ...selected,
+      reasonCodes: uniqueReasons([...selected.reasonCodes, ...selectionReasons]),
+    };
+  }
   const fallbacks = [...distinctInstanceFallbacks(eligible, selected)];
-  const decisionReasons = uniqueReasons([
-    ...selectionReasons,
-    ...(manualRejectionReasons.some((reason) => !reason.startsWith("ESTIMATED_"))
-      ? []
-      : selected === null
-        ? withIndex.flatMap((candidate) => candidate.reasonCodes)
-        : selected.reasonCodes),
-  ]);
+  const decisionReasons = uniqueReasons(
+    [
+      ...selectionReasons,
+      ...(manualRejectionReasons.some((reason) => !reason.startsWith("ESTIMATED_"))
+        ? []
+        : selected === null
+          ? withIndex.flatMap((candidate) => candidate.reasonCodes)
+          : selected.reasonCodes),
+    ].filter(
+      (code) =>
+        code !== "PREFERRED_DEFAULT" ||
+        (input.mode === "auto" && selectionBasis.tieBreak.includes("preferred")),
+    ),
+  );
 
   const decision: ModelRouterDecision = {
     policyVersion: MODEL_ROUTER_POLICY_VERSION,
@@ -586,13 +705,8 @@ export function routeModel(input: ModelRouterInput): ModelRouterDecision {
         ? manualRejectionReasons.every((reason) => reason.startsWith("ESTIMATED_"))
           ? "Manual override could not satisfy the supplied estimated cost or latency limits. No model was selected."
           : "Manual selection could not satisfy the supplied capabilities or allow/exclude constraints. No model was selected."
-        : explanationFor({
-            mode: input.mode,
-            selected,
-            qualityActive,
-            costActive,
-            latencyActive,
-          }),
+        : explanationFor(input.mode, selected, selectionBasis),
+    selectionBasis,
     estimatedCostUsd: selected?.metrics.costUsd ?? MODEL_ROUTER_UNKNOWN_METRIC,
     estimatedLatencyMs: selected?.metrics.latencyMs ?? MODEL_ROUTER_UNKNOWN_METRIC,
     estimatedQuality: selected?.metrics.quality ?? MODEL_ROUTER_UNKNOWN_METRIC,

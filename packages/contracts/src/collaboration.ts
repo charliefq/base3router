@@ -18,7 +18,7 @@ import {
   TaskContractReviewReference,
 } from "./taskContract.ts";
 import { ExplicitUserFeedbackV0 } from "./routerEvaluation.ts";
-import { ModelRouterMode, ModelRouterTarget } from "./modelRouter.ts";
+import { ModelRouterMode, ModelRouterTarget, ModelRouterSelectionBasis } from "./modelRouter.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
@@ -110,6 +110,7 @@ export const CollaborationTaskRoutingReadout = Schema.Union([
     source: Schema.NullOr(Schema.String),
     reasons: Schema.Array(Schema.String),
     explanation: Schema.NullOr(Schema.String),
+    selectionBasis: Schema.optional(ModelRouterSelectionBasis),
     selectionUnknownReason: Schema.NullOr(Schema.String),
     configuredModel: Schema.NullOr(ModelSelection),
     execution: Schema.Union([

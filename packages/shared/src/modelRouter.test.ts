@@ -6,6 +6,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ModelRouterMetrics,
+  type ModelRouterCandidate,
   type ServerProvider,
 } from "@t3tools/contracts";
 
@@ -284,45 +285,61 @@ describe("estimated hard limits", () => {
   it.each([
     {
       mode: "auto" as const,
-      hash: "e2922b04f8acbc518607b641522b1ffcc21f4c60f0185ef23c8bcadf3d11ae4c",
+      hash: "f57047c11b494c0923aac4aaf88982a6db2573a3c5d015e2aa68eeed3a54bd74",
     },
     {
       mode: "manual" as const,
-      hash: "6a15747d47c116b98bb2b2a873f354ba6340b103b2a07f8db2d2f77a3e94656d",
+      hash: "74cdcb20e9b318425d25958f5489c8b78446efb0a03ff5b43b928876fbf366fc",
     },
-  ])(
-    "preserves the starting full serialized $mode decision when limits are absent",
-    ({ mode, hash }) => {
-      const catalog = [
-        entry({
-          instanceId: "fixture-a",
-          model: "fixture-a",
-          driver: driver("codex"),
-          capabilities: ["code"],
-        }),
-        entry({
-          instanceId: "fixture-b",
-          model: "fixture-b",
-          driver: driver("claudeAgent"),
-          capabilities: ["code"],
-        }),
-      ];
-      const input = {
-        mode,
-        catalog,
-        ...(mode === "manual"
-          ? {
-              manualOverride: { instanceId: instance("fixture-missing"), model: "fixture-missing" },
-            }
-          : {}),
-      };
-      const decision = routeModel(input);
-      expect(NodeCrypto.createHash("sha256").update(JSON.stringify(decision)).digest("hex")).toBe(
-        hash,
-      );
-      expect(routeModel({ ...input, constraints: {} })).toEqual(decision);
-    },
-  );
+  ])("preserves exact-base $mode routing identity when limits are absent", ({ mode, hash }) => {
+    const catalog = [
+      entry({
+        instanceId: "fixture-a",
+        model: "fixture-a",
+        driver: driver("codex"),
+        capabilities: ["code"],
+      }),
+      entry({
+        instanceId: "fixture-b",
+        model: "fixture-b",
+        driver: driver("claudeAgent"),
+        capabilities: ["code"],
+      }),
+    ];
+    const input = {
+      mode,
+      catalog,
+      ...(mode === "manual"
+        ? {
+            manualOverride: { instanceId: instance("fixture-missing"), model: "fixture-missing" },
+          }
+        : {}),
+    };
+    const decision = routeModel(input);
+    // Base-generated identity oracle excludes the explanation and attribution being repaired.
+    const {
+      explanation: _explanation,
+      reasonCodes: _reasons,
+      selectionBasis: _basis,
+      ...identity
+    } = decision;
+    const candidateIdentity = (candidate: ModelRouterCandidate | null | undefined) => {
+      if (candidate == null) return candidate;
+      const { reasonCodes: _codes, ...rest } = candidate;
+      return rest;
+    };
+    const routingIdentity = {
+      ...identity,
+      selected: candidateIdentity(identity.selected),
+      fallbacks: identity.fallbacks.map(candidateIdentity),
+      candidates: identity.candidates.map(candidateIdentity),
+      executed: candidateIdentity(identity.executed),
+    };
+    expect(
+      NodeCrypto.createHash("sha256").update(JSON.stringify(routingIdentity)).digest("hex"),
+    ).toBe(hash);
+    expect(routeModel({ ...input, constraints: {} })).toEqual(decision);
+  });
 });
 
 describe("Manual explicit hard constraints", () => {
@@ -800,5 +817,212 @@ describe("routeModel", () => {
       "openrouter",
       "codex",
     ]);
+  });
+});
+
+describe("selection basis", () => {
+  const known = (value: number) => ({ status: "known" as const, value });
+  const metrics = (quality: number): ModelRouterMetrics => ({
+    quality: known(quality),
+    costUsd: known(1),
+    latencyMs: known(10),
+  });
+  const a = entry({ instanceId: "codex", model: "a", metrics: metrics(20) });
+  const b = entry({ instanceId: "claude", model: "b", metrics: metrics(10) });
+  it.each([true, false])(
+    "attributes strict score wins accurately (winner preferred=%s)",
+    (preferred) => {
+      const decision = routeModel({
+        mode: "auto",
+        catalog: [b, a],
+        preferredTargets: [preferred ? a : b],
+      });
+      expect(decision.selected?.target).toEqual({ instanceId: a.instanceId, model: a.model });
+      expect(decision.selectionBasis).toMatchObject({
+        outcome: "score",
+        selectedScore: 9,
+        runnerUpScore: -1,
+        tieBreak: [],
+        dimensions: { quality: { participation: "weighted", weight: 1, complete: true } },
+      });
+      expect(decision.reasonCodes).not.toContain("PREFERRED_DEFAULT");
+      expect(decision.reasonCodes).not.toContain("POLICY_TIE_BREAK");
+      expect(decision.explanation).toContain("higher weighted catalog-estimate score");
+      expect(decision.explanation).not.toContain("configured default");
+    },
+  );
+  it("records preference only when it breaks an equal-score tie", () => {
+    const decision = routeModel({
+      mode: "auto",
+      catalog: [a, { ...b, metrics: metrics(20) }],
+      preferredTargets: [b],
+    });
+    expect(decision.selected?.target.model).toBe("b");
+    expect(decision.selectionBasis).toMatchObject({
+      outcome: "tie",
+      selectedScore: 9,
+      runnerUpScore: 9,
+      tieBreak: ["preferred"],
+    });
+    expect(decision.reasonCodes).toContain("PREFERRED_DEFAULT");
+    expect(decision.reasonCodes).toContain("POLICY_TIE_BREAK");
+  });
+  it("records each tie stage that narrows equally scored contenders", () => {
+    const rows = [
+      a,
+      { ...a, instanceId: instance("z") },
+      { ...a, model: "z" },
+      { ...b, metrics: metrics(20), driver: driver("claudeAgent") },
+    ];
+    const decision = routeModel({ mode: "auto", catalog: rows });
+    expect(decision.selectionBasis).toMatchObject({
+      outcome: "tie",
+      tieBreak: ["driver", "instance", "model"],
+    });
+    expect(decision.reasonCodes).not.toContain("PREFERRED_DEFAULT");
+  });
+  it("separates incomplete and zero-weight dimensions from selected estimates and ignores exclusions", () => {
+    const excluded = {
+      ...b,
+      instanceId: instance("excluded"),
+      availabilityReasons: ["PROVIDER_DISABLED" as const],
+      metrics: {
+        quality: { status: "unknown" as const },
+        costUsd: { status: "unknown" as const },
+        latencyMs: { status: "unknown" as const },
+      },
+    };
+    const decision = routeModel({
+      mode: "auto",
+      catalog: [
+        a,
+        { ...b, metrics: { ...metrics(100), quality: { status: "unknown" } } },
+        excluded,
+      ],
+      policy: { version: "model-router.v0", qualityWeight: 2, costWeight: 0, latencyWeight: 1 },
+    });
+    expect(decision.estimatedQuality).toEqual(known(20));
+    expect(decision.selectionBasis).toMatchObject({
+      outcome: "tie",
+      eligibleCount: 2,
+      consideredEligibleCount: 2,
+      excludedCount: 1,
+      tieBreak: ["driver"],
+      dimensions: {
+        quality: { participation: "incomplete", complete: false, weight: 2 },
+        costUsd: { participation: "zero-weight", complete: true, weight: 0 },
+        latencyMs: { participation: "weighted", weight: 1 },
+      },
+    });
+    expect(decision.explanation).not.toContain("are unknown");
+  });
+  it("does not call known zero-weight metrics unknown", () => {
+    const decision = routeModel({
+      mode: "auto",
+      catalog: [a, b],
+      policy: { version: "model-router.v0", qualityWeight: 0, costWeight: 0, latencyWeight: 0 },
+    });
+    expect(decision.selectionBasis?.dimensions.quality.participation).toBe("zero-weight");
+    expect(decision.reasonCodes).not.toContain("METRICS_UNKNOWN");
+  });
+  it.each(["single", "none", "manual-accepted", "manual-rejected", "manual-missing"] as const)(
+    "records %s independently of automatic scores",
+    (outcome) => {
+      const manual = outcome.startsWith("manual");
+      const decision = routeModel({
+        mode: manual ? "manual" : "auto",
+        catalog: outcome === "none" ? [] : [a],
+        ...(outcome === "manual-missing" ? {} : { manualOverride: a }),
+        ...(outcome === "manual-rejected" ? { constraints: { excludedModels: ["a"] } } : {}),
+      });
+      expect(decision.selectionBasis).toMatchObject({
+        outcome,
+        selectedScore: null,
+        runnerUpScore: null,
+        tieBreak: [],
+      });
+      expect(decision.reasonCodes).not.toContain("POLICY_TIE_BREAK");
+      expect(decision.selectionBasis?.selectedTarget).toEqual(decision.selected?.target ?? null);
+    },
+  );
+  it.each(["auto", "manual"] as const)(
+    "does not attribute preference to a sole %s selection",
+    (mode) => {
+      const decision = routeModel({ mode, catalog: [a], preferredTargets: [a], manualOverride: a });
+      expect(decision.reasonCodes).not.toContain("PREFERRED_DEFAULT");
+      expect(decision.selected?.reasonCodes).not.toContain("PREFERRED_DEFAULT");
+      expect(decision.candidates[0]?.preferredDefault).toBe(true);
+    },
+  );
+  it("does not attribute preference to excluded candidates when none remain", () => {
+    const decision = routeModel({
+      mode: "auto",
+      catalog: [a],
+      preferredTargets: [a],
+      constraints: { excludedModels: [a.model] },
+    });
+    expect(decision.selectionBasis?.outcome).toBe("none");
+    expect(decision.reasonCodes).not.toContain("PREFERRED_DEFAULT");
+  });
+  it("records incomplete coverage across all eligible rows before the existing candidate cap", () => {
+    const rows = Array.from({ length: 33 }, (_, index) => ({
+      ...a,
+      model: `m${index.toString().padStart(2, "0")}`,
+      ...(index === 32
+        ? { metrics: { ...metrics(20), quality: { status: "unknown" as const } } }
+        : {}),
+    }));
+    const decision = routeModel({ mode: "auto", catalog: rows });
+    expect(decision.candidates).toHaveLength(32);
+    expect(decision.selectionBasis).toMatchObject({
+      eligibleCount: 33,
+      consideredEligibleCount: 32,
+      dimensions: { quality: { participation: "incomplete" } },
+      outcome: "tie",
+      tieBreak: ["model"],
+    });
+  });
+  it("reports unknown decisive basis if the unchanged arithmetic produces NaN", () => {
+    const huge = { quality: known(1e308), costUsd: known(1e308), latencyMs: known(0) };
+    const decision = routeModel({
+      mode: "auto",
+      catalog: [
+        { ...a, metrics: huge },
+        { ...b, metrics: huge },
+      ],
+      policy: {
+        version: "model-router.v0",
+        qualityWeight: 1e308,
+        costWeight: 1e308,
+        latencyWeight: 0,
+      },
+    });
+    expect(decision.selected?.target.model).toBe("a");
+    expect(decision.selectionBasis).toMatchObject({
+      outcome: "unknown",
+      selectedScore: null,
+      runnerUpScore: null,
+      tieBreak: [],
+    });
+    expect(decision.explanation).toContain("selection cause is unknown");
+  });
+  it("reports no selectable candidate when exclusions occupy the existing cap", () => {
+    const excluded = Array.from({ length: 32 }, (_, i) => ({
+      ...a,
+      model: `excluded${i}`,
+      availabilityReasons: ["PROVIDER_DISABLED" as const],
+    }));
+    const decision = routeModel({
+      mode: "auto",
+      catalog: [...excluded, { ...b, metrics: metrics(0) }],
+    });
+    expect(decision.selected).toBeNull();
+    expect(decision.selectionBasis).toMatchObject({
+      outcome: "none",
+      eligibleCount: 1,
+      consideredEligibleCount: 0,
+      excludedCount: 32,
+    });
+    expect(decision.explanation).toContain("candidate limit");
   });
 });

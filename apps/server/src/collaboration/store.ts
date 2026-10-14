@@ -250,6 +250,9 @@ const readRoutingEvidence = (
       source: routeConsistent ? binding.source : null,
       reasons: routeConsistent ? (decision?.reasonCodes ?? binding.gate.reasonCodes) : [],
       explanation: routeConsistent ? (decision?.explanation ?? null) : null,
+      ...(routeConsistent && decision?.selectionBasis !== undefined
+        ? { selectionBasis: decision.selectionBasis }
+        : {}),
       selectionUnknownReason:
         routeRow === undefined
           ? "route_missing"
