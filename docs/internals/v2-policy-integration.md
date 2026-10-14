@@ -174,6 +174,17 @@ cost stay unknown. Cost is the provider-reported figure only. Human acceptance
 is a separate decision from provider completion. A cohort with no accepted
 task has an undefined consumption ratio. Incomplete coverage is partial.
 
+Tasks budget cards read the validated owner's root tree in the same SQLite
+transaction as the link checks. Reservations are not confirmed execution.
+Declared brakes and persisted frozen bounds are separate: omitting a brake on
+a later revision does not erase a frozen cap. Reported partial components stay
+visible, but missing reservations, turn coverage, or verified pricing cannot
+establish headroom. Only explicitly labelled synthetic fixture prices can be
+verified on this implementation; production reported dollars are unverified.
+The card observes facts without freezing bounds, admitting work, or requesting
+cancellation. Dispatch still recomputes policy, and a cancellation request does
+not confirm termination or impose a hard mid-turn consumption ceiling.
+
 ## Later upstream commits
 
 None. The pin remains `8ed276c246b624631e7d39241ebfd22d8314cb68`.

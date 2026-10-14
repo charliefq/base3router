@@ -1065,3 +1065,215 @@ it.live(
       }),
     ).pipe(Effect.provide(Layer.mergeAll(runtime, NodeServices.layer))),
 );
+
+it.live(
+  "projects task tree budget evidence without SQLite writes on a disposable disk database",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const dir = yield* Effect.acquireRelease(
+          Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "b3r-budget-"))),
+          (path) => Effect.sync(() => NodeFS.rmSync(path, { recursive: true, force: true })),
+        );
+        const database = makeSqlitePersistenceLive(NodePath.join(dir, "state.sqlite")).pipe(
+          Layer.provide(NodeServices.layer),
+        );
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* seedProject;
+            const sql = yield* SqlClient.SqlClient;
+            const orchestrator = yield* Orchestrator.OrchestratorV2;
+            const command = create("budget-root");
+            yield* orchestrator
+              .dispatch(command)
+              .pipe(Effect.provideService(PolicyExecutionContext, principal));
+            const read = () =>
+              readCollaborationSnapshot(sql, principal.actorId, {
+                environmentId: "budget-env",
+                canOperate: false,
+              });
+            const marker = () =>
+              Effect.gen(function* () {
+                const tables = yield* sql<{
+                  name: string;
+                }>`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`;
+                const contents = yield* Effect.forEach(tables, (t) =>
+                  sql.unsafe(`SELECT * FROM "${t.name.replaceAll('"', '""')}"`),
+                );
+                return { contents, changes: yield* sql`SELECT total_changes() AS changes` };
+              });
+            const checkedRead = () =>
+              Effect.gen(function* () {
+                const before = yield* marker();
+                const snapshot = yield* read();
+                assert.deepEqual(yield* marker(), before);
+                yield* Effect.log("Budget read SQLite zero-write evidence", {
+                  tables: before.contents.length,
+                  totalChanges: before.changes,
+                });
+                const value = snapshot.tasks[0]?.budgetReadout;
+                assert.equal(value?.status, "available");
+                if (value?.status !== "available")
+                  throw new Error(`Budget read failed: ${value?.reason ?? "missing readout"}`);
+                assert.equal(value.taskId, snapshot.tasks[0]!.id);
+                assert.equal(value.rootThreadId, command.threadId);
+                assert.equal(value.environmentId, "budget-env");
+                assert.isTrue(Number.isFinite(Date.parse(value.observedAt)));
+                return value;
+              });
+            const unused = yield* checkedRead();
+            assert.equal(unused.reservedStarts, 0);
+            assert.equal(unused.usage.reportedTokens, 0);
+            assert.equal(unused.usage.remainingTokens, null);
+            assert.equal(unused.usage.verifiedRemainingCostUsd, null);
+            assert.equal(unused.frozen, null);
+            yield* sql`INSERT INTO task_contract_admissions (root_thread_id,command_id,thread_id,contract_revision,created_at) VALUES (${command.threadId},'unreported-reservation',${command.threadId},1,'2026-10-14T00:00:00.000Z')`;
+            const unreported = yield* checkedRead();
+            assert.equal(unreported.usage.status, "unknown");
+            assert.equal(unreported.usage.reportedTokens, null);
+            assert.equal(unreported.usage.reportedCostUsd, null);
+            yield* sql`DELETE FROM task_contract_admissions WHERE command_id='unreported-reservation'`;
+            const parent = (yield* orchestrator.getThreadProjection(command.threadId)).thread;
+            const child = makeSubagentChildThread({
+              parentThread: parent,
+              childThreadId: ThreadId.make("budget-child"),
+              parentNodeId: NodeId.make("budget-node"),
+              activeProviderThreadId: null,
+              providerInstanceId: selection.instanceId,
+              modelSelection: selection,
+              title: "Budget child",
+              now: yield* DateTime.now,
+              createdBy: "agent",
+              creationSource: "provider",
+            });
+            const json = encodeEvidence;
+            yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.taskContract.brake.maxTokens',100) WHERE thread_id=${command.threadId}`;
+            assert.include((yield* checkedRead()).issues, "required_bound_missing");
+            yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.taskContractPhase','redirected') WHERE thread_id=${command.threadId}`;
+            assert.include((yield* checkedRead()).issues, "paused");
+            yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.taskContractPhase','active','$.taskAcceptedRevision',1) WHERE thread_id=${command.threadId}`;
+            assert.include((yield* checkedRead()).issues, "accepted");
+            yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=${json(parent)} WHERE thread_id=${command.threadId}`;
+            // Setup writes only. Provider adapters and effect worker remain disabled.
+            yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id,project_id,provider_instance_id,title,default_provider,runtime_mode,interaction_mode,created_at,updated_at,payload_json) SELECT ${child.id},project_id,provider_instance_id,'Budget child',default_provider,runtime_mode,interaction_mode,created_at,updated_at,${json(child)} FROM orchestration_v2_projection_threads WHERE thread_id=${command.threadId}`;
+            yield* sql`INSERT INTO task_contract_members (thread_id,root_thread_id,revision,parent_thread_id) VALUES (${child.id},${command.threadId},1,${command.threadId})`;
+            yield* sql`INSERT INTO task_contract_deadlines (root_thread_id,deadline_at,frozen_at,max_tokens,max_cost_usd) VALUES (${command.threadId},'2099-01-01T00:00:00.000Z','2026-10-14T00:00:00.000Z',100,5)`;
+            for (const [i, thread, role] of [
+              [1, command.threadId, "primary"],
+              [2, child.id, "retry"],
+              [3, child.id, "failover"],
+            ] as const) {
+              const historicalProvider = i === 3 ? "fake-handoff" : selection.instanceId;
+              yield* sql`INSERT INTO orchestration_v2_projection_provider_threads (provider_thread_id,thread_id,provider_instance_id,provider,status,updated_at,payload_json) VALUES (${`budget-provider-${i}`},${thread},${historicalProvider},'codex','closed','2026-10-14T00:00:00.000Z','{}')`;
+              yield* sql`INSERT INTO task_contract_admissions (root_thread_id,command_id,thread_id,contract_revision,message_id,created_at) VALUES (${command.threadId},${`budget-command-${i}`},${thread},${i},${`budget-message-${i}`},'2026-10-14T00:00:00.000Z')`;
+              yield* sql`INSERT INTO orchestration_v2_projection_provider_turns (provider_turn_id,thread_id,provider_thread_id,node_id,run_attempt_id,ordinal,status,started_at,payload_json) VALUES (${`budget-turn-${i}`},${thread},${`budget-provider-${i}`},'budget-node','budget-attempt',${i},'completed','2026-10-14T00:00:00.000Z','{}')`;
+              yield* sql`INSERT INTO task_usage_attempts (environment_id,provider_turn_id,root_thread_id,thread_id,message_id,contract_revision,provider_instance_id,status,attempt_role,usage_status,basis,input_tokens,output_tokens,reported_cost_usd,updated_at) VALUES ('budget-env',${`budget-turn-${i}`},${command.threadId},${thread},${`budget-message-${i}`},${i},${historicalProvider},'completed',${role},'complete','snapshot',10,10,1,'2026-10-14T00:00:00.000Z')`;
+            }
+            const production = yield* checkedRead();
+            assert.equal(production.reservedStarts, 3);
+            assert.equal(production.remainingStarts, 0);
+            assert.equal(production.usage.reportedTokens, 60);
+            assert.equal(production.usage.priceStatus, "unverified");
+            assert.equal(production.usage.verifiedRemainingCostUsd, null);
+            assert.include(production.issues, "unverified_price");
+            assert.include(production.issues, "unsettled_reservation");
+            assert.equal(production.frozen?.tokens, 100);
+            assert.equal(production.declared.tokens, null);
+            yield* sql`UPDATE task_usage_attempts SET price_verified=1,price_label='synthetic-fixture' WHERE root_thread_id=${command.threadId}`;
+            const synthetic = yield* checkedRead();
+            assert.equal(synthetic.usage.priceStatus, "synthetic_verified");
+            assert.equal(synthetic.usage.remainingTokens, 40);
+            assert.equal(synthetic.usage.verifiedRemainingCostUsd, 2);
+            // A persisted descendant is evidence even before it acquires ledger rows.
+            // Its raw lineage claims this tree, but the malformed id fails the codec.
+            const malformedChild = { ...child, id: 123 };
+            yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id,project_id,provider_instance_id,title,default_provider,runtime_mode,interaction_mode,created_at,updated_at,payload_json) SELECT 'untracked-malformed-child',project_id,provider_instance_id,'Malformed child',default_provider,runtime_mode,interaction_mode,created_at,updated_at,${json(malformedChild)} FROM orchestration_v2_projection_threads WHERE thread_id=${command.threadId}`;
+            const malformedMarker = yield* marker();
+            assert.deepEqual((yield* read()).tasks[0]?.budgetReadout, {
+              status: "unavailable",
+              reason: "invalid_tree_binding",
+            });
+            assert.deepEqual(yield* marker(), malformedMarker);
+            yield* sql`INSERT INTO orchestration_v2_projection_provider_threads (provider_thread_id,thread_id,provider_instance_id,provider,status,updated_at,payload_json) VALUES ('malformed-provider','untracked-malformed-child',${selection.instanceId},'codex','closed','2026-10-14T00:00:00.000Z','{}')`;
+            yield* sql`INSERT INTO orchestration_v2_projection_provider_turns (provider_turn_id,thread_id,provider_thread_id,node_id,run_attempt_id,ordinal,status,started_at,payload_json) VALUES ('malformed-turn','untracked-malformed-child','malformed-provider','malformed-node','malformed-attempt',1,'running','2026-10-14T00:00:00.000Z','{}')`;
+            const malformedTurnMarker = yield* marker();
+            assert.deepEqual((yield* read()).tasks[0]?.budgetReadout, {
+              status: "unavailable",
+              reason: "invalid_tree_binding",
+            });
+            assert.deepEqual(yield* marker(), malformedTurnMarker);
+            yield* sql`DELETE FROM orchestration_v2_projection_provider_turns WHERE provider_turn_id='malformed-turn'`;
+            yield* sql`DELETE FROM orchestration_v2_projection_provider_threads WHERE provider_thread_id='malformed-provider'`;
+            yield* sql`DELETE FROM orchestration_v2_projection_threads WHERE thread_id='untracked-malformed-child'`;
+
+            const repeated = yield* checkedRead();
+            assert.equal(repeated.usage.reportedTokens, 60);
+            yield* sql`INSERT INTO orchestration_v2_projection_provider_turns (provider_turn_id,thread_id,provider_thread_id,node_id,run_attempt_id,ordinal,status,started_at,payload_json) VALUES ('unreported-turn',${child.id},'budget-provider-2','budget-node','budget-attempt',4,'running','2026-10-14T00:00:00.000Z','{}')`;
+            assert.equal((yield* checkedRead()).usage.remainingTokens, null);
+            yield* sql`DELETE FROM orchestration_v2_projection_provider_turns WHERE provider_turn_id='unreported-turn'`;
+            yield* sql`UPDATE task_usage_attempts SET input_tokens=NULL,usage_status='partial' WHERE provider_turn_id='budget-turn-2'`;
+            const partial = yield* checkedRead();
+            assert.equal(partial.usage.status, "partial");
+            assert.equal(partial.usage.reportedTokens, 50);
+            assert.equal(partial.usage.remainingTokens, null);
+            assert.equal(partial.usage.verifiedRemainingCostUsd, null);
+            assert.include(partial.issues, "usage_incomplete");
+            yield* sql`UPDATE task_usage_attempts SET input_tokens=100,usage_status='complete',reported_cost_usd=10 WHERE provider_turn_id='budget-turn-2'`;
+            yield* sql`UPDATE task_contract_deadlines SET deadline_at='2000-01-01T00:00:00.000Z' WHERE root_thread_id=${command.threadId}`;
+            const overspent = yield* checkedRead();
+            assert.equal(overspent.usage.reportedTokens, 150);
+            assert.equal(overspent.usage.remainingTokens, 0);
+            assert.equal(overspent.usage.verifiedRemainingCostUsd, 0);
+            for (const issue of ["deadline_expired", "token_exhausted", "cost_exhausted"])
+              assert.include(overspent.issues, issue);
+            yield* sql`UPDATE task_usage_attempts SET environment_id='foreign-env' WHERE provider_turn_id='budget-turn-2'`;
+            const before = yield* marker();
+            assert.deepEqual((yield* read()).tasks[0]?.budgetReadout, {
+              status: "unavailable",
+              reason: "inconsistent_tree_accounting",
+            });
+            assert.deepEqual(yield* marker(), before);
+            yield* sql`UPDATE task_usage_attempts SET environment_id='budget-env' WHERE provider_turn_id='budget-turn-2'`;
+            yield* sql`UPDATE orchestration_v2_projection_threads SET project_id='foreign-project' WHERE thread_id=${child.id}`;
+            assert.deepEqual((yield* read()).tasks[0]?.budgetReadout, {
+              status: "unavailable",
+              reason: "invalid_tree_binding",
+            });
+            yield* sql`UPDATE orchestration_v2_projection_threads SET project_id=${projectId} WHERE thread_id=${child.id}`;
+            yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json='bad json' WHERE thread_id=${child.id}`;
+            assert.deepEqual((yield* read()).tasks[0]?.budgetReadout, {
+              status: "unavailable",
+              reason: "invalid_member_binding",
+            });
+            yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=${json(child)} WHERE thread_id=${child.id}`;
+            const foreignLink = {
+              type: "thread.bind",
+              commandId: "foreign-child-owner",
+              projectId,
+              threadId: child.id,
+              agentId: selection.instanceId,
+              admittedBy: "foreign-owner",
+              admissionSource: "server",
+            };
+            yield* sql`INSERT INTO collaboration_commands (command_id,sequence,payload_json,created_at) SELECT 'foreign-child-owner',COALESCE(MAX(sequence),0)+1,${json(foreignLink)},'2026-10-14T00:00:00.000Z' FROM collaboration_commands`;
+            assert.deepEqual((yield* read()).tasks[0]?.budgetReadout, {
+              status: "unavailable",
+              reason: "invalid_tree_binding",
+            });
+            yield* sql`DELETE FROM collaboration_commands WHERE command_id='foreign-child-owner'`;
+            yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.lineage.rootThreadId','foreign-root') WHERE thread_id=${command.threadId}`;
+            assert.deepEqual((yield* read()).tasks[0]?.budgetReadout, {
+              status: "unavailable",
+              reason: "invalid_thread_link",
+            });
+            yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=${json(parent)} WHERE thread_id=${command.threadId}`;
+            yield* sql`DROP TABLE task_contract_deadlines`;
+            assert.deepEqual((yield* read()).tasks[0]?.budgetReadout, {
+              status: "unavailable",
+              reason: "budget_read_failed",
+            });
+          }),
+        ).pipe(Effect.provide(makeRuntime(database)));
+      }),
+    ),
+);

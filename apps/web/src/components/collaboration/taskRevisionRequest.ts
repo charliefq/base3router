@@ -18,10 +18,14 @@ const validReview = Schema.is(TaskContractReviewState);
 const validSnapshot = Schema.is(CollaborationSnapshot);
 const sameContract = Schema.toEquivalence(TaskContract);
 const sameReference = Schema.toEquivalence(TaskContractReviewReference);
-export const sameRevisionTask = Schema.toEquivalence(CollaborationTask);
+// Budget observation timestamps are display facts, not revision preparation
+// preconditions. Keep every existing task field in the original operation gate.
+const { budgetReadout: _budgetReadout, ...revisionFields } = CollaborationTask.fields;
+const RevisionTask = Schema.Struct(revisionFields);
+export const sameRevisionTask = Schema.toEquivalence(RevisionTask);
 export const sameRevisionProjection = Schema.toEquivalence(OrchestrationV2ThreadProjection);
 export const sameRevisionReview = Schema.toEquivalence(TaskContractReviewState);
-export const revisionTaskKey = Schema.encodeSync(Schema.fromJsonString(CollaborationTask));
+export const revisionTaskKey = Schema.encodeSync(Schema.fromJsonString(RevisionTask));
 
 export function hasRevisionOutput(task: CollaborationTask) {
   const r = task.resultReadout;

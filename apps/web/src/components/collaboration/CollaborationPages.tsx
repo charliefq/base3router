@@ -8,6 +8,7 @@ import {
   type CollaborationTask,
   type CollaborationTaskRoutingReadout,
   type CollaborationTaskResultReadout,
+  type CollaborationTaskBudgetReadout,
   type EnvironmentId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -37,6 +38,120 @@ import { Alert, AlertDescription } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { ScrollArea } from "../ui/scroll-area";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+
+const budgetIssueLabels: Readonly<Record<string, string>> = {
+  paused: "Paused for revised instructions",
+  accepted: "Current revision already accepted",
+  start_exhausted: "Reserved start limit exhausted",
+  required_bound_missing: "Required frozen budget bound missing",
+  deadline_expired: "Frozen deadline expired",
+  usage_incomplete: "Task tree usage coverage incomplete",
+  unverified_price: "Price evidence unverified",
+  token_exhausted: "Frozen token budget exhausted",
+  cost_exhausted: "Frozen dollar budget exhausted",
+  unsettled_reservation: "Reservation not settled by complete verified usage",
+};
+
+function TaskBudgetReadout({
+  readout,
+  stale,
+}: {
+  readout: CollaborationTaskBudgetReadout | undefined;
+  stale: boolean;
+}) {
+  const amount = (value: number | null) => (value === null ? "Unknown" : String(value));
+  return (
+    <div className="mt-4 space-y-2 rounded-lg border border-border/50 p-3">
+      <h3 className="text-sm font-medium">Task tree budget evidence</h3>
+      {stale ? (
+        <p className="text-xs text-muted-foreground">
+          Stale budget evidence — refresh has not confirmed current facts.
+        </p>
+      ) : null}
+      {readout?.status === "available" ? (
+        <>
+          <p className="text-xs text-muted-foreground">
+            Root {readout.rootThreadId} · contract revision {readout.contractRevision} · observed{" "}
+            {readout.observedAt}
+          </p>
+          <dl className="space-y-1 text-xs text-muted-foreground">
+            <div>
+              <dt>Reserved provider starts / declared limit / remaining</dt>
+              <dd>
+                {readout.reservedStarts} / {readout.declaredStarts} / {readout.remainingStarts}
+              </dd>
+            </div>
+            <div>
+              <dt>Declared token / cost (USD) / deadline bounds</dt>
+              <dd>
+                {readout.declared.tokens ?? "Not declared"} /{" "}
+                {readout.declared.costUsd ?? "Not declared"} /{" "}
+                {readout.declared.deadline ?? "Not declared"}
+              </dd>
+            </div>
+            <div>
+              <dt>Frozen token / cost (USD) / deadline bounds</dt>
+              <dd>
+                {readout.frozen
+                  ? `${readout.frozen.tokens ?? "No frozen token cap"} / ${readout.frozen.costUsd ?? "No frozen cost cap"} / ${readout.frozen.deadline} (frozen ${readout.frozen.frozenAt})`
+                  : "Unknown — no persisted frozen bounds"}
+              </dd>
+            </div>
+            <div>
+              <dt>
+                Reported tree usage ({readout.usage.status}; {readout.usage.attempts} attempts)
+              </dt>
+              <dd>
+                {amount(readout.usage.reportedTokens)} tokens /{" "}
+                {amount(readout.usage.reportedCostUsd)} USD
+              </dd>
+            </div>
+            <div>
+              <dt>Price evidence</dt>
+              <dd>
+                {readout.usage.priceStatus === "synthetic_verified"
+                  ? "Verified synthetic fixture only"
+                  : readout.usage.priceStatus === "no_attempts"
+                    ? "No reported attempts; no production price verified"
+                    : "Unverified — reported cost is not verified pricing"}
+              </dd>
+            </div>
+            <div>
+              <dt>Token remaining / verified dollar headroom (USD)</dt>
+              <dd>
+                {amount(readout.usage.remainingTokens)} /{" "}
+                {amount(readout.usage.verifiedRemainingCostUsd)}
+              </dd>
+            </div>
+            <div>
+              <dt>Observed budget issues</dt>
+              <dd>
+                {readout.issues.length
+                  ? readout.issues
+                      .map(
+                        (issue) =>
+                          `${budgetIssueLabels[issue] ?? "Unknown budget issue"} (${issue})`,
+                      )
+                      .join(", ")
+                  : "None observed in this snapshot"}
+              </dd>
+            </div>
+          </dl>
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Budget evidence unknown: {readout?.reason ?? "not provided in this snapshot"}.
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">
+        Reservations are not confirmed execution. Partial totals do not establish remaining budget.
+        Unset bounds do not mean unlimited budget. This snapshot grants no execution permission;
+        dispatch rechecks policy. A cancellation request does not prove work stopped, and a turn may
+        exceed a remaining consumption cap.
+      </p>
+    </div>
+  );
+}
 
 const routingUnknownReason = (reason: string | null) => {
   switch (reason) {
@@ -1209,6 +1324,10 @@ export function TasksPage() {
                         </p>
                       )}
                     </div>
+                    <TaskBudgetReadout
+                      readout={task.budgetReadout}
+                      stale={error !== null || refreshing}
+                    />
                     <TaskRoutingReadout readout={task.routingReadout} />
                     <TaskResultReadout readout={task.resultReadout} />
                     {environmentId ? (
