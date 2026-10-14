@@ -96,6 +96,7 @@ type Fixture = {
   orchestrator: Orchestrator.OrchestratorV2["Service"];
   eventSink: EventSink.EventSinkV2["Service"];
   setProviders: (providers: ReadonlyArray<ServerProvider>) => void;
+  providerStarts: () => number;
   setProviderReadHook: (hook: (count: number) => void) => void;
   setEnvironment: (environment: string) => void;
   dispatch: (
@@ -141,6 +142,7 @@ export const withAgentsTaskCreationFixture = <E>(
 ) => {
   let providers: ReadonlyArray<ServerProvider> = [agentsCreationProvider];
   let providerReadCount = 0;
+  let providerStartCount = 0;
   let providerReadHook = (_count: number) => {};
   let environment = "environment-a";
   const registry = Layer.mock(ProviderRegistry)({
@@ -165,7 +167,10 @@ export const withAgentsTaskCreationFixture = <E>(
           driver: ProviderDriverKind.make("codex"),
           getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
           planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
-          openSession: () => Effect.die("Preview fixture must never open a provider session"),
+          openSession: () => {
+            providerStartCount += 1;
+            return Effect.die("Preview fixture must never open a provider session");
+          },
         }),
     }),
     {
@@ -207,6 +212,7 @@ export const withAgentsTaskCreationFixture = <E>(
         sql,
         orchestrator: service,
         eventSink,
+        providerStarts: () => providerStartCount,
         setProviders: (next) => {
           providers = next;
         },

@@ -201,7 +201,7 @@ const button = () =>
   renderer.root
     .findByProps({ "data-agent-id": "codex" })
     .findAllByType("button")
-    .find((node) => String(node.props["aria-label"]).startsWith("Open "))!;
+    .find((node) => String(node.props["aria-label"]).endsWith(" conversation"))!;
 const click = async () => {
   await act(async () => {
     button().props.onClick();
@@ -474,7 +474,7 @@ const agentAction = () =>
     .find(
       (node) =>
         typeof node.props["aria-label"] === "string" &&
-        node.props["aria-label"].startsWith("Open "),
+        node.props["aria-label"].endsWith(" conversation"),
     )!;
 
 describe("Agents saved identity continuity", () => {
@@ -1734,6 +1734,9 @@ const loadAgentsCreationFixture = async () =>
     ).href
   )) as {
     agentsCreationProvider: ServerProvider;
+    agentsCreationCommand: (
+      id: string,
+    ) => Extract<OrchestrationV2Command, { type: "thread.create" }>;
     withAgentsTaskCreationFixture: (
       check: (fixture: {
         sql: SqlClientForFixture.SqlClient;
@@ -1753,6 +1756,7 @@ const loadAgentsCreationFixture = async () =>
           Error
         >;
         setProviders: (providers: ReadonlyArray<ServerProvider>) => void;
+        providerStarts: () => number;
         readSnapshot: () => EffectForFixture.Effect<CollaborationSnapshot, Error>;
         previewAuto: (
           input: TaskAutoPreviewInput,
@@ -5098,3 +5102,452 @@ it.each(["success", "failure"] as const)(
     expect(button().props.disabled).toBe(false);
   },
 );
+
+const taskNavigationSnapshot = (): CollaborationSnapshot => ({
+  ...state.snapshot,
+  environmentId: EnvironmentId.make("environment-a"),
+  agents: [{ ...savedAgentFixture(), threadId: "canonical-thread" }],
+  tasks: ["one", "two"].map((id) => ({
+    ...agentTaskFixture(),
+    id: `task-${id}`,
+    title: `Task ${id}`,
+    threadId: `thread-${id}`,
+  })),
+});
+const taskNavigationAction = (id = "one") =>
+  renderer.root
+    .findAllByType("button")
+    .find((node) => node.props["aria-label"] === `Open task: Task ${id}`);
+const openTaskForProof = async (id = "one") => {
+  await act(async () => {
+    // On the frozen base exercise the existing action, exposing its wrong canonical target.
+    (taskNavigationAction(id) ?? button()).props.onClick();
+  });
+};
+describe("Agents task navigation frozen behavior", () => {
+  it("opens each task's own thread instead of the provider canonical conversation", async () => {
+    state.snapshot = taskNavigationSnapshot();
+    state.recover.mockResolvedValue({ outcome: "applied", snapshot: state.snapshot });
+    await mount();
+    await openTaskForProof("one");
+    await openTaskForProof("two");
+    expect(state.navigate.mock.calls.map(([input]) => input.params.threadId)).toEqual([
+      "thread-one",
+      "thread-two",
+    ]);
+    expect(state.load).toHaveBeenCalledTimes(3);
+    expect(state.recover).not.toHaveBeenCalled();
+    expect(state.snapshot.agents[0]!.threadId).toBe("canonical-thread");
+  });
+  it.each(["disabled", "uninstalled", "unauthenticated", "missing"])(
+    "reads valid task history with a %s provider without opening or creating",
+    async (mode) => {
+      state.snapshot = taskNavigationSnapshot();
+      state.providers =
+        mode === "missing"
+          ? []
+          : state.providers.map((p) => ({
+              ...p,
+              enabled: mode !== "disabled",
+              installed: mode !== "uninstalled",
+              auth: { status: mode === "unauthenticated" ? "unauthenticated" : "authenticated" },
+            }));
+      await mount();
+      await openTaskForProof();
+      expect(state.navigate).toHaveBeenCalledWith({
+        to: "/$environmentId/$threadId",
+        params: { environmentId: "environment-a", threadId: "thread-one" },
+      });
+      expect(button().props.disabled).toBe(true);
+      expect(creationButton("New task")!.props.disabled).toBe(true);
+      expect(state.recover).not.toHaveBeenCalled();
+      expect(state.create).not.toHaveBeenCalled();
+      expect(state.bind).not.toHaveBeenCalled();
+    },
+  );
+});
+
+const taskNavigationRefresh = async () => {
+  await act(async () =>
+    (creationButton("Refresh agent directory") ??
+      creationButton("Retry agent directory") ??
+      creationButton("Reading agent directory…"))!.props.onClick(),
+  );
+};
+describe("Agents task navigation validation and ownership", () => {
+  beforeEach(() => {
+    state.snapshot = taskNavigationSnapshot();
+  });
+  it.each([
+    "rebound",
+    "deleted",
+    "project",
+    "assignee",
+    "owner",
+    "environment",
+    "null",
+    "duplicate",
+    "missing-environment",
+  ])("rejects a fresh %s identity without a substitute", async (mode) => {
+    await mount();
+    const original = state.snapshot.tasks[0]!;
+    const changed = {
+      ...original,
+      threadId:
+        mode === "rebound" ? "canonical-thread" : mode === "null" ? null : original.threadId,
+      projectId: mode === "project" ? "project-b" : original.projectId,
+      assigneeAgentId: mode === "assignee" ? "other" : original.assigneeAgentId,
+      ownerAgentId: mode === "owner" ? "foreign" : original.ownerAgentId,
+    };
+    state.load.mockResolvedValueOnce({
+      ...state.snapshot,
+      environmentId:
+        mode === "environment"
+          ? EnvironmentId.make("environment-b")
+          : mode === "missing-environment"
+            ? undefined
+            : state.snapshot.environmentId,
+      tasks: mode === "deleted" ? [] : mode === "duplicate" ? [changed, changed] : [changed],
+    });
+    await openTaskForProof();
+    expect(state.navigate).not.toHaveBeenCalled();
+    expect(state.load).toHaveBeenCalledTimes(2);
+    expect(text()).toMatch(/changed|another environment/);
+    expect(state.recover).not.toHaveBeenCalled();
+  });
+  it("explains a null link and rejects a saved handler with no GET", async () => {
+    state.snapshot = {
+      ...state.snapshot,
+      tasks: [{ ...state.snapshot.tasks[0]!, threadId: null }],
+    };
+    await mount();
+    expect(taskNavigationAction()!.props.disabled).toBe(true);
+    expect(text()).toContain("no valid conversation link");
+    await openTaskForProof();
+    expect(state.load).toHaveBeenCalledTimes(1);
+    expect(state.navigate).not.toHaveBeenCalled();
+  });
+  it("admits one same-render GET and at most one navigation", async () => {
+    await mount();
+    const result = deferred<CollaborationSnapshot>();
+    state.load.mockReturnValueOnce(result.promise);
+    await act(async () => {
+      const action = taskNavigationAction()!.props.onClick;
+      action();
+      action();
+    });
+    expect(state.load).toHaveBeenCalledTimes(2);
+    expect(taskNavigationAction()!.props.disabled).toBe(true);
+    expect(button().props.disabled).toBe(true);
+    await act(async () => result.resolve(state.snapshot));
+    expect(state.navigate).toHaveBeenCalledTimes(1);
+    expect(taskNavigationAction()!.props.disabled).toBe(false);
+  });
+  it("rejects saved callbacks during refresh, after failure and after a newer valid read", async () => {
+    await mount();
+    const saved = taskNavigationAction()!.props.onClick;
+    const failed = deferred<CollaborationSnapshot>();
+    state.load.mockReturnValueOnce(failed.promise);
+    await taskNavigationRefresh();
+    await act(async () => saved());
+    await act(async () => failed.reject(new Error("Controlled GET failure")));
+    await act(async () => saved());
+    expect(state.load).toHaveBeenCalledTimes(2);
+    await taskNavigationRefresh();
+    await act(async () => saved());
+    expect(state.load).toHaveBeenCalledTimes(3);
+    expect(state.navigate).not.toHaveBeenCalled();
+    await openTaskForProof();
+    expect(state.navigate).toHaveBeenCalledTimes(1);
+  });
+  it.each(["success", "failure"] as const)(
+    "coalesces refresh with a pending task-open %s without an automatic retry",
+    async (outcome) => {
+      await mount();
+      const old = deferred<CollaborationSnapshot>();
+      state.load.mockReturnValueOnce(old.promise);
+      await openTaskForProof();
+      await taskNavigationRefresh();
+      await act(async () => {
+        void renderer.root.findByType(AgentsTaskCreator).props.refresh();
+      });
+      expect(state.load).toHaveBeenCalledTimes(2);
+      await act(async () =>
+        outcome === "success"
+          ? old.resolve(state.snapshot)
+          : old.reject(new Error("Controlled failure")),
+      );
+      expect(state.navigate).toHaveBeenCalledTimes(outcome === "success" ? 1 : 0);
+      expect(state.load).toHaveBeenCalledTimes(2);
+      if (outcome === "failure") {
+        await openTaskForProof();
+        expect(state.load).toHaveBeenCalledTimes(2);
+        await taskNavigationRefresh();
+        expect(state.navigate).not.toHaveBeenCalled();
+        await openTaskForProof();
+        expect(state.navigate).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+  it("keeps historical task access independent of provider readiness changes during its read", async () => {
+    await mount();
+    const current = deferred<CollaborationSnapshot>();
+    state.load.mockReturnValueOnce(current.promise);
+    await openTaskForProof();
+    state.providers = [];
+    await act(async () => renderer.update(<AgentsPage />));
+    expect(taskNavigationAction()!.props.disabled).toBe(true);
+    await act(async () => current.resolve(state.snapshot));
+    expect(state.navigate).toHaveBeenCalledTimes(1);
+    expect(button().props.disabled).toBe(true);
+    expect(state.recover).not.toHaveBeenCalled();
+  });
+  it.each(
+    ["session", "environment", "project", "disconnect", "unmount"].flatMap((mode) =>
+      ["success", "failure"].map((outcome) => [mode, outcome]),
+    ),
+  )("retires saved callbacks and in-flight %s / %s with its finally", async (mode, outcome) => {
+    state.projects.push({ id: "project-b", title: "B", environmentId: "environment-a" });
+    await mount();
+    await select("project-a");
+    const saved = taskNavigationAction()!.props.onClick;
+    const old = deferred<CollaborationSnapshot>();
+    state.load.mockReturnValueOnce(old.promise);
+    await openTaskForProof();
+    if (mode === "session") {
+      state.sessionIdentity = {};
+      await act(async () => renderer.update(<AgentsPage />));
+    }
+    if (mode === "environment") {
+      state.environmentId = "environment-b";
+      await act(async () => renderer.update(<AgentsPage />));
+      state.environmentId = "environment-a";
+      await act(async () => renderer.update(<AgentsPage />));
+    }
+    if (mode === "project") {
+      await select("project-b");
+      await select("project-a");
+      await taskNavigationRefresh();
+    }
+    if (mode === "disconnect") {
+      state.sessionIdentity = null;
+      await act(async () => renderer.update(<AgentsPage />));
+    }
+    if (mode === "unmount") await act(async () => renderer.unmount());
+    const count = state.load.mock.calls.length;
+    await act(async () => saved());
+    expect(state.load).toHaveBeenCalledTimes(count);
+    const current = deferred<CollaborationSnapshot>();
+    if (mode !== "disconnect" && mode !== "unmount") {
+      state.load.mockReturnValueOnce(current.promise);
+      await openTaskForProof();
+    }
+    await act(async () =>
+      outcome === "success"
+        ? old.resolve({
+            ...state.snapshot,
+            agents: [{ ...savedAgentFixture(), displayName: "Retired success" }],
+          })
+        : old.reject(new Error("Retired failure")),
+    );
+    expect(state.navigate).not.toHaveBeenCalled();
+    if (mode !== "unmount") expect(text()).not.toContain("Retired");
+    if (mode !== "disconnect" && mode !== "unmount") {
+      expect(taskNavigationAction()!.props.disabled).toBe(true);
+      await act(async () => current.resolve(state.snapshot));
+      expect(state.navigate).toHaveBeenCalledTimes(1);
+    }
+  });
+  it.each(["success", "failure"] as const)(
+    "retired task-open %s cannot release a new operation",
+    async (outcome) => {
+      await mount();
+      const old = deferred<CollaborationSnapshot>(),
+        current = deferred<CollaborationSnapshot>();
+      state.load.mockReturnValueOnce(old.promise);
+      await openTaskForProof();
+      state.sessionIdentity = {};
+      await act(async () => renderer.update(<AgentsPage />));
+      state.load.mockReturnValueOnce(current.promise);
+      await openTaskForProof();
+      await act(async () =>
+        outcome === "success"
+          ? old.resolve(state.snapshot)
+          : old.reject(new Error("Retired failure")),
+      );
+      expect(state.navigate).not.toHaveBeenCalled();
+      expect(taskNavigationAction()!.props.disabled).toBe(true);
+      const count = state.load.mock.calls.length;
+      await openTaskForProof();
+      expect(state.load).toHaveBeenCalledTimes(count);
+      await act(async () => current.resolve(state.snapshot));
+      expect(state.navigate).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("respects canonical-open ownership even after a concurrent refresh", async () => {
+    await mount();
+    const canonical = deferred<CollaborationCommandResult>();
+    state.recover.mockReturnValueOnce(canonical.promise);
+    await click();
+    await taskNavigationRefresh();
+    const count = state.load.mock.calls.length;
+    await openTaskForProof();
+    expect(state.load).toHaveBeenCalledTimes(count);
+    await act(async () =>
+      canonical.resolve({
+        outcome: "applied",
+        code: null,
+        detail: "Fixture",
+        idempotent: true,
+        gateDecision: "DENY",
+        snapshot: state.snapshot,
+      }),
+    );
+    expect(state.navigate).not.toHaveBeenCalled();
+    await openTaskForProof();
+    expect(state.navigate).toHaveBeenCalledTimes(1);
+  });
+  it("keeps pending/uncertain creation cache bytes and recovery locks while task callbacks are invoked", async () => {
+    const records = creationStorage();
+    await mount();
+    const saved = taskNavigationAction()!.props.onClick;
+    const creating = deferred<{ _tag: "Failure"; cause: string }>();
+    state.create.mockReturnValueOnce(creating.promise);
+    await creationClick("New task");
+    await fillCreation();
+    await creationClick("Review new task");
+    await creationClick("Create task");
+    const original = [...records.values()][0]!;
+    const count = state.load.mock.calls.length;
+    await act(async () => saved());
+    expect([...records.values()][0]).toBe(original);
+    expect(taskNavigationAction()!.props.disabled).toBe(true);
+    expect(state.load).toHaveBeenCalledTimes(count);
+    await act(async () => creating.resolve({ _tag: "Failure", cause: "Lost receipt" }));
+    const uncertain = [...records.values()][0]!;
+    expect(decodeCreationStorage(uncertain)).toMatchObject({ status: "uncertain" });
+    await act(async () => taskNavigationAction()!.props.onClick());
+    expect([...records.values()][0]).toBe(uncertain);
+    expect(state.readCreationStatus).not.toHaveBeenCalled();
+    expect(state.navigate).not.toHaveBeenCalled();
+    expect(state.create).toHaveBeenCalledTimes(1);
+    expect(state.recover).not.toHaveBeenCalled();
+  });
+});
+
+it("Agents task navigation uses actual governed tasks on disposable disk SQLite without read-phase writes or provider starts", async () => {
+  const fs = await import("node:fs/promises"),
+    os = await import("node:os"),
+    path = await import("node:path");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "b3r-task-navigation-"));
+  const module = await loadAgentsCreationFixture();
+  try {
+    await EffectForFixture.runPromise(
+      module.withAgentsTaskCreationFixture(
+        (f) =>
+          EffectForFixture.promise(async () => {
+            // SETUP: real service mutations create the canonical conversation and two governed roots.
+            const canonical = await EffectForFixture.runPromise(f.openCanonical());
+            const canonicalId = canonical.snapshot.agents.find((a) => a.id === "codex")!.threadId;
+            for (const id of ["one", "two"])
+              await EffectForFixture.runPromise(f.dispatch(module.agentsCreationCommand(id)));
+            f.setProviders([{ ...module.agentsCreationProvider, enabled: false }]);
+            state.providers = state.providers.map((p) => ({ ...p, enabled: false }));
+            state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+            const rows = () =>
+              EffectForFixture.runPromise(
+                f.sql`SELECT * FROM orchestration_command_receipts ORDER BY command_id`,
+              );
+            const changes = () => EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
+            const effects = { runs: 0, grants: 0, outbox: 0, messages: 0 };
+            const receipts = await rows(),
+              before = await changes();
+            await mount();
+            const openTask = async (id: string) => {
+              await act(async () =>
+                renderer.root
+                  .findByProps({ "aria-label": `Open task: Task ${id}` })
+                  .props.onClick(),
+              );
+            };
+            await openTask("one");
+            await openTask("two");
+            expect(state.navigate.mock.calls.map(([input]) => input.params.threadId)).toEqual([
+              "one",
+              "two",
+            ]);
+            expect(state.load).toHaveBeenCalledTimes(3);
+            expect(
+              (await EffectForFixture.runPromise(f.readSnapshot())).agents.find(
+                (a) => a.id === "codex",
+              )!.threadId,
+            ).toBe(canonicalId);
+            expect(await changes()).toEqual(before);
+            expect(await rows()).toEqual(receipts);
+            expect(await EffectForFixture.runPromise(f.noExecution())).toEqual(effects);
+            expect(f.providerStarts()).toBe(0);
+            // Each setup UPDATE below deliberately writes. Take a new marker only AFTER setup.
+            for (const mode of ["archived", "deleted", "foreign", "missing"] as const) {
+              if (mode === "archived")
+                await EffectForFixture.runPromise(
+                  f.sql`UPDATE orchestration_v2_projection_threads SET archived_at='2026-10-14T00:00:00Z' WHERE thread_id='one'`,
+                );
+              if (mode === "deleted")
+                await EffectForFixture.runPromise(
+                  f.sql`UPDATE orchestration_v2_projection_threads SET archived_at=NULL, deleted_at='2026-10-14T00:00:00Z' WHERE thread_id='one'`,
+                );
+              if (mode === "foreign")
+                await EffectForFixture.runPromise(
+                  f.sql`UPDATE orchestration_v2_projection_threads SET deleted_at=NULL, project_id='project-b' WHERE thread_id='one'`,
+                );
+              if (mode === "missing")
+                await EffectForFixture.runPromise(
+                  f.sql`DELETE FROM orchestration_v2_projection_threads WHERE thread_id='one'`,
+                );
+              const marker = await changes(),
+                savedReceipts = await rows(),
+                navigationCount = state.navigate.mock.calls.length;
+              if (mode === "archived") await openTask("one");
+              else await taskNavigationRefresh();
+              const projected = await EffectForFixture.runPromise(f.readSnapshot());
+              expect(
+                projected.tasks.find((t) => t.id === "task:governed:thread:one")!.threadId,
+              ).toBeNull();
+              expect(
+                renderer.root.findByProps({ "aria-label": "Open task: Task one" }).props.disabled,
+              ).toBe(true);
+              await openTask("one");
+              expect(state.navigate).toHaveBeenCalledTimes(navigationCount);
+              expect(await changes()).toEqual(marker);
+              expect(await rows()).toEqual(savedReceipts);
+              expect(projected.agents.find((a) => a.id === "codex")!.threadId).toBe(canonicalId);
+            }
+            // Fault injection/repair are fixture DDL setup, never navigation or application writes.
+            await EffectForFixture.runPromise(
+              f.sql`ALTER TABLE collaboration_commands RENAME TO navigation_fault_commands`,
+            );
+            const failedMarker = await changes();
+            await openTask("two");
+            expect(text()).toContain("could not be confirmed");
+            expect(await changes()).toEqual(failedMarker);
+            await EffectForFixture.runPromise(
+              f.sql`ALTER TABLE navigation_fault_commands RENAME TO collaboration_commands`,
+            );
+            const repairedMarker = await changes();
+            await taskNavigationRefresh();
+            expect(await changes()).toEqual(repairedMarker);
+            expect(await rows()).toEqual(receipts);
+            expect(await EffectForFixture.runPromise(f.noExecution())).toEqual(effects);
+            expect(f.providerStarts()).toBe(0);
+            expect(state.recover).not.toHaveBeenCalled();
+            expect(state.create).not.toHaveBeenCalled();
+            expect(state.bind).not.toHaveBeenCalled();
+            await act(async () => renderer.unmount());
+          }),
+        { dbPath: path.join(dir, "state.sqlite") },
+      ),
+    );
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
