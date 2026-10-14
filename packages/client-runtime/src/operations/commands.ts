@@ -2,6 +2,7 @@ import { remapComposerContextAttachments } from "@t3tools/shared/composerContext
 import {
   type ThreadLinkedPullRequest,
   type TaskContractReviewInput,
+  type TaskAutoPreviewInput,
   type TaskContractReviewReference,
   type TaskContractBrake,
   type TaskContractFields,
@@ -298,6 +299,20 @@ export const readAgentsCreationStatus = Effect.fn("EnvironmentCommands.readAgent
     return result;
   },
 );
+
+export const readTaskAutoPreview = Effect.fn("EnvironmentCommands.readTaskAutoPreview")(function* (
+  input: TaskAutoPreviewInput,
+) {
+  const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+  const before = yield* SubscriptionRef.get(supervisor.session);
+  if (Option.isNone(before))
+    return { status: "unavailable" as const, reason: "task-preview-unavailable" as const };
+  const result = yield* request(ORCHESTRATION_V2_WS_METHODS.getTaskAutoPreview, input);
+  const after = yield* SubscriptionRef.get(supervisor.session);
+  if (Option.isNone(after) || before.value !== after.value)
+    return { status: "unavailable" as const, reason: "task-preview-unavailable" as const };
+  return result;
+});
 
 export const readThreadProjection = (input: { readonly threadId: ThreadId }) =>
   getProjection(input.threadId);

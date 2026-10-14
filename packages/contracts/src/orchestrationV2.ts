@@ -51,7 +51,8 @@ import {
   OrchestrationGetTurnDiffResult,
 } from "./checkpointDiff.ts";
 import { ModelSelection } from "./modelSelection.ts";
-import { ModelRouterConstraints } from "./modelRouter.ts";
+import { LocalTaskProfile, HybridRouteDecisionV1 } from "./routerEvaluation.ts";
+import { ModelRouterDecision, ModelRouterConstraints } from "./modelRouter.ts";
 import {
   ThreadLinkedPullRequest,
   ThreadPullRequestLink,
@@ -2981,6 +2982,34 @@ export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalComma
 /** Everything the server's orchestrator accepts: client commands plus internal ones. */
 export type OrchestrationV2ServerCommand = OrchestrationV2Command | OrchestrationV2InternalCommand;
 
+export const TaskAutoPreviewInput = Schema.Struct({
+  ...TaskContractReviewInput.fields,
+  reference: TaskContractReviewReference,
+  text: Schema.String.check(
+    Schema.isMaxLength(64000),
+    Schema.makeFilter((text) => text.trim().length > 0),
+  ),
+  constraints: Schema.optionalKey(ModelRouterConstraints),
+});
+export type TaskAutoPreviewInput = typeof TaskAutoPreviewInput.Type;
+export const TaskAutoPreviewState = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("available"),
+    request: TaskAutoPreviewInput,
+    reference: TaskContractReviewReference,
+    profile: LocalTaskProfile,
+    activePolicyVersion: Schema.String,
+    policyFallbackReason: Schema.NullOr(Schema.String),
+    decision: ModelRouterDecision,
+    hybrid: Schema.optionalKey(HybridRouteDecisionV1),
+  }),
+  Schema.Struct({
+    status: Schema.Literal("unavailable"),
+    reason: Schema.Literal("task-preview-unavailable"),
+  }),
+]);
+export type TaskAutoPreviewState = typeof TaskAutoPreviewState.Type;
+
 export const ORCHESTRATION_V2_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   getTurnDiff: "orchestration.getTurnDiff",
@@ -2990,6 +3019,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getThreadProjection: "orchestration.getThreadProjection",
   getTaskUsage: "orchestration.getTaskUsage",
   getTaskReview: "orchestration.getTaskReview",
+  getTaskAutoPreview: "orchestration.getTaskAutoPreview",
   getAgentsCreationStatus: "orchestration.getAgentsCreationStatus",
   getTaskUsageCohort: "orchestration.getTaskUsageCohort",
   getWorkflowScript: "orchestration.getWorkflowScript",
@@ -3358,6 +3388,7 @@ export const OrchestrationV2RpcSchemas = {
     output: OrchestrationV2ThreadProjection,
   },
   getTaskReview: { input: TaskContractReviewInput, output: TaskContractReviewState },
+  getTaskAutoPreview: { input: TaskAutoPreviewInput, output: TaskAutoPreviewState },
   getAgentsCreationStatus: {
     input: Schema.Struct({
       command: OrchestrationV2Command.members[0].check(

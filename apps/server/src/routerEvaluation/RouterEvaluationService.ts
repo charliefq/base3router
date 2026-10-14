@@ -70,6 +70,10 @@ export class RouterEvaluationService extends Context.Service<
     readonly status: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<RouterPolicyStatus, RouterEvaluationError>;
+    readonly existingRoutingSnapshot: (
+      environmentId: EnvironmentId,
+      localTaskProfile?: LocalTaskProfile,
+    ) => Effect.Effect<Option.Option<RouterPolicyRuntimeSnapshot>, RouterEvaluationError>;
     readonly routingSnapshot: (
       environmentId: EnvironmentId,
       localTaskProfile?: LocalTaskProfile,
@@ -179,6 +183,35 @@ type RouterPolicyRuntimeSnapshot = RouterPolicyStatus & {
   readonly challengerEnabled: boolean;
   readonly evidenceByTarget: ReadonlyMap<string, LocalModelEvidence>;
 };
+
+export function routingPolicyInput(snapshot: RouterPolicyRuntimeSnapshot) {
+  const shadow = snapshot.challengerPolicy;
+  return {
+    activePolicyVersion: snapshot.active.policyVersion,
+    weights: snapshot.active.weights,
+    shrinkageK: snapshot.active.shrinkageK,
+    minSampleRate: snapshot.active.minSampleRate,
+    challengerEnabled: snapshot.challengerEnabled,
+    evidenceByTarget:
+      snapshot.active.policyVersion === HYBRID_TASK_ROUTER_POLICY_VERSION
+        ? snapshot.taskEvidenceByTarget
+        : snapshot.evidenceByTarget,
+    ...(shadow === undefined
+      ? {}
+      : {
+          shadowPolicy: {
+            policyVersion: shadow.policyVersion,
+            weights: shadow.weights,
+            shrinkageK: shadow.shrinkageK,
+            minSampleRate: shadow.minSampleRate,
+            evidenceByTarget:
+              shadow.policyVersion === HYBRID_TASK_ROUTER_POLICY_VERSION
+                ? snapshot.taskEvidenceByTarget
+                : snapshot.evidenceByTarget,
+          },
+        }),
+  };
+}
 
 const baselineSnapshot = (environmentId: EnvironmentId, now: string): RouterPolicySnapshotV0 => ({
   version: ROUTER_POLICY_SNAPSHOT_VERSION,
@@ -338,9 +371,9 @@ const make = Effect.gen(function* () {
           detail: "Policy status changed; refresh before confirming.",
         });
     });
-  const readStatus = (environmentId: EnvironmentId) =>
+  const readStatus = (environmentId: EnvironmentId, initialize = true) =>
     Effect.gen(function* () {
-      yield* ensureDefaults(environmentId, "1970-01-01T00:00:00.000Z");
+      if (initialize) yield* ensureDefaults(environmentId, "1970-01-01T00:00:00.000Z");
       const policies = yield* store.listPolicies(environmentId);
       const active = policies.filter((policy) => policy.state === "active");
       if (active.length !== 1)
@@ -357,33 +390,52 @@ const make = Effect.gen(function* () {
     });
   const status: RouterEvaluationService["Service"]["status"] = (environmentId) =>
     store.transaction(readStatus(environmentId)).pipe(Effect.mapError(toEvalError));
+  const evidenceSnapshot = (snapshot: RouterPolicyStatus, localTaskProfile?: LocalTaskProfile) =>
+    Effect.gen(function* () {
+      const environmentId = snapshot.environmentId;
+      const shadows = snapshot.policies.filter((policy) => policy.state === "shadow");
+      if (shadows.length > 1)
+        return yield* new RouterEvaluationError({
+          reason: "malformed_policy",
+          detail: "Multiple shadow policies; repair is required.",
+        });
+      const challengerPolicy = shadows[0];
+      const records = yield* store.listByEnvironment(environmentId);
+      return {
+        ...(challengerPolicy === undefined ? {} : { challengerPolicy }),
+        ...snapshot,
+        challengerEnabled: snapshot.policies.some((policy) => policy.state === "shadow"),
+        evidenceByTarget: evidenceFromObservations(records),
+        taskEvidenceByTarget: evidenceForLocalTask({
+          records,
+          environmentId,
+          ...(localTaskProfile === undefined ? {} : { profile: localTaskProfile }),
+        }),
+      };
+    });
   const routingSnapshot: RouterEvaluationService["Service"]["routingSnapshot"] = (
     environmentId,
     localTaskProfile,
   ) =>
     store
       .transaction(
+        readStatus(environmentId).pipe(
+          Effect.flatMap((snapshot) => evidenceSnapshot(snapshot, localTaskProfile)),
+        ),
+      )
+      .pipe(Effect.mapError(toEvalError));
+  const existingRoutingSnapshot: RouterEvaluationService["Service"]["existingRoutingSnapshot"] = (
+    environmentId,
+    localTaskProfile,
+  ) =>
+    store
+      .transaction(
         Effect.gen(function* () {
-          const snapshot = yield* readStatus(environmentId);
-          const shadows = snapshot.policies.filter((policy) => policy.state === "shadow");
-          if (shadows.length > 1)
-            return yield* new RouterEvaluationError({
-              reason: "malformed_policy",
-              detail: "Multiple shadow policies; repair is required.",
-            });
-          const challengerPolicy = shadows[0];
-          const records = yield* store.listByEnvironment(environmentId);
-          return {
-            ...(challengerPolicy === undefined ? {} : { challengerPolicy }),
-            ...snapshot,
-            challengerEnabled: snapshot.policies.some((policy) => policy.state === "shadow"),
-            evidenceByTarget: evidenceFromObservations(records),
-            taskEvidenceByTarget: evidenceForLocalTask({
-              records,
-              environmentId,
-              ...(localTaskProfile === undefined ? {} : { profile: localTaskProfile }),
-            }),
-          };
+          if ((yield* store.listPolicies(environmentId)).length === 0)
+            return Option.none<RouterPolicyRuntimeSnapshot>();
+          return Option.some(
+            yield* evidenceSnapshot(yield* readStatus(environmentId, false), localTaskProfile),
+          );
         }),
       )
       .pipe(Effect.mapError(toEvalError));
@@ -788,6 +840,7 @@ const make = Effect.gen(function* () {
     control,
     status,
     routingSnapshot,
+    existingRoutingSnapshot,
     insights,
     exportObservations,
     deleteObservations,

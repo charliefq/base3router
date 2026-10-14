@@ -44,6 +44,8 @@ import {
   type TaskEnrollmentOutcome,
   type TaskContractReviewInput,
   type TaskContractReviewState,
+  type TaskAutoPreviewInput,
+  type TaskAutoPreviewState,
   type TaskContractReviewReference,
   type TaskContractReviewAction,
   childConstraintConflict,
@@ -122,7 +124,7 @@ import {
   ThreadForkServiceV2,
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
-import { authorizeDispatch } from "../policy/Base3PolicyGate.ts";
+import { readTaskAutoPreview, authorizeDispatch } from "../policy/Base3PolicyGate.ts";
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import {
   readTaskReview,
@@ -287,6 +289,7 @@ export interface OrchestratorV2Shape {
   readonly getAgentsCreationStatus: (input: {
     readonly command: OrchestrationV2Command;
   }) => Effect.Effect<{ readonly status: "committed" | "rejected" | "unknown" | "unavailable" }>;
+  readonly getTaskAutoPreview: (input: TaskAutoPreviewInput) => Effect.Effect<TaskAutoPreviewState>;
   readonly getTaskReview: (
     input: TaskContractReviewInput,
   ) => Effect.Effect<TaskContractReviewState, OrchestratorV2Error>;
@@ -10047,6 +10050,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             : Effect.succeed({ status: "unavailable" as const }),
         ),
       ),
+    getTaskAutoPreview: (input) =>
+      taskReviewSqlAtCall.pipe(
+        Effect.flatMap((database) =>
+          Option.isSome(database)
+            ? readTaskAutoPreview(database.value, input, (id) =>
+                projectionStore.getThreadProjection(id),
+              )
+            : Effect.succeed({
+                status: "unavailable" as const,
+                reason: "task-preview-unavailable" as const,
+              }),
+        ),
+      ),
     getTaskReview: (input) =>
       taskReviewSqlAtCall.pipe(
         Effect.flatMap((database) =>
@@ -10178,6 +10194,11 @@ const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
     getMessageCount: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
     getThreadRecords: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
     getAgentsCreationStatus: () => Effect.succeed({ status: "unavailable" as const }),
+    getTaskAutoPreview: () =>
+      Effect.succeed({
+        status: "unavailable" as const,
+        reason: "task-preview-unavailable" as const,
+      }),
     getTaskReview: () =>
       Effect.succeed({ status: "unavailable" as const, reason: "runtime-unavailable" }),
     getThreadProjection: (threadId) =>

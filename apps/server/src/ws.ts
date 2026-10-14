@@ -1932,6 +1932,17 @@ const makeWsRpcLayer = (
               ),
             { "rpc.aggregate": "orchestrationV2" },
           ),
+        [ORCHESTRATION_V2_WS_METHODS.getTaskAutoPreview]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.getTaskAutoPreview,
+            orchestrationEngine
+              .getTaskAutoPreview(input)
+              .pipe(
+                Effect.provideService(ServerEnvironment.ServerEnvironment, serverEnvironment),
+                Effect.provideService(SqlClient.SqlClient, sql),
+              ),
+            { "rpc.aggregate": "orchestrationV2" },
+          ),
         [ORCHESTRATION_V2_WS_METHODS.getTaskReview]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.getTaskReview,

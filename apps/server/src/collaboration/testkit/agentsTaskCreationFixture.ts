@@ -9,6 +9,7 @@ import {
   type OrchestrationV2Command,
   type ServerProvider,
   type TaskContractReviewInput,
+  type TaskAutoPreviewInput,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -23,6 +24,8 @@ import {
 import { PolicyExecutionContext } from "../../policy/executionContext.ts";
 import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
+import * as RouterEvaluation from "../../routerEvaluation/RouterEvaluationService.ts";
+import { CodexProviderCapabilitiesV2 } from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
 import type * as CommandReceiptStore from "../../orchestration-v2/CommandReceiptStore.ts";
 import * as EventSink from "../../orchestration-v2/EventSink.ts";
@@ -105,6 +108,11 @@ type Fixture = {
   commitCreation: (
     input: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0],
   ) => ReturnType<EventSink.EventSinkV2["Service"]["commitCommand"]>;
+  evaluation: RouterEvaluation.RouterEvaluationService["Service"];
+  previewAuto: (
+    input: TaskAutoPreviewInput,
+    actor?: typeof agentsCreationActor,
+  ) => ReturnType<Orchestrator.OrchestratorV2["Service"]["getTaskAutoPreview"]>;
   readStatus: (
     command: OrchestrationV2Command,
     actor?: typeof agentsCreationActor,
@@ -149,7 +157,17 @@ export const withAgentsTaskCreationFixture = <E>(
     : SqlitePersistenceMemory;
   const orchestrator = makeOrchestratorV2ReplayLayerWithRegistry(
     { name: "agents-task-creation" },
-    ProviderAdapterRegistry.makeLayer([]),
+    Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+      list: () => Effect.succeed(providers.map((p) => p.instanceId)),
+      get: (id) =>
+        Effect.succeed({
+          instanceId: id,
+          driver: ProviderDriverKind.make("codex"),
+          getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+          planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
+          openSession: () => Effect.die("Preview fixture must never open a provider session"),
+        }),
+    }),
     {
       databaseLayer: database,
       runEffectWorker: false,
@@ -164,6 +182,7 @@ export const withAgentsTaskCreationFixture = <E>(
     orchestrator,
     registry,
     environmentLayer,
+    RouterEvaluation.layer.pipe(Layer.provide(database)),
     ProjectStore.layer.pipe(Layer.provide(database)),
     ThreadManagement.layer.pipe(Layer.provide(orchestrator)),
   );
@@ -176,6 +195,7 @@ export const withAgentsTaskCreationFixture = <E>(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const service = yield* Orchestrator.OrchestratorV2;
+      const evaluation = yield* RouterEvaluation.RouterEvaluationService;
       const eventSink = yield* EventSink.EventSinkV2;
       const canonical = yield* CollaborationThreads.CollaborationThreads;
       const context = yield* Effect.context();
@@ -213,6 +233,11 @@ export const withAgentsTaskCreationFixture = <E>(
           }).pipe(actorContext, Effect.provide(context)),
         commitCreation: (input) =>
           eventSink.commitCommand(input).pipe(actorContext, Effect.provide(context)),
+        evaluation,
+        previewAuto: (input, actor = agentsCreationActor) =>
+          service
+            .getTaskAutoPreview(input)
+            .pipe(Effect.provideService(PolicyExecutionContext, actor), Effect.provide(context)),
         readStatus: (command, actor = agentsCreationActor) =>
           service
             .getAgentsCreationStatus({ command })

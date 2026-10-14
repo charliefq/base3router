@@ -28,6 +28,8 @@ import {
   type CollaborationCommandResult,
   type TaskContractReviewInput,
   type TaskContractReviewState,
+  type TaskAutoPreviewInput,
+  type TaskAutoPreviewState,
 } from "@t3tools/contracts";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -64,6 +66,7 @@ const state = vi.hoisted(() => ({
   reviewDecide: vi.fn(),
   readProjection: vi.fn(),
   readCreationStatus: vi.fn(),
+  autoPreview: vi.fn(),
   sessionIdentity: {} as object,
 }));
 vi.mock("@effect/atom-react", () => ({
@@ -83,19 +86,22 @@ vi.mock("../../state/threads", () => ({
     decideTaskContract: "review-decide",
     readProjection: "read-projection",
     readCreationStatus: "read-creation-status",
+    readAutoPreview: "auto-preview",
   },
 }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
-    command === "read-creation-status"
-      ? state.readCreationStatus
-      : command === "review-read"
-        ? state.reviewRead
-        : command === "review-decide"
-          ? state.reviewDecide
-          : command === "read-projection"
-            ? state.readProjection
-            : state.create,
+    command === "auto-preview"
+      ? state.autoPreview
+      : command === "read-creation-status"
+        ? state.readCreationStatus
+        : command === "review-read"
+          ? state.reviewRead
+          : command === "review-decide"
+            ? state.reviewDecide
+            : command === "read-projection"
+              ? state.readProjection
+              : state.create,
 }));
 vi.mock("../../env", () => ({ isElectron: false }));
 vi.mock("../../lib/utils", () => {
@@ -245,6 +251,7 @@ beforeEach(() => {
   state.reviewDecide.mockReset();
   state.readProjection.mockReset();
   state.readCreationStatus.mockReset();
+  state.autoPreview.mockReset();
   state.sessionIdentity = {};
 });
 afterEach(async () => {
@@ -1725,6 +1732,9 @@ const loadAgentsCreationFixture = async () =>
         >;
         setProviders: (providers: ReadonlyArray<ServerProvider>) => void;
         readSnapshot: () => EffectForFixture.Effect<CollaborationSnapshot, Error>;
+        previewAuto: (
+          input: TaskAutoPreviewInput,
+        ) => EffectForFixture.Effect<TaskAutoPreviewState, Error>;
         readReview: (
           input: TaskContractReviewInput,
         ) => EffectForFixture.Effect<TaskContractReviewState, Error>;
@@ -3619,6 +3629,12 @@ it("prepares reviewed first instructions for an actual owned empty root without 
             ),
           }),
         );
+        state.autoPreview.mockImplementation(
+          async ({ input }: { input: TaskAutoPreviewInput }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(f.previewAuto(input)),
+          }),
+        );
         const target = scopeThreadRef(EnvironmentId.make("environment-a"), command.threadId);
         useComposerDraftStore.setState({
           draftsByThreadKey: {},
@@ -3640,6 +3656,13 @@ it("prepares reviewed first instructions for an actual owned empty root without 
         const editor = renderer.root.findByProps({ "aria-label": "Initial instructions" });
         expect(editor.props.value).toBe("Fix parser");
         await act(async () => editor.props.onChange({ target: { value: "Fix parser carefully" } }));
+        expect(state.autoPreview).not.toHaveBeenCalled();
+        expect(creationButton("Preview Auto")).toBeDefined();
+        await creationClick("Preview Auto", true);
+        expect(state.autoPreview).toHaveBeenCalledTimes(1);
+        expect(text()).toContain("Deterministic local classification");
+        expect(text()).toContain("unknown");
+        expect(text()).toContain("not permission");
         expect(useComposerDraftStore.getState().getComposerDraft(target)).toBeNull();
         expect(state.navigate).not.toHaveBeenCalled();
         await creationClick("Fill empty draft and open", true);
@@ -3909,3 +3932,185 @@ it.each([
   },
   60_000,
 );
+
+it.each([
+  "text",
+  "newer",
+  "session",
+  "environment",
+  "target",
+  "revision",
+  "cancel",
+  "unmount",
+  "error",
+  "mismatch",
+] as const)("retires Auto preview across %s without draft or execution mutations", async (mode) => {
+  const module = await loadAgentsCreationFixture();
+  await EffectForFixture.runPromise(
+    module.withAgentsTaskCreationFixture((f) =>
+      EffectForFixture.promise(async () => {
+        const command: Extract<OrchestrationV2Command, { type: "thread.create" }> = {
+          type: "thread.create",
+          commandId: CommandId.make(`preview-race:${mode}`),
+          threadId: ThreadId.make(`preview-race-${mode}`),
+          projectId: "project-a" as Extract<
+            OrchestrationV2Command,
+            { type: "thread.create" }
+          >["projectId"],
+          title: "Initial parser task",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "fake-model" },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+          taskGovernance: "required",
+          taskContract: {
+            goal: "Fix parser",
+            redirect: "Ask before expanding",
+            acceptance: "Parser tests pass",
+            brake: {
+              maxProviderStarts: 2,
+              stopConditions: "Scope changed",
+              maxTokens: 900,
+              maxCostUsd: 0.1,
+              deadlineAt: "2026-10-14T00:00:00Z",
+            },
+          },
+          taskCreationReview: {
+            environmentId: EnvironmentId.make("environment-a"),
+            projectId: "project-a" as Extract<
+              OrchestrationV2Command,
+              { type: "thread.create" }
+            >["projectId"],
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "fake-model" },
+          },
+        };
+        await EffectForFixture.runPromise(f.dispatch(command));
+        state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+        state.reviewRead.mockImplementation(
+          async ({ input }: { input: TaskContractReviewInput }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(f.readReview(input)),
+          }),
+        );
+        state.readProjection.mockImplementation(
+          async ({ input }: { input: { threadId: string } }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(
+              f.orchestrator.getThreadProjection(input.threadId),
+            ),
+          }),
+        );
+        state.autoPreview.mockImplementation(
+          async ({ input }: { input: TaskAutoPreviewInput }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(f.previewAuto(input)),
+          }),
+        );
+        const target = scopeThreadRef(EnvironmentId.make("environment-a"), command.threadId);
+        useComposerDraftStore.setState({
+          draftsByThreadKey: {},
+          draftThreadsByThreadKey: {},
+          backgroundSubmissionThreadKeys: {},
+          rewindingThreadKeys: new Set(),
+        });
+        await act(async () => {
+          renderer = create(<TasksPage />);
+        });
+        const before = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
+        expect(creationButton("Prepare first instructions")).toBeDefined();
+        await creationClick("Prepare first instructions", true);
+        expect(text()).toContain("Ask before expanding");
+        expect(text()).toContain("Parser tests pass");
+        expect(text()).toContain("900");
+        expect(text()).toContain("0.1");
+        expect(text()).toContain("2026-10-14T00:00:00Z");
+
+        const request = state.autoPreview;
+        const gated = deferred<{ _tag: "Success"; value: TaskAutoPreviewState }>();
+        const real = request.getMockImplementation()!;
+        request.mockImplementationOnce(() => gated.promise);
+        await creationClick("Preview Auto");
+        const args = request.mock.calls[0]![0];
+        const result = (await real(args)) as { _tag: "Success"; value: TaskAutoPreviewState };
+        if (mode === "text" || mode === "newer")
+          await act(async () =>
+            renderer.root
+              .findByProps({ "aria-label": "Initial instructions" })
+              .props.onChange({ target: { value: "New exact instructions" } }),
+          );
+        if (mode === "newer") {
+          await creationClick("Preview Auto");
+          expect(request).toHaveBeenCalledTimes(2);
+          expect(text()).toContain("Deterministic local classification");
+        }
+        if (mode === "session") {
+          state.sessionIdentity = {};
+          await act(async () => renderer.update(<TasksPage />));
+        }
+        if (mode === "environment") {
+          state.environmentId = "environment-b";
+          await act(async () => renderer.update(<TasksPage />));
+        }
+        if (mode === "target" || mode === "revision") {
+          const snapshot = await EffectForFixture.runPromise(f.readSnapshot());
+          state.load.mockResolvedValue({
+            ...snapshot,
+            tasks:
+              mode === "target"
+                ? []
+                : snapshot.tasks.map((t) => ({
+                    ...t,
+                    contractReadout:
+                      t.contractReadout?.status === "available"
+                        ? {
+                            ...t.contractReadout,
+                            contract: { ...t.contractReadout.contract, revision: 2 },
+                          }
+                        : t.contractReadout,
+                  })),
+          });
+          await creationClick("Refresh tasks");
+        }
+        if (mode === "cancel") await creationClick("Cancel preparation");
+        if (mode === "unmount") await act(async () => renderer.unmount());
+        if (mode === "error") gated.reject(new Error("controlled preview failure"));
+        else {
+          const value = result.value;
+          gated.resolve({
+            _tag: "Success",
+            value:
+              mode === "mismatch" && value.status === "available"
+                ? { ...value, request: { ...value.request, text: "foreign response text" } }
+                : value,
+          });
+        }
+        await act(async () => {
+          await Promise.resolve();
+        });
+        if (mode !== "unmount") {
+          if (mode === "newer") expect(text()).toContain("Deterministic local classification");
+          else expect(text()).not.toContain("Deterministic local classification");
+          if (mode === "error" || mode === "mismatch")
+            expect(text()).toContain("No draft or model was changed");
+        }
+        expect(useComposerDraftStore.getState().getComposerDraft(target)).toBeNull();
+        expect(state.navigate).not.toHaveBeenCalled();
+        expect(state.create).not.toHaveBeenCalled();
+        expect(state.reviewDecide).not.toHaveBeenCalled();
+        expect(state.bind).not.toHaveBeenCalled();
+        expect(await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`)).toEqual(
+          before,
+        );
+        expect(await EffectForFixture.runPromise(f.noExecution())).toEqual({
+          runs: 0,
+          grants: 0,
+          outbox: 0,
+          messages: 0,
+        });
+      }),
+    ),
+  );
+});
