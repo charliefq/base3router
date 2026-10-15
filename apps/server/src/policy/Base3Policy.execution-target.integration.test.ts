@@ -51,6 +51,8 @@ import {
   OrchestrationV2Command,
   type OrchestrationV2ProviderThread,
   type ServerProvider,
+  type ChatAttachment,
+  type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -136,6 +138,7 @@ function makeAdapter(
   started: Ref.Ref<ReadonlyArray<ModelSelection>>,
   instanceId: ProviderInstanceId,
   resultText?: string,
+  delivered?: Ref.Ref<ReadonlyArray<ReadonlyArray<ChatAttachment>>>,
 ): ProviderAdapterV2Shape {
   return {
     instanceId: instanceId,
@@ -192,6 +195,11 @@ function makeAdapter(
           startTurn: (input) =>
             Effect.gen(function* () {
               yield* Ref.update(started, (models) => [...models, input.modelSelection]);
+              if (delivered)
+                yield* Ref.update(delivered, (messages) => [
+                  ...messages,
+                  input.message.attachments,
+                ]);
               const occurredAt = yield* DateTime.now;
               const providerTurnId = ProviderTurnId.make(
                 `provider-turn:handoff:${input.attemptId}`,
@@ -300,6 +308,8 @@ function makeAdapter(
 }
 
 interface BoundTargetScenario {
+  readonly image?: "supported" | "unsupported" | "unknown";
+  readonly revokeImage?: "capability" | "availability";
   readonly name: string;
   readonly mode: "auto" | "manual";
   readonly queued: boolean;
@@ -313,7 +323,40 @@ interface BoundTargetScenario {
   readonly rejectionReason?: string;
 }
 
+const imageAttachments: ReadonlyArray<ChatAttachment> = [
+  {
+    type: "image",
+    id: "image-fixture-original",
+    name: "private-image.png",
+    mimeType: "image/png",
+    sizeBytes: 12,
+  },
+];
 const scenarios: ReadonlyArray<BoundTargetScenario> = [
+  ...(["capability", "availability"] as const).map((revokeImage): BoundTargetScenario => ({
+    name: `image loses ${revokeImage} before dequeue`,
+    image: "supported",
+    revokeImage,
+    mode: "auto",
+    queued: true,
+    sameTarget: false,
+    omitted: false,
+    options: false,
+    expectedTarget: b,
+  })),
+  ...[false, true].flatMap((queued) =>
+    (["supported", "unsupported", "unknown"] as const).map((image): BoundTargetScenario => ({
+      name: `image ${image} ${queued ? "queued" : "immediate"}`,
+      mode: "auto",
+      queued,
+      image,
+      sameTarget: false,
+      omitted: false,
+      options: false,
+      expectedTarget: b,
+      denied: image !== "supported",
+    })),
+  ),
   {
     name: "manual required vision rejected",
     mode: "manual",
@@ -539,6 +582,8 @@ it.live.each(scenarios)(
   "server-bound $name preserves target, options, grant and replay",
   ({
     name,
+    image,
+    revokeImage,
     mode,
     queued,
     sameTarget,
@@ -597,7 +642,7 @@ it.live.each(scenarios)(
             (spy) => Effect.sync(() => spy.mockRestore()),
           );
         }
-        const fixtureProviders =
+        const rawFixtureProviders =
           constraints === undefined
             ? [provider, { ...provider, instanceId: b.instanceId }]
             : [
@@ -608,6 +653,25 @@ it.live.each(scenarios)(
                   models: provider.models.filter((model) => model.slug === b.model),
                 },
               ];
+        const fixtureProviders =
+          image === undefined
+            ? rawFixtureProviders
+            : rawFixtureProviders.map((p) => ({
+                ...p,
+                models: p.models.map((m) => ({
+                  ...m,
+                  ...(image === "unknown"
+                    ? {}
+                    : {
+                        inputModalities:
+                          p.instanceId === b.instanceId &&
+                          m.slug === b.model &&
+                          image === "supported"
+                            ? ["text", "image"]
+                            : ["text"],
+                      }),
+                })),
+              }));
         if (constraints !== undefined && !unknownEstimates && mode === "auto") {
           const unconstrained = ModelRouter.routeModel({
             mode: "auto",
@@ -620,18 +684,30 @@ it.live.each(scenarios)(
             "same fixture estimates prefer a without limits",
           );
         }
+        const currentProviders = yield* Ref.make(fixtureProviders);
+        const delivered = yield* Ref.make<ReadonlyArray<ReadonlyArray<ChatAttachment>>>([]);
         const started = yield* Ref.make<ReadonlyArray<ModelSelection>>([]);
         const database = SqlitePersistenceMemory;
         const runtime = Layer.mergeAll(
           database,
           Layer.mock(ProviderRegistry)({
-            getProviders: Effect.succeed(fixtureProviders),
+            getProviders: Ref.get(currentProviders),
           }),
           makeOrchestratorV2ReplayLayerWithRegistry(
             { name: `bound-target-${name}` },
             ProviderAdapterRegistry.makeLayer([
-              makeAdapter(started, a.instanceId),
-              makeAdapter(started, b.instanceId),
+              makeAdapter(
+                started,
+                a.instanceId,
+                image ? "Image fake result" : undefined,
+                delivered,
+              ),
+              makeAdapter(
+                started,
+                b.instanceId,
+                image ? "Image fake result" : undefined,
+                delivered,
+              ),
             ]),
             { databaseLayer: database, runEffectWorker: !queued },
           ),
@@ -664,8 +740,8 @@ it.live.each(scenarios)(
             commandId: CommandId.make(`dispatch:${mode}`),
             threadId,
             messageId: MessageId.make(`message:${mode}`),
-            text: "Inspect this fixture.",
-            attachments: [],
+            text: image ? "" : "Inspect this fixture.",
+            attachments: image ? imageAttachments : [],
             ...(omitted ? {} : { modelSelection: sourceSelection }),
             routingMode: mode,
             ...(constraints === undefined ? {} : { modelRouteConstraints: constraints }),
@@ -772,6 +848,11 @@ it.live.each(scenarios)(
             { instanceId: route.target.instanceId, model: route.target.model },
             { instanceId: expected.instanceId, model: expected.model },
           );
+          if (image) {
+            assert.deepEqual(route.modelRoute?.task.requiredCapabilities, ["vision"]);
+            assert.equal(route.modelRoute?.task.attachmentCount, 1);
+            assert.deepEqual(yield* Ref.get(delivered), queued ? [] : [imageAttachments]);
+          }
           const grants = yield* sql<{
             hash: string;
           }>`SELECT argument_hash AS hash FROM base3_execution_grants WHERE grant_id=${`grant:message:${threadId}:${command.messageId}`}`;
@@ -781,12 +862,12 @@ it.live.each(scenarios)(
               text: command.text,
               model: expected.model,
               instanceId: expected.instanceId,
-              attachmentIds: [],
+              attachmentIds: command.attachments.map((attachment) => attachment.id),
               ...(expected.options === undefined ? {} : { options: expected.options }),
               ...(constraints === undefined ? {} : { modelRouteConstraints: constraints }),
             }),
           );
-          if (constraints === undefined && mode === "auto" && !sameTarget) {
+          if (image === undefined && constraints === undefined && mode === "auto" && !sameTarget) {
             const staleTarget = yield* Effect.flip(
               authorizeDispatch(command).pipe(
                 Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
@@ -881,10 +962,47 @@ it.live.each(scenarios)(
             hash: string;
           }>`SELECT argument_hash AS hash FROM base3_execution_grants WHERE grant_id=${`grant:message:${threadId}:${command.messageId}`}`;
           assert.deepEqual(afterGrants, grants);
+          const assertImageResult = (projection: OrchestrationV2ThreadProjection) => {
+            const imageRun = projection.runs.find((r) => r.userMessageId === command.messageId);
+            assert.isDefined(imageRun);
+            const attempt = projection.attempts.find((a) => a.runId === imageRun?.id);
+            const turn = projection.providerTurns.find((t) => t.runAttemptId === attempt?.id);
+            const output = projection.turnItems.find(
+              (item) => item.runId === imageRun?.id && item.type === "assistant_message",
+            );
+            assert.isDefined(output);
+            if (!output || output.type !== "assistant_message")
+              throw new Error("Missing image result");
+            assert.equal(
+              output.text,
+              `Image fake result [run=${imageRun?.id}; attempt=${attempt?.id}]`,
+            );
+            assert.equal(output.providerTurnId, turn?.id);
+            assert.equal(output.providerThreadId, imageRun?.providerThreadId);
+            assert.equal(attempt?.providerTurnId, turn?.id);
+            assert.deepEqual(imageRun?.modelSelection, expected);
+          };
+          if (image && !queued) assertImageResult(projection);
           if (queued) {
+            if (revokeImage) {
+              yield* Ref.update(currentProviders, (ps) =>
+                ps.map((p) =>
+                  p.instanceId !== b.instanceId
+                    ? p
+                    : revokeImage === "availability"
+                      ? { ...p, availability: "unavailable" as const }
+                      : {
+                          ...p,
+                          models: p.models.map((m) => ({ ...m, inputModalities: ["text"] })),
+                        },
+                ),
+              );
+            }
             const finished = yield* orchestrator.streamDomainEvents.pipe(
               Stream.filter(
-                (event) => event.type === "run.updated" && event.payload.status === "completed",
+                (event) =>
+                  event.type === "run.updated" &&
+                  (event.payload.status === "completed" || event.payload.status === "failed"),
               ),
               Stream.take(2),
               Stream.runDrain,
@@ -893,12 +1011,33 @@ it.live.each(scenarios)(
             yield* EffectWorker.runDaemonWithOptions({ concurrency: 1 }).pipe(Effect.forkScoped);
             yield* Fiber.join(finished);
             yield* worker.drain();
+            if (revokeImage) {
+              assert.deepEqual(yield* Ref.get(started), [sourceSelection]);
+              const revoked = yield* sql<{
+                revoked_at: string | null;
+              }>`SELECT revoked_at FROM base3_execution_grants WHERE message_id=${command.messageId}`;
+              assert.isString(revoked[0]?.revoked_at);
+              assert.equal(
+                (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+                  (r) => r.userMessageId === command.messageId,
+                )?.status,
+                "failed",
+              );
+              yield* orchestrator.dispatch(decoded);
+              yield* worker.drain();
+              assert.deepEqual(yield* Ref.get(started), [sourceSelection]);
+              return;
+            }
             assert.deepEqual(yield* Ref.get(started), [sourceSelection, expected]);
             const finalRun = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
               (candidate) => candidate.userMessageId === command.messageId,
             );
             assert.equal(finalRun?.status, "completed");
             assert.deepEqual(finalRun?.modelSelection, expected);
+            if (image) {
+              assert.deepEqual(yield* Ref.get(delivered), [imageAttachments, imageAttachments]);
+              assertImageResult(yield* orchestrator.getThreadProjection(threadId));
+            }
             const queuedReplay = yield* orchestrator.dispatch(decoded);
             yield* worker.drain();
             assert.equal(queuedReplay.sequence, receipt.sequence);

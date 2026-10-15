@@ -82,6 +82,8 @@ export const ServerProviderModel = Schema.Struct({
   isCustom: Schema.Boolean,
   isDefault: Schema.optional(Schema.Boolean),
   isLegacy: Schema.optional(Schema.Boolean),
+  /** Native model-list declaration only. Missing metadata is unknown, never a default. */
+  inputModalities: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   capabilities: Schema.NullOr(ModelCapabilities),
 });
 export type ServerProviderModel = typeof ServerProviderModel.Type;

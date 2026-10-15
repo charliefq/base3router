@@ -415,6 +415,7 @@ it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
                 "gpt-5.4": {
                   id: "gpt-5.4",
                   name: "GPT-5.4",
+                  capabilities: { input: { text: true, image: true, audio: false } },
                   variants: {
                     none: {},
                     low: {},
@@ -438,6 +439,7 @@ it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
       const model = snapshot.models.find((entry) => entry.slug === "openai/gpt-5.4");
 
       NodeAssert.ok(model);
+      NodeAssert.deepEqual(model.inputModalities, ["text", "image"]);
       const variantDescriptor = model.capabilities?.optionDescriptors?.find(
         (descriptor) => descriptor.id === "variant" && descriptor.type === "select",
       );
@@ -549,7 +551,13 @@ it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
         undefined,
         undefined,
         Effect.succeed([
-          { providerID: "opencode", id: "big-pickle", name: "Big Pickle", variants: [] },
+          {
+            providerID: "opencode",
+            id: "big-pickle",
+            name: "Big Pickle",
+            variants: [],
+            capabilities: { input: ["text", "image"] },
+          },
           {
             providerID: "opencode",
             id: "space-bunny-free",
@@ -561,6 +569,15 @@ it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
 
       NodeAssert.equal(snapshot.status, "ready");
       NodeAssert.equal(snapshot.version, "2.0.18");
+      NodeAssert.deepEqual(
+        snapshot.models.find((model) => model.slug === "opencode/big-pickle")?.inputModalities,
+        ["text", "image"],
+      );
+      NodeAssert.equal(
+        snapshot.models.find((model) => model.slug === "opencode/space-bunny-free")
+          ?.inputModalities,
+        undefined,
+      );
       NodeAssert.deepEqual(snapshot.supportedRuntimeModes, [
         "approval-required",
         "auto-accept-edits",

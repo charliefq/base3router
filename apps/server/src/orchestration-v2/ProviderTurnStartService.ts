@@ -1,3 +1,6 @@
+import { revalidateImageRoute, Base3PolicyDeniedError } from "../policy/Base3PolicyGate.ts";
+import { PolicyExecutionContext } from "../policy/executionContext.ts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
@@ -62,6 +65,7 @@ export class ProviderTurnStartError extends Schema.TaggedError<ProviderTurnStart
 ) {}
 
 const isProviderTurnStartError = Schema.is(ProviderTurnStartError);
+const isBase3PolicyDeniedError = Schema.is(Base3PolicyDeniedError);
 
 export interface ProviderTurnStartServiceV2Shape {
   /**
@@ -489,6 +493,43 @@ export const layer: Layer.Layer<
               ),
             );
           }
+        }
+      }
+      if ((yield* PolicyExecutionContext).kind !== "kernel-test") {
+        const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+        if (Option.isNone(sql))
+          return yield* new ProviderTurnStartError({
+            runId,
+            cause: "Policy store unavailable before provider start.",
+          });
+        const eligibility = yield* Effect.result(
+          revalidateImageRoute({
+            sql: sql.value,
+            threadId: input.threadId,
+            messageId: run.userMessageId,
+            commandType: "provider-turn.start",
+          }),
+        );
+        if (eligibility._tag === "Failure") {
+          yield* settleRunBeforeStart({
+            signal: "image-eligibility-denied",
+            status: "failed",
+            now: yield* DateTime.now,
+            providerInstanceId: run.providerInstanceId,
+            itemProviderThreadId: providerThread.id,
+            item: {
+              type: "error",
+              title: "Image input unavailable",
+              failure: makeProviderFailure({
+                cause: eligibility.failure,
+                message: isBase3PolicyDeniedError(eligibility.failure)
+                  ? eligibility.failure.message
+                  : "Image eligibility could not be verified.",
+                class: "validation_error",
+              }),
+            },
+          });
+          return;
         }
       }
       const selectInheritedBackgroundItems = (

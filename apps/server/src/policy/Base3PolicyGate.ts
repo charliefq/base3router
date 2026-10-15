@@ -5,6 +5,8 @@ import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
 import * as NodeCrypto from "node:crypto";
 import {
   type AuthEnvironmentScope,
+  type ChatAttachment,
+  type OrchestrationMessageContext,
   MODEL_ROUTER_POLICY_VERSION,
   AuthOrchestrationOperateScope,
   defaultConcurrencyBudgetPolicy,
@@ -34,6 +36,7 @@ import { ActionGateService } from "../actionGate/ActionGateService.ts";
 import {
   calculateDispatcherModelRoute,
   readDispatcherProjectedState,
+  readDispatcherTaskRoute,
   bindDispatcherTurnStartCommand,
   bindingForExplicitTarget,
   deleteDispatcherTaskRoutesByThread,
@@ -85,7 +88,8 @@ export interface DispatchPolicyCommand {
   readonly restartContinuationOfRunId?: string;
   readonly delegatedCompletion?: unknown;
   readonly dispatchMode?: { readonly type: string };
-  readonly attachments?: ReadonlyArray<{ readonly id?: string }>;
+  readonly attachments?: ReadonlyArray<ChatAttachment>;
+  readonly context?: OrchestrationMessageContext;
   readonly task?: string;
   readonly taskContract?: TaskContractFields;
 }
@@ -525,6 +529,10 @@ const bindRoute = (input: {
       message: {
         messageId: MessageId.make(input.command.messageId),
         text: input.command.text ?? "",
+        ...(input.command.attachments === undefined
+          ? {}
+          : { attachments: input.command.attachments }),
+        ...(input.command.context === undefined ? {} : { context: input.command.context }),
       },
       routingMode,
       ...(input.command.modelRouteConstraints === undefined
@@ -919,6 +927,56 @@ const authorizeContinuation = (command: DispatchPolicyCommand, operation: Operat
       });
     }
     yield* recordAttempt(sql, command, "continuation");
+  });
+
+export const revalidateImageRoute = (input: {
+  readonly sql: SqlClient.SqlClient;
+  readonly threadId: string;
+  readonly messageId: string;
+  readonly commandType: string;
+}) =>
+  Effect.gen(function* () {
+    // Queue admission cannot promise that the cached declaration is still current at handoff.
+    const route = yield* readDispatcherTaskRoute({
+      threadId: ThreadId.make(input.threadId),
+      messageId: MessageId.make(input.messageId),
+    }).pipe(
+      Effect.provideService(SqlClient.SqlClient, input.sql),
+      Effect.mapError(
+        () =>
+          new Base3PolicyDeniedError({
+            reason: "binding",
+            commandType: input.commandType,
+            detail: "Execution route could not be verified.",
+          }),
+      ),
+    );
+    if (
+      Option.isSome(route) &&
+      route.value.modelRoute?.task.requiredCapabilities.includes("vision")
+    ) {
+      const target = route.value.target;
+      const current = calculateDispatcherModelRoute({
+        mode: "auto",
+        providers: yield* providersForBind,
+        preferredTargets: [],
+        constraints: {
+          requiredCapabilities: ["vision"],
+          allowedInstanceIds: [target.instanceId],
+          allowedModels: [target.model],
+        },
+        nowMs: DateTime.toEpochMillis(yield* DateTime.now),
+        localTaskProfile: classifyLocalTask(""),
+      });
+      if (current.decision.selected === null) {
+        yield* input.sql`UPDATE base3_execution_grants SET revoked_at = ${DateTime.formatIso(yield* DateTime.now)} WHERE grant_id = ${`grant:message:${input.threadId}:${input.messageId}`}`;
+        return yield* deny(
+          input.commandType,
+          "binding",
+          "The bound model no longer has available declared image-input support. Send again with an eligible model or remove the image.",
+        );
+      }
+    }
   });
 
 export const revalidateOutboxEffect = (effect: {

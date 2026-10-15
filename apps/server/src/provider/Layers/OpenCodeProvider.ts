@@ -273,6 +273,13 @@ function flattenOpenCodeModels(
         name,
         ...(subProvider ? { subProvider } : {}),
         isCustom: false,
+        ...(model.capabilities?.input === undefined
+          ? {}
+          : {
+              inputModalities: Object.entries(model.capabilities.input)
+                .filter(([, supported]) => supported === true)
+                .map(([modality]) => modality),
+            }),
         capabilities: openCodeCapabilitiesForModel({
           providerID: provider.id,
           model,
@@ -384,6 +391,7 @@ export interface OpenCode2Model {
   readonly id: string;
   readonly name: string;
   readonly variants: ReadonlyArray<{ readonly id: string }>;
+  readonly capabilities?: { readonly input: ReadonlyArray<string> };
 }
 
 /**
@@ -546,6 +554,9 @@ const checkOpenCode2 = Effect.fn("checkOpenCode2")(function* (
         name: model.name,
         isCustom: false,
         capabilities: openCode2ModelCapabilities(model),
+        ...(model.capabilities?.input === undefined
+          ? {}
+          : { inputModalities: model.capabilities.input }),
       }))
       .toSorted((left, right) => left.name.localeCompare(right.name)),
     settings.customModels,
