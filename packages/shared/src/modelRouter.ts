@@ -368,8 +368,9 @@ function selectionBasisFor(input: {
     selectedScore = score(selected);
     runnerUpScore = input.eligible[1] === undefined ? null : score(input.eligible[1]);
     let tied = input.eligible.filter((candidate) => score(candidate) === selectedScore);
-    // The existing sort includes excluded rows before its display/selection cap.
-    if (input.built.some((candidate) => Number.isNaN(score(candidate)))) {
+    // Auto sorts the full eligible pool before the selectable cap. Excluded
+    // diagnostics do not participate in that sort or its decisive score basis.
+    if (input.built.some((candidate) => candidate.eligible && Number.isNaN(score(candidate)))) {
       outcome = "unknown";
     } else if (tied.length > 1) {
       outcome = "tie";
@@ -595,7 +596,9 @@ export function routeModel(input: ModelRouterInput): ModelRouterDecision {
   const costActive = scoreDimensionActive(built, (metrics) => metrics.costUsd);
   const latencyActive = scoreDimensionActive(built, (metrics) => metrics.latencyMs);
 
-  const ranked = [...built].sort((left, right) =>
+  const selectionPool =
+    input.mode === "auto" ? built.filter((candidate) => candidate.eligible) : [...built];
+  const ranked = selectionPool.sort((left, right) =>
     compareForSelection(
       { ...left, fallbackIndex: 0 },
       { ...right, fallbackIndex: 0 },
@@ -606,9 +609,20 @@ export function routeModel(input: ModelRouterInput): ModelRouterDecision {
     ),
   );
 
-  const withIndex: Array<ModelRouterCandidate> = ranked
-    .slice(0, MODEL_ROUTER_MAX_CANDIDATES)
-    .map((candidate, fallbackIndex) => ({ ...candidate, fallbackIndex }));
+  const bounded = ranked.slice(0, MODEL_ROUTER_MAX_CANDIDATES);
+  if (input.mode === "auto" && bounded.length < MODEL_ROUTER_MAX_CANDIDATES) {
+    // Eligibility owns selectable capacity; remaining slots are diagnostics only.
+    const excluded = built
+      .filter((candidate) => !candidate.eligible)
+      .sort((left, right) =>
+        compareModelRouterTieBreak({ ...left, fallbackIndex: 0 }, { ...right, fallbackIndex: 0 }),
+      );
+    bounded.push(...excluded.slice(0, MODEL_ROUTER_MAX_CANDIDATES - bounded.length));
+  }
+  const withIndex: Array<ModelRouterCandidate> = bounded.map((candidate, fallbackIndex) => ({
+    ...candidate,
+    fallbackIndex,
+  }));
 
   const eligible = withIndex.filter((candidate) => candidate.eligible);
   let selected: ModelRouterCandidate | null = null;

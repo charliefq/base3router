@@ -15,6 +15,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
+import type * as Scope from "effect/Scope";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import {
@@ -27,6 +28,7 @@ import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import * as RouterEvaluation from "../../routerEvaluation/RouterEvaluationService.ts";
 import { CodexProviderCapabilitiesV2 } from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
+import * as EffectWorker from "../../orchestration-v2/EffectWorker.ts";
 import type * as CommandReceiptStore from "../../orchestration-v2/CommandReceiptStore.ts";
 import * as EventSink from "../../orchestration-v2/EventSink.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
@@ -57,6 +59,22 @@ export const agentsCreationProvider: ServerProvider = {
   slashCommands: [],
   skills: [],
 };
+export const eligibleCapProviders = (count = 32): ReadonlyArray<ServerProvider> => [
+  {
+    ...agentsCreationProvider,
+    instanceId: ProviderInstanceId.make("aaa-disabled"),
+    enabled: false,
+    status: "disabled",
+    models: Array.from({ length: count }, (_, i) => ({
+      slug: `blocked-${i.toString().padStart(2, "0")}`,
+      name: `Blocked ${i}`,
+      isCustom: false,
+      capabilities: null,
+    })),
+  },
+  agentsCreationProvider,
+];
+
 export const agentsCreationCommand = (
   id: string,
 ): Extract<OrchestrationV2Command, { type: "thread.create" }> => ({
@@ -93,6 +111,7 @@ export const agentsCreationCommand = (
 });
 type Fixture = {
   sql: SqlClient.SqlClient;
+  worker: EffectWorker.OrchestrationEffectWorkerV2["Service"];
   orchestrator: Orchestrator.OrchestratorV2["Service"];
   eventSink: EventSink.EventSinkV2["Service"];
   setProviders: (providers: ReadonlyArray<ServerProvider>) => void;
@@ -129,9 +148,10 @@ type Fixture = {
   >;
 };
 export const withAgentsTaskCreationFixture = <E>(
-  check: (fixture: Fixture) => Effect.Effect<void, E>,
+  check: (fixture: Fixture) => Effect.Effect<void, E, Scope.Scope>,
   options: {
     readonly dbPath?: string;
+    readonly adapterRegistryLayer?: Layer.Layer<ProviderAdapterRegistry.ProviderAdapterRegistryV2>;
     readonly decorateEventSink?: (
       service: EventSink.EventSinkV2["Service"],
     ) => EventSink.EventSinkV2["Service"];
@@ -159,20 +179,21 @@ export const withAgentsTaskCreationFixture = <E>(
     : SqlitePersistenceMemory;
   const orchestrator = makeOrchestratorV2ReplayLayerWithRegistry(
     { name: "agents-task-creation" },
-    Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
-      list: () => Effect.succeed(providers.map((p) => p.instanceId)),
-      get: (id) =>
-        Effect.succeed({
-          instanceId: id,
-          driver: ProviderDriverKind.make("codex"),
-          getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
-          planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
-          openSession: () => {
-            providerStartCount += 1;
-            return Effect.die("Preview fixture must never open a provider session");
-          },
-        }),
-    }),
+    options.adapterRegistryLayer ??
+      Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+        list: () => Effect.succeed(providers.map((p) => p.instanceId)),
+        get: (id) =>
+          Effect.succeed({
+            instanceId: id,
+            driver: ProviderDriverKind.make("codex"),
+            getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+            planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
+            openSession: () => {
+              providerStartCount += 1;
+              return Effect.die("Preview fixture must never open a provider session");
+            },
+          }),
+      }),
     {
       databaseLayer: database,
       runEffectWorker: false,
@@ -200,6 +221,7 @@ export const withAgentsTaskCreationFixture = <E>(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const service = yield* Orchestrator.OrchestratorV2;
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
       const evaluation = yield* RouterEvaluation.RouterEvaluationService;
       const eventSink = yield* EventSink.EventSinkV2;
       const canonical = yield* CollaborationThreads.CollaborationThreads;
@@ -210,6 +232,7 @@ export const withAgentsTaskCreationFixture = <E>(
       const actorContext = Effect.provideService(PolicyExecutionContext, agentsCreationActor);
       yield* check({
         sql,
+        worker,
         orchestrator: service,
         eventSink,
         providerStarts: () => providerStartCount,

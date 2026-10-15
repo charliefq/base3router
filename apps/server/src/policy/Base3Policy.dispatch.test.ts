@@ -1,5 +1,6 @@
 import {
   ActionApprovalId,
+  ModelRouterDecision,
   AuthOrchestrationOperateScope,
   EnvironmentId,
   ProviderDriverKind,
@@ -85,11 +86,7 @@ const StoredRoute = Schema.Struct({
       instanceId: Schema.optionalKey(Schema.String),
     }),
   ),
-  modelRoute: Schema.optionalKey(
-    Schema.Struct({
-      mode: Schema.optionalKey(Schema.String),
-    }),
-  ),
+  modelRoute: Schema.optionalKey(ModelRouterDecision),
 });
 const decodeStoredRoute = Schema.decodeUnknownEffect(Schema.fromJsonString(StoredRoute));
 
@@ -159,7 +156,7 @@ it.effect("Auto binds the eligible model and Manual keeps an explicit target", (
   }).pipe(Effect.provide(gateLayer)),
 );
 
-it.effect("Auto failovers from an unavailable environment default", () =>
+it.effect("eligible cap Auto selects before unavailable default diagnostics", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* dispatch({
@@ -179,7 +176,13 @@ it.effect("Auto failovers from an unavailable environment default", () =>
     const auto = yield* decodeStoredRoute(rows[0]?.binding_json ?? "{}");
     expect(auto.modelRoute?.mode).toBe("auto");
     expect(auto.target?.instanceId).toBe("codex-work");
-    expect(auto.fallbackIndex ?? 0).toBeGreaterThanOrEqual(1);
+    expect(auto.fallbackIndex).toBe(0);
+    expect(auto.modelRoute?.candidates[0]?.target).toEqual(auto.target);
+    expect(
+      auto.modelRoute?.candidates.find(
+        (candidate) => candidate.target.instanceId === unavailable.instanceId,
+      )?.eligible,
+    ).toBe(false);
     expect(auto.source).not.toBe("environment-default");
     expect(auto.source).not.toBe("explicit");
   }).pipe(

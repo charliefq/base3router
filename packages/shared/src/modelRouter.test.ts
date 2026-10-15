@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import * as Schema from "effect/Schema";
 import {
   ModelRouterConstraints,
+  ModelRouterDecision,
   ProviderDriverKind,
   ProviderInstanceId,
   type ModelRouterMetrics,
@@ -19,6 +20,8 @@ import {
   routeModel,
   type ModelRouterCatalogEntry,
 } from "./modelRouter.ts";
+
+const isRouterDecision = Schema.is(ModelRouterDecision);
 
 const instance = (id: string) => ProviderInstanceId.make(id);
 const driver = (id: string) => ProviderDriverKind.make(id);
@@ -1006,7 +1009,7 @@ describe("selection basis", () => {
     });
     expect(decision.explanation).toContain("selection cause is unknown");
   });
-  it("reports no selectable candidate when exclusions occupy the existing cap", () => {
+  it("eligible cap selects the ready model when exclusions formerly occupied the cap", () => {
     const excluded = Array.from({ length: 32 }, (_, i) => ({
       ...a,
       model: `excluded${i}`,
@@ -1016,14 +1019,14 @@ describe("selection basis", () => {
       mode: "auto",
       catalog: [...excluded, { ...b, metrics: metrics(0) }],
     });
-    expect(decision.selected).toBeNull();
+    expect(decision.selected?.target.model).toBe("b");
     expect(decision.selectionBasis).toMatchObject({
-      outcome: "none",
+      outcome: "single",
       eligibleCount: 1,
-      consideredEligibleCount: 0,
+      consideredEligibleCount: 1,
       excludedCount: 32,
     });
-    expect(decision.explanation).toContain("candidate limit");
+    expect(decision.explanation).toContain("only eligible candidate");
   });
   it("does not claim a decisive score when another selectable candidate has NaN arithmetic", () => {
     const huge = { quality: known(1e308), costUsd: known(1e308), latencyMs: known(0) };
@@ -1101,7 +1104,7 @@ describe("selection basis", () => {
     });
     expect(decision.reasonCodes).not.toContain("POLICY_TIE_BREAK");
   });
-  it("reports unknown cause when an excluded NaN row disrupts the unchanged candidate sort", () => {
+  it("eligible cap isolates excluded NaN diagnostics from selectable scores", () => {
     const zero = { quality: known(0), costUsd: known(0), latencyMs: known(0) };
     const rows = [
       { ...a, model: "a", metrics: zero },
@@ -1123,15 +1126,253 @@ describe("selection basis", () => {
         latencyWeight: 0,
       },
     });
-    expect(decision.candidates.map((row) => row.target.model)).toEqual(["a", "b", "c"]);
-    expect(decision.selected?.target.model).toBe("a");
+    expect(decision.candidates.map((row) => row.target.model)).toEqual(["c", "a", "b"]);
+    expect(decision.selected?.target.model).toBe("c");
     expect(decision.selectionBasis).toMatchObject({
-      outcome: "unknown",
-      selectedScore: 0,
-      runnerUpScore: 1e308,
+      outcome: "score",
+      selectedScore: 1e308,
+      runnerUpScore: 0,
       eligibleCount: 2,
       excludedCount: 1,
     });
-    expect(decision.explanation).not.toContain("higher weighted");
+    expect(decision.explanation).toContain("higher weighted");
+  });
+});
+
+describe("eligible cap", () => {
+  const known = (value: number) => ({ status: "known" as const, value });
+  const ready = entry({ instanceId: "zzz-ready", model: "ready", driver: driver("codex") });
+  const blocked = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      entry({
+        instanceId: "aaa-disabled",
+        model: `blocked-${i.toString().padStart(2, "0")}`,
+        driver: driver("codex"),
+        availabilityReasons: ["PROVIDER_DISABLED"],
+      }),
+    );
+  it.each([31, 32, 33])(
+    "reserves selectable capacity ahead of %s disabled models with production unknown metrics",
+    (count) => {
+      const decision = routeModel({
+        mode: "auto",
+        catalog: [...blocked(count), ready],
+        preferredTargets: blocked(count),
+      });
+      expect(decision.selected?.target).toEqual({
+        instanceId: ready.instanceId,
+        model: ready.model,
+      });
+      expect(decision.candidates[0]?.target).toEqual(decision.selected?.target);
+      expect(decision.candidates).toHaveLength(32);
+      expect(decision.fallbacks).toEqual([]);
+      expect(decision.candidates.map((c) => c.fallbackIndex)).toEqual(
+        Array.from({ length: 32 }, (_, i) => i),
+      );
+      expect(decision.selectionBasis).toMatchObject({
+        outcome: "single",
+        eligibleCount: 1,
+        consideredEligibleCount: 1,
+        excludedCount: count,
+      });
+      expect(decision.reasonCodes).not.toContain("PREFERRED_DEFAULT");
+      expect(decision.attemptBudget).toBe(3);
+      expect(isRouterDecision(decision)).toBe(true);
+    },
+  );
+  it.each([
+    "unavailable",
+    "capability",
+    "instance",
+    "model",
+    "driver",
+    "cooldown",
+    "cost",
+    "latency",
+  ] as const)("applies %s hard exclusion before the eligible cap", (reason) => {
+    const metrics = { quality: known(100), costUsd: known(10), latencyMs: known(10) };
+    const rows = blocked(33).map((c) => ({
+      ...c,
+      availabilityReasons:
+        reason === "unavailable"
+          ? ["PROVIDER_UNAVAILABLE" as const]
+          : reason === "cooldown"
+            ? ["PROVIDER_COOLDOWN" as const]
+            : [],
+      capabilities: reason === "capability" ? [] : c.capabilities,
+      driver: reason === "driver" ? driver("claudeAgent") : c.driver,
+      metrics,
+    }));
+    const allowed = {
+      ...ready,
+      metrics: { quality: known(0), costUsd: known(0), latencyMs: known(0) },
+    };
+    const constraints =
+      reason === "capability"
+        ? { requiredCapabilities: ["code" as const] }
+        : reason === "instance"
+          ? { allowedInstanceIds: [ready.instanceId] }
+          : reason === "model"
+            ? { allowedModels: [ready.model] }
+            : reason === "driver"
+              ? { allowedDrivers: [driver("codex")] }
+              : reason === "cost"
+                ? { maxCostUsd: 1 }
+                : reason === "latency"
+                  ? { maxLatencyMs: 1 }
+                  : {};
+    const decision = routeModel({ mode: "auto", catalog: [...rows, allowed], constraints });
+    expect(decision.selected?.target.model).toBe("ready");
+    expect(decision.selectionBasis).toMatchObject({
+      eligibleCount: 1,
+      excludedCount: 33,
+      consideredEligibleCount: 1,
+    });
+    expect(decision.candidates.slice(1).every((c) => !c.eligible)).toBe(true);
+  });
+  it.each([0, 31, 32, 33])(
+    "bounds and deterministically orders %s eligible rows and distinct-instance fallbacks",
+    (count) => {
+      const rows = Array.from({ length: count }, (_, i) => ({
+        ...ready,
+        instanceId: instance(`ready-${i.toString().padStart(2, "0")}`),
+      }));
+      const catalog = [...blocked(33), ...rows];
+      const decision = routeModel({ mode: "auto", catalog });
+      const reversed = routeModel({ mode: "auto", catalog: catalog.toReversed() });
+      expect(reversed).toEqual(decision);
+      expect(decision.candidates).toHaveLength(32);
+      expect(decision.candidates.filter((c) => c.eligible)).toHaveLength(Math.min(32, count));
+      expect(decision.selected?.target.instanceId ?? null).toBe(count ? "ready-00" : null);
+      expect(decision.fallbacks).toHaveLength(Math.max(0, Math.min(32, count) - 1));
+      expect(new Set(decision.fallbacks.map((c) => c.target.instanceId)).size).toBe(
+        decision.fallbacks.length,
+      );
+      expect(decision.selectionBasis).toMatchObject({
+        eligibleCount: count,
+        excludedCount: 33,
+        consideredEligibleCount: Math.min(32, count),
+      });
+    },
+  );
+  it("deduplicates targets before eligibility counts and keeps same-instance models out of executable fallbacks", () => {
+    const second = { ...ready, model: "ready-2" };
+    const other = { ...ready, instanceId: instance("zzzz-other") };
+    const decision = routeModel({
+      mode: "auto",
+      catalog: [...blocked(33), ready, ready, second, other, other],
+    });
+    expect(decision.selectionBasis).toMatchObject({
+      eligibleCount: 3,
+      excludedCount: 33,
+      consideredEligibleCount: 3,
+    });
+    expect(decision.fallbacks.map((c) => c.target.instanceId)).toEqual([other.instanceId]);
+    expect(decision.candidates.filter((c) => c.eligible).map((c) => c.fallbackIndex)).toEqual([
+      0, 1, 2,
+    ]);
+  });
+  it("keeps completeness global when an eligible unknown metric is beyond the cap", () => {
+    const rows = Array.from({ length: 33 }, (_, i) => ({
+      ...ready,
+      model: `r${i.toString().padStart(2, "0")}`,
+      metrics: {
+        quality: i === 32 ? { status: "unknown" as const } : known(i),
+        costUsd: known(0),
+        latencyMs: known(0),
+      },
+    }));
+    const decision = routeModel({
+      mode: "auto",
+      catalog: [...blocked(33), ...rows],
+      policy: { version: "model-router.v0", qualityWeight: 1, costWeight: 0, latencyWeight: 0 },
+    });
+    expect(decision.selected?.target.model).toBe("r00");
+    expect(decision.selectionBasis).toMatchObject({
+      eligibleCount: 33,
+      consideredEligibleCount: 32,
+      dimensions: {
+        quality: { complete: false, participation: "incomplete" },
+        costUsd: { participation: "zero-weight" },
+        latencyMs: { participation: "zero-weight" },
+      },
+      outcome: "tie",
+      tieBreak: ["model"],
+    });
+  });
+  it("does not let excluded unknown estimates disable complete eligible weighted scores", () => {
+    const metrics = (quality: number): ModelRouterMetrics => ({
+      quality: known(quality),
+      costUsd: known(0),
+      latencyMs: known(0),
+    });
+    const decision = routeModel({
+      mode: "auto",
+      catalog: [
+        ...blocked(33),
+        { ...ready, metrics: metrics(1) },
+        { ...ready, model: "winner", metrics: metrics(2) },
+      ],
+      preferredTargets: [ready],
+    });
+    expect(decision.selected?.target.model).toBe("winner");
+    expect(decision.selectionBasis).toMatchObject({
+      outcome: "score",
+      dimensions: { quality: { complete: true, participation: "weighted" } },
+      selectedScore: 2,
+      runnerUpScore: 1,
+    });
+  });
+  it("retains original Manual cap and unavailable-target behavior", () => {
+    const outside = routeModel({
+      mode: "manual",
+      catalog: [...blocked(32), ready],
+      manualOverride: ready,
+    });
+    expect(outside.selected).toBeNull();
+    expect(outside.selectionBasis?.outcome).toBe("manual-missing");
+    const pinned = blocked(32)[0]!;
+    const inside = routeModel({
+      mode: "manual",
+      catalog: [...blocked(32), ready],
+      manualOverride: pinned,
+    });
+    expect(inside.selected?.target.model).toBe(pinned.model);
+    expect(inside.selected?.eligible).toBe(false);
+    const rejected = routeModel({
+      mode: "manual",
+      catalog: [ready],
+      manualOverride: ready,
+      constraints: { excludedModels: [ready.model] },
+    });
+    expect(rejected.selected).toBeNull();
+  });
+  it("applies real provider-instance cooldown expansion before the eligible cap", () => {
+    const rows = blocked(33).map((candidate) => ({ ...candidate, availabilityReasons: [] }));
+    const cooled = applyModelRouterCooldowns(
+      [...rows, ready],
+      [
+        {
+          instanceId: rows[0]!.instanceId,
+          scope: "provider_instance",
+          category: "rate_limited",
+          until: "2026-10-16T00:00:00Z",
+          reasonCode: "PROVIDER_RATE_LIMITED",
+        },
+      ],
+      Date.parse("2026-10-15T00:00:00Z"),
+    );
+    const decision = routeModel({ mode: "auto", catalog: cooled });
+    expect(decision.selected?.target.model).toBe("ready");
+    expect(decision.selectionBasis).toMatchObject({
+      eligibleCount: 1,
+      consideredEligibleCount: 1,
+      excludedCount: 33,
+    });
+    expect(
+      decision.candidates
+        .slice(1)
+        .every((candidate) => candidate.reasonCodes.includes("PROVIDER_RATE_LIMITED")),
+    ).toBe(true);
   });
 });

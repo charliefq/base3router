@@ -5,6 +5,15 @@ import { assert, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import * as ModelRouter from "@t3tools/shared/modelRouter";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
+import {
+  withAgentsTaskCreationFixture,
+  agentsCreationCommand,
+  agentsCreationProvider,
+  eligibleCapProviders,
+} from "../collaboration/testkit/agentsTaskCreationFixture.ts";
 import {
   AuthOrchestrationOperateScope,
   EnvironmentId,
@@ -123,6 +132,7 @@ const provider: ServerProvider = {
 function makeAdapter(
   started: Ref.Ref<ReadonlyArray<ModelSelection>>,
   instanceId: ProviderInstanceId,
+  resultText?: string,
 ): ProviderAdapterV2Shape {
   return {
     instanceId: instanceId,
@@ -202,6 +212,68 @@ function makeAdapter(
                   completedAt: occurredAt,
                 },
               });
+              if (resultText !== undefined) {
+                const ids = yield* IdAllocator.IdAllocatorV2.pipe(
+                  Effect.provide(IdAllocator.layer),
+                );
+                const ref = {
+                  driver,
+                  nativeId: `eligible-output:${input.attemptId}`,
+                  strength: "strong" as const,
+                };
+                const nodeId = ids.derive.nodeFromProviderItem({
+                  driver,
+                  nativeItemId: ref.nativeId,
+                });
+                yield* Queue.offer(events, {
+                  type: "node.updated",
+                  driver,
+                  node: {
+                    id: nodeId,
+                    threadId: input.threadId,
+                    runId: input.runId,
+                    parentNodeId: input.rootNodeId,
+                    rootNodeId: input.rootNodeId,
+                    kind: "assistant_message",
+                    status: "completed",
+                    countsForRun: false,
+                    providerThreadId: input.providerThread.id,
+                    providerTurnId,
+                    nativeItemRef: ref,
+                    runtimeRequestId: null,
+                    checkpointScopeId: null,
+                    startedAt: occurredAt,
+                    completedAt: occurredAt,
+                  },
+                });
+                yield* Queue.offer(events, {
+                  type: "turn_item.updated",
+                  driver,
+                  turnItem: {
+                    id: ids.derive.turnItemFromProviderItem({ driver, nativeItemId: ref.nativeId }),
+                    messageId: ids.derive.messageFromProviderItem({
+                      driver,
+                      nativeItemId: ref.nativeId,
+                    }),
+                    threadId: input.threadId,
+                    runId: input.runId,
+                    nodeId,
+                    providerThreadId: input.providerThread.id,
+                    providerTurnId,
+                    nativeItemRef: ref,
+                    parentItemId: null,
+                    ordinal: 1,
+                    type: "assistant_message",
+                    status: "completed",
+                    title: null,
+                    startedAt: occurredAt,
+                    completedAt: occurredAt,
+                    updatedAt: occurredAt,
+                    text: resultText,
+                    streaming: false,
+                  },
+                });
+              }
               yield* Queue.offer(events, {
                 type: "turn.terminal",
                 driver: driver,
@@ -1373,6 +1445,228 @@ it.live(
           yield* run("rollback-write", "writing", a, HYBRID_ROUTER_POLICY_VERSION);
           assert.deepEqual(yield* Ref.get(started), [a, a, a, a, b, a]);
         }).pipe(Effect.provide(runtime), Effect.provideService(PolicyExecutionContext, session));
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live.each(["control", "immediate", "queued", "availability", "constraints"] as const)(
+  "eligible cap governed disk SQLite preview and real worker %s preserve authorization and replay",
+  (mode) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "b3r-cap-a2-" });
+        const cwd = yield* checkpointWorkspace(`eligible-cap-${mode}`);
+        const started = yield* Ref.make<ReadonlyArray<ModelSelection>>([]);
+        const expected = { instanceId: agentsCreationProvider.instanceId, model: "fake-model" };
+        yield* withAgentsTaskCreationFixture(
+          (f) =>
+            Effect.gen(function* () {
+              f.setProviders(
+                mode === "control" ? [agentsCreationProvider] : eligibleCapProviders(),
+              );
+              yield* f.sql`UPDATE projection_projects SET workspace_root=${cwd} WHERE project_id='project-a'`;
+              const c = {
+                ...agentsCreationCommand(`cap-${mode}`),
+                taskContract: {
+                  goal: "Run the cap fixture",
+                  redirect: "Keep fixture scope",
+                  acceptance: "Owner checks the fake result",
+                  brake: { maxProviderStarts: 3, stopConditions: "Scope changed" },
+                },
+              };
+              yield* f.dispatch(c);
+              const task = (yield* f.readSnapshot()).tasks[0]!;
+              const marker = () =>
+                Effect.gen(function* () {
+                  const tables = yield* f.sql<{
+                    name: string;
+                  }>`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`;
+                  const contents = yield* Effect.forEach(tables, (t) =>
+                    f.sql.unsafe(`SELECT * FROM "${t.name.replaceAll('"', '""')}"`),
+                  );
+                  return { contents, changes: yield* f.sql`SELECT total_changes() AS changes` };
+                });
+              const before = yield* marker();
+              const preview = yield* f.previewAuto({
+                environmentId: "environment-a",
+                taskId: task.id,
+                projectId: c.projectId,
+                threadId: c.threadId,
+                revision: 1,
+                reference: task.review!.reference,
+                text: "Inspect the eligible cap fixture",
+                constraints: { allowedModels: ["fake-model"] },
+              });
+              assert.equal(preview.status, "available");
+              if (preview.status !== "available") throw new Error("Preview unavailable");
+              assert.deepEqual(yield* marker(), before);
+              assert.deepEqual(yield* Ref.get(started), []);
+              assert.deepEqual(preview.decision.selected?.target, expected);
+              assert.equal(
+                preview.decision.selectionBasis?.excludedCount,
+                mode === "control" ? 0 : 32,
+              );
+              yield* Effect.log("Eligible cap preview zero-write disk SQLite", {
+                tables: before.contents.length,
+                totalChanges: before.changes,
+              });
+              if (mode === "availability")
+                f.setProviders(eligibleCapProviders().map((p) => ({ ...p, installed: false })));
+              const constraints =
+                mode === "constraints" ? { allowedModels: [] } : { allowedModels: ["fake-model"] };
+              const command = {
+                type: "message.dispatch" as const,
+                commandId: CommandId.make(`eligible-cap:${mode}`),
+                threadId: c.threadId,
+                messageId: MessageId.make(`eligible-cap:${mode}`),
+                text: "Inspect the eligible cap fixture",
+                attachments: [],
+                routingMode: "auto" as const,
+                modelRouteConstraints: constraints,
+                dispatchMode: {
+                  type:
+                    mode === "queued"
+                      ? ("queue_after_active" as const)
+                      : ("start_immediately" as const),
+                },
+                createdBy: "user" as const,
+                creationSource: "web" as const,
+              };
+              if (mode === "availability" || mode === "constraints") {
+                const effects = yield* f.noExecution();
+                yield* Effect.flip(f.dispatch(command));
+                yield* Effect.flip(f.dispatch(command));
+                yield* f.worker.drain();
+                assert.deepEqual(yield* Ref.get(started), []);
+                assert.deepEqual(yield* f.noExecution(), effects);
+                assert.deepEqual(
+                  yield* f.sql`SELECT binding_json FROM projection_dispatcher_task_routes`,
+                  [],
+                );
+                assert.deepEqual(yield* f.sql`SELECT * FROM task_contract_admissions`, []);
+                return;
+              }
+              if (mode === "queued") {
+                // Admit a foreground run without starting the worker, then enqueue Auto behind it.
+                f.setProviders([agentsCreationProvider]);
+                yield* f.dispatch({
+                  ...command,
+                  routingMode: "manual",
+                  commandId: CommandId.make("cap-foreground"),
+                  messageId: MessageId.make("cap-foreground"),
+                  modelSelection: expected,
+                  dispatchMode: { type: "start_immediately" },
+                });
+                f.setProviders(eligibleCapProviders());
+              }
+              const finished = yield* f.orchestrator.streamDomainEvents.pipe(
+                Stream.filter(
+                  (event) => event.type === "run.updated" && event.payload.status === "completed",
+                ),
+                Stream.take(mode === "queued" ? 2 : 1),
+                Stream.runDrain,
+                Effect.forkScoped,
+              );
+              const receipt = yield* f.dispatch(command);
+              const beforeWorker = yield* f.orchestrator.getThreadProjection(c.threadId);
+              const admittedRun = beforeWorker.runs.find(
+                (r) => r.userMessageId === command.messageId,
+              )!;
+              assert.deepEqual(admittedRun.modelSelection, expected);
+              if (mode === "queued") assert.equal(admittedRun.status, "queued");
+              assert.deepEqual(yield* Ref.get(started), []);
+              yield* EffectWorker.runDaemonWithOptions({ concurrency: 1 }).pipe(
+                Effect.provideService(EffectWorker.OrchestrationEffectWorkerV2, f.worker),
+                Effect.forkScoped,
+              );
+              yield* Fiber.join(finished);
+              yield* f.worker.drain();
+              const projection = yield* f.orchestrator.getThreadProjection(c.threadId);
+              const run = projection.runs.find((r) => r.userMessageId === command.messageId)!;
+              assert.equal(run.status, "completed");
+              assert.deepEqual(run.modelSelection, expected);
+              const attempts = projection.attempts.filter((a) => a.runId === run.id);
+              assert.equal(attempts.length, 1);
+              assert.equal(attempts[0]!.status, "completed");
+              const routes = yield* f.sql<{
+                binding_json: string;
+              }>`SELECT binding_json FROM projection_dispatcher_task_routes WHERE message_id=${command.messageId}`;
+              const binding = yield* decodeRoute(routes[0]!.binding_json);
+              assert.deepEqual(binding.target, expected);
+              assert.deepEqual(
+                binding.modelRoute?.selected?.target,
+                preview.decision.selected?.target,
+              );
+              assert.equal(binding.modelRoute?.attemptBudget, 3);
+              const grants = yield* f.sql<{
+                argument_hash: string;
+              }>`SELECT argument_hash FROM base3_execution_grants WHERE message_id=${command.messageId}`;
+              assert.equal(grants.length, 1);
+              assert.equal(
+                grants[0]!.argument_hash,
+                argumentHash({
+                  text: command.text,
+                  model: expected.model,
+                  instanceId: expected.instanceId,
+                  attachmentIds: [],
+                  modelRouteConstraints: constraints,
+                  contractRevision: 1,
+                  maxProviderStarts: 3,
+                }),
+              );
+              const snapshot = yield* f.readSnapshot();
+              const result = snapshot.tasks[0]!.resultReadout;
+              assert.equal(result?.status, "available");
+              if (result?.status !== "available") throw new Error("No result evidence");
+              const output = projection.turnItems.find(
+                (item) =>
+                  item.type === "assistant_message" &&
+                  item.runId === run.id &&
+                  item.text === "Eligible fake result",
+              );
+              assert.isDefined(
+                output,
+                "the fake adapter result reaches the real event/projector path",
+              );
+              const turn = projection.providerTurns.find(
+                (candidate) => candidate.runAttemptId === attempts[0]!.id,
+              );
+              assert.equal(turn?.status, "completed");
+              assert.equal(output?.providerTurnId, turn?.id);
+              assert.equal(output?.providerThreadId, run.providerThreadId);
+              // This existing fake protocol path leaves attempt.providerTurnId unlinked.
+              // Preserve the reader's fail-closed result rather than fabricating a binding.
+              assert.equal(attempts[0]!.providerTurnId, null);
+              assert.deepEqual(result.content, {
+                status: "unknown",
+                reason: "missing_provider_turn",
+              });
+              const starts = yield* Ref.get(started);
+              assert.deepEqual(
+                starts,
+                Array.from({ length: mode === "queued" ? 2 : 1 }, () => expected),
+              );
+              const admissions = yield* f.sql`SELECT * FROM task_contract_admissions`;
+              assert.equal(admissions.length, starts.length);
+              const replay = yield* f.dispatch(command);
+              yield* f.worker.drain();
+              assert.equal(replay.sequence, receipt.sequence);
+              assert.deepEqual(yield* Ref.get(started), starts);
+              assert.deepEqual(yield* f.sql`SELECT * FROM task_contract_admissions`, admissions);
+              assert.deepEqual(
+                yield* f.sql`SELECT argument_hash FROM base3_execution_grants WHERE message_id=${command.messageId}`,
+                grants,
+              );
+            }),
+          {
+            dbPath: path.join(directory, "state.sqlite"),
+            adapterRegistryLayer: ProviderAdapterRegistry.makeLayer([
+              makeAdapter(started, expected.instanceId, "Eligible fake result"),
+            ]),
+          },
+        );
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
 );

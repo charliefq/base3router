@@ -870,3 +870,41 @@ it.effect("keeps a task route immutable across a database reload", () => {
     ),
   );
 });
+
+it.effect("eligible cap binds an eligible Auto target behind 33 disabled catalog models", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const command = {
+      type: "thread.turn.start" as const,
+      commandId: CommandId.make("eligible-cap-dispatcher"),
+      threadId: threadA,
+      message: {
+        messageId: MessageId.make("eligible-cap-dispatcher"),
+        text: "Choose the eligible model",
+      },
+      routingMode: "auto" as const,
+    };
+    const bound = yield* bindDispatcherTurnStartCommand(command, {
+      enabled: true,
+      environmentId: Effect.succeed(environmentId),
+      providers: Effect.succeed([
+        provider({
+          instanceId: "aaa-disabled",
+          driver: "codex",
+          enabled: false,
+          models: Array.from({ length: 33 }, (_, i) => `blocked-${i}`),
+        }),
+        provider({ instanceId: "zzz-ready", driver: "codex", models: ["ready"] }),
+      ]),
+      environmentDefaultModelSelection: Effect.succeed(null),
+      sql,
+    });
+    expect(bound.modelSelection).toEqual(selection("zzz-ready", "ready"));
+    expect(bound.routeBinding?.modelRoute?.selectionBasis).toMatchObject({
+      eligibleCount: 1,
+      excludedCount: 33,
+      consideredEligibleCount: 1,
+    });
+    expect(bound.routeBinding?.modelRoute?.attemptBudget).toBe(3);
+  }).pipe(Effect.provide(SqlitePersistenceMemory)),
+);
