@@ -2,6 +2,8 @@ import {
   CommandId,
   EventId,
   OrchestrationV2RunJson,
+  OrchestrationV2AppThreadJson,
+  type OrchestrationV2Subagent,
   OrchestrationV2ExecutionNodeJson,
   OrchestrationV2TurnItemJson,
   OrchestrationV2SubagentJson,
@@ -86,6 +88,9 @@ const decodeProviderSession = Schema.decodeUnknownOption(
   Schema.fromJsonString(OrchestrationV2ProviderSessionJson),
 );
 
+const decodeAppThread = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2AppThreadJson),
+);
 const decodeNode = Schema.decodeUnknownOption(
   Schema.fromJsonString(OrchestrationV2ExecutionNodeJson),
 );
@@ -574,10 +579,11 @@ const baseLayer: Layer.Layer<
         if (nodeId === null || nodeId === owner.rootNodeId) return [];
         const nodes = yield* sql<{
           payload_json: string;
-        }>`SELECT payload_json FROM orchestration_v2_projection_nodes
+          provider_thread_id: string | null;
+        }>`SELECT payload_json,provider_thread_id FROM orchestration_v2_projection_nodes
           WHERE node_id=${nodeId} AND thread_id=${input.threadId} AND run_id=${input.runId}
           AND root_node_id=${owner.rootNodeId} AND parent_node_id=${owner.rootNodeId}
-          AND provider_thread_id=${owner.providerThreadId} AND provider_turn_id=${t.id} LIMIT 1`;
+          AND provider_turn_id=${t.id} LIMIT 1`;
         const node = nodes[0] === undefined ? Option.none() : decodeNode(nodes[0].payload_json);
         if (Option.isNone(node)) return [];
         const n = node.value;
@@ -587,10 +593,84 @@ const baseLayer: Layer.Layer<
           n.runId !== input.runId ||
           n.rootNodeId !== owner.rootNodeId ||
           n.parentNodeId !== owner.rootNodeId ||
-          n.providerThreadId !== owner.providerThreadId ||
+          n.providerThreadId === null ||
+          n.providerThreadId !== nodes[0]!.provider_thread_id ||
           n.providerTurnId !== t.id
         )
           return [];
+        let nativeChildAgent: OrchestrationV2Subagent | undefined;
+        if (n.providerThreadId !== owner.providerThreadId) {
+          if (n.kind !== "subagent") return [];
+          const children = yield* sql<{
+            agent_payload: string;
+            provider_payload: string;
+            child_payload: string;
+            parent_payload: string;
+            child_id: string;
+            project_id: string;
+          }>`SELECT a.payload_json AS agent_payload,p.payload_json AS provider_payload,c.payload_json AS child_payload,parent.payload_json AS parent_payload,c.thread_id AS child_id,c.project_id AS project_id
+            FROM orchestration_v2_projection_subagents a
+            JOIN orchestration_v2_projection_provider_threads p ON p.provider_thread_id=a.provider_thread_id AND p.thread_id=a.child_thread_id
+            JOIN orchestration_v2_projection_threads c ON c.thread_id=a.child_thread_id AND c.active_provider_thread_id=p.provider_thread_id
+            JOIN orchestration_v2_projection_threads parent ON parent.thread_id=a.thread_id AND parent.project_id=c.project_id
+            WHERE a.subagent_id=${n.id} AND a.thread_id=${input.threadId} AND a.run_id=${input.runId}
+              AND a.parent_node_id=${owner.rootNodeId} AND a.provider_thread_id=${n.providerThreadId}
+              AND a.driver=${owner.driver} AND a.provider_instance_id=${owner.providerInstanceId}
+              AND p.driver=${owner.driver} AND p.provider_instance_id=${owner.providerInstanceId} AND p.provider_session_id=${owner.providerSessionId}
+              AND c.provider_instance_id=${owner.providerInstanceId} LIMIT 1`;
+          const childRow = children[0];
+          if (childRow === undefined) return [];
+          const agent = decodeSubagent(childRow.agent_payload),
+            provider = decodeThread(childRow.provider_payload),
+            child = decodeAppThread(childRow.child_payload),
+            parent = decodeAppThread(childRow.parent_payload);
+          if (
+            Option.isNone(agent) ||
+            Option.isNone(provider) ||
+            Option.isNone(child) ||
+            Option.isNone(parent)
+          )
+            return [];
+          const task = agent.value,
+            p = provider.value,
+            c = child.value,
+            app = parent.value;
+          if (
+            task.id !== n.id ||
+            task.threadId !== input.threadId ||
+            task.runId !== input.runId ||
+            task.parentNodeId !== owner.rootNodeId ||
+            task.providerThreadId !== n.providerThreadId ||
+            task.childThreadId !== c.id ||
+            task.origin !== "provider_native" ||
+            task.driver !== owner.driver ||
+            task.providerInstanceId !== owner.providerInstanceId ||
+            p.id !== n.providerThreadId ||
+            p.appThreadId !== c.id ||
+            p.providerSessionId !== owner.providerSessionId ||
+            p.driver !== owner.driver ||
+            p.providerInstanceId !== owner.providerInstanceId ||
+            p.ownerNodeId !== null ||
+            p.nativeThreadRef?.strength !== "strong" ||
+            p.nativeThreadRef.nativeId === null ||
+            p.nativeThreadRef.driver !== owner.driver ||
+            p.forkedFrom?.providerThreadId !== owner.providerThreadId ||
+            p.forkedFrom.providerTurnId !== t.id ||
+            app.id !== input.threadId ||
+            c.id !== childRow.child_id ||
+            c.projectId !== childRow.project_id ||
+            c.projectId !== app.projectId ||
+            c.providerInstanceId !== owner.providerInstanceId ||
+            c.activeProviderThreadId !== p.id ||
+            c.lineage.parentThreadId !== input.threadId ||
+            c.lineage.relationshipToParent !== "subagent" ||
+            c.lineage.rootThreadId !== app.lineage.rootThreadId ||
+            c.forkedFrom?.type !== "node" ||
+            c.forkedFrom.nodeId !== n.id
+          )
+            return [];
+          nativeChildAgent = task;
+        }
         const canSettle = (old: string, next: string) =>
           terminalWorkStatus(next) &&
           (old === "pending" || old === "running" || old === "waiting" || old === next);
@@ -618,10 +698,20 @@ const baseLayer: Layer.Layer<
             payload_json: string;
           }>`SELECT payload_json FROM orchestration_v2_projection_turn_items
             WHERE turn_item_id=${next.id} AND thread_id=${input.threadId} AND run_id=${input.runId}
-            AND node_id=${nodeId} AND provider_thread_id=${owner.providerThreadId} AND provider_turn_id=${t.id} LIMIT 1`;
+            AND node_id=${nodeId} AND provider_thread_id=${n.providerThreadId} AND provider_turn_id=${t.id} LIMIT 1`;
           const item = items[0] === undefined ? Option.none() : decodeItem(items[0].payload_json);
           if (Option.isNone(item)) return [];
           const old = item.value;
+          if (
+            nativeChildAgent !== undefined &&
+            (old.type !== "subagent" ||
+              old.subagentId !== nativeChildAgent.id ||
+              old.childThreadId !== nativeChildAgent.childThreadId ||
+              old.driver !== owner.driver ||
+              old.providerInstanceId !== owner.providerInstanceId ||
+              !sameRef(old.nativeItemRef, nativeChildAgent.nativeTaskRef))
+          )
+            return [];
           if (
             old.id !== next.id ||
             old.threadId !== next.threadId ||
@@ -653,7 +743,7 @@ const baseLayer: Layer.Layer<
             payload_json: string;
           }>`SELECT payload_json FROM orchestration_v2_projection_subagents
             WHERE subagent_id=${next.id} AND thread_id=${input.threadId} AND run_id=${input.runId}
-            AND parent_node_id=${owner.rootNodeId} AND provider_thread_id=${owner.providerThreadId} LIMIT 1`;
+            AND parent_node_id=${owner.rootNodeId} AND provider_thread_id=${n.providerThreadId} LIMIT 1`;
           const agent =
             agents[0] === undefined ? Option.none() : decodeSubagent(agents[0].payload_json);
           if (Option.isNone(agent)) return [];

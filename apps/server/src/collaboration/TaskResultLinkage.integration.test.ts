@@ -1,3 +1,5 @@
+import type * as SqlClient from "effect/unstable/sql/SqlClient";
+import { makeSubagentChildThread } from "../orchestration-v2/SubagentProjection.ts";
 import { TurnItemId } from "@t3tools/contracts";
 import { RunId } from "@t3tools/contracts";
 import * as Stream from "effect/Stream";
@@ -29,6 +31,10 @@ import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { withTaskResultLinkageFixture } from "./testkit/taskResultLinkageFixture.ts";
+
+const MetadataJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown));
+const decodeMetadata = Schema.decodeUnknownSync(MetadataJson);
+const encodeMetadata = Schema.encodeSync(MetadataJson);
 
 const decodePhysicalAttempt = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ providerTurnId: Schema.String })),
@@ -988,21 +994,40 @@ it.live.each(["interrupted", "cancelled", "start-failed"] as const)(
     ),
 );
 
-it.live(
-  "result linkage actual restart terminalizes existing predecessor work before B completes",
-  () =>
+it.live.each(["root", "child"] as const)(
+  "result linkage actual restart terminalizes existing predecessor work before B completes (%s provider thread)",
+  (shape) =>
     Effect.gen(function* () {
       const runningWork = yield* Deferred.make<void>();
+      const cleanupDecision = yield* Deferred.make<void>();
       const cleanupRejected = yield* Ref.make(0);
       const rejectedControls = yield* Ref.make(0);
       const unprovenAliasAccepted = yield* Ref.make(false);
       const work = new Map<string, ReadonlyArray<ProviderAdapterV2Event>>();
       let firstAttempt: ProviderAdapterV2TurnInput | undefined;
       let nextAttempt: ProviderAdapterV2TurnInput | undefined;
+      let fixtureSql: SqlClient.SqlClient | undefined;
+      const lineageVerdicts: Array<{ name: string; committed: boolean }> = [];
+      let observeBeforeB = Effect.void;
+      let beforeBWork: ReadonlyArray<string> = [];
       yield* withTaskResultLinkageFixture(
         (f) =>
           Effect.gen(function* () {
+            fixtureSql = f.sql;
             const c = yield* f.createTask("linkage-restart-work");
+            observeBeforeB = f.orchestrator.getThreadProjection(c.threadId).pipe(
+              Effect.map((p) => {
+                const id = firstAttempt!.attemptId;
+                beforeBWork = [
+                  p.nodes.find((n) => n.id === `work:${id}`)!.status,
+                  p.turnItems.find((n) => n.id === `work-item:${id}`)!.status,
+                  p.nodes.find((n) => n.id === `agent:${id}`)!.status,
+                  p.subagents.find((n) => n.id === `agent:${id}`)!.status,
+                  p.turnItems.find((n) => n.id === `agent-item:${id}`)!.status,
+                ];
+              }),
+              Effect.orDie,
+            );
             const firstMessage = MessageId.make("linkage-restart-work-a");
             yield* f.dispatch({
               type: "message.dispatch",
@@ -1082,14 +1107,37 @@ it.live(
               1,
               "retired A must not finalize or enqueue a checkpoint",
             );
+            assert.deepEqual(
+              beforeBWork,
+              ["interrupted", "interrupted", "interrupted", "interrupted", "interrupted"],
+              "A cleanup must persist before B starts",
+            );
             assert.equal(yield* Ref.get(cleanupRejected), 0);
             assert.isAtLeast(yield* Ref.get(rejectedControls), 7);
             assert.isFalse(yield* Ref.get(unprovenAliasAccepted));
+            if (shape === "child") {
+              assert.lengthOf(lineageVerdicts, 12);
+              for (const verdict of lineageVerdicts)
+                assert.isFalse(verdict.committed, verdict.name);
+            }
             assert.isFalse(after.nodes.some((n) => n.id === "never-existing-retired-node"));
             const foreign = after.nodes.find((n) => n.id === `foreign-descendant:${a.attemptId}`)!;
             assert.equal(foreign.status, "running");
             const agent = after.subagents.find((n) => n.id === `agent:${a.attemptId}`)!;
             assert.equal(agent.status, "interrupted");
+            assert.equal(after.nodes.find((n) => n.id === agent.id)!.status, "interrupted");
+            assert.equal(
+              after.turnItems.find((n) => n.id === `agent-item:${a.attemptId}`)!.status,
+              "interrupted",
+            );
+            assert.equal(
+              agent.providerThreadId,
+              shape === "child" ? `native-child-provider:${a.attemptId}` : a.providerThread.id,
+            );
+            assert.equal(
+              agent.childThreadId,
+              shape === "child" ? `native-child:${a.attemptId}` : null,
+            );
           }),
         {
           runningFirst: true,
@@ -1097,6 +1145,7 @@ it.live(
             Effect.gen(function* () {
               if (firstAttempt !== undefined) {
                 nextAttempt = input;
+                yield* observeBeforeB;
                 yield* Effect.forEach(events, emit, { discard: true });
                 return;
               }
@@ -1125,10 +1174,34 @@ it.live(
                 completedAt: null,
                 input: "fake long command",
               };
+              const childId = ThreadId.make(`native-child:${input.attemptId}`);
+              const childProvider = {
+                ...input.providerThread,
+                id: ProviderThreadId.make(`native-child-provider:${input.attemptId}`),
+                appThreadId: childId,
+                ownerNodeId: null,
+                firstRunOrdinal: null,
+                lastRunOrdinal: null,
+                nativeThreadRef: {
+                  driver: input.providerThread.driver,
+                  nativeId: `native-child:${input.attemptId}`,
+                  strength: "strong" as const,
+                },
+                forkedFrom: {
+                  providerThreadId: input.providerThread.id,
+                  providerTurnId: node.providerTurnId!,
+                },
+              };
               const agentNode = {
                 ...node,
                 id: NodeId.make(`agent:${input.attemptId}`),
                 kind: "subagent" as const,
+                providerThreadId: shape === "child" ? childProvider.id : input.providerThread.id,
+                nativeItemRef: {
+                  driver: input.providerThread.driver,
+                  nativeId: `native-tool:${input.attemptId}`,
+                  strength: "strong" as const,
+                },
               };
               const agent = {
                 id: agentNode.id,
@@ -1139,9 +1212,13 @@ it.live(
                 createdBy: "agent" as const,
                 driver: input.providerThread.driver,
                 providerInstanceId: input.providerThread.providerInstanceId,
-                providerThreadId: input.providerThread.id,
-                childThreadId: null,
-                nativeTaskRef: node.nativeItemRef,
+                providerThreadId: agentNode.providerThreadId,
+                childThreadId: shape === "child" ? childId : null,
+                nativeTaskRef: {
+                  driver: input.providerThread.driver,
+                  nativeId: `native-task:${input.attemptId}`,
+                  strength: "strong" as const,
+                },
                 prompt: "fake work",
                 title: null,
                 model: null,
@@ -1156,9 +1233,80 @@ it.live(
                 { ...itemEvent, turnItem: item },
                 { ...nodeEvent, node: agentNode },
                 { type: "subagent.updated", driver: input.providerThread.driver, subagent: agent },
+                {
+                  type: "turn_item.updated",
+                  driver: input.providerThread.driver,
+                  turnItem: {
+                    ...item,
+                    id: TurnItemId.make(`agent-item:${input.attemptId}`),
+                    nodeId: agentNode.id,
+                    providerThreadId: agentNode.providerThreadId,
+                    nativeItemRef: agent.nativeTaskRef,
+                    type: "subagent",
+                    subagentId: agent.id,
+                    origin: agent.origin,
+                    driver: agent.driver,
+                    providerInstanceId: agent.providerInstanceId,
+                    childThreadId: agent.childThreadId,
+                    prompt: agent.prompt,
+                    result: null,
+                  },
+                },
               ];
               work.set(input.attemptId, pending);
               yield* emit(events[0]!);
+              if (shape === "child") {
+                const child = makeSubagentChildThread({
+                  parentThread: input.appThread,
+                  childThreadId: childId,
+                  parentNodeId: agentNode.id,
+                  activeProviderThreadId: childProvider.id,
+                  providerInstanceId: childProvider.providerInstanceId,
+                  modelSelection: input.modelSelection,
+                  title: "Fake native child",
+                  now: node.startedAt!,
+                  createdBy: "agent",
+                  creationSource: "provider",
+                });
+                yield* emit({
+                  type: "app_thread.created",
+                  driver: childProvider.driver,
+                  appThread: child,
+                });
+                yield* emit({
+                  type: "provider_thread.updated",
+                  driver: childProvider.driver,
+                  providerThread: childProvider,
+                });
+                const siblingId = ThreadId.make(`native-sibling:${input.attemptId}`);
+                const siblingProvider = {
+                  ...childProvider,
+                  id: ProviderThreadId.make(`native-sibling-provider:${input.attemptId}`),
+                  appThreadId: siblingId,
+                };
+                const sibling = makeSubagentChildThread({
+                  parentThread: input.appThread,
+                  childThreadId: siblingId,
+                  parentNodeId: NodeId.make("sibling-agent"),
+                  activeProviderThreadId: siblingProvider.id,
+                  providerInstanceId: siblingProvider.providerInstanceId,
+                  modelSelection: input.modelSelection,
+                  title: "Fake native sibling",
+                  now: node.startedAt!,
+                  createdBy: "agent",
+                  creationSource: "provider",
+                });
+                yield* emit({
+                  type: "app_thread.created",
+                  driver: siblingProvider.driver,
+                  appThread: sibling,
+                });
+                yield* emit({
+                  type: "provider_thread.updated",
+                  driver: siblingProvider.driver,
+                  providerThread: siblingProvider,
+                });
+              }
               yield* emit({
                 ...nodeEvent,
                 node: {
@@ -1207,6 +1355,7 @@ it.live(
                     },
                   });
               }
+              yield* Deferred.await(cleanupDecision);
               yield* emit({ ...terminal, status: "interrupted", failure: null });
             }),
           decorateEventSink: (service) => ({
@@ -1247,6 +1396,12 @@ it.live(
                     ...[
                       { id: NodeId.make("never-existing-retired-node") },
                       { providerTurnId: ProviderTurnId.make("foreign-turn") },
+                      { providerThreadId: ProviderThreadId.make("foreign-child") },
+                      {
+                        providerThreadId: ProviderThreadId.make(
+                          `native-sibling-provider:${firstAttempt!.attemptId}`,
+                        ),
+                      },
                       { rootNodeId: NodeId.make("foreign-root") },
                       {
                         id: NodeId.make(`foreign-descendant:${firstAttempt!.attemptId}`),
@@ -1264,17 +1419,184 @@ it.live(
                     yield* Ref.update(rejectedControls, (n) => n + 1);
                   }
                 }
+                if (
+                  shape === "child" &&
+                  e?.type === "node.updated" &&
+                  e.payload.kind === "subagent" &&
+                  e.payload.status === "interrupted"
+                ) {
+                  const sql = fixtureSql!,
+                    id = firstAttempt!.attemptId;
+                  const childId = ThreadId.make(`native-child:${id}`),
+                    providerId = ProviderThreadId.make(`native-child-provider:${id}`);
+                  const children = yield* sql<{
+                    payload_json: string;
+                  }>`SELECT payload_json FROM orchestration_v2_projection_threads WHERE thread_id=${childId}`.pipe(
+                    Effect.orDie,
+                  );
+                  const providers = yield* sql<{
+                    payload_json: string;
+                  }>`SELECT payload_json FROM orchestration_v2_projection_provider_threads WHERE provider_thread_id=${providerId}`.pipe(
+                    Effect.orDie,
+                  );
+                  const agents = yield* sql<{
+                    payload_json: string;
+                  }>`SELECT payload_json FROM orchestration_v2_projection_subagents WHERE subagent_id=${e.payload.id}`.pipe(
+                    Effect.orDie,
+                  );
+                  const child = decodeMetadata(children[0]!.payload_json),
+                    provider = decodeMetadata(providers[0]!.payload_json),
+                    agent = decodeMetadata(agents[0]!.payload_json);
+                  const patchChild = (patch: Record<string, unknown>) =>
+                    sql`UPDATE orchestration_v2_projection_threads SET payload_json=${encodeMetadata({ ...child, ...patch })} WHERE thread_id=${childId}`.pipe(
+                      Effect.orDie,
+                    );
+                  const patchProvider = (patch: Record<string, unknown>) =>
+                    sql`UPDATE orchestration_v2_projection_provider_threads SET payload_json=${encodeMetadata({ ...provider, ...patch })} WHERE provider_thread_id=${providerId}`.pipe(
+                      Effect.orDie,
+                    );
+                  const patchAgent = (patch: Record<string, unknown>) =>
+                    sql`UPDATE orchestration_v2_projection_subagents SET payload_json=${encodeMetadata({ ...agent, ...patch })} WHERE subagent_id=${e.payload.id}`.pipe(
+                      Effect.orDie,
+                    );
+                  const restoreChild =
+                    sql`UPDATE orchestration_v2_projection_threads SET payload_json=${children[0]!.payload_json} WHERE thread_id=${childId}`.pipe(
+                      Effect.orDie,
+                    );
+                  const restoreProvider =
+                    sql`UPDATE orchestration_v2_projection_provider_threads SET payload_json=${providers[0]!.payload_json} WHERE provider_thread_id=${providerId}`.pipe(
+                      Effect.orDie,
+                    );
+                  const restoreAgent =
+                    sql`UPDATE orchestration_v2_projection_subagents SET payload_json=${agents[0]!.payload_json} WHERE subagent_id=${e.payload.id}`.pipe(
+                      Effect.orDie,
+                    );
+                  // Negative-only corruption of an already emitted child; exact original bytes restored.
+                  // No attempt/turn link or positive work row is created by SQL.
+                  const controls = [
+                    {
+                      name: "foreign-parent",
+                      mutate: patchChild({
+                        lineage: {
+                          ...(child.lineage as Record<string, unknown>),
+                          parentThreadId: "foreign-parent",
+                        },
+                      }),
+                      restore: restoreChild,
+                    },
+                    {
+                      name: "foreign-project",
+                      mutate: patchChild({ projectId: "project-b" }),
+                      restore: restoreChild,
+                    },
+                    {
+                      name: "wrong-tree-root",
+                      mutate: patchChild({
+                        lineage: {
+                          ...(child.lineage as Record<string, unknown>),
+                          rootThreadId: "foreign-root",
+                        },
+                      }),
+                      restore: restoreChild,
+                    },
+                    {
+                      name: "sibling-app-anchor",
+                      mutate: patchChild({ forkedFrom: { type: "node", nodeId: "sibling-agent" } }),
+                      restore: restoreChild,
+                    },
+                    {
+                      name: "wrong-parent-turn",
+                      mutate: patchProvider({
+                        forkedFrom: {
+                          ...(provider.forkedFrom as Record<string, unknown>),
+                          providerTurnId: "foreign-turn",
+                        },
+                      }),
+                      restore: restoreProvider,
+                    },
+                    {
+                      name: "wrong-parent-provider",
+                      mutate: patchProvider({
+                        forkedFrom: {
+                          ...(provider.forkedFrom as Record<string, unknown>),
+                          providerThreadId: "foreign-provider",
+                        },
+                      }),
+                      restore: restoreProvider,
+                    },
+                    {
+                      name: "foreign-session",
+                      mutate: patchProvider({ providerSessionId: "foreign-session" }),
+                      restore: restoreProvider,
+                    },
+                    {
+                      name: "foreign-instance",
+                      mutate: patchProvider({ providerInstanceId: "foreign-instance" }),
+                      restore: restoreProvider,
+                    },
+                    {
+                      name: "foreign-driver",
+                      mutate: patchProvider({ driver: "claudeAgent" }),
+                      restore: restoreProvider,
+                    },
+                    {
+                      name: "sibling-subagent",
+                      mutate: patchAgent({ childThreadId: `native-sibling:${id}` }),
+                      restore: restoreAgent,
+                    },
+                    {
+                      name: "wrong-agent-root",
+                      mutate: patchAgent({ parentNodeId: "foreign-root" }),
+                      restore: restoreAgent,
+                    },
+                    {
+                      name: "physical-session-mismatch",
+                      mutate:
+                        sql`UPDATE orchestration_v2_projection_provider_threads SET provider_session_id='foreign-session' WHERE provider_thread_id=${providerId}`.pipe(
+                          Effect.orDie,
+                        ),
+                      restore:
+                        sql`UPDATE orchestration_v2_projection_provider_threads SET provider_session_id=${firstAttempt!.providerThread.providerSessionId} WHERE provider_thread_id=${providerId}`.pipe(
+                          Effect.orDie,
+                        ),
+                    },
+                  ];
+                  for (const control of controls) {
+                    const result = yield* control.mutate.pipe(
+                      Effect.andThen(
+                        service.writeIfRunCurrent({
+                          ...input,
+                          events: [{ ...e, id: EventId.make(`${e.id}:invalid:${control.name}`) }],
+                        }),
+                      ),
+                      Effect.ensuring(control.restore),
+                    );
+                    lineageVerdicts.push({ name: control.name, committed: result.committed });
+                  }
+                }
                 return yield* service.writeIfRunCurrent(input);
               }).pipe(
                 Effect.tap((result) =>
                   Effect.gen(function* () {
                     if (
                       input.events.some(
-                        (e) => e.type === "subagent.updated" && e.payload.status === "running",
+                        (e) =>
+                          e.type === "turn-item.updated" &&
+                          e.payload.type === "subagent" &&
+                          e.payload.status === "running",
                       ) &&
                       result.committed
                     )
                       yield* Deferred.succeed(runningWork, undefined);
+                    if (
+                      input.events.some(
+                        (e) =>
+                          e.type === "turn-item.updated" &&
+                          e.payload.type === "subagent" &&
+                          e.payload.status === "interrupted",
+                      )
+                    )
+                      yield* Deferred.succeed(cleanupDecision, undefined);
                     if (
                       input.events.some(
                         (e) =>
