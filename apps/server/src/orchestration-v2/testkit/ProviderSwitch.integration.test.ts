@@ -244,7 +244,7 @@ function makeTestAdapter(input: {
               }
               const eventTime = yield* DateTime.now;
               const providerTurnId = ProviderTurnId.make(
-                `provider-turn:${input.driver}:${turnInput.threadId}:${turnInput.runOrdinal}`,
+                `provider-turn:${input.driver}:${turnInput.threadId}:${turnInput.attemptId}`,
               );
               const terminalStatus = input.failedRunOrdinals?.has(turnInput.runOrdinal)
                 ? "failed"
@@ -269,7 +269,7 @@ function makeTestAdapter(input: {
                       nativeId: `native-turn:${turnInput.threadId}:${turnInput.runOrdinal}`,
                       strength: "strong",
                     },
-                    ordinal: turnInput.runOrdinal,
+                    ordinal: turnInput.providerTurnOrdinal,
                     status: terminalStatus,
                     startedAt: eventTime,
                     completedAt: eventTime,

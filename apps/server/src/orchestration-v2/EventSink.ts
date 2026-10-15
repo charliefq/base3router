@@ -1,11 +1,28 @@
 import {
   CommandId,
+  EventId,
+  OrchestrationV2RunJson,
+  OrchestrationV2AppThreadJson,
+  type OrchestrationV2Subagent,
+  OrchestrationV2ExecutionNodeJson,
+  OrchestrationV2TurnItemJson,
+  OrchestrationV2SubagentJson,
+  OrchestrationV2RunAttemptJson,
+  OrchestrationV2ProviderThreadJson,
+  OrchestrationV2ProviderTurnJson,
+  OrchestrationV2ProviderSessionJson,
+  type ProviderInstanceId,
+  type ProviderSessionId,
+  type ProviderDriverKind,
+  type ProviderTurnId,
   type OrchestrationV2Command,
   CollaborationCommand,
   type TaskEnrollmentOutcome,
   type TaskContractReviewReference,
   type TaskContractReviewAction,
   type OrchestrationV2Run,
+  type OrchestrationV2ProviderThread,
+  type OrchestrationV2ProviderRef,
   OrchestrationV2DomainEvent,
   OrchestrationV2StoredEvent,
   ProviderThreadId,
@@ -55,6 +72,45 @@ import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
+
+const decodeRun = Schema.decodeUnknownOption(Schema.fromJsonString(OrchestrationV2RunJson));
+const decodeAttempt = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2RunAttemptJson),
+);
+const decodeThread = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2ProviderThreadJson),
+);
+const decodeProviderTurn = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2ProviderTurnJson),
+);
+
+const decodeProviderSession = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2ProviderSessionJson),
+);
+
+const decodeAppThread = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2AppThreadJson),
+);
+const decodeNode = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2ExecutionNodeJson),
+);
+const decodeItem = Schema.decodeUnknownOption(Schema.fromJsonString(OrchestrationV2TurnItemJson));
+const decodeSubagent = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2SubagentJson),
+);
+const sameRef = (a: OrchestrationV2ProviderRef | null, b: OrchestrationV2ProviderRef | null) =>
+  a === null || b === null
+    ? a === b
+    : a.driver === b.driver &&
+      a.nativeId === b.nativeId &&
+      a.strength === b.strength &&
+      a.fingerprint === b.fingerprint &&
+      a.ordinal === b.ordinal;
+const terminalWorkStatus = (status: string) =>
+  status === "completed" ||
+  status === "failed" ||
+  status === "interrupted" ||
+  status === "cancelled";
 
 const decodeEnrollmentCommand = Schema.decodeUnknownOption(
   Schema.fromJsonString(CollaborationCommand),
@@ -116,6 +172,19 @@ export interface EventSinkV2Shape {
     readonly runId: RunId;
     readonly activeAttemptId: RunAttemptId;
     readonly expectedStatus: OrchestrationV2Run["status"];
+    readonly effects?: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
+    readonly rootExecution?: {
+      readonly rootThreadAlias?: OrchestrationV2ProviderThread;
+      readonly rootNodeId: NodeId;
+      readonly providerThreadId: ProviderThreadId;
+      readonly providerSessionId: ProviderSessionId;
+      readonly providerInstanceId: ProviderInstanceId;
+      readonly driver: ProviderDriverKind;
+      readonly runOrdinal: number;
+      readonly providerTurnOrdinal: number;
+      readonly providerTurnId?: ProviderTurnId;
+      readonly terminalStatus?: "completed" | "failed" | "interrupted" | "cancelled";
+    };
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
   }) => Effect.Effect<
     {
@@ -396,6 +465,358 @@ const baseLayer: Layer.Layer<
       return storedEvents;
     });
 
+    const retiredRootObservation = Effect.fn("orchestrationV2.EventSink.retiredRootObservation")(
+      function* (input: Parameters<EventSinkV2Shape["writeIfRunCurrent"]>[0]) {
+        const owner = input.rootExecution;
+        const event =
+          input.events.find((e) => e.type === "provider-turn.updated") ?? input.events[0];
+        if (
+          owner === undefined ||
+          input.effects !== undefined ||
+          (event?.type !== "provider-turn.updated" && input.events.length !== 1) ||
+          event === undefined ||
+          ![
+            "provider-turn.updated",
+            "node.updated",
+            "turn-item.updated",
+            "subagent.updated",
+          ].includes(event.type) ||
+          event.threadId !== input.threadId ||
+          event.runId !== input.runId ||
+          event.driver !== owner.driver ||
+          event.providerInstanceId !== owner.providerInstanceId
+        )
+          return [];
+        const rows = yield* sql<{
+          run_ordinal: number;
+          attempt_payload: string;
+          attempt_status: string;
+          turn_payload: string;
+          session_payload: string;
+          attempt_run: string;
+          attempt_root: string;
+          attempt_thread: string;
+          attempt_instance: string;
+          attempt_turn: string | null;
+          turn_attempt: string | null;
+          turn_root: string;
+          turn_thread: string;
+          turn_status: string;
+          turn_ordinal: number;
+          session_instance: string;
+          session_driver: string;
+        }>`SELECT r.ordinal AS run_ordinal,a.payload_json AS attempt_payload,a.status AS attempt_status,t.payload_json AS turn_payload,s.payload_json AS session_payload,
+          a.run_id AS attempt_run,a.root_node_id AS attempt_root,a.provider_thread_id AS attempt_thread,a.provider_instance_id AS attempt_instance,
+          a.provider_turn_id AS attempt_turn,t.run_attempt_id AS turn_attempt,t.node_id AS turn_root,t.provider_thread_id AS turn_thread,t.status AS turn_status,t.ordinal AS turn_ordinal,
+          s.provider_instance_id AS session_instance,s.driver AS session_driver
+          FROM orchestration_v2_projection_run_attempts a
+          JOIN orchestration_v2_projection_runs r ON r.run_id=a.run_id AND r.thread_id=a.thread_id
+          JOIN orchestration_v2_projection_provider_turns t ON t.provider_turn_id=a.provider_turn_id AND t.thread_id=a.thread_id
+          JOIN orchestration_v2_projection_provider_sessions s ON s.provider_session_id=${owner.providerSessionId}
+          WHERE a.attempt_id=${input.activeAttemptId} AND a.thread_id=${input.threadId} AND a.run_id=${input.runId} LIMIT 1`;
+        const row = rows[0];
+        if (row === undefined) return [];
+        const attempt = decodeAttempt(row.attempt_payload),
+          previous = decodeProviderTurn(row.turn_payload),
+          session = decodeProviderSession(row.session_payload);
+        if (Option.isNone(attempt) || Option.isNone(previous) || Option.isNone(session)) return [];
+        const a = attempt.value,
+          t = previous.value,
+          s = session.value;
+        const turn = event.type === "provider-turn.updated" ? event.payload : t;
+        if (
+          row.run_ordinal !== owner.runOrdinal ||
+          a.id !== input.activeAttemptId ||
+          a.runId !== input.runId ||
+          a.rootNodeId !== owner.rootNodeId ||
+          a.providerInstanceId !== owner.providerInstanceId ||
+          a.providerThreadId !== owner.providerThreadId ||
+          a.providerTurnId !== turn.id ||
+          a.status === "pending" ||
+          row.attempt_status !== a.status ||
+          row.attempt_run !== a.runId ||
+          row.attempt_root !== a.rootNodeId ||
+          row.attempt_thread !== a.providerThreadId ||
+          row.attempt_instance !== a.providerInstanceId ||
+          row.attempt_turn !== a.providerTurnId ||
+          t.id !== turn.id ||
+          t.runAttemptId !== a.id ||
+          t.nodeId !== owner.rootNodeId ||
+          t.providerThreadId !== owner.providerThreadId ||
+          t.ordinal !== owner.providerTurnOrdinal ||
+          row.turn_attempt !== t.runAttemptId ||
+          row.turn_root !== t.nodeId ||
+          row.turn_thread !== t.providerThreadId ||
+          row.turn_status !== t.status ||
+          row.turn_ordinal !== t.ordinal ||
+          (t.status !== "running" && t.status !== "pending" && t.status !== turn.status) ||
+          s.id !== owner.providerSessionId ||
+          s.providerInstanceId !== owner.providerInstanceId ||
+          s.driver !== owner.driver ||
+          row.session_instance !== s.providerInstanceId ||
+          row.session_driver !== s.driver
+        )
+          return [];
+        if (event.type === "provider-turn.updated") {
+          if (
+            owner.providerTurnId !== turn.id ||
+            turn.runAttemptId !== a.id ||
+            turn.nodeId !== owner.rootNodeId ||
+            turn.providerThreadId !== owner.providerThreadId ||
+            turn.ordinal !== owner.providerTurnOrdinal ||
+            !terminalWorkStatus(turn.status)
+          )
+            return [];
+          return [event];
+        }
+        // A terminal root observation authorizes only lifecycle cleanup of its
+        // already persisted direct work. Never create work or touch the new root.
+        const nodeId =
+          event.type === "node.updated" || event.type === "subagent.updated"
+            ? event.payload.id
+            : event.type === "turn-item.updated"
+              ? event.payload.nodeId
+              : null;
+        if (nodeId === null || nodeId === owner.rootNodeId) return [];
+        const nodes = yield* sql<{
+          payload_json: string;
+          provider_thread_id: string | null;
+        }>`SELECT payload_json,provider_thread_id FROM orchestration_v2_projection_nodes
+          WHERE node_id=${nodeId} AND thread_id=${input.threadId} AND run_id=${input.runId}
+          AND root_node_id=${owner.rootNodeId} AND parent_node_id=${owner.rootNodeId}
+          AND provider_turn_id=${t.id} LIMIT 1`;
+        const node = nodes[0] === undefined ? Option.none() : decodeNode(nodes[0].payload_json);
+        if (Option.isNone(node)) return [];
+        const n = node.value;
+        if (
+          n.id !== nodeId ||
+          n.threadId !== input.threadId ||
+          n.runId !== input.runId ||
+          n.rootNodeId !== owner.rootNodeId ||
+          n.parentNodeId !== owner.rootNodeId ||
+          n.providerThreadId === null ||
+          n.providerThreadId !== nodes[0]!.provider_thread_id ||
+          n.providerTurnId !== t.id
+        )
+          return [];
+        let nativeChildAgent: OrchestrationV2Subagent | undefined;
+        let permitsToolToTaskRef = false;
+        if (n.providerThreadId !== owner.providerThreadId) {
+          if (n.kind !== "subagent") return [];
+          const children = yield* sql<{
+            agent_payload: string;
+            provider_payload: string;
+            child_payload: string;
+            parent_payload: string;
+            child_id: string;
+            project_id: string;
+          }>`SELECT a.payload_json AS agent_payload,p.payload_json AS provider_payload,c.payload_json AS child_payload,parent.payload_json AS parent_payload,c.thread_id AS child_id,c.project_id AS project_id
+            FROM orchestration_v2_projection_subagents a
+            JOIN orchestration_v2_projection_provider_threads p ON p.provider_thread_id=a.provider_thread_id AND p.thread_id=a.child_thread_id
+            JOIN orchestration_v2_projection_threads c ON c.thread_id=a.child_thread_id AND c.active_provider_thread_id=p.provider_thread_id
+            JOIN orchestration_v2_projection_threads parent ON parent.thread_id=a.thread_id AND parent.project_id=c.project_id
+            WHERE a.subagent_id=${n.id} AND a.thread_id=${input.threadId} AND a.run_id=${input.runId}
+              AND a.parent_node_id=${owner.rootNodeId} AND a.provider_thread_id=${n.providerThreadId}
+              AND a.driver=${owner.driver} AND a.provider_instance_id=${owner.providerInstanceId}
+              AND p.driver=${owner.driver} AND p.provider_instance_id=${owner.providerInstanceId} AND p.provider_session_id=${owner.providerSessionId}
+              AND c.provider_instance_id=${owner.providerInstanceId} LIMIT 1`;
+          const childRow = children[0];
+          if (childRow === undefined) return [];
+          const agent = decodeSubagent(childRow.agent_payload),
+            provider = decodeThread(childRow.provider_payload),
+            child = decodeAppThread(childRow.child_payload),
+            parent = decodeAppThread(childRow.parent_payload);
+          if (
+            Option.isNone(agent) ||
+            Option.isNone(provider) ||
+            Option.isNone(child) ||
+            Option.isNone(parent)
+          )
+            return [];
+          const task = agent.value,
+            p = provider.value,
+            c = child.value,
+            app = parent.value;
+          if (
+            task.id !== n.id ||
+            task.threadId !== input.threadId ||
+            task.runId !== input.runId ||
+            task.parentNodeId !== owner.rootNodeId ||
+            task.providerThreadId !== n.providerThreadId ||
+            task.childThreadId !== c.id ||
+            task.origin !== "provider_native" ||
+            task.driver !== owner.driver ||
+            task.providerInstanceId !== owner.providerInstanceId ||
+            p.id !== n.providerThreadId ||
+            p.appThreadId !== c.id ||
+            p.providerSessionId !== owner.providerSessionId ||
+            p.driver !== owner.driver ||
+            p.providerInstanceId !== owner.providerInstanceId ||
+            p.ownerNodeId !== null ||
+            p.nativeThreadRef?.strength !== "strong" ||
+            p.nativeThreadRef.nativeId === null ||
+            p.nativeThreadRef.driver !== owner.driver ||
+            p.forkedFrom?.providerThreadId !== owner.providerThreadId ||
+            p.forkedFrom.providerTurnId !== t.id ||
+            app.id !== input.threadId ||
+            c.id !== childRow.child_id ||
+            c.projectId !== childRow.project_id ||
+            c.projectId !== app.projectId ||
+            c.providerInstanceId !== owner.providerInstanceId ||
+            c.activeProviderThreadId !== p.id ||
+            c.lineage.parentThreadId !== input.threadId ||
+            c.lineage.relationshipToParent !== "subagent" ||
+            c.lineage.rootThreadId !== app.lineage.rootThreadId ||
+            c.forkedFrom?.type !== "node" ||
+            c.forkedFrom.nodeId !== n.id
+          )
+            return [];
+          nativeChildAgent = task;
+          // Codex launches the parent node under its tool-call reference, then
+          // terminalizes it under the recorded tool-call:child-thread task ref.
+          permitsToolToTaskRef =
+            owner.driver === "codex" &&
+            n.nativeItemRef?.driver === owner.driver &&
+            n.nativeItemRef.strength === "strong" &&
+            n.nativeItemRef.nativeId !== null &&
+            task.nativeTaskRef?.driver === owner.driver &&
+            task.nativeTaskRef.strength === "strong" &&
+            task.nativeTaskRef.nativeId ===
+              `${n.nativeItemRef.nativeId}:${p.nativeThreadRef.nativeId}`;
+        }
+        // A superseded Codex child can finish before its parent completion.
+        // Its existing, independently proven child work may settle; the running
+        // parent turn, root, attempt link and successor remain untouched.
+        if (
+          !terminalWorkStatus(t.status) &&
+          !(
+            nativeChildAgent !== undefined &&
+            owner.driver === "codex" &&
+            a.status === "superseded" &&
+            t.status === "running"
+          )
+        )
+          return [];
+        const canSettle = (old: string, next: string) =>
+          terminalWorkStatus(next) &&
+          (old === "pending" || old === "running" || old === "waiting" || old === next);
+        if (event.type === "node.updated") {
+          const next = event.payload;
+          if (
+            next.threadId !== n.threadId ||
+            next.runId !== n.runId ||
+            next.rootNodeId !== n.rootNodeId ||
+            next.parentNodeId !== n.parentNodeId ||
+            next.providerThreadId !== n.providerThreadId ||
+            next.providerTurnId !== n.providerTurnId ||
+            next.kind !== n.kind ||
+            (!sameRef(next.nativeItemRef, n.nativeItemRef) &&
+              !(
+                permitsToolToTaskRef &&
+                nativeChildAgent !== undefined &&
+                sameRef(next.nativeItemRef, nativeChildAgent.nativeTaskRef)
+              )) ||
+            !canSettle(n.status, next.status)
+          )
+            return [];
+          return [
+            {
+              ...event,
+              payload: {
+                ...n,
+                status: next.status,
+                completedAt: next.completedAt,
+                nativeItemRef: next.nativeItemRef,
+              },
+            },
+          ];
+        }
+        if (event.type === "turn-item.updated") {
+          const next = event.payload;
+          const items = yield* sql<{
+            payload_json: string;
+          }>`SELECT payload_json FROM orchestration_v2_projection_turn_items
+            WHERE turn_item_id=${next.id} AND thread_id=${input.threadId} AND run_id=${input.runId}
+            AND node_id=${nodeId} AND provider_thread_id=${n.providerThreadId} AND provider_turn_id=${t.id} LIMIT 1`;
+          const item = items[0] === undefined ? Option.none() : decodeItem(items[0].payload_json);
+          if (Option.isNone(item)) return [];
+          const old = item.value;
+          if (
+            nativeChildAgent !== undefined &&
+            (old.type !== "subagent" ||
+              old.subagentId !== nativeChildAgent.id ||
+              old.childThreadId !== nativeChildAgent.childThreadId ||
+              old.driver !== owner.driver ||
+              old.providerInstanceId !== owner.providerInstanceId ||
+              !sameRef(old.nativeItemRef, nativeChildAgent.nativeTaskRef))
+          )
+            return [];
+          if (
+            old.id !== next.id ||
+            old.threadId !== next.threadId ||
+            old.runId !== next.runId ||
+            old.nodeId !== next.nodeId ||
+            old.providerThreadId !== next.providerThreadId ||
+            old.providerTurnId !== next.providerTurnId ||
+            old.type !== next.type ||
+            old.parentItemId !== next.parentItemId ||
+            !sameRef(old.nativeItemRef, next.nativeItemRef) ||
+            !canSettle(old.status, next.status)
+          )
+            return [];
+          return [
+            {
+              ...event,
+              payload: {
+                ...old,
+                status: next.status,
+                completedAt: next.completedAt,
+                updatedAt: next.updatedAt,
+              },
+            },
+          ];
+        }
+        if (event.type === "subagent.updated") {
+          const next = event.payload;
+          const agents = yield* sql<{
+            payload_json: string;
+          }>`SELECT payload_json FROM orchestration_v2_projection_subagents
+            WHERE subagent_id=${next.id} AND thread_id=${input.threadId} AND run_id=${input.runId}
+            AND parent_node_id=${owner.rootNodeId} AND provider_thread_id=${n.providerThreadId} LIMIT 1`;
+          const agent =
+            agents[0] === undefined ? Option.none() : decodeSubagent(agents[0].payload_json);
+          if (Option.isNone(agent)) return [];
+          const old = agent.value;
+          if (
+            old.id !== next.id ||
+            old.threadId !== next.threadId ||
+            old.runId !== next.runId ||
+            old.parentNodeId !== next.parentNodeId ||
+            old.providerThreadId !== next.providerThreadId ||
+            old.driver !== next.driver ||
+            old.providerInstanceId !== next.providerInstanceId ||
+            old.childThreadId !== next.childThreadId ||
+            !sameRef(old.nativeTaskRef, next.nativeTaskRef) ||
+            !canSettle(old.status, next.status)
+          )
+            return [];
+          return [
+            {
+              ...event,
+              payload: {
+                ...old,
+                status: next.status,
+                result: next.result,
+                completedAt: next.completedAt,
+                updatedAt: next.updatedAt,
+              },
+            },
+          ];
+        }
+        return [];
+      },
+    );
+
     const writeIfRunCurrentEffect = Effect.fn("orchestrationV2.EventSink.writeIfRunCurrent")(
       function* (input: Parameters<EventSinkV2Shape["writeIfRunCurrent"]>[0]) {
         yield* Effect.annotateCurrentSpan({
@@ -425,26 +846,273 @@ const baseLayer: Layer.Layer<
               current.status !== input.expectedStatus ||
               current.active_attempt_id !== input.activeAttemptId
             ) {
-              return {
+              const retired = yield* retiredRootObservation(input);
+              if (retired.length === 0)
+                return {
+                  committed: false as const,
+                  storedEvents: [] as ReadonlyArray<OrchestrationV2StoredEvent>,
+                };
+              const storedEvents = yield* eventStore.append({
+                ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
+                events: yield* normalizeEvents(retired),
+              });
+              yield* applyStoredEvents(storedEvents);
+              return { committed: true as const, storedEvents };
+            }
+
+            let events = input.events;
+            if (input.rootExecution !== undefined) {
+              // Re-read ownership and link under the same transaction as the event batch.
+              // A routed event is only a proposal until this compare-and-commit succeeds.
+              const owner = input.rootExecution;
+              const rows = yield* sql<{
+                run_payload: string;
+                run_instance: string;
+                run_thread: string | null;
+                attempt_payload: string;
+                thread_payload: string;
+                attempt_run: string;
+                attempt_root: string;
+                attempt_instance: string;
+                attempt_thread: string;
+                attempt_turn: string | null;
+                attempt_status: string;
+                thread_instance: string;
+                thread_session: string | null;
+                thread_driver: string;
+                last_run_ordinal: number | null;
+              }>`SELECT r.payload_json AS run_payload,a.payload_json AS attempt_payload,
+                p.payload_json AS thread_payload,r.provider_instance_id AS run_instance,r.provider_thread_id AS run_thread,a.run_id AS attempt_run,a.root_node_id AS attempt_root,
+                a.provider_instance_id AS attempt_instance,a.provider_thread_id AS attempt_thread,
+                a.provider_turn_id AS attempt_turn,a.status AS attempt_status,
+                p.provider_instance_id AS thread_instance,p.provider_session_id AS thread_session,p.driver AS thread_driver,p.last_run_ordinal
+                FROM orchestration_v2_projection_runs r
+                JOIN orchestration_v2_projection_run_attempts a ON a.attempt_id=${input.activeAttemptId} AND a.thread_id=r.thread_id
+                JOIN orchestration_v2_projection_provider_threads p ON p.provider_thread_id=${owner.providerThreadId} AND p.thread_id=r.thread_id
+                WHERE r.run_id=${input.runId} AND r.thread_id=${input.threadId} LIMIT 1`;
+              const row = rows[0];
+              const run = row === undefined ? Option.none() : decodeRun(row.run_payload);
+              const attempt =
+                row === undefined ? Option.none() : decodeAttempt(row.attempt_payload);
+              const thread = row === undefined ? Option.none() : decodeThread(row.thread_payload);
+              const reject = {
                 committed: false as const,
                 storedEvents: [] as ReadonlyArray<OrchestrationV2StoredEvent>,
               };
+              if (
+                row === undefined ||
+                Option.isNone(run) ||
+                Option.isNone(attempt) ||
+                Option.isNone(thread)
+              )
+                return reject;
+              const r = run.value,
+                a = attempt.value,
+                p = thread.value;
+              if (
+                r.id !== input.runId ||
+                r.threadId !== input.threadId ||
+                r.status !== input.expectedStatus ||
+                r.activeAttemptId !== input.activeAttemptId ||
+                r.rootNodeId !== owner.rootNodeId ||
+                r.providerThreadId !== owner.providerThreadId ||
+                r.providerInstanceId !== owner.providerInstanceId ||
+                r.ordinal !== owner.runOrdinal ||
+                row.run_instance !== r.providerInstanceId ||
+                row.run_thread !== r.providerThreadId ||
+                a.id !== input.activeAttemptId ||
+                a.runId !== r.id ||
+                a.rootNodeId !== owner.rootNodeId ||
+                a.providerInstanceId !== owner.providerInstanceId ||
+                a.providerThreadId !== owner.providerThreadId ||
+                a.status !== "running" ||
+                row.attempt_run !== a.runId ||
+                row.attempt_root !== a.rootNodeId ||
+                row.attempt_instance !== a.providerInstanceId ||
+                row.attempt_thread !== a.providerThreadId ||
+                row.attempt_turn !== a.providerTurnId ||
+                row.attempt_status !== a.status ||
+                p.id !== owner.providerThreadId ||
+                p.appThreadId !== input.threadId ||
+                p.providerSessionId !== owner.providerSessionId ||
+                p.providerInstanceId !== owner.providerInstanceId ||
+                p.driver !== owner.driver ||
+                row.thread_instance !== p.providerInstanceId ||
+                row.thread_session !== p.providerSessionId ||
+                row.thread_driver !== p.driver ||
+                p.lastRunOrdinal !== owner.runOrdinal ||
+                row.last_run_ordinal !== owner.runOrdinal
+              )
+                return reject;
+              for (const event of input.effects === undefined ? events : []) {
+                if (
+                  event.type === "node.updated" &&
+                  event.payload.threadId === input.threadId &&
+                  event.payload.runId === input.runId &&
+                  event.payload.providerTurnId === null &&
+                  event.payload.rootNodeId !== owner.rootNodeId
+                )
+                  return reject;
+                if (
+                  (event.type === "node.updated" || event.type === "turn-item.updated") &&
+                  event.payload.threadId === input.threadId &&
+                  event.payload.runId === input.runId &&
+                  event.payload.providerTurnId !== null &&
+                  event.payload.providerTurnId !== a.providerTurnId
+                )
+                  return reject;
+                if (
+                  event.type === "subagent.updated" &&
+                  event.payload.threadId === input.threadId &&
+                  event.payload.runId === input.runId &&
+                  event.payload.parentNodeId !== owner.rootNodeId
+                ) {
+                  const anchors = yield* sql`SELECT node_id FROM orchestration_v2_projection_nodes
+                    WHERE node_id=${event.payload.id} AND thread_id=${input.threadId} AND run_id=${input.runId}
+                    AND provider_turn_id=${a.providerTurnId} AND provider_thread_id=${owner.providerThreadId} LIMIT 1`;
+                  if (anchors.length !== 1) return reject;
+                }
+              }
+              const alias = owner.rootThreadAlias;
+              if (
+                alias !== undefined &&
+                (alias.id === p.id ||
+                  alias.appThreadId !== p.appThreadId ||
+                  alias.driver !== p.driver ||
+                  alias.providerSessionId !== p.providerSessionId ||
+                  alias.providerInstanceId !== p.providerInstanceId ||
+                  alias.ownerNodeId !== p.ownerNodeId ||
+                  alias.lastRunOrdinal !== owner.runOrdinal ||
+                  p.nativeThreadRef?.strength !== "strong" ||
+                  p.nativeThreadRef.nativeId === null ||
+                  alias.nativeThreadRef?.strength !== "strong" ||
+                  !sameRef(p.nativeThreadRef, alias.nativeThreadRef) ||
+                  p.forkedFrom === null ||
+                  alias.forkedFrom === null ||
+                  p.forkedFrom.providerThreadId !== alias.forkedFrom.providerThreadId ||
+                  p.forkedFrom.providerTurnId !== alias.forkedFrom.providerTurnId ||
+                  p.forkedFrom.checkpointId !== alias.forkedFrom.checkpointId)
+              )
+                return reject;
+              const observed = events.find(
+                (event) =>
+                  event.type === "provider-turn.updated" && event.payload.runAttemptId === a.id,
+              );
+              const turnId = owner.providerTurnId;
+              if (turnId !== undefined) {
+                if (a.providerTurnId !== null && a.providerTurnId !== turnId) return reject;
+                const previousRows = yield* sql<{
+                  thread_id: string;
+                  payload_json: string;
+                  provider_thread_id: string;
+                  run_attempt_id: string | null;
+                  node_id: string;
+                  status: string;
+                  ordinal: number;
+                }>`
+                  SELECT thread_id,payload_json,provider_thread_id,run_attempt_id,node_id,status,ordinal FROM orchestration_v2_projection_provider_turns WHERE provider_turn_id=${turnId} LIMIT 1`;
+                const previousRow = previousRows[0];
+                const previous =
+                  previousRow === undefined
+                    ? undefined
+                    : decodeProviderTurn(previousRow.payload_json);
+                if (
+                  previousRow !== undefined &&
+                  (previousRow.thread_id !== input.threadId ||
+                    previous === undefined ||
+                    Option.isNone(previous))
+                )
+                  return reject;
+                const existing =
+                  previous !== undefined && Option.isSome(previous) ? previous.value : undefined;
+                const turn =
+                  observed?.type === "provider-turn.updated" ? observed.payload : existing;
+                if (
+                  turn === undefined ||
+                  turn.id !== turnId ||
+                  turn.runAttemptId !== a.id ||
+                  turn.nodeId !== owner.rootNodeId ||
+                  turn.providerThreadId !== owner.providerThreadId ||
+                  turn.ordinal !== owner.providerTurnOrdinal
+                )
+                  return reject;
+                if (
+                  existing !== undefined &&
+                  (previousRow?.provider_thread_id !== existing.providerThreadId ||
+                    previousRow.run_attempt_id !== existing.runAttemptId ||
+                    previousRow.node_id !== existing.nodeId ||
+                    previousRow.status !== existing.status ||
+                    previousRow.ordinal !== existing.ordinal ||
+                    existing.id !== turnId ||
+                    existing.runAttemptId !== a.id ||
+                    existing.nodeId !== owner.rootNodeId ||
+                    existing.providerThreadId !== owner.providerThreadId ||
+                    existing.ordinal !== owner.providerTurnOrdinal ||
+                    (existing.status !== "running" &&
+                      existing.status !== "pending" &&
+                      turn.status !== existing.status))
+                )
+                  return reject;
+                if (
+                  observed !== undefined &&
+                  (observed.threadId !== input.threadId ||
+                    observed.runId !== r.id ||
+                    observed.driver !== owner.driver)
+                )
+                  return reject;
+                if (
+                  owner.terminalStatus !== undefined &&
+                  (a.providerTurnId !== turnId || existing?.status !== owner.terminalStatus)
+                )
+                  return reject;
+                if (observed !== undefined && a.providerTurnId === null) {
+                  events = [
+                    ...events,
+                    {
+                      id: EventId.make(`${observed.id}:attempt-link`),
+                      type: "run-attempt.updated",
+                      threadId: input.threadId,
+                      runId: r.id,
+                      nodeId: owner.rootNodeId,
+                      providerInstanceId: owner.providerInstanceId,
+                      occurredAt: observed.occurredAt,
+                      payload: { ...a, providerTurnId: turnId },
+                    },
+                  ];
+                }
+              }
+              // Terminal snapshots captured at start must never erase the committed link.
+              events = events.map((event) =>
+                event.type === "run-attempt.updated" && event.payload.id === a.id
+                  ? {
+                      ...event,
+                      payload: {
+                        ...a,
+                        providerTurnId: turnId ?? a.providerTurnId,
+                        status: event.payload.status,
+                        completedAt: event.payload.completedAt,
+                      },
+                    }
+                  : event,
+              );
             }
-
             const normalized = yield* normalizeEvents(
               input.guardPendingUserInputCancellations === true
-                ? yield* guardUserInputCancellations(input.events)
-                : input.events,
+                ? yield* guardUserInputCancellations(events)
+                : events,
             );
             const storedEvents = yield* eventStore.append({
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
               events: normalized,
             });
             yield* applyStoredEvents(storedEvents);
+            yield* effectOutbox.enqueue(input.effects ?? []);
             return { committed: true as const, storedEvents };
           }),
         );
         if (result.committed) {
+          if (input.effects !== undefined && input.effects.length > 0)
+            yield* effectOutbox.notifyAvailable(input.effects.length);
           yield* eventStore.publishCommitted(result.storedEvents);
           yield* publishLiveEvents(result.storedEvents);
         }

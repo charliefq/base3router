@@ -252,7 +252,7 @@ function makeDeterministicAdapter(input: {
               ]);
               const eventTime = yield* DateTime.now;
               const providerTurnId = ProviderTurnId.make(
-                `provider-turn:${input.instanceId}:${turnInput.threadId}:${turnInput.runOrdinal}`,
+                `provider-turn:${input.instanceId}:${turnInput.threadId}:${turnInput.attemptId}`,
               );
               runOrdinals.set(providerTurnId, turnInput.runOrdinal);
               turnInputs.set(providerTurnId, turnInput);

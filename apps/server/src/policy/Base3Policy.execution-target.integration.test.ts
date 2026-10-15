@@ -99,6 +99,9 @@ const b: ModelSelection = {
 };
 const capabilities = CodexProviderCapabilitiesV2;
 const encodeModelSelection = Schema.encodeEffect(Schema.fromJsonString(ModelSelection));
+const decodeLinkedAttempt = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Struct({ providerTurnId: Schema.NullOr(Schema.String) })),
+);
 const decodeRoute = Schema.decodeEffect(Schema.fromJsonString(DispatcherTaskRouteBinding));
 const isDispatchError = Schema.is(Orchestrator.OrchestratorDispatchError);
 const isPreviouslyRejected = Schema.is(Orchestrator.OrchestratorCommandPreviouslyRejectedError);
@@ -1708,13 +1711,20 @@ it.live.each(["control", "immediate", "queued", "availability", "constraints"] a
                 );
                 assert.throws(() => assertNodeOwnership(foregroundNode));
               }
-              // This existing fake protocol path leaves attempt.providerTurnId unlinked.
-              // Preserve the reader's fail-closed result rather than fabricating a binding.
-              assert.equal(attempts[0]!.providerTurnId, null);
-              assert.deepEqual(result.content, {
-                status: "unknown",
-                reason: "missing_provider_turn",
-              });
+              // Only adapter events and the real worker may create this positive link.
+              assert.equal(result.content.status, "output");
+              if (result.content.status !== "output") throw new Error("No attributable output");
+              assert.equal(result.content.preview, expectedText);
+              assert.equal(result.providerTurnId, turn.id);
+              assert.equal(attempts[0]!.providerTurnId, turn.id);
+              const persistedAttempt = (yield* f.sql<{
+                provider_turn_id: string | null;
+                payload_json: string;
+              }>`SELECT provider_turn_id,payload_json FROM orchestration_v2_projection_run_attempts WHERE attempt_id=${attempts[0]!.id}`)[0]!;
+              assert.equal(persistedAttempt.provider_turn_id, turn.id);
+              const decodedAttempt = yield* decodeLinkedAttempt(persistedAttempt.payload_json);
+              assert.equal(decodedAttempt.providerTurnId, turn.id);
+
               const starts = yield* Ref.get(started);
               assert.deepEqual(
                 starts,

@@ -222,6 +222,9 @@ export interface ProviderEventIngestorV2Shape {
         readonly runId: RunId;
         readonly activeAttemptId: RunAttemptId;
         readonly expectedStatus: OrchestrationV2Run["status"];
+        readonly rootExecution?: NonNullable<
+          Parameters<EventSink.EventSinkV2Shape["writeIfRunCurrent"]>[0]["rootExecution"]
+        >;
       };
       /**
        * Atomically reject provider-thread snapshots from an attempt that no
