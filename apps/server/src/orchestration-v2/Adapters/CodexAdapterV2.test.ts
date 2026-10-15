@@ -1,3 +1,6 @@
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { makeSqlitePersistenceLive } from "../../persistence/Layers/Sqlite.ts";
+import { checkpointWorkspace } from "../testkit/ReplayFixtureWorkspace.ts";
 import * as NodeOS from "node:os";
 
 import { historyResponseItems } from "../ContextHandoffBudget.ts";
@@ -9,6 +12,7 @@ import {
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
+  EventId,
   CheckpointId,
   CodexSettings,
   EnvironmentId,
@@ -16,6 +20,7 @@ import {
   type ModelSelection,
   NodeId,
   type OrchestrationV2AppThread,
+  type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
   ProjectId,
@@ -73,6 +78,9 @@ import {
   withCodexReplayChildMetadata,
 } from "./CodexAdapterV2.testkit.ts";
 
+const decodeReplayFrameRecord = Schema.decodeUnknownSync(
+  Schema.Record(Schema.String, Schema.Unknown),
+);
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const replayTranscriptJson = Schema.fromJsonString(CodexReplay.CodexAppServerReplayTranscript);
 const encodeReplayTranscriptJson = Schema.encodeEffect(replayTranscriptJson);
@@ -4656,6 +4664,319 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       { type: "runtime_exit", status: "success" },
     ],
   });
+
+  it.live.each(["child-first", "parent-first"] as const)(
+    "result linkage actual Codex restart preserves %s cleanup and native task reference",
+    (order) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwd = yield* checkpointWorkspace(`codex-linkage-${order}`);
+          const fs = yield* FileSystem.FileSystem,
+            path = yield* Path.Path;
+          const directory = yield* fs.makeTempDirectoryScoped({ prefix: "codex-linkage-db-" });
+          const database = makeSqlitePersistenceLive(path.join(directory, "state.sqlite")).pipe(
+            Layer.provide(NodeServices.layer),
+          );
+          const cleanupDecision = yield* Deferred.make<void>(),
+            parentRelease = yield* Deferred.make<void>(),
+            replacementReached = yield* Deferred.make<void>(),
+            replacementRelease = yield* Deferred.make<void>();
+          yield* Effect.addFinalizer(() =>
+            Deferred.succeed(parentRelease, undefined).pipe(
+              Effect.andThen(Deferred.succeed(replacementRelease, undefined)),
+            ),
+          );
+          const foreignAccepted = yield* Ref.make(false);
+          const terminalIndex = interruptSubagentCommandTranscript.entries.findIndex(
+            (e) => e.type === "emit_inbound" && e.label === "turn/completed/root",
+          );
+          const rootCompleted = interruptSubagentCommandTranscript.entries[terminalIndex]!,
+            childCompleted = interruptSubagentCommandTranscript.entries[terminalIndex + 1]!;
+          const nextTurn = "native-codex-linkage-replacement";
+          const start = codexReplayPreamble({
+            nativeThreadId: INTERRUPT_NATIVE_THREAD,
+            nativeTurnId: nextTurn,
+            prompt: "Replacement linkage result",
+          }).slice(-3);
+          const transcript = makeCodexReplayTranscript({
+            scenario: `codex-linkage-${order}`,
+            entries: [
+              ...interruptSubagentCommandTranscript.entries.slice(0, terminalIndex),
+              ...(order === "child-first"
+                ? [childCompleted, rootCompleted]
+                : [rootCompleted, childCompleted]),
+              ...start.map((e) =>
+                e.type === "expect_outbound"
+                  ? {
+                      ...e,
+                      frame: { ...decodeReplayFrameRecord(e.frame), id: 7 },
+                      label: "turn/start/replacement",
+                    }
+                  : e.type === "emit_inbound" && e.label === "turn/start"
+                    ? {
+                        ...e,
+                        frame: { ...decodeReplayFrameRecord(e.frame), id: 7 },
+                        label: "turn/start/replacement-response",
+                      }
+                    : e,
+              ),
+              {
+                type: "emit_inbound",
+                label: "item/completed/replacement",
+                frame: {
+                  method: "item/completed",
+                  params: {
+                    threadId: INTERRUPT_NATIVE_THREAD,
+                    turnId: nextTurn,
+                    item: {
+                      type: "agentMessage",
+                      id: "native-replacement-result",
+                      text: "Replacement linkage result",
+                      phase: "final_answer",
+                    },
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "turn/completed/replacement",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: INTERRUPT_NATIVE_THREAD,
+                    turn: makeCodexReplayTurn({ id: nextTurn, status: "completed" }),
+                  },
+                },
+              },
+            ],
+          });
+          const localTranscript = yield* decodeReplayTranscriptJson(
+            (yield* encodeReplayTranscriptJson(transcript)).replaceAll(
+              yield* encodeStringJson("/workspace"),
+              yield* encodeStringJson(cwd),
+            ),
+          );
+          const driver = yield* CodexReplay.makeReplayDriver(localTranscript, {
+            beforeEmitInbound: (entry) =>
+              entry.label === "turn/completed/root" && order === "child-first"
+                ? Deferred.await(parentRelease)
+                : entry.label === "turn/start/replacement-response"
+                  ? Deferred.succeed(replacementReached, undefined).pipe(
+                      Effect.andThen(Deferred.await(replacementRelease)),
+                    )
+                  : Effect.void,
+          });
+          const layer = makeOrchestratorV2ReplayLayerWithRegistry(
+            { name: `codex-linkage-${order}`, runtimePolicyOverride: { cwd } },
+            makeCodexProviderAdapterRegistryReplayLayer({ transcript: localTranscript, driver }),
+            {
+              databaseLayer: database,
+              runEffectWorker: false,
+              decorateEventSink: (service) => ({
+                ...service,
+                writeIfRunCurrent: (input) =>
+                  Effect.gen(function* () {
+                    const node = input.events.find(
+                      (e) =>
+                        e.type === "node.updated" &&
+                        e.payload.kind === "subagent" &&
+                        e.payload.status === "interrupted",
+                    );
+                    if (node?.type === "node.updated") {
+                      const bad = yield* service.writeIfRunCurrent({
+                        ...input,
+                        events: [
+                          {
+                            ...node,
+                            id: EventId.make(`${node.id}:foreign-task-ref`),
+                            payload: {
+                              ...node.payload,
+                              nativeItemRef: {
+                                driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+                                nativeId: "foreign-child-task",
+                                strength: "strong",
+                              },
+                            },
+                          },
+                        ],
+                      });
+                      yield* Ref.set(foreignAccepted, bad.committed);
+                    }
+                    const result = yield* service.writeIfRunCurrent(input);
+                    if (
+                      input.events.some(
+                        (e) =>
+                          e.type === "turn-item.updated" &&
+                          e.payload.type === "subagent" &&
+                          e.payload.status === "interrupted",
+                      )
+                    )
+                      yield* Deferred.succeed(cleanupDecision, undefined);
+                    return result;
+                  }),
+              }),
+            },
+          );
+          yield* Effect.gen(function* () {
+            const orchestrator = yield* Orchestrator.OrchestratorV2,
+              worker = yield* EffectWorker.OrchestrationEffectWorkerV2,
+              sql = yield* SqlClient.SqlClient;
+            const threadId = ThreadId.make(`thread:actual-codex-linkage:${order}`);
+            const seen = yield* Ref.make<ReadonlyArray<OrchestrationV2DomainEvent>>([]);
+            yield* orchestrator.streamDomainEvents.pipe(
+              Stream.tap((e) => Ref.update(seen, (es) => [...es, e])),
+              Stream.runDrain,
+              Effect.forkScoped,
+            );
+            yield* orchestrator.dispatch({
+              type: "thread.create",
+              commandId: CommandId.make(`create:${order}`),
+              threadId,
+              projectId: ProjectId.make(`project:${order}`),
+              title: "Actual Codex linkage",
+              modelSelection: CODEX_TEST_MODEL_SELECTION,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: cwd,
+              createdBy: "user",
+              creationSource: "web",
+            });
+            const runningChild = yield* orchestrator.streamDomainEvents.pipe(
+              Stream.filter(
+                (e) =>
+                  e.type === "turn-item.updated" &&
+                  e.payload.type === "command_execution" &&
+                  e.payload.nativeItemRef?.nativeId === INTERRUPT_CHILD_COMMAND_ITEM &&
+                  e.payload.status === "running",
+              ),
+              Stream.take(1),
+              Stream.runDrain,
+              Effect.forkScoped,
+            );
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(`start:${order}`),
+              threadId,
+              messageId: MessageId.make(`message:a:${order}`),
+              text: INTERRUPT_PROMPT,
+              attachments: [],
+              dispatchMode: { type: "start_immediately" },
+              createdBy: "user",
+              creationSource: "web",
+            });
+            yield* worker.drain();
+            assert.isNull((yield* Ref.get(driver.state)).failure);
+            yield* Fiber.join(runningChild);
+            const before = yield* orchestrator.getThreadProjection(threadId),
+              a = before.attempts[0]!,
+              run = before.runs[0]!,
+              agent = before.subagents[0]!;
+            const initialNode = before.nodes.find((n) => n.id === agent.id)!;
+            assert.notEqual(
+              initialNode.nativeItemRef?.nativeId,
+              agent.nativeTaskRef?.nativeId,
+              "actual adapter emits distinct launch-tool/task refs",
+            );
+            const waiting = yield* orchestrator.streamDomainEvents.pipe(
+              Stream.filter(
+                (e) =>
+                  e.type === "run.updated" &&
+                  e.payload.id === run.id &&
+                  e.payload.status === "waiting",
+              ),
+              Stream.take(1),
+              Stream.runDrain,
+              Effect.forkScoped,
+            );
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(`restart:${order}`),
+              threadId,
+              messageId: MessageId.make(`message:b:${order}`),
+              text: "Replacement linkage result",
+              attachments: [],
+              dispatchMode: { type: "restart_active", targetRunId: run.id },
+              createdBy: "user",
+              creationSource: "web",
+            });
+            const restartWork = yield* worker.drain().pipe(Effect.forkScoped);
+            yield* Deferred.await(cleanupDecision);
+            const during = yield* orchestrator.getThreadProjection(threadId);
+            const parentStatus = during.providerTurns.find(
+              (t) => t.id === a.providerTurnId,
+            )!.status;
+            const beforeParent = [
+              during.nodes.find((n) => n.id === agent.id)!.status,
+              during.subagents.find((n) => n.id === agent.id)!.status,
+              during.turnItems.find((i) => i.type === "subagent" && i.nodeId === agent.id)!.status,
+            ];
+            yield* Deferred.succeed(parentRelease, undefined);
+            if (beforeParent.some((status) => status !== "interrupted")) {
+              yield* Deferred.succeed(replacementRelease, undefined);
+              yield* Fiber.interrupt(restartWork);
+              assert.deepEqual(
+                beforeParent,
+                ["interrupted", "interrupted", "interrupted"],
+                "actual adapter cleanup must persist before parent completion/B finalization",
+              );
+            }
+            yield* Deferred.await(replacementReached);
+            const preBNode = during.nodes.find((n) => n.id === agent.id)!;
+            yield* Deferred.succeed(replacementRelease, undefined);
+            yield* Fiber.join(restartWork);
+            assert.isNull((yield* Ref.get(driver.state)).failure);
+            yield* Fiber.join(waiting);
+            yield* worker.drain();
+            const after = yield* orchestrator.getThreadProjection(threadId),
+              b = after.attempts.find((t) => t.id !== a.id)!;
+            assert.equal(parentStatus, order === "child-first" ? "running" : "interrupted");
+            assert.deepEqual(
+              beforeParent,
+              ["interrupted", "interrupted", "interrupted"],
+              "actual adapter cleanup must persist before parent completion/B finalization",
+            );
+            assert.equal(preBNode.status, "interrupted");
+            assert.deepEqual(preBNode.nativeItemRef, agent.nativeTaskRef);
+            assert.isFalse(yield* Ref.get(foreignAccepted));
+            assert.equal(after.attempts.find((t) => t.id === a.id)!.status, "superseded");
+            assert.equal(
+              after.attempts.find((t) => t.id === a.id)!.providerTurnId,
+              a.providerTurnId,
+            );
+            assert.equal(after.runs[0]!.status, "completed");
+            assert.equal(after.nodes.find((n) => n.id === b.rootNodeId)!.status, "completed");
+            assert.equal(after.runs[0]!.activeAttemptId, b.id);
+            assert.equal(after.runs[0]!.rootNodeId, b.rootNodeId);
+            assert.equal(
+              after.providerTurns.find((t) => t.id === b.providerTurnId)!.nativeTurnRef?.nativeId,
+              nextTurn,
+            );
+            assert.isTrue(
+              after.turnItems.some(
+                (i) =>
+                  i.type === "assistant_message" &&
+                  i.providerTurnId === b.providerTurnId &&
+                  i.text === "Replacement linkage result",
+              ),
+            );
+            const checkpoints =
+              yield* sql`SELECT effect_id FROM orchestration_v2_effect_outbox WHERE effect_type='checkpoint.capture'`;
+            assert.lengthOf(checkpoints, 1);
+            const events = yield* Ref.get(seen);
+            assert.lengthOf(
+              events.filter(
+                (e) =>
+                  e.type === "run-attempt.updated" &&
+                  e.payload.id === a.id &&
+                  e.payload.status === "completed",
+              ),
+              0,
+            );
+          }).pipe(Effect.provide(Layer.merge(layer, database)));
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
+  );
 
   const assertChildProviderTerminalBeforeRoot = (
     events: ReadonlyArray<ProviderAdapterV2Event>,

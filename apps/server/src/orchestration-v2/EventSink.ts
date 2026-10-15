@@ -490,6 +490,7 @@ const baseLayer: Layer.Layer<
         const rows = yield* sql<{
           run_ordinal: number;
           attempt_payload: string;
+          attempt_status: string;
           turn_payload: string;
           session_payload: string;
           attempt_run: string;
@@ -504,7 +505,7 @@ const baseLayer: Layer.Layer<
           turn_ordinal: number;
           session_instance: string;
           session_driver: string;
-        }>`SELECT r.ordinal AS run_ordinal,a.payload_json AS attempt_payload,t.payload_json AS turn_payload,s.payload_json AS session_payload,
+        }>`SELECT r.ordinal AS run_ordinal,a.payload_json AS attempt_payload,a.status AS attempt_status,t.payload_json AS turn_payload,s.payload_json AS session_payload,
           a.run_id AS attempt_run,a.root_node_id AS attempt_root,a.provider_thread_id AS attempt_thread,a.provider_instance_id AS attempt_instance,
           a.provider_turn_id AS attempt_turn,t.run_attempt_id AS turn_attempt,t.node_id AS turn_root,t.provider_thread_id AS turn_thread,t.status AS turn_status,t.ordinal AS turn_ordinal,
           s.provider_instance_id AS session_instance,s.driver AS session_driver
@@ -532,6 +533,7 @@ const baseLayer: Layer.Layer<
           a.providerThreadId !== owner.providerThreadId ||
           a.providerTurnId !== turn.id ||
           a.status === "pending" ||
+          row.attempt_status !== a.status ||
           row.attempt_run !== a.runId ||
           row.attempt_root !== a.rootNodeId ||
           row.attempt_thread !== a.providerThreadId ||
@@ -569,7 +571,6 @@ const baseLayer: Layer.Layer<
         }
         // A terminal root observation authorizes only lifecycle cleanup of its
         // already persisted direct work. Never create work or touch the new root.
-        if (!terminalWorkStatus(t.status)) return [];
         const nodeId =
           event.type === "node.updated" || event.type === "subagent.updated"
             ? event.payload.id
@@ -599,6 +600,7 @@ const baseLayer: Layer.Layer<
         )
           return [];
         let nativeChildAgent: OrchestrationV2Subagent | undefined;
+        let permitsToolToTaskRef = false;
         if (n.providerThreadId !== owner.providerThreadId) {
           if (n.kind !== "subagent") return [];
           const children = yield* sql<{
@@ -670,7 +672,31 @@ const baseLayer: Layer.Layer<
           )
             return [];
           nativeChildAgent = task;
+          // Codex launches the parent node under its tool-call reference, then
+          // terminalizes it under the recorded tool-call:child-thread task ref.
+          permitsToolToTaskRef =
+            owner.driver === "codex" &&
+            n.nativeItemRef?.driver === owner.driver &&
+            n.nativeItemRef.strength === "strong" &&
+            n.nativeItemRef.nativeId !== null &&
+            task.nativeTaskRef?.driver === owner.driver &&
+            task.nativeTaskRef.strength === "strong" &&
+            task.nativeTaskRef.nativeId ===
+              `${n.nativeItemRef.nativeId}:${p.nativeThreadRef.nativeId}`;
         }
+        // A superseded Codex child can finish before its parent completion.
+        // Its existing, independently proven child work may settle; the running
+        // parent turn, root, attempt link and successor remain untouched.
+        if (
+          !terminalWorkStatus(t.status) &&
+          !(
+            nativeChildAgent !== undefined &&
+            owner.driver === "codex" &&
+            a.status === "superseded" &&
+            t.status === "running"
+          )
+        )
+          return [];
         const canSettle = (old: string, next: string) =>
           terminalWorkStatus(next) &&
           (old === "pending" || old === "running" || old === "waiting" || old === next);
@@ -684,12 +710,25 @@ const baseLayer: Layer.Layer<
             next.providerThreadId !== n.providerThreadId ||
             next.providerTurnId !== n.providerTurnId ||
             next.kind !== n.kind ||
-            !sameRef(next.nativeItemRef, n.nativeItemRef) ||
+            (!sameRef(next.nativeItemRef, n.nativeItemRef) &&
+              !(
+                permitsToolToTaskRef &&
+                nativeChildAgent !== undefined &&
+                sameRef(next.nativeItemRef, nativeChildAgent.nativeTaskRef)
+              )) ||
             !canSettle(n.status, next.status)
           )
             return [];
           return [
-            { ...event, payload: { ...n, status: next.status, completedAt: next.completedAt } },
+            {
+              ...event,
+              payload: {
+                ...n,
+                status: next.status,
+                completedAt: next.completedAt,
+                nativeItemRef: next.nativeItemRef,
+              },
+            },
           ];
         }
         if (event.type === "turn-item.updated") {
