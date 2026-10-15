@@ -26,6 +26,7 @@ import {
   agentsCreationActor,
   agentsCreationCommand,
   agentsCreationProvider,
+  eligibleCapProviders,
   withAgentsTaskCreationFixture,
 } from "./testkit/agentsTaskCreationFixture.ts";
 
@@ -300,153 +301,177 @@ it.live.each([
   "task-empty",
   "task-evidence",
   "task-evidence-manual",
+  "cap-shadow",
   "unknown",
   "unavailable-policy",
   "unavailable-provider",
   "constraints",
-] as const)("reads %s snapshot without writes and matches authoritative dispatch", (mode) =>
-  withAgentsTaskCreationFixture((f) =>
-    Effect.gen(function* () {
-      const c = previewCreationCommand(`policy-${mode}`);
-      yield* f.dispatch(c);
-      const task = (yield* f.readSnapshot()).tasks[0]!;
-      const input: TaskAutoPreviewInput = {
-        environmentId: "environment-a",
-        taskId: task.id,
-        projectId: c.projectId,
-        threadId: c.threadId,
-        revision: 1,
-        reference: task.review!.reference,
-        text: mode === "unknown" ? "hello" : "Implement parser regression tests",
-        ...(mode === "constraints" ? { constraints: { maxCostUsd: 0, maxLatencyMs: 0 } } : {}),
-      };
-      const env = EnvironmentId.make(input.environmentId);
-      const now = DateTime.formatIso(yield* DateTime.now);
-      if (!["unavailable-policy", "unavailable-provider", "constraints"].includes(mode)) {
-        const initial = yield* f.evaluation.status(env);
-        const candidate = initial.policies.find(
-          (p) =>
-            p.policyVersion ===
-            (mode === "v1" ? HYBRID_ROUTER_POLICY_VERSION : HYBRID_TASK_ROUTER_POLICY_VERSION),
-        )!;
-        const shadow = yield* f.evaluation.control(
-          env,
-          {
-            action: "shadow",
-            policyId: candidate.policyId,
-            expectedRevision: initial.revision,
-            confirm: true,
-          },
-          now,
-          "fixture-owner",
-        );
-        yield* f.evaluation.control(
-          env,
-          {
-            action: "activate",
-            policyId: candidate.policyId,
-            expectedRevision: shadow.revision,
-            confirm: true,
-          },
-          now,
-          "fixture-owner",
-        );
-      }
-      if (mode === "unavailable-policy") yield* f.sql`DROP TABLE router_policies`;
-      if (mode === "unavailable-provider")
-        f.setProviders([{ ...agentsCreationProvider, enabled: false }]);
-      if (mode.startsWith("task-evidence")) {
-        f.setProviders([
-          agentsCreationProvider,
-          { ...agentsCreationProvider, instanceId: ProviderInstanceId.make("alternative") },
-        ]);
-        const p = yield* f.previewAuto(input);
-        assert.equal(p.status, "available");
-        if (p.status !== "available") return;
-        for (const instanceId of [
-          agentsCreationProvider.instanceId,
-          ProviderInstanceId.make("alternative"),
-        ])
-          for (let index = 0; index < 8; index++)
-            yield* f.evaluation.recordObservation({
-              version: TURN_OUTCOME_OBSERVATION_VERSION,
-              observationId: ObservationId.make(`preview-evidence-${instanceId}-${index}`),
-              environmentId: env,
-              recordedAt: now,
-              policyVersion: MODEL_ROUTER_POLICY_VERSION,
-              routingMode: "auto",
-              instanceId,
-              model: "fake-model",
-              taskProfile: UNKNOWN_TASK_PROFILE,
-              localTaskProfile: p.profile,
-              timing: emptyTiming(),
-              usage: emptyUsageMeasurement(),
-              cost: emptyCostMeasurement(),
-              providerAttempts: 1,
-              fallbackCount: 0,
-              cancelled: false,
-              timedOut: false,
-              finishReason: instanceId === "alternative" ? "stop" : "error",
-              terminalCategory: instanceId === "alternative" ? "success" : "provider_failure",
-              evidence: emptyOutcomeEvidence(),
-            });
-      }
-      const before = yield* f.sql`SELECT total_changes() AS n`;
-      const preview = yield* f.previewAuto(input);
-      assert.equal(preview.status, "available");
-      assert.isTrue(isPreviewState(preview));
-      if (preview.status !== "available") return;
-      assert.deepStrictEqual(yield* f.sql`SELECT total_changes() AS n`, before);
-      assert.deepStrictEqual(yield* f.noExecution(), {
-        runs: 0,
-        grants: 0,
-        outbox: 0,
-        messages: 0,
-      });
-      if (mode.startsWith("task-evidence")) {
-        assert.equal(preview.decision.policyVersion, HYBRID_TASK_ROUTER_POLICY_VERSION);
-        assert.equal(preview.decision.selected?.target.instanceId, "alternative");
-      }
-      if (mode === "task-empty") assert.include(preview.hybrid!.fallbackReason!, "coverage");
-      if (mode === "unknown") {
-        assert.equal(preview.profile.category, "unknown");
-        assert.include(preview.hybrid!.fallbackReason!, "unknown");
-      }
-      if (mode === "unavailable-policy") {
-        assert.include(preview.policyFallbackReason!, "ephemeral");
-      }
-      if (mode === "unavailable-provider" || mode === "constraints") {
-        assert.equal(preview.decision.selected, null);
-        return;
-      }
-      yield* f.dispatch({
-        type: "message.dispatch",
-        createdBy: "user",
-        creationSource: "web",
-        commandId: CommandId.make(`send-${mode}`),
-        threadId: c.threadId,
-        messageId: MessageId.make(`message-${mode}`),
-        text: input.text,
-        attachments: [],
-        dispatchMode: { type: "start_immediately" },
-        routingMode: mode === "task-evidence-manual" ? "manual" : "auto",
-      });
-      const rows = yield* f.sql<{
-        binding_json: string;
-      }>`SELECT binding_json FROM projection_dispatcher_task_routes WHERE thread_id=${c.threadId}`;
-      const actual = decodeBinding(rows[0]!.binding_json);
-      if (mode === "task-evidence-manual") {
-        assert.equal(actual.modelRoute?.selected?.target.instanceId, "codex");
-        assert.notEqual(actual.modelRoute?.explanation, preview.decision.explanation);
-      } else {
-        assert.deepStrictEqual(
-          { ...actual.modelRoute, executionStatus: "not-started" },
-          preview.decision,
-        );
-        assert.deepStrictEqual(actual.hybrid, preview.hybrid);
-      }
-    }),
-  ),
+] as const)(
+  "eligible cap reads %s snapshot without writes and matches authoritative dispatch",
+  (mode) =>
+    withAgentsTaskCreationFixture((f) =>
+      Effect.gen(function* () {
+        const c = previewCreationCommand(`policy-${mode}`);
+        if (mode !== "task-evidence-manual") f.setProviders(eligibleCapProviders());
+        yield* f.dispatch(c);
+        if (mode === "cap-shadow")
+          yield* f.sql`UPDATE projection_projects SET default_model_selection_json=json_object('instanceId','codex','model','fake-model') WHERE project_id=${c.projectId}`;
+        const task = (yield* f.readSnapshot()).tasks[0]!;
+        const input: TaskAutoPreviewInput = {
+          environmentId: "environment-a",
+          taskId: task.id,
+          projectId: c.projectId,
+          threadId: c.threadId,
+          revision: 1,
+          reference: task.review!.reference,
+          text: mode === "unknown" ? "hello" : "Implement parser regression tests",
+          ...(mode === "constraints" ? { constraints: { maxCostUsd: 0, maxLatencyMs: 0 } } : {}),
+        };
+        const env = EnvironmentId.make(input.environmentId);
+        const now = DateTime.formatIso(yield* DateTime.now);
+        if (!["unavailable-policy", "unavailable-provider", "constraints"].includes(mode)) {
+          const initial = yield* f.evaluation.status(env);
+          const candidate = initial.policies.find(
+            (p) =>
+              p.policyVersion ===
+              (mode === "v1" || mode === "cap-shadow"
+                ? HYBRID_ROUTER_POLICY_VERSION
+                : HYBRID_TASK_ROUTER_POLICY_VERSION),
+          )!;
+          const shadow = yield* f.evaluation.control(
+            env,
+            {
+              action: "shadow",
+              policyId: candidate.policyId,
+              expectedRevision: initial.revision,
+              confirm: true,
+            },
+            now,
+            "fixture-owner",
+          );
+          if (mode !== "cap-shadow")
+            yield* f.evaluation.control(
+              env,
+              {
+                action: "activate",
+                policyId: candidate.policyId,
+                expectedRevision: shadow.revision,
+                confirm: true,
+              },
+              now,
+              "fixture-owner",
+            );
+        }
+        if (mode === "unavailable-policy") yield* f.sql`DROP TABLE router_policies`;
+        if (mode === "unavailable-provider")
+          f.setProviders([{ ...agentsCreationProvider, enabled: false }]);
+        if (mode.startsWith("task-evidence") || mode === "cap-shadow") {
+          f.setProviders([
+            ...(mode === "task-evidence-manual"
+              ? []
+              : eligibleCapProviders().filter(
+                  (p) => p.instanceId !== agentsCreationProvider.instanceId,
+                )),
+            agentsCreationProvider,
+            { ...agentsCreationProvider, instanceId: ProviderInstanceId.make("alternative") },
+          ]);
+          const p = yield* f.previewAuto(input);
+          assert.equal(p.status, "available");
+          if (p.status !== "available") return;
+          for (const instanceId of [
+            agentsCreationProvider.instanceId,
+            ProviderInstanceId.make("alternative"),
+          ])
+            for (let index = 0; index < 8; index++)
+              yield* f.evaluation.recordObservation({
+                version: TURN_OUTCOME_OBSERVATION_VERSION,
+                observationId: ObservationId.make(`preview-evidence-${instanceId}-${index}`),
+                environmentId: env,
+                recordedAt: now,
+                policyVersion: MODEL_ROUTER_POLICY_VERSION,
+                routingMode: "auto",
+                instanceId,
+                model: "fake-model",
+                taskProfile: UNKNOWN_TASK_PROFILE,
+                localTaskProfile: p.profile,
+                timing: emptyTiming(),
+                usage: emptyUsageMeasurement(),
+                cost: emptyCostMeasurement(),
+                providerAttempts: 1,
+                fallbackCount: 0,
+                cancelled: false,
+                timedOut: false,
+                finishReason: instanceId === "alternative" ? "stop" : "error",
+                terminalCategory: instanceId === "alternative" ? "success" : "provider_failure",
+                evidence: emptyOutcomeEvidence(),
+              });
+        }
+        const before = yield* f.sql`SELECT total_changes() AS n`;
+        const preview = yield* f.previewAuto(input);
+        assert.equal(preview.status, "available");
+        assert.isTrue(isPreviewState(preview));
+        if (preview.status !== "available") return;
+        assert.deepStrictEqual(yield* f.sql`SELECT total_changes() AS n`, before);
+        assert.deepStrictEqual(yield* f.noExecution(), {
+          runs: 0,
+          grants: 0,
+          outbox: 0,
+          messages: 0,
+        });
+        if (mode === "cap-shadow") {
+          assert.equal(preview.decision.policyVersion, MODEL_ROUTER_POLICY_VERSION);
+          assert.equal(preview.decision.selected?.target.instanceId, "codex");
+          assert.equal(preview.hybrid?.challenger?.selected?.instanceId, "alternative");
+          assert.deepEqual(
+            preview.decision.selectionBasis?.selectedTarget,
+            preview.decision.selected?.target,
+          );
+        }
+        if (mode.startsWith("task-evidence")) {
+          assert.equal(preview.decision.policyVersion, HYBRID_TASK_ROUTER_POLICY_VERSION);
+          assert.equal(preview.decision.selected?.target.instanceId, "alternative");
+          assert.equal(preview.decision.selectionBasis, undefined);
+        }
+        if (mode === "task-empty") assert.include(preview.hybrid!.fallbackReason!, "coverage");
+        if (mode === "unknown") {
+          assert.equal(preview.profile.category, "unknown");
+          assert.include(preview.hybrid!.fallbackReason!, "unknown");
+        }
+        if (mode === "unavailable-policy") {
+          assert.include(preview.policyFallbackReason!, "ephemeral");
+        }
+        if (mode === "unavailable-provider" || mode === "constraints") {
+          assert.equal(preview.decision.selected, null);
+          return;
+        }
+        yield* f.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`send-${mode}`),
+          threadId: c.threadId,
+          messageId: MessageId.make(`message-${mode}`),
+          text: input.text,
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          routingMode: mode === "task-evidence-manual" ? "manual" : "auto",
+        });
+        const rows = yield* f.sql<{
+          binding_json: string;
+        }>`SELECT binding_json FROM projection_dispatcher_task_routes WHERE thread_id=${c.threadId}`;
+        const actual = decodeBinding(rows[0]!.binding_json);
+        if (mode === "task-evidence-manual") {
+          assert.equal(actual.modelRoute?.selected?.target.instanceId, "codex");
+          assert.notEqual(actual.modelRoute?.explanation, preview.decision.explanation);
+        } else {
+          assert.deepStrictEqual(
+            { ...actual.modelRoute, executionStatus: "not-started" },
+            preview.decision,
+          );
+          assert.deepStrictEqual(actual.hybrid, preview.hybrid);
+        }
+      }),
+    ),
 );
 
 it.live("refuses a populated root even with a freshly read matching reference", () =>
@@ -492,4 +517,63 @@ it.live("refuses a populated root even with a freshly read matching reference", 
       assert.deepStrictEqual(yield* f.noExecution(), effects);
     }),
   ),
+);
+
+it.live.each([32, 33])(
+  "eligible cap read-only preview and authoritative binding with %s disabled models",
+  (count) =>
+    withAgentsTaskCreationFixture((f) =>
+      Effect.gen(function* () {
+        const c = previewCreationCommand(`eligible-cap-${count}`);
+        const disabled = {
+          ...agentsCreationProvider,
+          instanceId: ProviderInstanceId.make("aaa-disabled"),
+          enabled: false,
+          status: "disabled" as const,
+          models: Array.from({ length: count }, (_, i) => ({
+            ...agentsCreationProvider.models[0]!,
+            slug: `blocked-${i}`,
+          })),
+        };
+        f.setProviders([disabled, agentsCreationProvider]);
+        yield* f.dispatch(c);
+        const task = (yield* f.readSnapshot()).tasks[0]!;
+        const before = yield* f.sql`SELECT total_changes() AS n`;
+        const preview = yield* f.previewAuto({
+          environmentId: "environment-a",
+          taskId: task.id,
+          projectId: c.projectId,
+          threadId: c.threadId,
+          revision: 1,
+          reference: task.review!.reference,
+          text: "Inspect the eligible fixture",
+        });
+        assert.equal(preview.status, "available");
+        if (preview.status !== "available") throw new Error("Preview unavailable");
+        assert.deepEqual(yield* f.sql`SELECT total_changes() AS n`, before);
+        assert.deepEqual(yield* f.noExecution(), { runs: 0, grants: 0, outbox: 0, messages: 0 });
+        const expected = { instanceId: agentsCreationProvider.instanceId, model: "fake-model" };
+        assert.deepEqual(preview.decision.selected?.target, expected);
+        assert.equal(preview.decision.selectionBasis?.excludedCount, count);
+        yield* f.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`eligible-cap-send-${count}`),
+          threadId: c.threadId,
+          messageId: MessageId.make(`eligible-cap-message-${count}`),
+          text: "Inspect the eligible fixture",
+          attachments: [],
+          routingMode: "auto",
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const rows = yield* f.sql<{
+          binding_json: string;
+        }>`SELECT binding_json FROM projection_dispatcher_task_routes`;
+        const binding = decodeBinding(rows[0]!.binding_json);
+        assert.deepEqual(binding.target, expected);
+        assert.deepEqual(binding.modelRoute?.selectionBasis, preview.decision.selectionBasis);
+        assert.equal(f.providerStarts(), 0, "binding does not invoke the disabled fixture worker");
+      }),
+    ),
 );

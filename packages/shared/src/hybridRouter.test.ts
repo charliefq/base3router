@@ -570,3 +570,59 @@ describe("selection basis hybrid provenance", () => {
     });
   });
 });
+
+describe("eligible cap hybrid", () => {
+  const excluded = Array.from({ length: 33 }, (_, i) => ({
+    ...catalog[0]!,
+    instanceId: instance("aaa-disabled"),
+    model: `blocked-${i}`,
+    availabilityReasons: ["PROVIDER_DISABLED" as const],
+  }));
+  it.each(["v0", "fallback", "active", "shadow", "task-active", "task-fallback"] as const)(
+    "uses the bounded eligible pool for %s",
+    (path) => {
+      const evidenceByTarget = new Map([
+        ["codex\u0000gpt-5.5", enough(0.4, 800)],
+        ["claude\u0000claude-sonnet-4-6", enough(0.95, 120)],
+      ]);
+      const result = routeHybridModel({
+        mode: "auto",
+        catalog: [...excluded, ...catalog],
+        activePolicyVersion: path.startsWith("task-")
+          ? HYBRID_TASK_ROUTER_POLICY_VERSION
+          : path === "v0" || path === "shadow"
+            ? MODEL_ROUTER_POLICY_VERSION
+            : HYBRID_ROUTER_POLICY_VERSION,
+        ...(path === "active" || path === "shadow" || path === "task-active"
+          ? { evidenceByTarget }
+          : {}),
+        ...(path === "task-active"
+          ? {
+              localTaskProfile: {
+                category: "debugging" as const,
+                source: "local-heuristic" as const,
+                classifierVersion: LOCAL_TASK_CLASSIFIER_VERSION,
+              },
+            }
+          : {}),
+        challengerEnabled: path === "shadow",
+      });
+      const active = path === "active" || path === "task-active";
+      expect(result.decision.selected?.target.model).toBe(active ? "claude-sonnet-4-6" : "gpt-5.5");
+      expect(result.decision.candidates.filter((c) => c.eligible)).toHaveLength(2);
+      expect(result.decision.candidates).toHaveLength(32);
+      expect(result.decision.fallbacks).toHaveLength(1);
+      expect(result.hybrid.usedHybridRanking).toBe(active);
+      if (active) expect(result.decision.selectionBasis).toBeUndefined();
+      else
+        expect(result.decision.selectionBasis).toMatchObject({
+          eligibleCount: 2,
+          excludedCount: 33,
+          consideredEligibleCount: 2,
+          selectedTarget: result.decision.selected?.target,
+        });
+      if (path === "shadow")
+        expect(result.hybrid.challenger?.selected?.model).toBe("claude-sonnet-4-6");
+    },
+  );
+});

@@ -5837,3 +5837,119 @@ it.each(["ordinary_chat", "budget_read_failed", "inconsistent_tree_accounting"])
     expect(budgetText()).not.toContain("None observed in this snapshot");
   },
 );
+
+it("eligible cap mounted real preview and persisted route refresh preserve read-only preparation", async () => {
+  const module = await loadAgentsCreationFixture();
+  await EffectForFixture.runPromise(
+    module.withAgentsTaskCreationFixture((f) =>
+      EffectForFixture.promise(async () => {
+        const ready = module.agentsCreationProvider;
+        f.setProviders([
+          {
+            ...ready,
+            instanceId: ProviderInstanceId.make("aaa-disabled"),
+            enabled: false,
+            status: "disabled",
+            models: Array.from({ length: 33 }, (_, i) => ({
+              ...ready.models[0]!,
+              slug: `blocked-${i}`,
+            })),
+          },
+          ready,
+        ]);
+        const c = {
+          ...module.agentsCreationCommand("eligible-cap-mounted"),
+          taskContract: {
+            goal: "Inspect the eligible cap fixture",
+            redirect: "Keep fixture scope",
+            acceptance: "Owner checks fixture",
+            brake: { maxProviderStarts: 3, stopConditions: "Scope changed" },
+          },
+        };
+        await EffectForFixture.runPromise(f.dispatch(c));
+        state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+        state.reviewRead.mockImplementation(
+          async ({ input }: { input: TaskContractReviewInput }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(f.readReview(input)),
+          }),
+        );
+        state.readProjection.mockImplementation(
+          async ({ input }: { input: { threadId: string } }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(
+              f.orchestrator.getThreadProjection(input.threadId),
+            ),
+          }),
+        );
+        state.autoPreview.mockImplementation(
+          async ({ input }: { input: TaskAutoPreviewInput }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(f.previewAuto(input)),
+          }),
+        );
+        useComposerDraftStore.setState({
+          draftsByThreadKey: {},
+          draftThreadsByThreadKey: {},
+          backgroundSubmissionThreadKeys: {},
+          rewindingThreadKeys: new Set(),
+        });
+        await act(async () => {
+          renderer = create(<TasksPage />);
+        });
+        const before = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
+        await creationClick("Prepare first instructions");
+        await creationClick("Preview Auto", true);
+        expect(text()).toContain("codex / fake-model");
+        expect(text()).toContain("Only one eligible candidate remained in the selectable ranking.");
+        expect(text()).toContain(
+          "Selectable eligible candidates: 1 of 1. Excluded candidates: 33.",
+        );
+        expect(text()).toContain("not permission");
+        expect(await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`)).toEqual(
+          before,
+        );
+        expect(await EffectForFixture.runPromise(f.noExecution())).toEqual({
+          runs: 0,
+          grants: 0,
+          outbox: 0,
+          messages: 0,
+        });
+        const send: Extract<OrchestrationV2Command, { type: "message.dispatch" }> = {
+          type: "message.dispatch",
+          commandId: CommandId.make("eligible-cap-mounted-send"),
+          threadId: c.threadId,
+          messageId: "eligible-cap-mounted-message" as Extract<
+            OrchestrationV2Command,
+            { type: "message.dispatch" }
+          >["messageId"],
+          text: "Inspect the eligible cap fixture",
+          attachments: [],
+          routingMode: "auto",
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        };
+        const receipt = await EffectForFixture.runPromise(f.dispatch(send));
+        await creationClick("Refresh tasks");
+        expect(text()).toContain("Selected model");
+        expect(text()).toContain("fake-model (codex)");
+        expect(text()).toContain(
+          "Selectable eligible candidates: 1 of 1. Excluded candidates: 33.",
+        );
+        expect(text()).not.toContain("Provider-turn start recorded");
+        const writes = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
+        await creationClick("Refresh tasks");
+        expect(await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`)).toEqual(
+          writes,
+        );
+        expect((await EffectForFixture.runPromise(f.dispatch(send))).sequence).toBe(
+          receipt.sequence,
+        );
+        expect(f.providerStarts()).toBe(0);
+        expect(state.bind).not.toHaveBeenCalled();
+        expect(state.navigate).not.toHaveBeenCalled();
+      }),
+    ),
+  );
+});
