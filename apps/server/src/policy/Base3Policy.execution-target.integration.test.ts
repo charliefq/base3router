@@ -269,7 +269,7 @@ function makeAdapter(
                     startedAt: occurredAt,
                     completedAt: occurredAt,
                     updatedAt: occurredAt,
-                    text: resultText,
+                    text: `${resultText} [run=${input.runId}; attempt=${input.attemptId}]`,
                     streaming: false,
                   },
                 });
@@ -1620,11 +1620,22 @@ it.live.each(["control", "immediate", "queued", "availability", "constraints"] a
               const result = snapshot.tasks[0]!.resultReadout;
               assert.equal(result?.status, "available");
               if (result?.status !== "available") throw new Error("No result evidence");
+              const assertReadoutIdentity = (actual: {
+                runId: string | null;
+                messageId: string;
+                attemptId: string | null;
+              }) =>
+                assert.deepEqual(
+                  { runId: actual.runId, messageId: actual.messageId, attemptId: actual.attemptId },
+                  { runId: run.id, messageId: command.messageId, attemptId: attempts[0]!.id },
+                );
+              assertReadoutIdentity(result);
+              const expectedText = `Eligible fake result [run=${run.id}; attempt=${attempts[0]!.id}]`;
               const output = projection.turnItems.find(
                 (item) =>
                   item.type === "assistant_message" &&
                   item.runId === run.id &&
-                  item.text === "Eligible fake result",
+                  item.text === expectedText,
               );
               assert.isDefined(
                 output,
@@ -1636,6 +1647,67 @@ it.live.each(["control", "immediate", "queued", "availability", "constraints"] a
               assert.equal(turn?.status, "completed");
               assert.equal(output?.providerTurnId, turn?.id);
               assert.equal(output?.providerThreadId, run.providerThreadId);
+              assert.isDefined(output);
+              if (output === undefined || output.type !== "assistant_message" || turn === undefined)
+                throw new Error("No persisted output");
+              const node = projection.nodes.find((candidate) => candidate.id === output.nodeId);
+              assert.isDefined(node, "the emitted assistant node is persisted with its item");
+              if (node === undefined) throw new Error("No persisted assistant node");
+              const assertNodeOwnership = (actual: typeof node) => {
+                assert.equal(actual.kind, "assistant_message");
+                assert.equal(actual.status, "completed");
+                assert.equal(actual.threadId, c.threadId);
+                assert.equal(actual.runId, run.id);
+                assert.equal(actual.rootNodeId, run.rootNodeId);
+                assert.equal(actual.parentNodeId, run.rootNodeId);
+                assert.equal(actual.providerThreadId, run.providerThreadId);
+                assert.equal(actual.providerTurnId, turn.id);
+                assert.deepEqual(actual.nativeItemRef, output.nativeItemRef);
+              };
+              assertNodeOwnership(node);
+              assert.equal(turn.runAttemptId, attempts[0]!.id);
+              assert.equal(turn.nodeId, run.rootNodeId);
+              assert.equal(output.threadId, c.threadId);
+              assert.equal(output.runId, result.runId);
+              assert.equal(output.nativeItemRef?.nativeId, `eligible-output:${attempts[0]!.id}`);
+              const ids = yield* IdAllocator.IdAllocatorV2.pipe(Effect.provide(IdAllocator.layer));
+              const nativeItem = { driver, nativeItemId: `eligible-output:${attempts[0]!.id}` };
+              assert.equal(node.id, ids.derive.nodeFromProviderItem(nativeItem));
+              assert.equal(output.id, ids.derive.turnItemFromProviderItem(nativeItem));
+              assert.equal(output.messageId, ids.derive.messageFromProviderItem(nativeItem));
+              if (mode === "queued") {
+                const foreground = projection.runs.find(
+                  (r) => r.userMessageId === "cap-foreground",
+                )!;
+                const foregroundAttempt = projection.attempts.find(
+                  (a) => a.runId === foreground.id,
+                )!;
+                const foregroundOutput = projection.turnItems.find(
+                  (item) => item.type === "assistant_message" && item.runId === foreground.id,
+                )!;
+                if (foregroundOutput.type !== "assistant_message")
+                  throw new Error("No foreground assistant output");
+                const foregroundNode = projection.nodes.find(
+                  (n) => n.id === foregroundOutput.nodeId,
+                )!;
+                assert.equal(
+                  foregroundOutput.text,
+                  `Eligible fake result [run=${foreground.id}; attempt=${foregroundAttempt.id}]`,
+                );
+                assert.notEqual(foregroundOutput.text, output.text);
+                assert.notEqual(foregroundOutput.id, output.id);
+                assert.notEqual(foregroundOutput.messageId, output.messageId);
+                // A real sibling run has the same model and completed status. Substituting
+                // its identity or assistant node must fail these ownership assertions.
+                assert.throws(() => assertReadoutIdentity({ ...result, runId: foreground.id }));
+                assert.throws(() =>
+                  assertReadoutIdentity({ ...result, messageId: foreground.userMessageId }),
+                );
+                assert.throws(() =>
+                  assertReadoutIdentity({ ...result, attemptId: foregroundAttempt.id }),
+                );
+                assert.throws(() => assertNodeOwnership(foregroundNode));
+              }
               // This existing fake protocol path leaves attempt.providerTurnId unlinked.
               // Preserve the reader's fail-closed result rather than fabricating a binding.
               assert.equal(attempts[0]!.providerTurnId, null);
