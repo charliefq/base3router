@@ -1,5 +1,15 @@
 import {
   CommandId,
+  EventId,
+  OrchestrationV2RunJson,
+  OrchestrationV2RunAttemptJson,
+  OrchestrationV2ProviderThreadJson,
+  OrchestrationV2ProviderTurnJson,
+  OrchestrationV2ProviderSessionJson,
+  type ProviderInstanceId,
+  type ProviderSessionId,
+  type ProviderDriverKind,
+  type ProviderTurnId,
   type OrchestrationV2Command,
   CollaborationCommand,
   type TaskEnrollmentOutcome,
@@ -55,6 +65,21 @@ import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
+
+const decodeRun = Schema.decodeUnknownOption(Schema.fromJsonString(OrchestrationV2RunJson));
+const decodeAttempt = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2RunAttemptJson),
+);
+const decodeThread = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2ProviderThreadJson),
+);
+const decodeProviderTurn = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2ProviderTurnJson),
+);
+
+const decodeProviderSession = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2ProviderSessionJson),
+);
 
 const decodeEnrollmentCommand = Schema.decodeUnknownOption(
   Schema.fromJsonString(CollaborationCommand),
@@ -116,6 +141,18 @@ export interface EventSinkV2Shape {
     readonly runId: RunId;
     readonly activeAttemptId: RunAttemptId;
     readonly expectedStatus: OrchestrationV2Run["status"];
+    readonly effects?: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
+    readonly rootExecution?: {
+      readonly rootNodeId: NodeId;
+      readonly providerThreadId: ProviderThreadId;
+      readonly providerSessionId: ProviderSessionId;
+      readonly providerInstanceId: ProviderInstanceId;
+      readonly driver: ProviderDriverKind;
+      readonly runOrdinal: number;
+      readonly providerTurnOrdinal: number;
+      readonly providerTurnId?: ProviderTurnId;
+      readonly terminalStatus?: "completed" | "failed" | "interrupted" | "cancelled";
+    };
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
   }) => Effect.Effect<
     {
@@ -396,6 +433,105 @@ const baseLayer: Layer.Layer<
       return storedEvents;
     });
 
+    const retiredRootObservation = Effect.fn("orchestrationV2.EventSink.retiredRootObservation")(
+      function* (input: Parameters<EventSinkV2Shape["writeIfRunCurrent"]>[0]) {
+        const owner = input.rootExecution;
+        const event = input.events.find((event) => event.type === "provider-turn.updated");
+        if (
+          owner === undefined ||
+          owner.providerTurnId === undefined ||
+          input.effects !== undefined ||
+          event?.type !== "provider-turn.updated" ||
+          event.payload.status === "running" ||
+          event.payload.status === "pending"
+        )
+          return [];
+        const turn = event.payload;
+        if (
+          event.threadId !== input.threadId ||
+          event.runId !== input.runId ||
+          event.driver !== owner.driver ||
+          event.providerInstanceId !== owner.providerInstanceId ||
+          turn.id !== owner.providerTurnId ||
+          turn.runAttemptId !== input.activeAttemptId ||
+          turn.nodeId !== owner.rootNodeId ||
+          turn.providerThreadId !== owner.providerThreadId ||
+          turn.ordinal !== owner.providerTurnOrdinal
+        )
+          return [];
+        const rows = yield* sql<{
+          run_ordinal: number;
+          attempt_payload: string;
+          turn_payload: string;
+          session_payload: string;
+          attempt_run: string;
+          attempt_root: string;
+          attempt_thread: string;
+          attempt_instance: string;
+          attempt_turn: string | null;
+          turn_attempt: string | null;
+          turn_root: string;
+          turn_thread: string;
+          turn_status: string;
+          turn_ordinal: number;
+          session_instance: string;
+          session_driver: string;
+        }>`SELECT r.ordinal AS run_ordinal,a.payload_json AS attempt_payload,t.payload_json AS turn_payload,s.payload_json AS session_payload,
+          a.run_id AS attempt_run,a.root_node_id AS attempt_root,a.provider_thread_id AS attempt_thread,a.provider_instance_id AS attempt_instance,
+          a.provider_turn_id AS attempt_turn,t.run_attempt_id AS turn_attempt,t.node_id AS turn_root,t.provider_thread_id AS turn_thread,t.status AS turn_status,t.ordinal AS turn_ordinal,
+          s.provider_instance_id AS session_instance,s.driver AS session_driver
+          FROM orchestration_v2_projection_run_attempts a
+          JOIN orchestration_v2_projection_runs r ON r.run_id=a.run_id AND r.thread_id=a.thread_id
+          JOIN orchestration_v2_projection_provider_turns t ON t.provider_turn_id=a.provider_turn_id AND t.thread_id=a.thread_id
+          JOIN orchestration_v2_projection_provider_sessions s ON s.provider_session_id=${owner.providerSessionId}
+          WHERE a.attempt_id=${input.activeAttemptId} AND a.thread_id=${input.threadId} AND a.run_id=${input.runId} LIMIT 1`;
+        const row = rows[0];
+        if (row === undefined) return [];
+        const attempt = decodeAttempt(row.attempt_payload),
+          previous = decodeProviderTurn(row.turn_payload),
+          session = decodeProviderSession(row.session_payload);
+        if (Option.isNone(attempt) || Option.isNone(previous) || Option.isNone(session)) return [];
+        const a = attempt.value,
+          t = previous.value,
+          s = session.value;
+        if (
+          row.run_ordinal !== owner.runOrdinal ||
+          a.id !== input.activeAttemptId ||
+          a.runId !== input.runId ||
+          a.rootNodeId !== owner.rootNodeId ||
+          a.providerInstanceId !== owner.providerInstanceId ||
+          a.providerThreadId !== owner.providerThreadId ||
+          a.providerTurnId !== turn.id ||
+          a.status === "pending" ||
+          row.attempt_run !== a.runId ||
+          row.attempt_root !== a.rootNodeId ||
+          row.attempt_thread !== a.providerThreadId ||
+          row.attempt_instance !== a.providerInstanceId ||
+          row.attempt_turn !== a.providerTurnId ||
+          t.id !== turn.id ||
+          t.runAttemptId !== a.id ||
+          t.nodeId !== owner.rootNodeId ||
+          t.providerThreadId !== owner.providerThreadId ||
+          t.ordinal !== owner.providerTurnOrdinal ||
+          row.turn_attempt !== t.runAttemptId ||
+          row.turn_root !== t.nodeId ||
+          row.turn_thread !== t.providerThreadId ||
+          row.turn_status !== t.status ||
+          row.turn_ordinal !== t.ordinal ||
+          (t.status !== "running" && t.status !== "pending" && t.status !== turn.status) ||
+          s.id !== owner.providerSessionId ||
+          s.providerInstanceId !== owner.providerInstanceId ||
+          s.driver !== owner.driver ||
+          row.session_instance !== s.providerInstanceId ||
+          row.session_driver !== s.driver
+        )
+          return [];
+        // Restart waits for the already observed predecessor to settle. Only its
+        // own turn may change; it cannot bind, finalize, or overwrite a successor.
+        return [event];
+      },
+    );
+
     const writeIfRunCurrentEffect = Effect.fn("orchestrationV2.EventSink.writeIfRunCurrent")(
       function* (input: Parameters<EventSinkV2Shape["writeIfRunCurrent"]>[0]) {
         yield* Effect.annotateCurrentSpan({
@@ -425,26 +561,223 @@ const baseLayer: Layer.Layer<
               current.status !== input.expectedStatus ||
               current.active_attempt_id !== input.activeAttemptId
             ) {
-              return {
+              const retired = yield* retiredRootObservation(input);
+              if (retired.length === 0)
+                return {
+                  committed: false as const,
+                  storedEvents: [] as ReadonlyArray<OrchestrationV2StoredEvent>,
+                };
+              const storedEvents = yield* eventStore.append({
+                ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
+                events: yield* normalizeEvents(retired),
+              });
+              yield* applyStoredEvents(storedEvents);
+              return { committed: true as const, storedEvents };
+            }
+
+            let events = input.events;
+            if (input.rootExecution !== undefined) {
+              // Re-read ownership and link under the same transaction as the event batch.
+              // A routed event is only a proposal until this compare-and-commit succeeds.
+              const owner = input.rootExecution;
+              const rows = yield* sql<{
+                run_payload: string;
+                run_instance: string;
+                run_thread: string | null;
+                attempt_payload: string;
+                thread_payload: string;
+                attempt_run: string;
+                attempt_root: string;
+                attempt_instance: string;
+                attempt_thread: string;
+                attempt_turn: string | null;
+                attempt_status: string;
+                thread_instance: string;
+                thread_session: string | null;
+                thread_driver: string;
+                last_run_ordinal: number | null;
+              }>`SELECT r.payload_json AS run_payload,a.payload_json AS attempt_payload,
+                p.payload_json AS thread_payload,r.provider_instance_id AS run_instance,r.provider_thread_id AS run_thread,a.run_id AS attempt_run,a.root_node_id AS attempt_root,
+                a.provider_instance_id AS attempt_instance,a.provider_thread_id AS attempt_thread,
+                a.provider_turn_id AS attempt_turn,a.status AS attempt_status,
+                p.provider_instance_id AS thread_instance,p.provider_session_id AS thread_session,p.driver AS thread_driver,p.last_run_ordinal
+                FROM orchestration_v2_projection_runs r
+                JOIN orchestration_v2_projection_run_attempts a ON a.attempt_id=${input.activeAttemptId} AND a.thread_id=r.thread_id
+                JOIN orchestration_v2_projection_provider_threads p ON p.provider_thread_id=${owner.providerThreadId} AND p.thread_id=r.thread_id
+                WHERE r.run_id=${input.runId} AND r.thread_id=${input.threadId} LIMIT 1`;
+              const row = rows[0];
+              const run = row === undefined ? Option.none() : decodeRun(row.run_payload);
+              const attempt =
+                row === undefined ? Option.none() : decodeAttempt(row.attempt_payload);
+              const thread = row === undefined ? Option.none() : decodeThread(row.thread_payload);
+              const reject = {
                 committed: false as const,
                 storedEvents: [] as ReadonlyArray<OrchestrationV2StoredEvent>,
               };
+              if (
+                row === undefined ||
+                Option.isNone(run) ||
+                Option.isNone(attempt) ||
+                Option.isNone(thread)
+              )
+                return reject;
+              const r = run.value,
+                a = attempt.value,
+                p = thread.value;
+              if (
+                r.id !== input.runId ||
+                r.threadId !== input.threadId ||
+                r.status !== input.expectedStatus ||
+                r.activeAttemptId !== input.activeAttemptId ||
+                r.rootNodeId !== owner.rootNodeId ||
+                r.providerThreadId !== owner.providerThreadId ||
+                r.providerInstanceId !== owner.providerInstanceId ||
+                r.ordinal !== owner.runOrdinal ||
+                row.run_instance !== r.providerInstanceId ||
+                row.run_thread !== r.providerThreadId ||
+                a.id !== input.activeAttemptId ||
+                a.runId !== r.id ||
+                a.rootNodeId !== owner.rootNodeId ||
+                a.providerInstanceId !== owner.providerInstanceId ||
+                a.providerThreadId !== owner.providerThreadId ||
+                a.status !== "running" ||
+                row.attempt_run !== a.runId ||
+                row.attempt_root !== a.rootNodeId ||
+                row.attempt_instance !== a.providerInstanceId ||
+                row.attempt_thread !== a.providerThreadId ||
+                row.attempt_turn !== a.providerTurnId ||
+                row.attempt_status !== a.status ||
+                p.id !== owner.providerThreadId ||
+                p.appThreadId !== input.threadId ||
+                p.providerSessionId !== owner.providerSessionId ||
+                p.providerInstanceId !== owner.providerInstanceId ||
+                p.driver !== owner.driver ||
+                row.thread_instance !== p.providerInstanceId ||
+                row.thread_session !== p.providerSessionId ||
+                row.thread_driver !== p.driver ||
+                p.lastRunOrdinal !== owner.runOrdinal ||
+                row.last_run_ordinal !== owner.runOrdinal
+              )
+                return reject;
+              const observed = events.find(
+                (event) =>
+                  event.type === "provider-turn.updated" && event.payload.runAttemptId === a.id,
+              );
+              const turnId = owner.providerTurnId;
+              if (turnId !== undefined) {
+                if (a.providerTurnId !== null && a.providerTurnId !== turnId) return reject;
+                const previousRows = yield* sql<{
+                  thread_id: string;
+                  payload_json: string;
+                  provider_thread_id: string;
+                  run_attempt_id: string | null;
+                  node_id: string;
+                  status: string;
+                  ordinal: number;
+                }>`
+                  SELECT thread_id,payload_json,provider_thread_id,run_attempt_id,node_id,status,ordinal FROM orchestration_v2_projection_provider_turns WHERE provider_turn_id=${turnId} LIMIT 1`;
+                const previousRow = previousRows[0];
+                const previous =
+                  previousRow === undefined
+                    ? undefined
+                    : decodeProviderTurn(previousRow.payload_json);
+                if (
+                  previousRow !== undefined &&
+                  (previousRow.thread_id !== input.threadId ||
+                    previous === undefined ||
+                    Option.isNone(previous))
+                )
+                  return reject;
+                const existing =
+                  previous !== undefined && Option.isSome(previous) ? previous.value : undefined;
+                const turn =
+                  observed?.type === "provider-turn.updated" ? observed.payload : existing;
+                if (
+                  turn === undefined ||
+                  turn.id !== turnId ||
+                  turn.runAttemptId !== a.id ||
+                  turn.nodeId !== owner.rootNodeId ||
+                  turn.providerThreadId !== owner.providerThreadId ||
+                  turn.ordinal !== owner.providerTurnOrdinal
+                )
+                  return reject;
+                if (
+                  existing !== undefined &&
+                  (previousRow?.provider_thread_id !== existing.providerThreadId ||
+                    previousRow.run_attempt_id !== existing.runAttemptId ||
+                    previousRow.node_id !== existing.nodeId ||
+                    previousRow.status !== existing.status ||
+                    previousRow.ordinal !== existing.ordinal ||
+                    existing.id !== turnId ||
+                    existing.runAttemptId !== a.id ||
+                    existing.nodeId !== owner.rootNodeId ||
+                    existing.providerThreadId !== owner.providerThreadId ||
+                    existing.ordinal !== owner.providerTurnOrdinal ||
+                    (existing.status !== "running" &&
+                      existing.status !== "pending" &&
+                      turn.status !== existing.status))
+                )
+                  return reject;
+                if (
+                  observed !== undefined &&
+                  (observed.threadId !== input.threadId ||
+                    observed.runId !== r.id ||
+                    observed.driver !== owner.driver)
+                )
+                  return reject;
+                if (
+                  owner.terminalStatus !== undefined &&
+                  (a.providerTurnId !== turnId || existing?.status !== owner.terminalStatus)
+                )
+                  return reject;
+                if (observed !== undefined && a.providerTurnId === null) {
+                  events = [
+                    ...events,
+                    {
+                      id: EventId.make(`${observed.id}:attempt-link`),
+                      type: "run-attempt.updated",
+                      threadId: input.threadId,
+                      runId: r.id,
+                      nodeId: owner.rootNodeId,
+                      providerInstanceId: owner.providerInstanceId,
+                      occurredAt: observed.occurredAt,
+                      payload: { ...a, providerTurnId: turnId },
+                    },
+                  ];
+                }
+              }
+              // Terminal snapshots captured at start must never erase the committed link.
+              events = events.map((event) =>
+                event.type === "run-attempt.updated" && event.payload.id === a.id
+                  ? {
+                      ...event,
+                      payload: {
+                        ...a,
+                        providerTurnId: turnId ?? a.providerTurnId,
+                        status: event.payload.status,
+                        completedAt: event.payload.completedAt,
+                      },
+                    }
+                  : event,
+              );
             }
-
             const normalized = yield* normalizeEvents(
               input.guardPendingUserInputCancellations === true
-                ? yield* guardUserInputCancellations(input.events)
-                : input.events,
+                ? yield* guardUserInputCancellations(events)
+                : events,
             );
             const storedEvents = yield* eventStore.append({
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
               events: normalized,
             });
             yield* applyStoredEvents(storedEvents);
+            yield* effectOutbox.enqueue(input.effects ?? []);
             return { committed: true as const, storedEvents };
           }),
         );
         if (result.committed) {
+          if (input.effects !== undefined && input.effects.length > 0)
+            yield* effectOutbox.notifyAvailable(input.effects.length);
           yield* eventStore.publishCommitted(result.storedEvents);
           yield* publishLiveEvents(result.storedEvents);
         }

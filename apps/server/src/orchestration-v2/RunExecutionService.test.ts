@@ -56,13 +56,81 @@ import * as RunFinalizationService from "./RunFinalizationService.ts";
 
 const driver = ProviderDriverKind.make("codex");
 
+// Existing unit spies observe finalization through writeWithEffects. The guarded
+// entry point keeps that observation while honoring explicit ownership rejection.
+function mockEventSink(service: Partial<EventSink.EventSinkV2Shape>) {
+  return Layer.mock(EventSink.EventSinkV2)({
+    ...service,
+    writeIfRunCurrent: (input) =>
+      Effect.gen(function* () {
+        const result =
+          service.writeIfRunCurrent === undefined
+            ? { committed: true, storedEvents: [] }
+            : yield* service.writeIfRunCurrent(input);
+        if (!result.committed || input.effects === undefined) return result;
+        const storedEvents =
+          service.writeWithEffects === undefined
+            ? []
+            : yield* service.writeWithEffects({ ...input, effects: input.effects });
+        return { committed: true, storedEvents };
+      }),
+  });
+}
+
+function mockIngestor(service: Partial<ProviderEventIngestor.ProviderEventIngestorV2Shape>) {
+  return Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+    ...service,
+    ingestNormalized: (input) =>
+      Effect.gen(function* () {
+        const stored =
+          service.ingestNormalized === undefined ? [] : yield* service.ingestNormalized(input);
+        if (
+          stored.length > 0 ||
+          (input.writeIfRunCurrent !== undefined &&
+            (input.event.type === "provider_thread.updated" ||
+              input.event.type === "provider_turn.updated")) ||
+          input.writeIfProviderThreadOwner !== undefined
+        )
+          return stored;
+        const event = input.event;
+        const base = {
+          id: EventId.make("event:unit-ingest"),
+          threadId: input.threadId,
+          providerInstanceId: input.providerInstanceId,
+          occurredAt: yield* DateTime.now,
+        };
+        // Unit ingestion spies must report their accepted topology writes as committed;
+        // production only adopts routing topology after the real sink commits it.
+        const domain: OrchestrationV2DomainEvent | null =
+          event.type === "app_thread.created"
+            ? { ...base, type: "thread.created", payload: event.appThread }
+            : event.type === "provider_thread.updated"
+              ? { ...base, type: "provider-thread.updated", payload: event.providerThread }
+              : event.type === "provider_turn.updated"
+                ? { ...base, type: "provider-turn.updated", payload: event.providerTurn }
+                : event.type === "node.updated"
+                  ? { ...base, type: "node.updated", payload: event.node }
+                  : event.type === "subagent.updated"
+                    ? { ...base, type: "subagent.updated", payload: event.subagent }
+                    : event.type === "turn_item.updated"
+                      ? { ...base, type: "turn-item.updated", payload: event.turnItem }
+                      : event.type === "message.updated"
+                        ? { ...base, type: "message.updated", payload: event.message }
+                        : event.type === "plan.updated"
+                          ? { ...base, type: "plan.updated", payload: event.plan }
+                          : null;
+        return domain === null ? stored : [{ sequence: 0, commandId: null, event: domain }];
+      }),
+  });
+}
+
 const RunExecutionTestLayer = RunExecutionService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       Layer.mock(CheckpointService.CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
-      Layer.mock(EventSink.EventSinkV2)({}),
+      mockEventSink({}),
       IdAllocator.layer,
-      Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+      mockIngestor({
         ingestNormalized: () => Effect.succeed([]),
       }),
       ServerSettings.layerTest(),
@@ -778,7 +846,7 @@ it.effect("starts the provider when checkpoint baseline capture fails", () =>
                 }),
               ),
           }),
-          Layer.mock(EventSink.EventSinkV2)({
+          mockEventSink({
             writeWithEffects: (input) =>
               Ref.update(writes, (current) => [
                 ...current,
@@ -786,7 +854,7 @@ it.effect("starts the provider when checkpoint baseline capture fails", () =>
               ]).pipe(Effect.as([])),
           }),
           IdAllocator.layer,
-          Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+          mockIngestor({
             ingestNormalized: () => Effect.succeed([]),
           }),
           ServerSettings.layerTest(),
@@ -889,7 +957,7 @@ it.effect.each(["failure", "interruption", "stale-attempt", "start-guard"] as co
               captureBaseline: () =>
                 scenario === "start-guard" ? Effect.void : Effect.die("not reached"),
             }),
-            Layer.mock(EventSink.EventSinkV2)({
+            mockEventSink({
               writeIfRunCurrent: (input) =>
                 Effect.gen(function* () {
                   assert.equal(input.threadId, threadId);
@@ -905,7 +973,7 @@ it.effect.each(["failure", "interruption", "stale-attempt", "start-guard"] as co
                 }),
             }),
             IdAllocator.layer,
-            Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+            mockIngestor({
               ingestNormalized: () => Effect.succeed([]),
             }),
             scenario === "start-guard"
@@ -1056,7 +1124,7 @@ it.effect("keeps ingesting owned child events after the root turn terminalizes",
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(CheckpointService.CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
-          Layer.mock(EventSink.EventSinkV2)({
+          mockEventSink({
             write: () => Effect.succeed([]),
             writeWithEffects: (input) =>
               Effect.gen(function* () {
@@ -1072,7 +1140,7 @@ it.effect("keeps ingesting owned child events after the root turn terminalizes",
             writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
           }),
           IdAllocator.layer,
-          Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+          mockIngestor({
             ingestNormalized: (input) =>
               Effect.gen(function* () {
                 if (
@@ -1483,7 +1551,7 @@ it.effect(
             Layer.mock(CheckpointService.CheckpointServiceV2)({
               captureBaseline: () => Effect.void,
             }),
-            Layer.mock(EventSink.EventSinkV2)({
+            mockEventSink({
               write: () => Effect.succeed([]),
               writeWithEffects: (input) =>
                 Effect.gen(function* () {
@@ -1501,7 +1569,7 @@ it.effect(
                 Effect.succeed({ committed: true, storedEvents: [] }),
             }),
             IdAllocator.layer,
-            Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+            mockIngestor({
               ingestNormalized: (input) =>
                 Effect.gen(function* () {
                   const event = input.event;
@@ -1698,7 +1766,7 @@ it.effect("drops late root provider-thread writes from a superseded attempt", ()
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(CheckpointService.CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
-          Layer.mock(EventSink.EventSinkV2)({
+          mockEventSink({
             write: () => Effect.succeed([]),
             writeWithEffects: (input) =>
               Effect.gen(function* () {
@@ -1716,7 +1784,7 @@ it.effect("drops late root provider-thread writes from a superseded attempt", ()
               Effect.succeed({ committed: false, storedEvents: [] }),
           }),
           IdAllocator.layer,
-          Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+          mockIngestor({
             ingestNormalized: (input) =>
               Effect.gen(function* () {
                 const event = input.event;
@@ -1904,7 +1972,7 @@ it.effect(
             Layer.mock(CheckpointService.CheckpointServiceV2)({
               captureBaseline: () => Effect.void,
             }),
-            Layer.mock(EventSink.EventSinkV2)({
+            mockEventSink({
               write: () => Effect.succeed([]),
               writeWithEffects: (input) =>
                 Effect.gen(function* () {
@@ -1922,7 +1990,7 @@ it.effect(
                 Effect.succeed({ committed: false, storedEvents: [] }),
             }),
             IdAllocator.layer,
-            Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+            mockIngestor({
               ingestNormalized: (input) =>
                 Effect.gen(function* () {
                   const event = input.event;
@@ -2075,7 +2143,7 @@ it.effect(
             Layer.mock(CheckpointService.CheckpointServiceV2)({
               captureBaseline: () => Effect.void,
             }),
-            Layer.mock(EventSink.EventSinkV2)({
+            mockEventSink({
               write: () => Effect.succeed([]),
               writeWithEffects: (input) =>
                 Effect.gen(function* () {
@@ -2091,7 +2159,7 @@ it.effect(
               writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
             }),
             IdAllocator.layer,
-            Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+            mockIngestor({
               ingestNormalized: (input) =>
                 Effect.gen(function* () {
                   if (input.event.type === "turn.terminal") {
@@ -2244,7 +2312,7 @@ it.effect(
             Layer.mock(CheckpointService.CheckpointServiceV2)({
               captureBaseline: () => Effect.void,
             }),
-            Layer.mock(EventSink.EventSinkV2)({
+            mockEventSink({
               write: () => Effect.succeed([]),
               writeWithEffects: (input) =>
                 Effect.gen(function* () {
@@ -2254,7 +2322,7 @@ it.effect(
               writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
             }),
             IdAllocator.layer,
-            Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+            mockIngestor({
               ingestNormalized: (input) =>
                 Ref.update(ingested, (current) => [...current, input.event]).pipe(Effect.as([])),
             }),
@@ -2617,7 +2685,7 @@ it.effect(
             Layer.mock(CheckpointService.CheckpointServiceV2)({
               captureBaseline: () => Effect.void,
             }),
-            Layer.mock(EventSink.EventSinkV2)({
+            mockEventSink({
               write: () => Effect.succeed([]),
               writeWithEffects: (input) =>
                 Effect.gen(function* () {
@@ -2627,7 +2695,7 @@ it.effect(
               writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
             }),
             IdAllocator.layer,
-            Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+            mockIngestor({
               ingestNormalized: () => Effect.succeed([]),
             }),
             ServerSettings.layerTest(),
@@ -3282,7 +3350,7 @@ function captureRootRunTermination(input: {
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(CheckpointService.CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
-          Layer.mock(EventSink.EventSinkV2)({
+          mockEventSink({
             write: (payload) =>
               Effect.gen(function* () {
                 for (const event of payload.events) {
@@ -3310,7 +3378,7 @@ function captureRootRunTermination(input: {
             writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
           }),
           IdAllocator.layer,
-          Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+          mockIngestor({
             ingestNormalized: () => Effect.succeed([]),
           }),
           ServerSettings.layerTest(),
@@ -3753,7 +3821,7 @@ function runBackgroundItemScenario(
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(CheckpointService.CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
-          Layer.mock(EventSink.EventSinkV2)({
+          mockEventSink({
             write: () => Effect.succeed([]),
             writeWithEffects: (input) =>
               Effect.gen(function* () {
@@ -3769,7 +3837,7 @@ function runBackgroundItemScenario(
             writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
           }),
           IdAllocator.layer,
-          Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+          mockIngestor({
             ingestNormalized: (input) =>
               Effect.gen(function* () {
                 const event = input.event;
@@ -3887,5 +3955,134 @@ it.effect("releases ingestion after idle subagent rows and items settle", () =>
       "turn_item:idle",
       "root-finalized",
     ]);
+  }),
+);
+
+it.effect("result linkage routes one stable root only with complete execution identity", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const identity = {
+      threadId: ThreadId.make("thread:linkage-routing"),
+      runId: RunId.make("run:linkage-routing"),
+      attemptId: RunAttemptId.make("attempt:linkage-routing"),
+      providerThreadId: ProviderThreadId.make("provider-thread:linkage-routing"),
+      providerInstanceId: ProviderInstanceId.make("linkage-routing-provider"),
+      providerSessionId: ProviderSessionId.make("linkage-routing-session"),
+      rootNodeId: NodeId.make("node:linkage-routing"),
+      driver,
+      runOrdinal: 2,
+      providerTurnOrdinal: 3,
+    };
+    const root: Extract<ProviderAdapterV2Event, { type: "provider_turn.updated" }> = {
+      type: "provider_turn.updated",
+      driver,
+      threadId: identity.threadId,
+      providerTurn: {
+        id: ProviderTurnId.make("turn:linkage-routing"),
+        providerThreadId: identity.providerThreadId,
+        nodeId: identity.rootNodeId,
+        runAttemptId: identity.attemptId,
+        ordinal: identity.providerTurnOrdinal,
+        nativeTurnRef: { driver, nativeId: "native-running", strength: "strong" },
+        status: "running",
+        startedAt: now,
+        completedAt: null,
+      },
+    };
+    const initial = RunExecutionService.makeProviderEventRoutingState({
+      identity,
+      providerTurnId: null,
+    });
+    const wrongRoots = [
+      { ...root, driver: ProviderDriverKind.make("claudeAgent") },
+      { ...root, threadId: ThreadId.make("foreign-app") },
+      ...[
+        { runAttemptId: null },
+        { runAttemptId: RunAttemptId.make("foreign-attempt") },
+        { nodeId: NodeId.make("child-using-root-attempt") },
+        { providerThreadId: ProviderThreadId.make("foreign-thread") },
+        { ordinal: 4 },
+      ].map((patch) => ({ ...root, providerTurn: { ...root.providerTurn, ...patch } })),
+    ];
+    for (const event of wrongRoots) {
+      const [accepted, next] = RunExecutionService.routeProviderEvent(event, identity, initial);
+      assert.isFalse(accepted, "foreign root identity must be rejected");
+      assert.strictEqual(next, initial, "rejection cannot poison root routing");
+    }
+    const providerThread = {
+      id: identity.providerThreadId,
+      driver,
+      appThreadId: identity.threadId,
+      providerInstanceId: identity.providerInstanceId,
+      providerSessionId: identity.providerSessionId,
+    } as OrchestrationV2ProviderThread;
+    for (const patch of [
+      { providerInstanceId: ProviderInstanceId.make("foreign-instance") },
+      { providerSessionId: ProviderSessionId.make("foreign-session") },
+      { providerSessionId: null },
+      { driver: ProviderDriverKind.make("claudeAgent") },
+      { appThreadId: ThreadId.make("foreign-app") },
+    ]) {
+      const [accepted, next] = RunExecutionService.routeProviderEvent(
+        {
+          type: "provider_thread.updated",
+          driver,
+          providerThread: { ...providerThread, ...patch },
+        },
+        identity,
+        initial,
+      );
+      assert.isFalse(accepted);
+      assert.strictEqual(next, initial, "foreign thread metadata cannot poison routing");
+    }
+    const [accepted, running] = RunExecutionService.routeProviderEvent(root, identity, initial);
+    assert.isTrue(accepted);
+    const sameWithoutAppThread = {
+      ...root,
+      threadId: undefined,
+      providerTurn: {
+        ...root.providerTurn,
+        nativeTurnRef: { driver, nativeId: "claude-enriched-native", strength: "strong" as const },
+        status: "completed" as const,
+        completedAt: now,
+      },
+    };
+    assert.isTrue(
+      RunExecutionService.routeProviderEvent(sameWithoutAppThread, identity, running)[0],
+    );
+    const [secondAccepted, secondState] = RunExecutionService.routeProviderEvent(
+      {
+        ...root,
+        providerTurn: { ...root.providerTurn, id: ProviderTurnId.make("second-root") },
+      },
+      identity,
+      running,
+    );
+    assert.isFalse(secondAccepted);
+    assert.strictEqual(secondState, running);
+    const terminal: Extract<ProviderAdapterV2Event, { type: "turn.terminal" }> = {
+      type: "turn.terminal",
+      driver,
+      providerThreadId: identity.providerThreadId,
+      providerTurnId: root.providerTurn.id,
+      runOrdinal: identity.runOrdinal,
+      status: "completed",
+      failure: null,
+      threadDisposition: "reusable",
+    };
+    for (const patch of [
+      { providerThreadId: ProviderThreadId.make("foreign-terminal-thread") },
+      { driver: ProviderDriverKind.make("claudeAgent") },
+      { runOrdinal: 1 },
+      { providerTurnId: ProviderTurnId.make("foreign-terminal-turn") },
+    ])
+      assert.isFalse(
+        RunExecutionService.routeProviderEvent({ ...terminal, ...patch }, identity, running)[0],
+      );
+    assert.isFalse(
+      RunExecutionService.routeProviderEvent(terminal, identity, initial)[0],
+      "terminal-only is not observation",
+    );
+    assert.isTrue(RunExecutionService.routeProviderEvent(terminal, identity, running)[0]);
   }),
 );
