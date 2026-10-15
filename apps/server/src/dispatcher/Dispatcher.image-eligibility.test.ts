@@ -83,6 +83,7 @@ describe("typed image hard eligibility", () => {
   ])("$name", ({ message, required }) => {
     const decision = calculate(message === undefined ? {} : { message }).decision;
     expect(decision.task.requiredCapabilities).toEqual(required ? ["vision"] : []);
+    expect(decision.explanation.includes("Image input required")).toBe(required);
     expect(decision.selected?.target.model).toBe(required ? "c-image" : "a-unknown");
     expect(JSON.stringify(decision)).not.toContain("/private/");
     expect(JSON.stringify(decision)).not.toContain("original-id");
@@ -174,6 +175,7 @@ it.each(["active", "shadow", "load-failure"] as const)(
     expect(result.decision.selected?.capabilities).toContain("vision");
     expect(result.decision.fallbacks.map((c) => c.target.model)).toEqual(["d-image"]);
     expect(result.decision.task.requiredCapabilities).toEqual(["vision"]);
+    expect(result.decision.explanation).toContain("Image input required");
     expect(
       result.decision.candidates
         .filter((c) => c.eligible)

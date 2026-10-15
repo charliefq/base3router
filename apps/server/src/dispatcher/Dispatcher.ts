@@ -842,8 +842,18 @@ export function calculateDispatcherModelRoute(input: {
   };
   const effectiveInput = { ...input.hybrid, ...base, localTaskProfile: input.localTaskProfile };
   const routedDecision = input.hybrid ? routeHybridModel(effectiveInput) : null;
+  const decision = routedDecision?.decision ?? routeModel(base);
   return {
-    decision: routedDecision?.decision ?? routeModel(base),
+    decision: decision.task.requiredCapabilities.includes("vision")
+      ? {
+          ...decision,
+          explanation:
+            `Image input required; only declared image-input support is eligible. ${decision.explanation}`.slice(
+              0,
+              512,
+            ),
+        }
+      : decision,
     hybrid: routedDecision?.hybrid,
     manualConstraintReasons:
       input.mode === "manual" ? manualModelRouterConstraintReasons(effectiveInput) : [],
