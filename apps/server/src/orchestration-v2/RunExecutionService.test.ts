@@ -4086,3 +4086,93 @@ it.effect("result linkage routes one stable root only with complete execution id
     assert.isTrue(RunExecutionService.routeProviderEvent(terminal, identity, running)[0]);
   }),
 );
+
+it.effect("result linkage routes only verified strong fork aliases", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const identity = {
+      threadId: ThreadId.make("fork-alias-app"),
+      runId: RunId.make("fork-alias-run"),
+      attemptId: RunAttemptId.make("fork-alias-attempt"),
+      rootNodeId: NodeId.make("fork-alias-root"),
+      providerThreadId: ProviderThreadId.make("fork-alias-canonical"),
+      providerInstanceId: ProviderInstanceId.make("fork-alias-instance"),
+      providerSessionId: ProviderSessionId.make("fork-alias-session"),
+      driver,
+      runOrdinal: 1,
+      providerTurnOrdinal: 1,
+    };
+    const canonical: OrchestrationV2ProviderThread = {
+      id: identity.providerThreadId,
+      driver,
+      providerInstanceId: identity.providerInstanceId,
+      providerSessionId: identity.providerSessionId,
+      appThreadId: identity.threadId,
+      ownerNodeId: null,
+      nativeThreadRef: { driver, nativeId: "native-owned-fork", strength: "strong" },
+      nativeConversationHeadRef: null,
+      forkedFrom: {
+        providerThreadId: ProviderThreadId.make("source-thread"),
+        providerTurnId: ProviderTurnId.make("source-turn"),
+      },
+      status: "active",
+      firstRunOrdinal: 1,
+      lastRunOrdinal: 1,
+      handoffIds: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    const owner = { ...identity, rootProviderThread: canonical };
+    const alias = { ...canonical, id: ProviderThreadId.make("fork-alias-native-id") };
+    const rootTurnId = ProviderTurnId.make("fork-alias-turn");
+    const initial = RunExecutionService.makeProviderEventRoutingState({
+      identity: owner,
+      providerTurnId: rootTurnId,
+    });
+    const terminal = {
+      type: "turn.terminal",
+      driver,
+      providerThreadId: alias.id,
+      providerTurnId: rootTurnId,
+      runOrdinal: 1,
+      status: "completed",
+      failure: null,
+      threadDisposition: "reusable",
+    } as const;
+    assert.isFalse(
+      RunExecutionService.routeProviderEvent(terminal, owner, initial)[0],
+      "unobserved alias is not authority",
+    );
+    for (const patch of [
+      { providerInstanceId: ProviderInstanceId.make("foreign") },
+      { providerSessionId: ProviderSessionId.make("foreign") },
+      { appThreadId: ThreadId.make("foreign") },
+      { driver: ProviderDriverKind.make("claudeAgent") },
+      { nativeThreadRef: { driver, nativeId: "foreign", strength: "strong" as const } },
+      { nativeThreadRef: { driver, nativeId: "native-owned-fork", strength: "weak" as const } },
+      { forkedFrom: null },
+      { forkedFrom: { providerThreadId: ProviderThreadId.make("foreign") } },
+      { forkedFrom: { ...alias.forkedFrom!, providerTurnId: ProviderTurnId.make("foreign") } },
+      { lastRunOrdinal: 2 },
+      { ownerNodeId: NodeId.make("foreign") },
+    ]) {
+      const event = {
+        type: "provider_thread.updated",
+        driver,
+        providerThread: { ...alias, ...patch },
+      } as const;
+      const [accepted, next] = RunExecutionService.routeProviderEvent(event, owner, initial);
+      assert.isFalse(accepted);
+      assert.strictEqual(next, initial);
+    }
+    const [accepted, committedMetadata] = RunExecutionService.routeProviderEvent(
+      { type: "provider_thread.updated", driver, providerThread: alias },
+      owner,
+      initial,
+    );
+    assert.isTrue(accepted);
+    assert.isTrue(RunExecutionService.routeProviderEvent(terminal, owner, committedMetadata)[0]);
+    // A rejected metadata write would keep initial, so its alias still cannot route.
+    assert.isFalse(RunExecutionService.routeProviderEvent(terminal, owner, initial)[0]);
+  }),
+);

@@ -1,3 +1,4 @@
+import { TurnItemId } from "@t3tools/contracts";
 import { RunId } from "@t3tools/contracts";
 import * as Stream from "effect/Stream";
 import {
@@ -985,4 +986,309 @@ it.live.each(["interrupted", "cancelled", "start-failed"] as const)(
           }),
       },
     ),
+);
+
+it.live(
+  "result linkage actual restart terminalizes existing predecessor work before B completes",
+  () =>
+    Effect.gen(function* () {
+      const runningWork = yield* Deferred.make<void>();
+      const cleanupRejected = yield* Ref.make(0);
+      const rejectedControls = yield* Ref.make(0);
+      const unprovenAliasAccepted = yield* Ref.make(false);
+      const work = new Map<string, ReadonlyArray<ProviderAdapterV2Event>>();
+      let firstAttempt: ProviderAdapterV2TurnInput | undefined;
+      let nextAttempt: ProviderAdapterV2TurnInput | undefined;
+      yield* withTaskResultLinkageFixture(
+        (f) =>
+          Effect.gen(function* () {
+            const c = yield* f.createTask("linkage-restart-work");
+            const firstMessage = MessageId.make("linkage-restart-work-a");
+            yield* f.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make("linkage-restart-work-send-a"),
+              threadId: c.threadId,
+              messageId: firstMessage,
+              text: "A running tool",
+              attachments: [],
+              routingMode: "auto",
+              dispatchMode: { type: "start_immediately" },
+              createdBy: "user",
+              creationSource: "web",
+            });
+            yield* Deferred.await(runningWork);
+            const before = yield* f.orchestrator.getThreadProjection(c.threadId);
+            const runId = before.runs[0]!.id;
+            const commandBefore = before.turnItems.find((i) => i.type === "command_execution")!;
+            assert.equal(commandBefore.status, "running");
+            const completed = yield* f.orchestrator.streamDomainEvents.pipe(
+              Stream.filter(
+                (e) =>
+                  e.type === "run.updated" &&
+                  e.payload.id === runId &&
+                  e.payload.status === "completed",
+              ),
+              Stream.take(1),
+              Stream.runDrain,
+              Effect.forkScoped,
+            );
+            yield* f.orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make("linkage-restart-work-send-b"),
+              threadId: c.threadId,
+              messageId: MessageId.make("linkage-restart-work-b"),
+              text: "B replacement",
+              attachments: [],
+              routingMode: "auto",
+              dispatchMode: { type: "restart_active", targetRunId: runId },
+              createdBy: "user",
+              creationSource: "web",
+            });
+            yield* Fiber.join(completed);
+            const after = yield* f.orchestrator.getThreadProjection(c.threadId);
+            yield* f.settle(after.runs[0]!.userMessageId);
+            assert.isDefined(firstAttempt);
+            assert.isDefined(nextAttempt);
+            const a = firstAttempt!,
+              b = nextAttempt!;
+            assert.notEqual(a.attemptId, b.attemptId);
+            assert.equal(
+              after.attempts.find((attempt) => attempt.id === a.attemptId)!.status,
+              "superseded",
+            );
+            assert.equal(
+              after.turnItems.find((i) => i.id === commandBefore.id)!.status,
+              "interrupted",
+            );
+            assert.equal(
+              after.nodes.find((n) => n.id === commandBefore.nodeId)!.status,
+              "interrupted",
+            );
+            assert.equal(after.runs[0]!.activeAttemptId, b.attemptId);
+            assert.equal(after.runs[0]!.rootNodeId, b.rootNodeId);
+            assert.equal(after.nodes.find((n) => n.id === b.rootNodeId)!.status, "completed");
+            const result = (yield* f.readSnapshot()).tasks[0]!.resultReadout;
+            assert.equal(result?.status === "available" && result.content.status, "output");
+            if (result?.status !== "available" || result.content.status !== "output")
+              throw new Error("B output missing");
+            assert.equal(result.attemptId, b.attemptId);
+            assert.include(result.content.preview, b.attemptId);
+            assert.notInclude(result.content.preview, a.attemptId);
+            assert.equal((yield* Ref.get(f.started)).length, 2);
+            const checkpoints =
+              yield* f.sql`SELECT effect_id FROM orchestration_v2_effect_outbox WHERE effect_type='checkpoint.capture'`;
+            assert.equal(
+              checkpoints.length,
+              1,
+              "retired A must not finalize or enqueue a checkpoint",
+            );
+            assert.equal(yield* Ref.get(cleanupRejected), 0);
+            assert.isAtLeast(yield* Ref.get(rejectedControls), 7);
+            assert.isFalse(yield* Ref.get(unprovenAliasAccepted));
+            assert.isFalse(after.nodes.some((n) => n.id === "never-existing-retired-node"));
+            const foreign = after.nodes.find((n) => n.id === `foreign-descendant:${a.attemptId}`)!;
+            assert.equal(foreign.status, "running");
+            const agent = after.subagents.find((n) => n.id === `agent:${a.attemptId}`)!;
+            assert.equal(agent.status, "interrupted");
+          }),
+        {
+          runningFirst: true,
+          onStart: (input, events, emit) =>
+            Effect.gen(function* () {
+              if (firstAttempt !== undefined) {
+                nextAttempt = input;
+                yield* Effect.forEach(events, emit, { discard: true });
+                return;
+              }
+              firstAttempt = input;
+              const nodeEvent = events.find((e) => e.type === "node.updated")!;
+              const itemEvent = events.find((e) => e.type === "turn_item.updated")!;
+              if (
+                nodeEvent.type !== "node.updated" ||
+                itemEvent.type !== "turn_item.updated" ||
+                itemEvent.turnItem.type !== "assistant_message"
+              )
+                throw new Error("Missing script output");
+              const node = {
+                ...nodeEvent.node,
+                id: NodeId.make(`work:${input.attemptId}`),
+                kind: "tool_call" as const,
+                status: "running" as const,
+                completedAt: null,
+              };
+              const item = {
+                ...itemEvent.turnItem,
+                id: TurnItemId.make(`work-item:${input.attemptId}`),
+                nodeId: node.id,
+                type: "command_execution" as const,
+                status: "running" as const,
+                completedAt: null,
+                input: "fake long command",
+              };
+              const agentNode = {
+                ...node,
+                id: NodeId.make(`agent:${input.attemptId}`),
+                kind: "subagent" as const,
+              };
+              const agent = {
+                id: agentNode.id,
+                threadId: input.threadId,
+                runId: input.runId,
+                parentNodeId: input.rootNodeId,
+                origin: "provider_native" as const,
+                createdBy: "agent" as const,
+                driver: input.providerThread.driver,
+                providerInstanceId: input.providerThread.providerInstanceId,
+                providerThreadId: input.providerThread.id,
+                childThreadId: null,
+                nativeTaskRef: node.nativeItemRef,
+                prompt: "fake work",
+                title: null,
+                model: null,
+                status: "running" as const,
+                result: null,
+                startedAt: node.startedAt,
+                completedAt: null,
+                updatedAt: node.startedAt!,
+              };
+              const pending: ReadonlyArray<ProviderAdapterV2Event> = [
+                { ...nodeEvent, node },
+                { ...itemEvent, turnItem: item },
+                { ...nodeEvent, node: agentNode },
+                { type: "subagent.updated", driver: input.providerThread.driver, subagent: agent },
+              ];
+              work.set(input.attemptId, pending);
+              yield* emit(events[0]!);
+              yield* emit({
+                ...nodeEvent,
+                node: {
+                  ...node,
+                  id: NodeId.make(`foreign-descendant:${input.attemptId}`),
+                  parentNodeId: NodeId.make("foreign-parent"),
+                },
+              });
+              yield* Effect.forEach(pending, emit, { discard: true });
+            }),
+          onInterrupt: (input, events, emit) =>
+            Effect.gen(function* () {
+              const root = events[0]!;
+              const terminal = events.at(-1)!;
+              if (root.type !== "provider_turn.updated" || terminal.type !== "turn.terminal")
+                throw new Error("Invalid interruption script");
+              const now = yield* DateTime.now;
+              yield* emit({
+                ...root,
+                providerTurn: { ...root.providerTurn, status: "interrupted", completedAt: now },
+              });
+              for (const event of work.get(input.attemptId) ?? []) {
+                if (event.type === "node.updated")
+                  yield* emit({
+                    ...event,
+                    node: { ...event.node, status: "interrupted", completedAt: now },
+                  });
+                if (event.type === "subagent.updated")
+                  yield* emit({
+                    ...event,
+                    subagent: {
+                      ...event.subagent,
+                      status: "interrupted",
+                      completedAt: now,
+                      updatedAt: now,
+                    },
+                  });
+                if (event.type === "turn_item.updated")
+                  yield* emit({
+                    ...event,
+                    turnItem: {
+                      ...event.turnItem,
+                      status: "interrupted",
+                      completedAt: now,
+                      updatedAt: now,
+                    },
+                  });
+              }
+              yield* emit({ ...terminal, status: "interrupted", failure: null });
+            }),
+          decorateEventSink: (service) => ({
+            ...service,
+            writeIfRunCurrent: (input) =>
+              Effect.gen(function* () {
+                const e = input.events[0];
+                if (
+                  e?.type === "provider-turn.updated" &&
+                  e.payload.status === "running" &&
+                  firstAttempt !== undefined &&
+                  input.rootExecution !== undefined
+                ) {
+                  const forgedAlias = {
+                    ...firstAttempt.providerThread,
+                    id: ProviderThreadId.make("unproven-thread-alias"),
+                  };
+                  const { providerTurnId: _observedTurn, ...proof } = input.rootExecution;
+                  const rejected = yield* service.writeIfRunCurrent({
+                    ...input,
+                    events: [],
+                    rootExecution: { ...proof, rootThreadAlias: forgedAlias },
+                  });
+                  yield* Ref.set(unprovenAliasAccepted, rejected.committed);
+                  yield* Ref.update(rejectedControls, (n) => n + 1);
+                }
+                if (e?.type === "node.updated" && e.payload.status === "interrupted") {
+                  const controls = [
+                    {
+                      ...input,
+                      events: [{ ...e, driver: ProviderDriverKind.make("claudeAgent") }],
+                    },
+                    {
+                      ...input,
+                      events: [{ ...e, providerInstanceId: ProviderInstanceId.make("foreign") }],
+                    },
+                    { ...input, events: [{ ...e, threadId: ThreadId.make("foreign") }] },
+                    ...[
+                      { id: NodeId.make("never-existing-retired-node") },
+                      { providerTurnId: ProviderTurnId.make("foreign-turn") },
+                      { rootNodeId: NodeId.make("foreign-root") },
+                      {
+                        id: NodeId.make(`foreign-descendant:${firstAttempt!.attemptId}`),
+                        parentNodeId: NodeId.make("foreign-parent"),
+                      },
+                    ].map((patch) => ({
+                      ...input,
+                      events: [{ ...e, payload: { ...e.payload, ...patch } }],
+                    })),
+                  ];
+                  for (const control of controls) {
+                    const rejected = yield* service.writeIfRunCurrent(control);
+                    assert.isFalse(rejected.committed, "foreign/new retired work must not write");
+                    assert.deepEqual(rejected.storedEvents, []);
+                    yield* Ref.update(rejectedControls, (n) => n + 1);
+                  }
+                }
+                return yield* service.writeIfRunCurrent(input);
+              }).pipe(
+                Effect.tap((result) =>
+                  Effect.gen(function* () {
+                    if (
+                      input.events.some(
+                        (e) => e.type === "subagent.updated" && e.payload.status === "running",
+                      ) &&
+                      result.committed
+                    )
+                      yield* Deferred.succeed(runningWork, undefined);
+                    if (
+                      input.events.some(
+                        (e) =>
+                          (e.type === "node.updated" || e.type === "turn-item.updated") &&
+                          e.payload.status === "interrupted",
+                      ) &&
+                      !result.committed
+                    )
+                      yield* Ref.update(cleanupRejected, (n) => n + 1);
+                  }),
+                ),
+              ),
+          }),
+        },
+      );
+    }),
 );

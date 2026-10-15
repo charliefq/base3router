@@ -60,9 +60,11 @@ export interface ProviderEventRoutingState {
   readonly ownedProviderTurnIds: ReadonlySet<ProviderTurnId>;
   readonly inheritedBackgroundTurnItems: ReadonlyMap<TurnItemId, OrchestrationV2Run["id"]>;
   readonly rootProviderTurnId: ProviderTurnId | null;
+  readonly rootThreadAliases: ReadonlyMap<ProviderThreadId, OrchestrationV2ProviderThread>;
 }
 
 export interface ProviderEventRouteIdentity {
+  readonly rootProviderThread?: OrchestrationV2ProviderThread;
   readonly threadId: ThreadId;
   readonly runId: OrchestrationV2Run["id"];
   readonly attemptId: RunAttemptId;
@@ -348,7 +350,81 @@ export function makeProviderEventRoutingState(input: {
       (input.inheritedBackgroundTurnItems ?? []).map((item) => [item.id, item.runId]),
     ),
     rootProviderTurnId: input.providerTurnId,
+    rootThreadAliases: new Map(),
   };
+}
+
+function sameForkThread(
+  canonical: OrchestrationV2ProviderThread,
+  alias: OrchestrationV2ProviderThread,
+): boolean {
+  return (
+    canonical.forkedFrom !== null &&
+    alias.forkedFrom !== null &&
+    canonical.forkedFrom.providerThreadId === alias.forkedFrom.providerThreadId &&
+    canonical.forkedFrom.providerTurnId === alias.forkedFrom.providerTurnId &&
+    canonical.forkedFrom.checkpointId === alias.forkedFrom.checkpointId &&
+    canonical.nativeThreadRef?.strength === "strong" &&
+    canonical.nativeThreadRef.nativeId !== null &&
+    alias.nativeThreadRef?.strength === "strong" &&
+    canonical.nativeThreadRef.driver === alias.nativeThreadRef.driver &&
+    canonical.nativeThreadRef.nativeId === alias.nativeThreadRef.nativeId &&
+    canonical.appThreadId === alias.appThreadId &&
+    canonical.driver === alias.driver &&
+    canonical.providerInstanceId === alias.providerInstanceId &&
+    canonical.providerSessionId === alias.providerSessionId &&
+    canonical.ownerNodeId === alias.ownerNodeId
+  );
+}
+
+function canonicalProviderEvent(
+  event: ProviderAdapterV2Event,
+  input: ProviderEventRouteIdentity,
+  aliases: ProviderEventRoutingState["rootThreadAliases"],
+): ProviderAdapterV2Event {
+  if (aliases.size === 0) return event;
+  const canonical = (id: ProviderThreadId | null) =>
+    id !== null && aliases.has(id) ? input.providerThreadId : id;
+  switch (event.type) {
+    case "provider_thread.updated":
+      return aliases.has(event.providerThread.id)
+        ? { ...event, providerThread: { ...event.providerThread, id: input.providerThreadId } }
+        : event;
+    case "provider_turn.updated":
+      return {
+        ...event,
+        providerTurn: {
+          ...event.providerTurn,
+          providerThreadId: canonical(event.providerTurn.providerThreadId)!,
+        },
+      };
+    case "node.updated":
+      return {
+        ...event,
+        node: { ...event.node, providerThreadId: canonical(event.node.providerThreadId) },
+      };
+    case "turn_item.updated":
+      if (event.turnItem.providerThreadId == null) return event;
+      return {
+        ...event,
+        turnItem: {
+          ...event.turnItem,
+          providerThreadId: canonical(event.turnItem.providerThreadId)!,
+        },
+      };
+    case "subagent.updated":
+      return {
+        ...event,
+        subagent: {
+          ...event.subagent,
+          providerThreadId: canonical(event.subagent.providerThreadId),
+        },
+      };
+    case "turn.terminal":
+      return { ...event, providerThreadId: canonical(event.providerThreadId)! };
+    default:
+      return event;
+  }
 }
 
 export function routeProviderEvent(
@@ -357,6 +433,28 @@ export function routeProviderEvent(
   state: ProviderEventRoutingState,
 ): readonly [boolean, ProviderEventRoutingState] {
   if (input.driver !== undefined && event.driver !== input.driver) return [false, state];
+  if (
+    event.type === "provider_thread.updated" &&
+    event.providerThread.id !== input.providerThreadId &&
+    event.providerThread.appThreadId === input.threadId
+  ) {
+    const canonical = input.rootProviderThread;
+    if (
+      canonical === undefined ||
+      !sameForkThread(canonical, event.providerThread) ||
+      event.providerThread.lastRunOrdinal !== input.runOrdinal
+    )
+      return [false, state];
+    state = {
+      ...state,
+      rootThreadAliases: new Map([
+        ...state.rootThreadAliases,
+        [event.providerThread.id, event.providerThread],
+      ]),
+    };
+  }
+  event = canonicalProviderEvent(event, input, state.rootThreadAliases);
+
   const ownsThread = (threadId: ThreadId): boolean => state.ownedThreadIds.has(threadId);
   const ownsChildThread = (threadId: ThreadId): boolean =>
     threadId !== input.threadId && ownsThread(threadId);
@@ -951,6 +1049,7 @@ export const layer: Layer.Layer<
           const latestTurnItemOrdinal = yield* Ref.make(input.providerTurnOrdinal * 100);
           const latestProviderThread = yield* Ref.make(input.providerThread);
           const routeIdentity: ProviderEventRouteIdentity = {
+            rootProviderThread: input.providerThread,
             threadId: input.run.threadId,
             runId: input.run.id,
             attemptId: input.attempt.id,
@@ -1007,7 +1106,10 @@ export const layer: Layer.Layer<
             ReadonlySet<OrchestrationV2TurnItem["id"]>
           >(new Set(inheritedBackgroundTurnItemsById.keys()));
           const openRunOwnedSubagents = yield* Ref.make(emptyOpenRunOwnedSubagentProjection());
-          const finalizeRootRun = (terminal: ProviderTerminalEvent) =>
+          const finalizeRootRun = (
+            terminal: ProviderTerminalEvent,
+            rootThreadAlias?: OrchestrationV2ProviderThread,
+          ) =>
             Effect.gen(function* () {
               if (yield* Ref.get(rootRunFinalized)) {
                 return;
@@ -1024,6 +1126,7 @@ export const layer: Layer.Layer<
                   ...rootExecution,
                   providerTurnId: terminal.providerTurnId,
                   terminalStatus: terminal.status,
+                  ...(rootThreadAlias === undefined ? {} : { rootThreadAlias }),
                 },
                 ...(input.shouldFinalizeRun === undefined
                   ? {}
@@ -1229,14 +1332,35 @@ export const layer: Layer.Layer<
           });
           const filterAssistantEvent = makeAssistantStreamingFilter(responseStreamingMode);
           const providerEventFiber = yield* eventSubscription.events.pipe(
-            Stream.tap((event) =>
+            Stream.tap((rawEvent) =>
               Effect.gen(function* () {
                 const [accepted, nextRouting] = routeProviderEvent(
-                  event,
+                  rawEvent,
                   routeIdentity,
                   yield* Ref.get(eventRouting),
                 );
                 if (!accepted) return;
+                const event = canonicalProviderEvent(
+                  rawEvent,
+                  routeIdentity,
+                  nextRouting.rootThreadAliases,
+                );
+                const rawThreadId =
+                  rawEvent.type === "provider_thread.updated"
+                    ? rawEvent.providerThread.id
+                    : rawEvent.type === "provider_turn.updated"
+                      ? rawEvent.providerTurn.providerThreadId
+                      : rawEvent.type === "node.updated"
+                        ? rawEvent.node.providerThreadId
+                        : rawEvent.type === "turn_item.updated"
+                          ? rawEvent.turnItem.providerThreadId
+                          : rawEvent.type === "subagent.updated"
+                            ? rawEvent.subagent.providerThreadId
+                            : rawEvent.type === "turn.terminal"
+                              ? rawEvent.providerThreadId
+                              : undefined;
+                const aliasProof =
+                  rawThreadId == null ? undefined : nextRouting.rootThreadAliases.get(rawThreadId);
                 let storedEventCount = 0;
                 const deliveredEvent = filterAssistantEvent(
                   event,
@@ -1291,7 +1415,10 @@ export const layer: Layer.Layer<
                     runId: input.run.id,
                     nodeId: input.rootNode.id,
                     event: deliveredEvent,
-                    ...(isRootTurn || isTerminal || guardRootProjection
+                    ...(isRootTurn ||
+                    isTerminal ||
+                    guardRootProjection ||
+                    (isRootProviderThreadUpdate && !rootTerminalAlreadySeen)
                       ? {
                           writeIfRunCurrent: {
                             runId: input.run.id,
@@ -1299,6 +1426,7 @@ export const layer: Layer.Layer<
                             expectedStatus: "running" as const,
                             rootExecution: {
                               ...rootExecution,
+                              ...(aliasProof === undefined ? {} : { rootThreadAlias: aliasProof }),
                               ...(event.type === "provider_turn.updated"
                                 ? { providerTurnId: event.providerTurn.id }
                                 : event.type === "turn.terminal"
@@ -1375,7 +1503,7 @@ export const layer: Layer.Layer<
                   );
                 }
                 if (event.type === "turn.terminal") {
-                  if (!(yield* finalizeRootRun(event))) {
+                  if (!(yield* finalizeRootRun(event, aliasProof))) {
                     // A successor/Stop owns finalization, but a committed terminal
                     // observation still releases this retired root's subscription.
                     if (

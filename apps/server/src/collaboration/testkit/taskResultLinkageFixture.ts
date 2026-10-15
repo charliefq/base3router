@@ -43,6 +43,11 @@ interface LinkageAdapterOptions {
   readonly appThread?: boolean;
   readonly runningFirst?: boolean;
   readonly enrichNative?: boolean;
+  readonly onInterrupt?: (
+    input: ProviderAdapterV2TurnInput,
+    events: ReadonlyArray<ProviderAdapterV2Event>,
+    emit: (event: ProviderAdapterV2Event) => Effect.Effect<void>,
+  ) => Effect.Effect<void>;
   readonly onStart?: (
     input: ProviderAdapterV2TurnInput,
     events: ReadonlyArray<ProviderAdapterV2Event>,
@@ -68,6 +73,14 @@ function makeAdapter(
       Effect.gen(function* () {
         yield* Ref.update(opened, (n) => n + 1);
         const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+        const active = new Map<
+          string,
+          {
+            input: ProviderAdapterV2TurnInput;
+            events: ReadonlyArray<ProviderAdapterV2Event>;
+            emit: (event: ProviderAdapterV2Event) => Effect.Effect<void>;
+          }
+        >();
         const now = yield* DateTime.now;
         return {
           instanceId: instanceId,
@@ -247,11 +260,17 @@ function makeAdapter(
                 : [completed, ...middle, terminal];
               const emit = (event: ProviderAdapterV2Event) =>
                 Queue.offer(events, event).pipe(Effect.asVoid);
+              active.set(input.providerThread.id, { input, events: delivery, emit });
               if (options.onStart) yield* options.onStart(input, delivery, emit);
               else yield* Effect.forEach(delivery, emit, { discard: true });
             }),
           steerTurn: () => Effect.void,
-          interruptTurn: () => Effect.void,
+          interruptTurn: (input) =>
+            Effect.gen(function* () {
+              const turn = active.get(input.providerThread.id);
+              if (turn !== undefined && options.onInterrupt !== undefined)
+                yield* options.onInterrupt(turn.input, turn.events, turn.emit);
+            }),
           respondToRuntimeRequest: () => Effect.void,
           readThreadSnapshot: () => Effect.die("unused readThreadSnapshot"),
           rollbackThread: () => Effect.die("unused rollbackThread"),

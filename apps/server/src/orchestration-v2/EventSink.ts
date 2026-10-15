@@ -2,6 +2,9 @@ import {
   CommandId,
   EventId,
   OrchestrationV2RunJson,
+  OrchestrationV2ExecutionNodeJson,
+  OrchestrationV2TurnItemJson,
+  OrchestrationV2SubagentJson,
   OrchestrationV2RunAttemptJson,
   OrchestrationV2ProviderThreadJson,
   OrchestrationV2ProviderTurnJson,
@@ -16,6 +19,8 @@ import {
   type TaskContractReviewReference,
   type TaskContractReviewAction,
   type OrchestrationV2Run,
+  type OrchestrationV2ProviderThread,
+  type OrchestrationV2ProviderRef,
   OrchestrationV2DomainEvent,
   OrchestrationV2StoredEvent,
   ProviderThreadId,
@@ -81,6 +86,27 @@ const decodeProviderSession = Schema.decodeUnknownOption(
   Schema.fromJsonString(OrchestrationV2ProviderSessionJson),
 );
 
+const decodeNode = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2ExecutionNodeJson),
+);
+const decodeItem = Schema.decodeUnknownOption(Schema.fromJsonString(OrchestrationV2TurnItemJson));
+const decodeSubagent = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2SubagentJson),
+);
+const sameRef = (a: OrchestrationV2ProviderRef | null, b: OrchestrationV2ProviderRef | null) =>
+  a === null || b === null
+    ? a === b
+    : a.driver === b.driver &&
+      a.nativeId === b.nativeId &&
+      a.strength === b.strength &&
+      a.fingerprint === b.fingerprint &&
+      a.ordinal === b.ordinal;
+const terminalWorkStatus = (status: string) =>
+  status === "completed" ||
+  status === "failed" ||
+  status === "interrupted" ||
+  status === "cancelled";
+
 const decodeEnrollmentCommand = Schema.decodeUnknownOption(
   Schema.fromJsonString(CollaborationCommand),
 );
@@ -143,6 +169,7 @@ export interface EventSinkV2Shape {
     readonly expectedStatus: OrchestrationV2Run["status"];
     readonly effects?: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
     readonly rootExecution?: {
+      readonly rootThreadAlias?: OrchestrationV2ProviderThread;
       readonly rootNodeId: NodeId;
       readonly providerThreadId: ProviderThreadId;
       readonly providerSessionId: ProviderSessionId;
@@ -436,27 +463,23 @@ const baseLayer: Layer.Layer<
     const retiredRootObservation = Effect.fn("orchestrationV2.EventSink.retiredRootObservation")(
       function* (input: Parameters<EventSinkV2Shape["writeIfRunCurrent"]>[0]) {
         const owner = input.rootExecution;
-        const event = input.events.find((event) => event.type === "provider-turn.updated");
+        const event =
+          input.events.find((e) => e.type === "provider-turn.updated") ?? input.events[0];
         if (
           owner === undefined ||
-          owner.providerTurnId === undefined ||
           input.effects !== undefined ||
-          event?.type !== "provider-turn.updated" ||
-          event.payload.status === "running" ||
-          event.payload.status === "pending"
-        )
-          return [];
-        const turn = event.payload;
-        if (
+          (event?.type !== "provider-turn.updated" && input.events.length !== 1) ||
+          event === undefined ||
+          ![
+            "provider-turn.updated",
+            "node.updated",
+            "turn-item.updated",
+            "subagent.updated",
+          ].includes(event.type) ||
           event.threadId !== input.threadId ||
           event.runId !== input.runId ||
           event.driver !== owner.driver ||
-          event.providerInstanceId !== owner.providerInstanceId ||
-          turn.id !== owner.providerTurnId ||
-          turn.runAttemptId !== input.activeAttemptId ||
-          turn.nodeId !== owner.rootNodeId ||
-          turn.providerThreadId !== owner.providerThreadId ||
-          turn.ordinal !== owner.providerTurnOrdinal
+          event.providerInstanceId !== owner.providerInstanceId
         )
           return [];
         const rows = yield* sql<{
@@ -494,6 +517,7 @@ const baseLayer: Layer.Layer<
         const a = attempt.value,
           t = previous.value,
           s = session.value;
+        const turn = event.type === "provider-turn.updated" ? event.payload : t;
         if (
           row.run_ordinal !== owner.runOrdinal ||
           a.id !== input.activeAttemptId ||
@@ -526,9 +550,141 @@ const baseLayer: Layer.Layer<
           row.session_driver !== s.driver
         )
           return [];
-        // Restart waits for the already observed predecessor to settle. Only its
-        // own turn may change; it cannot bind, finalize, or overwrite a successor.
-        return [event];
+        if (event.type === "provider-turn.updated") {
+          if (
+            owner.providerTurnId !== turn.id ||
+            turn.runAttemptId !== a.id ||
+            turn.nodeId !== owner.rootNodeId ||
+            turn.providerThreadId !== owner.providerThreadId ||
+            turn.ordinal !== owner.providerTurnOrdinal ||
+            !terminalWorkStatus(turn.status)
+          )
+            return [];
+          return [event];
+        }
+        // A terminal root observation authorizes only lifecycle cleanup of its
+        // already persisted direct work. Never create work or touch the new root.
+        if (!terminalWorkStatus(t.status)) return [];
+        const nodeId =
+          event.type === "node.updated" || event.type === "subagent.updated"
+            ? event.payload.id
+            : event.type === "turn-item.updated"
+              ? event.payload.nodeId
+              : null;
+        if (nodeId === null || nodeId === owner.rootNodeId) return [];
+        const nodes = yield* sql<{
+          payload_json: string;
+        }>`SELECT payload_json FROM orchestration_v2_projection_nodes
+          WHERE node_id=${nodeId} AND thread_id=${input.threadId} AND run_id=${input.runId}
+          AND root_node_id=${owner.rootNodeId} AND parent_node_id=${owner.rootNodeId}
+          AND provider_thread_id=${owner.providerThreadId} AND provider_turn_id=${t.id} LIMIT 1`;
+        const node = nodes[0] === undefined ? Option.none() : decodeNode(nodes[0].payload_json);
+        if (Option.isNone(node)) return [];
+        const n = node.value;
+        if (
+          n.id !== nodeId ||
+          n.threadId !== input.threadId ||
+          n.runId !== input.runId ||
+          n.rootNodeId !== owner.rootNodeId ||
+          n.parentNodeId !== owner.rootNodeId ||
+          n.providerThreadId !== owner.providerThreadId ||
+          n.providerTurnId !== t.id
+        )
+          return [];
+        const canSettle = (old: string, next: string) =>
+          terminalWorkStatus(next) &&
+          (old === "pending" || old === "running" || old === "waiting" || old === next);
+        if (event.type === "node.updated") {
+          const next = event.payload;
+          if (
+            next.threadId !== n.threadId ||
+            next.runId !== n.runId ||
+            next.rootNodeId !== n.rootNodeId ||
+            next.parentNodeId !== n.parentNodeId ||
+            next.providerThreadId !== n.providerThreadId ||
+            next.providerTurnId !== n.providerTurnId ||
+            next.kind !== n.kind ||
+            !sameRef(next.nativeItemRef, n.nativeItemRef) ||
+            !canSettle(n.status, next.status)
+          )
+            return [];
+          return [
+            { ...event, payload: { ...n, status: next.status, completedAt: next.completedAt } },
+          ];
+        }
+        if (event.type === "turn-item.updated") {
+          const next = event.payload;
+          const items = yield* sql<{
+            payload_json: string;
+          }>`SELECT payload_json FROM orchestration_v2_projection_turn_items
+            WHERE turn_item_id=${next.id} AND thread_id=${input.threadId} AND run_id=${input.runId}
+            AND node_id=${nodeId} AND provider_thread_id=${owner.providerThreadId} AND provider_turn_id=${t.id} LIMIT 1`;
+          const item = items[0] === undefined ? Option.none() : decodeItem(items[0].payload_json);
+          if (Option.isNone(item)) return [];
+          const old = item.value;
+          if (
+            old.id !== next.id ||
+            old.threadId !== next.threadId ||
+            old.runId !== next.runId ||
+            old.nodeId !== next.nodeId ||
+            old.providerThreadId !== next.providerThreadId ||
+            old.providerTurnId !== next.providerTurnId ||
+            old.type !== next.type ||
+            old.parentItemId !== next.parentItemId ||
+            !sameRef(old.nativeItemRef, next.nativeItemRef) ||
+            !canSettle(old.status, next.status)
+          )
+            return [];
+          return [
+            {
+              ...event,
+              payload: {
+                ...old,
+                status: next.status,
+                completedAt: next.completedAt,
+                updatedAt: next.updatedAt,
+              },
+            },
+          ];
+        }
+        if (event.type === "subagent.updated") {
+          const next = event.payload;
+          const agents = yield* sql<{
+            payload_json: string;
+          }>`SELECT payload_json FROM orchestration_v2_projection_subagents
+            WHERE subagent_id=${next.id} AND thread_id=${input.threadId} AND run_id=${input.runId}
+            AND parent_node_id=${owner.rootNodeId} AND provider_thread_id=${owner.providerThreadId} LIMIT 1`;
+          const agent =
+            agents[0] === undefined ? Option.none() : decodeSubagent(agents[0].payload_json);
+          if (Option.isNone(agent)) return [];
+          const old = agent.value;
+          if (
+            old.id !== next.id ||
+            old.threadId !== next.threadId ||
+            old.runId !== next.runId ||
+            old.parentNodeId !== next.parentNodeId ||
+            old.providerThreadId !== next.providerThreadId ||
+            old.driver !== next.driver ||
+            old.providerInstanceId !== next.providerInstanceId ||
+            old.childThreadId !== next.childThreadId ||
+            !sameRef(old.nativeTaskRef, next.nativeTaskRef) ||
+            !canSettle(old.status, next.status)
+          )
+            return [];
+          return [
+            {
+              ...event,
+              payload: {
+                ...old,
+                status: next.status,
+                result: next.result,
+                completedAt: next.completedAt,
+                updatedAt: next.updatedAt,
+              },
+            },
+          ];
+        }
+        return [];
       },
     );
 
@@ -657,6 +813,56 @@ const baseLayer: Layer.Layer<
                 row.thread_driver !== p.driver ||
                 p.lastRunOrdinal !== owner.runOrdinal ||
                 row.last_run_ordinal !== owner.runOrdinal
+              )
+                return reject;
+              for (const event of input.effects === undefined ? events : []) {
+                if (
+                  event.type === "node.updated" &&
+                  event.payload.threadId === input.threadId &&
+                  event.payload.runId === input.runId &&
+                  event.payload.providerTurnId === null &&
+                  event.payload.rootNodeId !== owner.rootNodeId
+                )
+                  return reject;
+                if (
+                  (event.type === "node.updated" || event.type === "turn-item.updated") &&
+                  event.payload.threadId === input.threadId &&
+                  event.payload.runId === input.runId &&
+                  event.payload.providerTurnId !== null &&
+                  event.payload.providerTurnId !== a.providerTurnId
+                )
+                  return reject;
+                if (
+                  event.type === "subagent.updated" &&
+                  event.payload.threadId === input.threadId &&
+                  event.payload.runId === input.runId &&
+                  event.payload.parentNodeId !== owner.rootNodeId
+                ) {
+                  const anchors = yield* sql`SELECT node_id FROM orchestration_v2_projection_nodes
+                    WHERE node_id=${event.payload.id} AND thread_id=${input.threadId} AND run_id=${input.runId}
+                    AND provider_turn_id=${a.providerTurnId} AND provider_thread_id=${owner.providerThreadId} LIMIT 1`;
+                  if (anchors.length !== 1) return reject;
+                }
+              }
+              const alias = owner.rootThreadAlias;
+              if (
+                alias !== undefined &&
+                (alias.id === p.id ||
+                  alias.appThreadId !== p.appThreadId ||
+                  alias.driver !== p.driver ||
+                  alias.providerSessionId !== p.providerSessionId ||
+                  alias.providerInstanceId !== p.providerInstanceId ||
+                  alias.ownerNodeId !== p.ownerNodeId ||
+                  alias.lastRunOrdinal !== owner.runOrdinal ||
+                  p.nativeThreadRef?.strength !== "strong" ||
+                  p.nativeThreadRef.nativeId === null ||
+                  alias.nativeThreadRef?.strength !== "strong" ||
+                  !sameRef(p.nativeThreadRef, alias.nativeThreadRef) ||
+                  p.forkedFrom === null ||
+                  alias.forkedFrom === null ||
+                  p.forkedFrom.providerThreadId !== alias.forkedFrom.providerThreadId ||
+                  p.forkedFrom.providerTurnId !== alias.forkedFrom.providerTurnId ||
+                  p.forkedFrom.checkpointId !== alias.forkedFrom.checkpointId)
               )
                 return reject;
               const observed = events.find(
