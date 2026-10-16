@@ -1,3 +1,4 @@
+import { imageDeliveryDenialStatus, settleImageDeliveryDenial } from "../policy/Base3PolicyGate.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
@@ -909,7 +910,12 @@ export const layer: Layer.Layer<
             },
           ],
         } satisfies Parameters<typeof eventSink.writeWithEffects>[0];
-        const result = yield* eventSink.writeIfRunCurrent({
+        const denied = yield* imageDeliveryDenialStatus(
+          input.run.threadId,
+          input.run.userMessageId,
+        );
+        if (denied === "settled") return false;
+        const write = eventSink.writeIfRunCurrent({
           threadId: input.run.threadId,
           runId: input.run.id,
           activeAttemptId: input.writeIfRunCurrent?.activeAttemptId ?? input.attempt.id,
@@ -918,7 +924,14 @@ export const layer: Layer.Layer<
           events: finalization.events,
           effects: finalization.effects,
         });
-        if (!result.committed) return false;
+        const result = yield* denied === "pending"
+          ? settleImageDeliveryDenial({
+              threadId: input.run.threadId,
+              messageId: input.run.userMessageId,
+              settle: write,
+            })
+          : write;
+        if (!result?.committed) return false;
         yield* input.refreshAfterTurn;
         return true;
       });

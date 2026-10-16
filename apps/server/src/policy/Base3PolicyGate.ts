@@ -697,6 +697,9 @@ export const authorizeDispatch = <
             commandType: command.type,
             detail: "Thread policy rows could not be removed.",
           });
+          yield* sqlOption.value`DELETE FROM base3_image_delivery_denials WHERE thread_id=${threadId}`.pipe(
+            Effect.mapError(() => unavailable),
+          );
           yield* deleteDispatcherTaskRoutesByThread({ threadId }).pipe(
             policyStore,
             Effect.mapError(() => unavailable),
@@ -929,13 +932,70 @@ const authorizeContinuation = (command: DispatchPolicyCommand, operation: Operat
     yield* recordAttempt(sql, command, "continuation");
   });
 
+const IMAGE_DELIVERY_DENIED =
+  "Image delivery denied: the bound model no longer has available declared image-input support. Send again with an eligible model or remove the image.";
+
+export const imageDeliveryDenialStatus = (threadId: string, messageId: string) =>
+  Effect.gen(function* () {
+    const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+    if (Option.isNone(sql)) return null;
+    const rows = yield* sql.value<{
+      settled_at: string | null;
+    }>`SELECT settled_at FROM base3_image_delivery_denials WHERE thread_id=${threadId} AND message_id=${messageId}`;
+    return rows[0] === undefined
+      ? null
+      : rows[0].settled_at === null
+        ? ("pending" as const)
+        : ("settled" as const);
+  });
+
+/** A denial permanently removes delivery authority; only its event settlement may be retried. */
+export const settleImageDeliveryDenial = <A extends { readonly committed: boolean }, E>(input: {
+  readonly threadId: string;
+  readonly messageId: string;
+  readonly settle: Effect.Effect<A, E>;
+}) =>
+  Effect.gen(function* () {
+    const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+    if (Option.isNone(sql))
+      return yield* new Base3PolicyDeniedError({
+        reason: "policy-store-unavailable",
+        commandType: "image-denial.settle",
+      });
+    return yield* sql.value.withTransaction(
+      Effect.gen(function* () {
+        const status = yield* imageDeliveryDenialStatus(input.threadId, input.messageId);
+        if (status === "settled") return undefined;
+        if (status !== "pending")
+          return yield* new Base3PolicyDeniedError({
+            reason: "denial-missing",
+            commandType: "image-denial.settle",
+          });
+        const result = yield* input.settle;
+        if (!result.committed)
+          return yield* new Base3PolicyDeniedError({
+            reason: "denial-settlement-stale",
+            commandType: "image-denial.settle",
+          });
+        yield* sql.value`UPDATE base3_image_delivery_denials SET settled_at=${DateTime.formatIso(yield* DateTime.now)} WHERE thread_id=${input.threadId} AND message_id=${input.messageId}`;
+        return result;
+      }),
+    );
+  });
+
 export const revalidateImageRoute = (input: {
   readonly sql: SqlClient.SqlClient;
   readonly threadId: string;
   readonly messageId: string;
   readonly commandType: string;
+  readonly target?: { readonly instanceId: ProviderInstanceId; readonly model: string };
 }) =>
   Effect.gen(function* () {
+    const denied = yield* imageDeliveryDenialStatus(input.threadId, input.messageId).pipe(
+      Effect.provideService(SqlClient.SqlClient, input.sql),
+    );
+    if (denied !== null)
+      return yield* deny(input.commandType, "image-eligibility", IMAGE_DELIVERY_DENIED);
     // Queue admission cannot promise that the cached declaration is still current at handoff.
     const route = yield* readDispatcherTaskRoute({
       threadId: ThreadId.make(input.threadId),
@@ -955,7 +1015,7 @@ export const revalidateImageRoute = (input: {
       Option.isSome(route) &&
       route.value.modelRoute?.task.requiredCapabilities.includes("vision")
     ) {
-      const target = route.value.target;
+      const target = input.target ?? route.value.target;
       const current = calculateDispatcherModelRoute({
         mode: "auto",
         providers: yield* providersForBind,
@@ -969,12 +1029,14 @@ export const revalidateImageRoute = (input: {
         localTaskProfile: classifyLocalTask(""),
       });
       if (current.decision.selected === null) {
-        yield* input.sql`UPDATE base3_execution_grants SET revoked_at = ${DateTime.formatIso(yield* DateTime.now)} WHERE grant_id = ${`grant:message:${input.threadId}:${input.messageId}`}`;
-        return yield* deny(
-          input.commandType,
-          "binding",
-          "The bound model no longer has available declared image-input support. Send again with an eligible model or remove the image.",
+        const now = DateTime.formatIso(yield* DateTime.now);
+        yield* input.sql.withTransaction(
+          Effect.gen(function* () {
+            yield* input.sql`INSERT INTO base3_image_delivery_denials (thread_id,message_id,denied_at) VALUES (${input.threadId},${input.messageId},${now}) ON CONFLICT DO NOTHING`;
+            yield* input.sql`UPDATE base3_execution_grants SET revoked_at=COALESCE(revoked_at,${now}) WHERE grant_id=${`grant:message:${input.threadId}:${input.messageId}`}`;
+          }),
         );
+        return yield* deny(input.commandType, "image-eligibility", IMAGE_DELIVERY_DENIED);
       }
     }
   });
@@ -1010,6 +1072,7 @@ export const revalidateOutboxEffect = (effect: {
     const sql = sqlOption.value;
     const runId = effect.request.runId;
     let messageId = effect.request.messageId;
+    let runStatus: string | undefined;
     if (runId !== undefined) {
       const runs = yield* sql<{ readonly status: string; readonly payload_json: string }>`
         SELECT status, payload_json FROM orchestration_v2_projection_runs WHERE run_id = ${runId} LIMIT 1
@@ -1017,13 +1080,7 @@ export const revalidateOutboxEffect = (effect: {
       const run = runs[0];
       if (run === undefined)
         return yield* deny(effect.request.type, "unconfirmed", "Run is not visible.");
-      if ((TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status)) {
-        return yield* deny(
-          effect.request.type,
-          "terminal",
-          "Terminal runs are not restarted by the outbox.",
-        );
-      }
+      runStatus = run.status;
       if (messageId === undefined) {
         const parsed = yield* Effect.try({
           try: () => JSON.parse(run.payload_json) as { userMessageId?: string },
@@ -1034,6 +1091,21 @@ export const revalidateOutboxEffect = (effect: {
     } else if (messageId === undefined) {
       return yield* deny(effect.request.type, "binding", "Effect is missing a run.");
     }
+    if (
+      (effect.request.type === "provider-turn.start" ||
+        effect.request.type === "provider-turn.steer") &&
+      (yield* imageDeliveryDenialStatus(effect.threadId, messageId ?? "").pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+      )) !== null
+    ) {
+      return "image-denied" as const;
+    }
+    if (runStatus !== undefined && (TERMINAL_RUN_STATUSES as readonly string[]).includes(runStatus))
+      return yield* deny(
+        effect.request.type,
+        "terminal",
+        "Terminal runs are not restarted by the outbox.",
+      );
     const grantId = `grant:message:${effect.threadId}:${messageId ?? ""}`;
     const grant = (yield* loadGrant(sql, grantId))[0];
     if (grant === undefined || grant.revoked_at !== null) {

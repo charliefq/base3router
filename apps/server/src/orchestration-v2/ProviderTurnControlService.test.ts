@@ -27,6 +27,8 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import type { ProviderAdapterV2SessionRuntime } from "./ProviderAdapter.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
+import * as EventSink from "./EventSink.ts";
+import * as IdAllocator from "./IdAllocator.ts";
 
 const driver = ProviderDriverKind.make("codex");
 const providerInstanceId = ProviderInstanceId.make("codex");
@@ -273,7 +275,14 @@ it.effect(
         }),
       );
       const controlLayer = ProviderTurnControlService.layer.pipe(
-        Layer.provide(Layer.merge(projectionLayer, sessionManagerLayer)),
+        Layer.provide(
+          Layer.mergeAll(
+            projectionLayer,
+            sessionManagerLayer,
+            IdAllocator.layer,
+            Layer.mock(EventSink.EventSinkV2)({}),
+          ),
+        ),
       );
 
       const [ordinaryInterrupt, unrelatedRestart] = yield* Effect.gen(function* () {

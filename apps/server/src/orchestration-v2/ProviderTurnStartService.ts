@@ -1,4 +1,8 @@
-import { revalidateImageRoute, Base3PolicyDeniedError } from "../policy/Base3PolicyGate.ts";
+import {
+  revalidateImageRoute,
+  settleImageDeliveryDenial,
+  Base3PolicyDeniedError,
+} from "../policy/Base3PolicyGate.ts";
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
@@ -77,6 +81,7 @@ export interface ProviderTurnStartServiceV2Shape {
     readonly threadId: ThreadId;
     readonly runId: RunId;
     readonly willRetry?: boolean;
+    readonly imageDenialOnly?: boolean;
   }) => Effect.Effect<void, ProviderTurnStartError>;
 }
 
@@ -221,6 +226,7 @@ export const layer: Layer.Layer<
       readonly threadId: ThreadId;
       readonly runId: RunId;
       readonly willRetry?: boolean;
+      readonly imageDenialOnly?: boolean;
     }) {
       const { runId } = input;
       const projection = yield* projectionStore.getTurnStartContext(input.threadId, runId);
@@ -228,7 +234,7 @@ export const layer: Layer.Layer<
       if (run === undefined) {
         return yield* new ProviderTurnStartError({ runId, cause: `Run ${runId} was not found.` });
       }
-      if (run.status !== "starting") {
+      if (run.status !== "starting" && !(input.imageDenialOnly && run.status === "running")) {
         // The effect is idempotent once the run has advanced or terminalized.
         return;
       }
@@ -363,15 +369,44 @@ export const layer: Layer.Layer<
               } satisfies OrchestrationV2DomainEvent;
             }),
           );
-          yield* eventSink.writeIfRunCurrent({
+          return yield* eventSink.writeIfRunCurrent({
             threadId: projection.thread.id,
             runId,
             activeAttemptId: attempt.id,
-            expectedStatus: "starting",
+            expectedStatus: run.status,
             events,
           });
         },
       );
+      const settleImageDenial = (failure: unknown) =>
+        Effect.gen(function* () {
+          return yield* settleImageDeliveryDenial({
+            threadId: input.threadId,
+            messageId: message.id,
+            settle: settleRunBeforeStart({
+              signal: "image-eligibility-denied",
+              status: "failed",
+              now: yield* DateTime.now,
+              providerInstanceId: run.providerInstanceId,
+              itemProviderThreadId: providerThread.id,
+              item: {
+                type: "error",
+                title: "Image delivery denied",
+                failure: makeProviderFailure({
+                  cause: failure,
+                  message: isBase3PolicyDeniedError(failure)
+                    ? failure.message
+                    : "Image delivery eligibility could not be verified.",
+                  class: "validation_error",
+                }),
+              },
+            }),
+          });
+        });
+      if (input.imageDenialOnly) {
+        yield* settleImageDenial("Recorded image delivery denial");
+        return;
+      }
       if (message.attachments.length === 0 && message.text.trimStart().startsWith("/")) {
         const isEmptyCompaction =
           message.text.trim().toLowerCase() === "/compact" && !projection.hasConversation;
@@ -511,24 +546,7 @@ export const layer: Layer.Layer<
           }),
         );
         if (eligibility._tag === "Failure") {
-          yield* settleRunBeforeStart({
-            signal: "image-eligibility-denied",
-            status: "failed",
-            now: yield* DateTime.now,
-            providerInstanceId: run.providerInstanceId,
-            itemProviderThreadId: providerThread.id,
-            item: {
-              type: "error",
-              title: "Image input unavailable",
-              failure: makeProviderFailure({
-                cause: eligibility.failure,
-                message: isBase3PolicyDeniedError(eligibility.failure)
-                  ? eligibility.failure.message
-                  : "Image eligibility could not be verified.",
-                class: "validation_error",
-              }),
-            },
-          });
+          yield* settleImageDenial(eligibility.failure);
           return;
         }
       }
@@ -1127,6 +1145,43 @@ export const layer: Layer.Layer<
                 !coveredItemIds.has(item.id) &&
                 historicalMessage(item) !== null,
             );
+      const deliverToProvider = (
+        turnInput: Parameters<ProviderAdapterV2SessionRuntime["startTurn"]>[0],
+        compact = false,
+      ) =>
+        Effect.gen(function* () {
+          if ((yield* PolicyExecutionContext).kind !== "kernel-test") {
+            const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+            if (Option.isNone(sql))
+              return yield* new Base3PolicyDeniedError({
+                reason: "policy-store-unavailable",
+                commandType: "provider-turn.start",
+              });
+            yield* revalidateImageRoute({
+              sql: sql.value,
+              threadId: input.threadId,
+              messageId: message.id,
+              commandType: "provider-turn.start",
+              target: {
+                instanceId: turnInput.providerThread.providerInstanceId,
+                model: turnInput.modelSelection.model,
+              },
+            });
+          }
+          const deliver = compact ? session.compactThread! : session.startTurn;
+          yield* deliver(turnInput);
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterTurnStartError({
+                driver: session.driver,
+                threadId: input.threadId,
+                providerThreadId: providerThread.id,
+                runId: run.id,
+                cause,
+              }),
+          ),
+        );
       const startWithHandoffs = (
         turnInput: Parameters<typeof session.startTurn>[0],
         compact = false,
@@ -1205,19 +1260,22 @@ export const layer: Layer.Layer<
               }),
           });
           if (!(yield* isCurrentAttemptInStatus("running"))) return;
-          const start = compact ? session.compactThread! : session.startTurn;
+
           const context = [delivery.context, restartNote]
             .filter((part) => part !== "")
             .join("\n\n");
           // A note continuation has no turn to resume; its text is the prompt.
           const { restartContinuationOfRunId: _resumedRunId, ...promptedInput } = turnInput;
-          yield* start({
-            ...(noteContinuation ? promptedInput : turnInput),
-            message: {
-              ...turnInput.message,
-              text: context === "" ? userText : `${context}\n\nUser message:\n${userText}`,
+          yield* deliverToProvider(
+            {
+              ...(noteContinuation ? promptedInput : turnInput),
+              message: {
+                ...turnInput.message,
+                text: context === "" ? userText : `${context}\n\nUser message:\n${userText}`,
+              },
             },
-          });
+            compact,
+          );
           // The provider already accepted the turn. A stale pending marker
           // can force a fresh thread later, but must not stop live ingestion.
           yield* delivery.delivered.pipe(
@@ -1246,7 +1304,7 @@ export const layer: Layer.Layer<
         missedItems.length === 0 &&
         restartNote === "" &&
         !noteContinuation
-          ? session
+          ? makeDeliverySession(session, deliverToProvider)
           : makeDeliverySession(session, startWithHandoffs);
       yield* runExecution.startRootRun({
         commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),

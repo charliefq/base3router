@@ -246,6 +246,19 @@ const collaborationTables = Effect.gen(function* () {
   `;
 });
 
+const imageDeliveryDenials = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    CREATE TABLE IF NOT EXISTS base3_image_delivery_denials (
+      thread_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      denied_at TEXT NOT NULL,
+      settled_at TEXT,
+      PRIMARY KEY (thread_id, message_id)
+    )
+  `;
+});
+
 const steps: ReadonlyArray<
   readonly [string, string, Effect.Effect<void, SqlError, SqlClient.SqlClient>]
 > = [
@@ -268,6 +281,7 @@ const steps: ReadonlyArray<
   ["b3-070", "CollaborationCommands", collaborationTables],
   ["b3-071", "PilotBrakeColumns", pilotBrakeColumns],
   ["b3-072", "FrozenTreeBounds", frozenTreeBounds],
+  ["b3-073", "ImageDeliveryDenials", imageDeliveryDenials],
 ];
 
 export const runBase3PolicyMigrations = Effect.gen(function* () {

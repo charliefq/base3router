@@ -253,6 +253,12 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
       SqlClient.SqlClient,
       MigrationError | PlatformError.PlatformError | SqlError
     >;
+    readonly decorateCheckpointService?: (
+      service: CheckpointService.CheckpointServiceV2["Service"],
+    ) => CheckpointService.CheckpointServiceV2["Service"];
+    readonly decorateEffectOutbox?: (
+      service: EffectOutbox.EffectOutboxV2["Service"],
+    ) => EffectOutbox.EffectOutboxV2["Service"];
     readonly decorateEventSink?: (
       service: EventSink.EventSinkV2["Service"],
     ) => EventSink.EventSinkV2["Service"];
@@ -313,7 +319,12 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     ProjectionStore.layer,
     ProjectStore.layer,
     receiptLayer,
-    EffectOutbox.layer,
+    options.decorateEffectOutbox === undefined
+      ? EffectOutbox.layer
+      : Layer.effect(
+          EffectOutbox.EffectOutboxV2,
+          Effect.map(EffectOutbox.EffectOutboxV2, options.decorateEffectOutbox),
+        ).pipe(Layer.provide(EffectOutbox.layer)),
     TurnItemPositionStore.layer,
   ).pipe(Layer.provide(databaseLayer));
   const eventSinkProvided = sinkLayer.pipe(
@@ -332,7 +343,14 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     Layer.provide(vcsDriverRegistryLayer),
     Layer.provide(NodeServices.layer),
   );
-  const checkpointServiceProvided = CheckpointService.layer.pipe(
+  const checkpointLayer =
+    options.decorateCheckpointService === undefined
+      ? CheckpointService.layer
+      : Layer.effect(
+          CheckpointService.CheckpointServiceV2,
+          Effect.map(CheckpointService.CheckpointServiceV2, options.decorateCheckpointService),
+        ).pipe(Layer.provide(CheckpointService.layer));
+  const checkpointServiceProvided = checkpointLayer.pipe(
     Layer.provide(Layer.mergeAll(checkpointStoreLayer, IdAllocator.layer)),
   );
   const contextHandoffServiceProvided = ContextHandoffService.layer.pipe(
@@ -390,7 +408,14 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     ),
   );
   const providerTurnControlServiceProvided = ProviderTurnControlService.layer.pipe(
-    Layer.provide(Layer.merge(storesLayer, providerSessionManagerProvided)),
+    Layer.provide(
+      Layer.mergeAll(
+        storesLayer,
+        eventSinkProvided,
+        IdAllocator.layer,
+        providerSessionManagerProvided,
+      ),
+    ),
   );
   const runtimeRequestServiceProvided = RuntimeRequestService.layer.pipe(
     Layer.provide(Layer.merge(storesLayer, providerSessionManagerProvided)),
