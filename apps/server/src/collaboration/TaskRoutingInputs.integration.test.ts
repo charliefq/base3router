@@ -97,7 +97,9 @@ it.live.each(["auto", "manual"] as const)(
             route,
           );
           assert.deepEqual(yield* f.sql`SELECT total_changes() AS n`, before);
-          const encoded = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(inputsOf(route));
+          const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
+            inputsOf(route),
+          );
           for (const sentinel of [
             "PROMPT_SENTINEL",
             "/private/",
