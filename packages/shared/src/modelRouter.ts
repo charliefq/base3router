@@ -612,7 +612,18 @@ export function routeModel(input: ModelRouterInput): ModelRouterDecision {
     ),
   );
 
+  const manualTargetKey =
+    input.mode === "manual" && input.manualOverride ? targetKey(input.manualOverride) : null;
+  const manualCandidate =
+    manualTargetKey === null
+      ? undefined
+      : ranked.find((candidate) => targetKey(candidate.target) === manualTargetKey);
   const bounded = ranked.slice(0, MODEL_ROUTER_MAX_CANDIDATES);
+  if (manualCandidate !== undefined && !bounded.includes(manualCandidate)) {
+    // The cap bounds diagnostics, never an explicit Manual choice. Keep ranked
+    // order and reserve its final slot before assigning contiguous indices.
+    bounded.splice(MODEL_ROUTER_MAX_CANDIDATES - 1, 1, manualCandidate);
+  }
   if (input.mode === "auto" && bounded.length < MODEL_ROUTER_MAX_CANDIDATES) {
     // Eligibility owns selectable capacity; remaining slots are diagnostics only.
     const excluded = built

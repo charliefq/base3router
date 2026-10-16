@@ -505,7 +505,7 @@ describe("Manual explicit hard constraints", () => {
     expect(left.selected?.target).toEqual(right.selected?.target);
     expect(left.reasonCodes).toEqual(right.reasonCodes);
   });
-  it("checks the requested target even when it falls outside the bounded candidate display", () => {
+  it("checks the requested target independently of its diagnostic rank", () => {
     const catalog = [
       ...Array.from({ length: 70 }, (_, i) => entry({ instanceId: `first-${i}`, model: "first" })),
       entry({ instanceId: "zz-manual", model: "last" }),
@@ -518,7 +518,7 @@ describe("Manual explicit hard constraints", () => {
     });
     expect(
       decision.candidates.some((candidate) => candidate.target.instanceId === "zz-manual"),
-    ).toBe(false);
+    ).toBe(true);
     expect(decision.selected).toBeNull();
     expect(decision.reasonCodes).toContain("CONSTRAINT_EXCLUDED");
   });
@@ -1323,14 +1323,14 @@ describe("eligible cap", () => {
       runnerUpScore: 1,
     });
   });
-  it("retains original Manual cap and unavailable-target behavior", () => {
+  it("retains Manual availability behavior beyond the diagnostic cap", () => {
     const outside = routeModel({
       mode: "manual",
       catalog: [...blocked(32), ready],
       manualOverride: ready,
     });
-    expect(outside.selected).toBeNull();
-    expect(outside.selectionBasis?.outcome).toBe("manual-missing");
+    expect(outside.selected?.target.model).toBe(ready.model);
+    expect(outside.selectionBasis?.outcome).toBe("manual-accepted");
     const pinned = blocked(32)[0]!;
     const inside = routeModel({
       mode: "manual",
@@ -1374,5 +1374,116 @@ describe("eligible cap", () => {
         .slice(1)
         .every((candidate) => candidate.reasonCodes.includes("PROVIDER_RATE_LIMITED")),
     ).toBe(true);
+  });
+});
+
+describe("Manual explicit target diagnostic capacity", () => {
+  const rows = Array.from({ length: 75 }, (_, i) =>
+    entry({
+      instanceId: "codex",
+      driver: driver("codex"),
+      model: `m${String(i).padStart(2, "0")}`,
+    }),
+  );
+  it.each([30, 31, 32, 71, 74])(
+    "retains target at position %i across order, duplicates and preferred peers",
+    (index) => {
+      const target = rows[index]!;
+      const input = {
+        mode: "manual" as const,
+        manualOverride: target,
+        preferredTargets: rows.filter((row) => row !== target),
+      };
+      const forward = routeModel({ ...input, catalog: [...rows, target, rows[0]!] });
+      const reversed = routeModel({ ...input, catalog: [...rows].reverse() });
+      expect(reversed).toEqual(forward);
+      expect(forward.selected?.target).toEqual({
+        instanceId: target.instanceId,
+        model: target.model,
+      });
+      expect(forward.selected?.metrics.quality).toEqual({ status: "unknown" });
+      expect(forward.selectionBasis).toMatchObject({
+        outcome: "manual-accepted",
+        selectedTarget: forward.selected?.target,
+        eligibleCount: 75,
+      });
+      expect(forward.candidates).toHaveLength(32);
+      expect(forward.candidates.filter((c) => c.target.model === target.model)).toHaveLength(1);
+      expect(forward.candidates.map((c) => c.fallbackIndex)).toEqual(
+        Array.from({ length: 32 }, (_, i) => i),
+      );
+      expect(forward.candidates[forward.selected!.fallbackIndex]?.target).toEqual(
+        forward.selected?.target,
+      );
+      expect(isRouterDecision(forward)).toBe(true);
+    },
+  );
+  it.each([
+    { allowedModels: ["other"] },
+    { excludedModels: ["m74"] },
+    { allowedInstanceIds: [instance("other")] },
+    { excludedInstanceIds: [instance("codex")] },
+    { allowedDrivers: [driver("claudeAgent")] },
+    { excludedDrivers: [driver("codex")] },
+    { requiredCapabilities: ["vision" as const] },
+    { maxCostUsd: 1 },
+    { maxLatencyMs: 100 },
+  ])("enforces full-catalog constraints beyond the cap: %j", (constraints) => {
+    const decision = routeModel({
+      mode: "manual",
+      catalog: rows,
+      manualOverride: rows[74]!,
+      constraints,
+    });
+    expect(decision.selected).toBeNull();
+    expect(decision.selectionBasis?.outcome).toBe("manual-rejected");
+    expect(decision.candidates.filter((c) => c.target.model === "m74")).toHaveLength(1);
+  });
+  it.each([{ maxCostUsd: 1 }, { maxLatencyMs: 1 }])(
+    "enforces known estimated hard limits beyond capacity: %j",
+    (constraints) => {
+      const target = {
+        ...rows[74]!,
+        metrics: {
+          quality: { status: "known" as const, value: 10 },
+          costUsd: { status: "known" as const, value: 2 },
+          latencyMs: { status: "known" as const, value: 2 },
+        },
+      };
+      const decision = routeModel({
+        mode: "manual",
+        catalog: [...rows.slice(0, 74), target],
+        manualOverride: target,
+        constraints,
+      });
+      expect(decision.selected).toBeNull();
+      expect(decision.selectionBasis?.outcome).toBe("manual-rejected");
+      expect(decision.candidates.some((c) => c.target.model === target.model)).toBe(true);
+    },
+  );
+  it("retains explicit unavailable/unknown metadata and absent-override semantics", () => {
+    for (const target of [
+      { ...rows[74]!, availabilityReasons: ["PROVIDER_UNAVAILABLE" as const] },
+      { ...rows[74]!, driver: null, capabilities: [] },
+    ]) {
+      const decision = routeModel({
+        mode: "manual",
+        catalog: [...rows.slice(0, 74), target],
+        manualOverride: target,
+      });
+      expect(decision.selected?.target.model).toBe("m74");
+      expect(decision.selectionBasis?.outcome).toBe("manual-accepted");
+      expect(decision.selected?.driver).toBe(target.driver);
+    }
+    const absent = routeModel({ mode: "manual", catalog: rows });
+    expect(absent.selected).toBeNull();
+    expect(absent.selectionBasis?.outcome).toBe("manual-missing");
+    const missing = routeModel({
+      mode: "manual",
+      catalog: [],
+      manualOverride: { instanceId: instance("missing"), model: "missing" },
+    });
+    expect(missing.selected?.eligible).toBe(false);
+    expect(missing.selected?.reasonCodes).toContain("MODEL_NOT_FOUND");
   });
 });

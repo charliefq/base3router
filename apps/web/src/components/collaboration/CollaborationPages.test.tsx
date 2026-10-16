@@ -6022,3 +6022,106 @@ it("result linkage mounted Tasks refresh and remount render actual persisted out
     ),
   );
 });
+
+it("Manual target cap mounted Tasks refresh and remount show persisted explanation and basis", async () => {
+  const module = (await import(
+    /* @vite-ignore */ new URL(
+      "../../../../server/src/collaboration/testkit/taskResultLinkageFixture.ts",
+      import.meta.url,
+    ).href
+  )) as {
+    withTaskResultLinkageFixture: (
+      check: (fixture: {
+        sql: SqlClientForFixture.SqlClient;
+        setProviders: (providers: ReadonlyArray<ServerProvider>) => void;
+        createTask: (
+          key: string,
+        ) => EffectForFixture.Effect<
+          Extract<OrchestrationV2Command, { type: "thread.create" }>,
+          Error
+        >;
+        execute: (
+          creation: Extract<OrchestrationV2Command, { type: "thread.create" }>,
+          key: string,
+          routing: {
+            routingMode: "manual";
+            modelSelection: { instanceId: ProviderInstanceId; model: string };
+          },
+          afterDispatch: () => EffectForFixture.Effect<void>,
+        ) => EffectForFixture.Effect<void, Error>;
+        readSnapshot: () => EffectForFixture.Effect<CollaborationSnapshot, Error>;
+      }) => EffectForFixture.Effect<void, Error>,
+    ) => EffectForFixture.Effect<void, Error>;
+  };
+  const fixtures = await loadAgentsCreationFixture();
+  await EffectForFixture.runPromise(
+    module.withTaskResultLinkageFixture((f) =>
+      EffectForFixture.gen(function* () {
+        const provider = fixtures.agentsCreationProvider;
+        f.setProviders([
+          {
+            ...provider,
+            models: [
+              ...Array.from({ length: 74 }, (_, i) => ({
+                ...provider.models[0]!,
+                slug: `aaa-${i}`,
+                isDefault: false,
+              })),
+              { ...provider.models[0]!, isDefault: false },
+            ],
+          },
+        ]);
+        const creation = yield* f.createTask("manual-cap-mounted");
+        state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+        yield* EffectForFixture.promise(async () => {
+          await act(async () => {
+            renderer = create(<TasksPage />);
+          });
+        });
+        yield* f.execute(
+          creation,
+          "manual-cap-mounted-message",
+          {
+            routingMode: "manual",
+            modelSelection: { instanceId: provider.instanceId, model: "fake-model" },
+          },
+          () =>
+            EffectForFixture.gen(function* () {
+              const persisted = (yield* f.readSnapshot()).tasks.find(
+                (t) => t.threadId === creation.threadId,
+              )?.routingReadout;
+              expect(persisted?.status === "available" && persisted.mode).toBe("manual");
+            }).pipe(EffectForFixture.orDie),
+        );
+        const task = (yield* f.readSnapshot()).tasks.find((t) => t.threadId === creation.threadId)!;
+        const route = task.routingReadout;
+        expect(route?.status).toBe("available");
+        if (route?.status !== "available")
+          return yield* EffectForFixture.die("Persisted route missing");
+        expect(route.mode).toBe("manual");
+        expect(route.selectionBasis?.outcome).toBe("manual-accepted");
+        const writes = yield* f.sql`SELECT total_changes() AS n`;
+        yield* EffectForFixture.promise(async () => {
+          await creationClick("Refresh tasks");
+          expect(text()).toContain(route.explanation!);
+          expect(text()).toContain("Manual");
+          expect(text()).not.toContain("Mode not recorded");
+          expect(text()).toContain(
+            "Manual selection; automatic ranking did not decide the target.",
+          );
+          await act(async () => {
+            renderer.unmount();
+            renderer = create(<TasksPage />);
+          });
+          expect(text()).toContain(route.explanation!);
+          expect(text()).toContain(
+            "Manual selection; automatic ranking did not decide the target.",
+          );
+        });
+        expect(yield* f.sql`SELECT total_changes() AS n`).toEqual(writes);
+        expect(state.bind).not.toHaveBeenCalled();
+        expect(state.navigate).not.toHaveBeenCalled();
+      }),
+    ),
+  );
+});

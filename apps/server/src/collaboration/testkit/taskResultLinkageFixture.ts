@@ -22,6 +22,7 @@ import {
   ProviderTurnId,
   ProviderDriverKind,
   type ModelSelection,
+  type OrchestrationV2Command,
   type OrchestrationV2ProviderThread,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -322,7 +323,17 @@ function linkageOperations(f: BaseFixture, settlements: Queue.Queue<string>) {
       yield* f.dispatch(command);
       return command;
     });
-  const execute = (creation: ReturnType<typeof agentsCreationCommand>, key: string) =>
+  const execute = (
+    creation: ReturnType<typeof agentsCreationCommand>,
+    key: string,
+    routing: Partial<
+      Pick<
+        Extract<OrchestrationV2Command, { type: "message.dispatch" }>,
+        "routingMode" | "modelSelection" | "dispatchMode"
+      >
+    > = {},
+    afterDispatch: () => Effect.Effect<void> = () => Effect.void,
+  ) =>
     Effect.scoped(
       Effect.gen(function* () {
         const completed = yield* f.orchestrator.streamDomainEvents.pipe(
@@ -345,9 +356,11 @@ function linkageOperations(f: BaseFixture, settlements: Queue.Queue<string>) {
           attachments: [],
           routingMode: "auto",
           dispatchMode: { type: "start_immediately" },
+          ...routing,
           createdBy: "user",
           creationSource: "web",
         });
+        yield* afterDispatch();
         yield* Fiber.join(completed);
         yield* Stream.fromQueue(settlements).pipe(
           Stream.filter((messageId) => messageId === key),
