@@ -6047,7 +6047,7 @@ it("Manual target cap mounted Tasks refresh and remount show persisted explanati
             routingMode: "manual";
             modelSelection: { instanceId: ProviderInstanceId; model: string };
           },
-          afterDispatch: () => EffectForFixture.Effect<void, Error>,
+          afterDispatch: () => EffectForFixture.Effect<void>,
         ) => EffectForFixture.Effect<void, Error>;
         readSnapshot: () => EffectForFixture.Effect<CollaborationSnapshot, Error>;
       }) => EffectForFixture.Effect<void, Error>,
@@ -6091,7 +6091,7 @@ it("Manual target cap mounted Tasks refresh and remount show persisted explanati
                 (t) => t.threadId === creation.threadId,
               )?.routingReadout;
               expect(persisted?.status === "available" && persisted.mode).toBe("manual");
-            }),
+            }).pipe(EffectForFixture.orDie),
         );
         const task = (yield* f.readSnapshot()).tasks.find((t) => t.threadId === creation.threadId)!;
         const route = task.routingReadout;

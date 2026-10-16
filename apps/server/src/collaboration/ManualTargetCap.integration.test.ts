@@ -40,14 +40,14 @@ it.live.each([false, true])("Manual target cap persisted execution and Tasks que
             model: p.models[0]!.slug,
             options: [{ id: "reasoningEffort", value: "high" }],
           };
-          let foreground: Fiber.Fiber<void, Error> | undefined;
+          let foreground: Fiber.Fiber<void> | undefined;
           if (queued) {
             foreground = yield* f
               .execute(c, "foreground", {
                 routingMode: "manual",
                 modelSelection: { ...selection, model: "aaa-00" },
               })
-              .pipe(Effect.forkScoped);
+              .pipe(Effect.orDie, Effect.forkScoped);
             yield* Deferred.await(reached);
           }
           const key = `manual-cap-message-${queued}`;
@@ -87,7 +87,7 @@ it.live.each([false, true])("Manual target cap persisted execution and Tasks que
                   );
                   yield* Deferred.succeed(release, undefined);
                 }
-              }),
+              }).pipe(Effect.orDie),
           );
           if (foreground) yield* Fiber.join(foreground);
           const executions = yield* Ref.get(f.executions);

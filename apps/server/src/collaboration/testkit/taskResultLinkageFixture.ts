@@ -332,7 +332,7 @@ function linkageOperations(f: BaseFixture, settlements: Queue.Queue<string>) {
         "routingMode" | "modelSelection" | "dispatchMode"
       >
     > = {},
-    afterDispatch: () => Effect.Effect<void, Error> = () => Effect.void,
+    afterDispatch: () => Effect.Effect<void> = () => Effect.void,
   ) =>
     Effect.scoped(
       Effect.gen(function* () {
