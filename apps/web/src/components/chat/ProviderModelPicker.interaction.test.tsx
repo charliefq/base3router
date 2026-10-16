@@ -139,6 +139,9 @@ it("selects the actual catalog identity, closes the picker, and retains it on re
   await act(async () => {
     renderer = create(<Harness />);
   });
+  expect(
+    renderer.root.findByProps({ "data-chat-provider-model-picker": "true" }).props["aria-label"],
+  ).toBe("Model routing: Manual, Team OpenRouter: One (vendor/one)");
   expect(cards()[2]!.props.disabled).toBe(true);
   await act(async () => {
     const select = cards()[1]!.props.onClick;
@@ -147,6 +150,9 @@ it("selects the actual catalog identity, closes the picker, and retains it on re
   });
   expect(selected).toHaveBeenCalledExactlyOnceWith(instanceId, "vendor/two");
   expect(saved).toEqual({ routingMode: "manual", instanceId, model: "vendor/two" });
+  expect(
+    renderer.root.findByProps({ "data-chat-provider-model-picker": "true" }).props["aria-label"],
+  ).toBe("Model routing: Manual, Team OpenRouter: Two (vendor/two)");
   expect(renderer.root.findAllByProps({ "aria-label": "Model cards" })).toHaveLength(0);
   await act(async () => renderer.unmount());
   await act(async () => {

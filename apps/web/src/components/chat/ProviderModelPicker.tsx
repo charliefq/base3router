@@ -194,6 +194,14 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const triggerTooltipContent = shortcutLabel
     ? `${props.triggerLabel ?? allModelNames ?? triggerLabel} · ${shortcutLabel}`
     : (props.triggerLabel ?? allModelNames ?? triggerLabel);
+  const manualIdentityLabel = selectedEntries
+    ? selectedEntries
+        .map(
+          (selection) =>
+            `${selection.entry?.displayName ?? selection.instanceId}: ${selection.label} (${selection.model})`,
+        )
+        .join(", ")
+    : `${activeEntry?.displayName ?? props.activeInstanceId}: ${triggerLabel} (${props.model})`;
 
   return (
     <Popover
@@ -211,7 +219,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           <ComposerControl
             aria-label={
               props.routingMode
-                ? `Model routing: ${props.routingMode === "auto" ? "Auto" : "Manual"}`
+                ? props.routingMode === "auto"
+                  ? "Model routing: Auto, local classification"
+                  : `Model routing: Manual, ${manualIdentityLabel}`
                 : (props.triggerAriaLabel ?? allModelNames)
             }
             data-composer-routing={props.routingMode}
