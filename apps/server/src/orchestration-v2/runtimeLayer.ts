@@ -98,9 +98,11 @@ export const ProjectServiceLayerLive = projectServiceLayer.pipe(
   ),
 );
 
-const providerEventIngestorProvided = providerEventIngestorLayer.pipe(
+export const OrchestrationV2ProviderEventIngestorLayerLive = providerEventIngestorLayer.pipe(
   Layer.provide(Layer.mergeAll(eventSinkProvided, idAllocatorLayer, projectionStoreLayer)),
 );
+
+const providerEventIngestorProvided = OrchestrationV2ProviderEventIngestorLayerLive;
 
 const checkpointServiceProvided = checkpointServiceLayer.pipe(Layer.provide(idAllocatorLayer));
 const contextHandoffServiceProvided = contextHandoffServiceLayer.pipe(
