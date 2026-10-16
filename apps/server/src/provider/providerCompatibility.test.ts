@@ -71,6 +71,20 @@ describe("provider compatibility", () => {
     }
   });
 
+  it("leaves versionless HTTP compatibility unknown without a fabricated CLI recommendation", () => {
+    for (const version of [null, "1.0.0"]) {
+      const advisory = resolveProviderCompatibility(
+        ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+        ProviderDriverKind.make("openrouter"),
+        version,
+        V2_RELEASE,
+      );
+      assert.equal(advisory?.status, "unknown");
+      assert.equal(advisory?.recommendedVersion, null);
+      assert.equal(advisory?.recommendedRange, null);
+    }
+  });
+
   it("keeps releases before V2 on the OpenCode 1 policy they shipped with", () => {
     // Every installed build fetches main's manifest, and 0.0.45 and older run the
     // V1 orchestrator, which cannot drive OpenCode 2.

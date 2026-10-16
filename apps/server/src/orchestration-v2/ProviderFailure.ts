@@ -40,6 +40,11 @@ function causeMessage(cause: unknown): string | undefined {
           return stringField(cause, "message");
         case "ContextHandoffDeliveryUncertainError":
           return "T3 could not confirm whether conversation history reached the provider. Retry the turn to recover the session.";
+        case "ProviderAdapterProtocolError":
+          // The text transport emits fixed, local pre-dispatch validation messages.
+          if ((cause as Record<string, unknown>).driver === "openrouter")
+            return "OpenRouter text tasks require enabled execution, a saved API key and a configured model. Images, tools, planning and model options are unsupported; text history is limited to 100000 characters. Check Settings > Providers before trying again.";
+          break;
         case "ProviderAdapterTurnStartError":
           message =
             "The provider could not start this turn. Retry the turn; if it keeps failing, check the provider setup and server logs.";

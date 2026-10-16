@@ -1,6 +1,6 @@
 import {
   isProviderAvailable,
-  isProviderTextGenerationCapable,
+  isProviderTaskExecutionCapable,
   type CollaborationAgent,
   type CollaborationSnapshot,
   type CollaborationTask,
@@ -13,7 +13,7 @@ export const providerExecutable = (provider: ServerProvider) =>
   provider.status === "ready" &&
   provider.auth.status !== "unauthenticated" &&
   isProviderAvailable(provider) &&
-  isProviderTextGenerationCapable(provider) &&
+  isProviderTaskExecutionCapable(provider) &&
   provider.models.length > 0;
 
 interface AgentDirectoryEntry {

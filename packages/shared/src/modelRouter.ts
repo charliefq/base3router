@@ -135,7 +135,9 @@ export function modelRouterCatalogFromProviders(
         model: model.slug,
         isDefault: model.isDefault === true,
         capabilities: uniqueCapabilities([
-          ...structuralModelRouterCapabilities(declaredCapabilities?.get(key)),
+          ...structuralModelRouterCapabilities(
+            declaredCapabilities?.get(key) ?? (provider.driver === "openrouter" ? [] : undefined),
+          ),
           ...(model.inputModalities?.includes("image") ? ["vision" as const] : []),
         ]),
         availabilityReasons: modelRouterAvailabilityReasons(provider, model.slug),
@@ -147,8 +149,8 @@ export function modelRouterCatalogFromProviders(
 }
 
 /**
- * OpenRouter is a Teacher/Shadow execution vehicle, not an Auto Route peer.
- * Including it in Auto ranking would change Phase 8 selections.
+ * OpenRouter execution is an explicit remote model choice. Keep it outside
+ * local heuristic Auto so ranking never silently substitutes openrouter/auto.
  */
 export const modelRouterCatalogForMode = (
   catalog: ReadonlyArray<ModelRouterCatalogEntry>,

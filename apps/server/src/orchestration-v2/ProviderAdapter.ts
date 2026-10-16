@@ -394,6 +394,8 @@ export interface ProviderAdapterV2EnsureThreadInput {
 }
 
 export interface ProviderAdapterV2TurnInput {
+  /** Stateless text transports receive persisted app history on each turn. */
+  readonly conversationHistory?: ReadonlyArray<OrchestrationV2HistoricalMessage>;
   readonly appThread: OrchestrationV2AppThread;
   readonly threadId: ThreadId;
   readonly runId: RunId;
@@ -482,6 +484,7 @@ export interface ProviderAdapterV2HistoricalContext {
 }
 
 export interface ProviderAdapterV2SessionRuntime {
+  readonly requiresConversationHistory?: boolean;
   readonly instanceId: ProviderInstanceId;
   readonly driver: ProviderDriverKind;
   readonly providerSessionId: ProviderSessionId;

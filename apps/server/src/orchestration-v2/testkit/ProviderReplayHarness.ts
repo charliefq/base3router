@@ -335,7 +335,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   );
   const commandReceiptStoreProvided = receiptLayer.pipe(Layer.provide(databaseLayer));
   const providerEventIngestorProvided = ProviderEventIngestor.layer.pipe(
-    Layer.provide(Layer.mergeAll(storesLayer, eventSinkProvided, IdAllocator.layer)),
+    Layer.provide(Layer.mergeAll(storesLayer, eventSinkProvided, IdAllocator.layer, databaseLayer)),
   );
   const vcsDriverRegistryLayer = VcsDriverRegistry.layer.pipe(
     Layer.provide(VcsProcess.layer),

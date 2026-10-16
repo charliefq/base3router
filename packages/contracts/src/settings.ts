@@ -840,6 +840,23 @@ export const AntigravitySettings = makeProviderSettingsSchema(
 );
 export type AntigravitySettings = typeof AntigravitySettings.Type;
 
+/** Explicit execution opt-in is separate from Teacher/Shadow guidance. */
+export const OpenRouterExecutionSettings = makeProviderSettingsSchema({
+  executionEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+    Schema.annotateKey({
+      title: "Enable text execution",
+      description:
+        "Allow explicitly selected OpenRouter models. Requires a saved API key; this does not enable Teacher/Shadow guidance.",
+    }),
+  ),
+  customModels: Schema.Array(CustomModelSetting).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+    Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+  ),
+});
+export type OpenRouterExecutionSettings = typeof OpenRouterExecutionSettings.Type;
+
 export const PiSettings = makeProviderSettingsSchema(
   {
     // Off by default like Cursor and Grok. Users opt in from Settings.

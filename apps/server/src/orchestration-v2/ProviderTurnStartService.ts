@@ -44,6 +44,7 @@ import {
 import { deliverContextHandoffs } from "./ContextHandoffDelivery.ts";
 import {
   ProviderAdapterTurnStartError,
+  ProviderAdapterProtocolError,
   type ProviderAdapterV2Error,
   type ProviderAdapterV2HistoricalContext,
   type ProviderAdapterV2SessionRuntime,
@@ -1162,7 +1163,40 @@ export const layer: Layer.Layer<
             });
           }
           const deliver = compact ? session.compactThread! : session.startTurn;
-          yield* deliver(turnInput);
+          const textHistory = session.requiresConversationHistory
+            ? yield* projectionStore.getTurnStartHistory(input.threadId)
+            : undefined;
+          if (
+            textHistory?.some(
+              (item) =>
+                (item.type === "user_message" || item.type === "assistant_message") &&
+                ((item.attachments?.length ?? 0) > 0 ||
+                  (item.type === "user_message" &&
+                    item.context?.records.some((record) => record.kind === "image"))),
+            )
+          )
+            return yield* new ProviderAdapterTurnStartError({
+              driver: session.driver,
+              threadId: input.threadId,
+              providerThreadId: providerThread.id,
+              runId: run.id,
+              cause: new ProviderAdapterProtocolError({
+                driver: session.driver,
+                detail: "OpenRouter text history contains unsupported attachments or images",
+              }),
+            });
+          const conversationHistory = textHistory
+            ? textHistory
+                .filter((item) => item.runId !== run.id)
+                .flatMap((item) => {
+                  const entry = historicalMessage(item);
+                  return entry ? [entry] : [];
+                })
+            : undefined;
+          yield* deliver({
+            ...turnInput,
+            ...(conversationHistory === undefined ? {} : { conversationHistory }),
+          });
         }).pipe(
           Effect.mapError(
             (cause) =>

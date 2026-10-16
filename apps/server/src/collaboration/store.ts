@@ -375,6 +375,7 @@ const StoredResultThread = Schema.Struct({
 });
 const StoredResultTurn = Schema.Struct({
   ...StoredTurnEvidence.fields,
+  modelIdentity: OrchestrationV2ProviderTurn.fields.modelIdentity,
   completedAt: Schema.NullOr(Schema.String),
 });
 const resultItemFields = {
@@ -580,6 +581,7 @@ const readResultEvidence = (
         attemptId: attempt.id,
         providerTurnId: turn.id,
         providerTurnStatus: turn.status,
+        ...(turn.modelIdentity === undefined ? {} : { modelIdentity: turn.modelIdentity }),
       };
       if (run.status !== turn.status || attempt.status !== run.status)
         return { ...correlated, content: unknownResult("run_turn_disagreement") };

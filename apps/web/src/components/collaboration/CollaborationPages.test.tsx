@@ -5954,74 +5954,90 @@ it("eligible cap mounted real preview and persisted route refresh preserve read-
   );
 });
 
-it("result linkage mounted Tasks refresh and remount render actual persisted output without accepting it", async () => {
-  const module = (await import(
-    /* @vite-ignore */ new URL(
-      "../../../../server/src/collaboration/testkit/taskResultLinkageFixture.ts",
-      import.meta.url,
-    ).href
-  )) as {
-    withTaskResultLinkageFixture: (
-      check: (fixture: {
-        sql: SqlClientForFixture.SqlClient;
-        createTask: (
-          key: string,
-        ) => EffectForFixture.Effect<
-          Extract<OrchestrationV2Command, { type: "thread.create" }>,
-          Error
-        >;
-        execute: (
-          creation: Extract<OrchestrationV2Command, { type: "thread.create" }>,
-          key: string,
-        ) => EffectForFixture.Effect<void, Error>;
-        readSnapshot: () => EffectForFixture.Effect<CollaborationSnapshot, Error>;
-      }) => EffectForFixture.Effect<void, Error>,
-    ) => EffectForFixture.Effect<void, Error>;
-  };
-  await EffectForFixture.runPromise(
-    module.withTaskResultLinkageFixture((f) =>
-      EffectForFixture.gen(function* () {
-        const c = yield* f.createTask("linkage-mounted");
-        state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
-        yield* EffectForFixture.promise(async () => {
-          await act(async () => {
-            renderer = create(<TasksPage />);
-          });
-          expect(text()).not.toContain("Linked task output");
-        });
-        yield* f.execute(c, "linkage-mounted-message");
-        const task = (yield* f.readSnapshot()).tasks.find((t) => t.threadId === c.threadId)!;
-        const result = task.resultReadout;
-        expect(result?.status).toBe("available");
-        if (result?.status !== "available" || result.content.status !== "output")
-          return yield* EffectForFixture.die("Real result output missing");
-        const before = yield* f.sql`SELECT total_changes() AS n`;
-        yield* EffectForFixture.promise(async () => {
-          await creationClick("Refresh tasks");
-          expect(text()).toContain(
-            result.content.status === "output" ? result.content.preview : "missing",
-          );
-          expect(text()).not.toContain("missing_provider_turn");
-          await act(async () => {
-            renderer.unmount();
-            renderer = create(<TasksPage />);
-          });
-          expect(text()).toContain(
-            result.content.status === "output" ? result.content.preview : "missing",
-          );
-        });
-        expect(yield* f.sql`SELECT total_changes() AS n`).toEqual(before);
-        const after = (yield* f.readSnapshot()).tasks.find((t) => t.id === task.id)!;
-        expect(
-          after.contractReadout?.status === "available" && after.contractReadout.acceptedRevision,
-        ).toBe(null);
-        expect(after.resultReadout).toEqual(result);
-        expect(state.bind).not.toHaveBeenCalled();
-        expect(state.navigate).not.toHaveBeenCalled();
-      }),
-    ),
-  );
-});
+it.each([undefined, "openrouter/auto", "fixture/text-model"])(
+  "result linkage mounted Tasks refresh and remount render actual persisted output without accepting it (%s)",
+  async (fixtureOpenRouterModel) => {
+    const module = (await import(
+      /* @vite-ignore */ new URL(
+        "../../../../server/src/collaboration/testkit/taskResultLinkageFixture.ts",
+        import.meta.url,
+      ).href
+    )) as {
+      withTaskResultLinkageFixture: (
+        check: (fixture: {
+          sql: SqlClientForFixture.SqlClient;
+          createTask: (
+            key: string,
+          ) => EffectForFixture.Effect<
+            Extract<OrchestrationV2Command, { type: "thread.create" }>,
+            Error
+          >;
+          execute: (
+            creation: Extract<OrchestrationV2Command, { type: "thread.create" }>,
+            key: string,
+            options?: { fixtureOpenRouterModel?: string },
+          ) => EffectForFixture.Effect<void, Error>;
+          readSnapshot: () => EffectForFixture.Effect<CollaborationSnapshot, Error>;
+        }) => EffectForFixture.Effect<void, Error>,
+        options?: { fixtureOpenRouterModel?: string },
+      ) => EffectForFixture.Effect<void, Error>;
+    };
+    await EffectForFixture.runPromise(
+      module.withTaskResultLinkageFixture(
+        (f) =>
+          EffectForFixture.gen(function* () {
+            const c = yield* f.createTask("linkage-mounted");
+            state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+            yield* EffectForFixture.promise(async () => {
+              await act(async () => {
+                renderer = create(<TasksPage />);
+              });
+              expect(text()).not.toContain("Linked task output");
+            });
+            yield* f.execute(c, "linkage-mounted-message");
+            const task = (yield* f.readSnapshot()).tasks.find((t) => t.threadId === c.threadId)!;
+            const result = task.resultReadout;
+            expect(result?.status).toBe("available");
+            if (result?.status !== "available" || result.content.status !== "output")
+              return yield* EffectForFixture.die("Real result output missing");
+            const before = yield* f.sql`SELECT total_changes() AS n`;
+            yield* EffectForFixture.promise(async () => {
+              await creationClick("Refresh tasks");
+              expect(text()).toContain(
+                result.content.status === "output" ? result.content.preview : "missing",
+              );
+              expect(text()).not.toContain("missing_provider_turn");
+              if (fixtureOpenRouterModel) {
+                const identity = renderer.root
+                  .findAllByType("p")
+                  .find((p) => p.children.includes("Requested model: "));
+                expect(identity?.children.join("")).toContain(
+                  `Requested model: ${fixtureOpenRouterModel}; resolved model: fixture/resolved-model`,
+                );
+              }
+              await act(async () => {
+                renderer.unmount();
+                renderer = create(<TasksPage />);
+              });
+              expect(text()).toContain(
+                result.content.status === "output" ? result.content.preview : "missing",
+              );
+            });
+            expect(yield* f.sql`SELECT total_changes() AS n`).toEqual(before);
+            const after = (yield* f.readSnapshot()).tasks.find((t) => t.id === task.id)!;
+            expect(
+              after.contractReadout?.status === "available" &&
+                after.contractReadout.acceptedRevision,
+            ).toBe(null);
+            expect(after.resultReadout).toEqual(result);
+            expect(state.bind).not.toHaveBeenCalled();
+            expect(state.navigate).not.toHaveBeenCalled();
+          }),
+        fixtureOpenRouterModel === undefined ? {} : { fixtureOpenRouterModel },
+      ),
+    );
+  },
+);
 
 it("Manual target cap mounted Tasks refresh and remount show persisted explanation and basis", async () => {
   const module = (await import(

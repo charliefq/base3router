@@ -4,7 +4,7 @@ import {
   ProjectId,
   ThreadId,
   isProviderAvailable,
-  isProviderTextGenerationCapable,
+  isProviderTaskExecutionCapable,
   type CollaborationCommandResult,
   type CollaborationOpenThreadInput,
 } from "@t3tools/contracts";
@@ -103,7 +103,7 @@ const make = Effect.gen(function* () {
       !provider.enabled ||
       provider.status !== "ready" ||
       !isProviderAvailable(provider) ||
-      !isProviderTextGenerationCapable(provider) ||
+      !isProviderTaskExecutionCapable(provider) ||
       !provider.models.length
     )
       return yield* refuse("The project or provider is unavailable. No conversation was opened.");

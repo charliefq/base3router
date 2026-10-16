@@ -960,6 +960,15 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
    * Task accounting must not invent a price for an omitted cost.
    */
   reportedCostUsd: Schema.optional(Schema.Number.check(Schema.isFinite())),
+  /** False retains the remote lease. Omission preserves existing native terminal semantics. */
+  terminationConfirmed: Schema.optional(Schema.Boolean),
+  /** Requested slug and provider-reported resolution; omission is unknown. */
+  modelIdentity: Schema.optional(
+    Schema.Struct({
+      requested: TrimmedNonEmptyString,
+      resolved: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
   /**
    * How `turnTokenUsage` should be combined with an earlier report for this
    * same turn. Snapshot replaces. Incremental adds. Omitted means snapshot,

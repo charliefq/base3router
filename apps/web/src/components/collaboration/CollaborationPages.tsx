@@ -277,6 +277,12 @@ function TaskResultReadout({ readout }: { readout: CollaborationTaskResultReadou
           <p className="text-sm">
             Correlated provider-turn status: {readout.providerTurnStatus ?? "Unknown"}
           </p>
+          {readout.modelIdentity ? (
+            <p className="text-sm">
+              Requested model: {readout.modelIdentity.requested}; resolved model:{" "}
+              {readout.modelIdentity.resolved ?? "Unknown (not reported)"}
+            </p>
+          ) : null}
           {readout.content.status === "output" ? (
             <>
               <h4 className="text-sm font-medium">Latest persisted assistant output</h4>

@@ -6,7 +6,7 @@ import {
   TaskContractFields,
   ModelSelection,
   isProviderAvailable,
-  isProviderTextGenerationCapable,
+  isProviderTaskExecutionCapable,
   type OrchestrationV2AppThread,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -134,7 +134,7 @@ export const validateReviewedCreate = Effect.fn("governedCreation.validateReview
       provider.status !== "ready" ||
       provider.auth.status === "unauthenticated" ||
       !isProviderAvailable(provider) ||
-      !isProviderTextGenerationCapable(provider) ||
+      !isProviderTaskExecutionCapable(provider) ||
       !provider.models.some((model) => model.slug === review.modelSelection.model) ||
       (provider.supportedRuntimeModes !== undefined &&
         !provider.supportedRuntimeModes.includes(command.runtimeMode))
