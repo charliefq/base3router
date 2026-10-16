@@ -15,6 +15,7 @@ import {
   capturePosixOwnershipLedger,
   isSafeCgroupPath,
   makeLinuxCgroupController,
+  makeLinuxProcessTreeController,
   makePosixProcessTreeController,
   observePosixOwnershipLedger,
   observePosixOwnershipLedgerContinuously,
@@ -93,6 +94,118 @@ function processExists(pid: number): boolean {
     return false;
   }
 }
+
+function linuxTopologyFixture() {
+  const processes = new Map<number, AcpPosixProcessIdentity>([
+    [100, identity(100, 1, 100, 100)],
+    [110, identity(110, 100, 110, 110)],
+    [120, identity(120, 110, 120, 120)],
+    [999, identity(999, 1, 999, 999)],
+  ]);
+  const childrenFiles = new Map<string, string>();
+  const readDirectory = vi.fn((path: string): ReadonlyArray<string> => {
+    if (path === "/proc") return [...processes.keys()].map(String);
+    const pid = Number(path.split("/")[2]);
+    if (processes.has(pid)) return [String(pid), String(pid + 1)];
+    throw new Error("missing process");
+  });
+  const readFile = vi.fn((path: string) => {
+    if (childrenFiles.has(path)) return childrenFiles.get(path)!;
+    const pid = Number(path.split("/")[2]);
+    const process = processes.get(pid);
+    if (!path.endsWith("/stat") || process === undefined) throw new Error("unreadable proc file");
+    const fields = Array<string>(20).fill("0");
+    fields[0] = process.state ?? "S";
+    fields[1] = String(process.ppid);
+    fields[2] = String(process.pgid);
+    fields[3] = String(process.sid);
+    fields[19] = process.startTime;
+    return `${pid} (fixture) ${fields.join(" ")}`;
+  });
+  const controller = makeLinuxProcessTreeController({
+    readDirectory,
+    readFile,
+    readLink: (path) => processes.get(Number(path.split("/")[2]))?.executable ?? "",
+  });
+  return { controller, processes, childrenFiles, readDirectory, readFile };
+}
+
+describe("Linux ACP child topology", () => {
+  it("keeps readable task children on the fast path, including non-leader tasks", () => {
+    const fixture = linuxTopologyFixture();
+    fixture.processes.set(120, identity(120, 100, 120, 120));
+    fixture.childrenFiles.set("/proc/100/task/100/children", "110");
+    fixture.childrenFiles.set("/proc/100/task/101/children", "120");
+    expect(fixture.controller.childPidsOf(100)).toEqual([110, 120]);
+    expect(fixture.readDirectory.mock.calls.filter(([path]) => path === "/proc")).toHaveLength(0);
+  });
+
+  it("falls back on a partial task read and reuses one PPid index per pass", () => {
+    const fixture = linuxTopologyFixture();
+    fixture.childrenFiles.set("/proc/100/task/100/children", "");
+    const pass = fixture.controller.beginObservation?.() ?? fixture.controller;
+    expect(pass.childPidsOf(100)).toEqual([110]);
+    expect(pass.childPidsOf(110)).toEqual([120]);
+    expect(pass.childPidsOf(999)).toEqual([]);
+    expect(fixture.readDirectory.mock.calls.filter(([path]) => path === "/proc")).toHaveLength(1);
+    fixture.controller.beginObservation?.().childPidsOf(100);
+    expect(fixture.readDirectory.mock.calls.filter(([path]) => path === "/proc")).toHaveLength(2);
+  });
+
+  it("rejects a reused child PID from a cached fallback snapshot", () => {
+    const fixture = linuxTopologyFixture();
+    const pass = fixture.controller.beginObservation?.() ?? fixture.controller;
+    expect(pass.childPidsOf(100)).toEqual([110]);
+    fixture.processes.set(110, identity(110, 100, 110, 110, "replacement"));
+    expect(pass.childPidsOf(100)).toEqual([]);
+    expect(fixture.controller.childPidsOf(100)).toEqual([110]);
+  });
+
+  it("refreshes executable metadata instead of using a pre-exec cached child", () => {
+    const fixture = linuxTopologyFixture();
+    const pass = fixture.controller.beginObservation?.() ?? fixture.controller;
+    expect(pass.childPidsOf(100)).toEqual([110]);
+    fixture.processes.set(110, { ...identity(110, 100, 110, 110), executable: "/new/program" });
+    expect(pass.childPidsOf(100)).toEqual([]);
+    expect(fixture.controller.childrenOf(100)).toMatchObject([
+      { pid: 110, executable: "/new/program" },
+    ]);
+  });
+
+  it("does not admit children when the parent is replaced during snapshot discovery", () => {
+    const fixture = linuxTopologyFixture();
+    const readDirectory = fixture.readDirectory.getMockImplementation()!;
+    fixture.readDirectory.mockImplementation((path) => {
+      if (path === "/proc") fixture.processes.set(100, identity(100, 1, 100, 100, "replacement"));
+      return readDirectory(path);
+    });
+    expect(fixture.controller.childrenOf(100)).toEqual([]);
+  });
+
+  it("surfaces unavailable topology and refuses an oversized incomplete snapshot", () => {
+    const fixture = linuxTopologyFixture();
+    const readDirectory = fixture.readDirectory.getMockImplementation()!;
+    fixture.readDirectory.mockImplementation((path) => {
+      if (path === "/proc") throw new Error("proc stat enumeration denied");
+      return readDirectory(path);
+    });
+    expect(() => fixture.controller.childrenOf(100)).toThrow(
+      "Cannot observe Linux ACP child topology",
+    );
+    fixture.readDirectory.mockImplementation((path) =>
+      path === "/proc"
+        ? Array.from({ length: 32_769 }, (_, index) => String(index + 1))
+        : readDirectory(path),
+    );
+    expect(() => fixture.controller.childrenOf(100)).toThrow(
+      "Cannot observe Linux ACP child topology",
+    );
+    fixture.processes.delete(100);
+    expect(() => fixture.controller.childrenOf(100)).toThrow(
+      "Cannot observe Linux ACP child topology",
+    );
+  });
+});
 
 describe("terminatePosixOwnedProcessTree", () => {
   it("parses unified cgroup paths and escaped cgroup2 mountinfo", () => {

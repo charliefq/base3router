@@ -195,6 +195,8 @@ export interface AcpPosixProcessIdentity {
 }
 
 export interface AcpPosixProcessTreeController {
+  /** Scope any lazy topology snapshot to one synchronous discovery/signalling pass. */
+  readonly beginObservation?: () => AcpPosixProcessTreeController;
   readonly childPidsOf: (pid: number) => ReadonlyArray<number>;
   readonly childrenOf: (pid: number) => ReadonlyArray<AcpPosixProcessIdentity>;
   readonly identity: (pid: number) => AcpPosixProcessIdentity | undefined;
@@ -567,9 +569,24 @@ export function signalLinuxCgroupRootTerm(input: {
   }
 }
 
-function readLinuxProcessIdentity(pid: number): AcpPosixProcessIdentity | undefined {
+interface LinuxProcfs {
+  readonly readFile: (path: string) => string;
+  readonly readDirectory: (path: string) => ReadonlyArray<string>;
+  readonly readLink: (path: string) => string;
+}
+
+const linuxProcfs: LinuxProcfs = {
+  readFile: (path) => NodeFS.readFileSync(path, "utf8"),
+  readDirectory: (path) => NodeFS.readdirSync(path),
+  readLink: (path) => NodeFS.readlinkSync(path),
+};
+
+function readLinuxProcessIdentity(
+  pid: number,
+  procfs: LinuxProcfs,
+): AcpPosixProcessIdentity | undefined {
   try {
-    const stat = NodeFS.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const stat = procfs.readFile(`/proc/${pid}/stat`);
     const commandEnd = stat.lastIndexOf(")");
     if (commandEnd < 0) return undefined;
     const fields = stat
@@ -593,7 +610,7 @@ function readLinuxProcessIdentity(pid: number): AcpPosixProcessIdentity | undefi
     }
     let executable: string | undefined;
     try {
-      executable = NodeFS.readlinkSync(`/proc/${pid}/exe`);
+      executable = procfs.readLink(`/proc/${pid}/exe`);
     } catch {
       executable = undefined;
     }
@@ -608,48 +625,120 @@ export function posixProcessIsZombie(process: AcpPosixProcessIdentity): boolean 
   return process.state === "Z";
 }
 
-function readLinuxChildPids(pid: number): ReadonlyArray<number> {
-  const childPids = new Set<number>();
-  let taskIds: ReadonlyArray<string> = [];
-  try {
-    taskIds = NodeFS.readdirSync(`/proc/${pid}/task`).filter((entry) =>
-      /^[1-9][0-9]*$/.test(entry),
-    );
-  } catch {
-    return [];
-  }
-  for (const taskId of taskIds) {
-    try {
-      for (const childPid of NodeFS.readFileSync(`/proc/${pid}/task/${taskId}/children`, "utf8")
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean)
-        .map(Number)) {
-        childPids.add(childPid);
-      }
-    } catch {
-      // The task exited while its children were being read.
-    }
-  }
-  return [...childPids];
-}
+// Refuse an incomplete oversized scan rather than calling a truncated topology empty.
+const MAX_LINUX_PROC_SNAPSHOT_PROCESSES = 32_768;
 
-function makeLinuxProcessTreeController(): AcpPosixProcessTreeController {
+export function makeLinuxProcessTreeController(
+  procfs: LinuxProcfs = linuxProcfs,
+): AcpPosixProcessTreeController {
+  const identity = (pid: number) => readLinuxProcessIdentity(pid, procfs);
+  // An exec is still the same owned process, but a cached topology must not
+  // admit descendants using executable metadata from before that transition.
+  const sameObservation = (
+    expected: AcpPosixProcessIdentity,
+    observed: AcpPosixProcessIdentity | undefined,
+  ) => samePosixProcessIdentity(expected, observed) && expected.executable === observed?.executable;
+  const unavailable = (pid: number, cause?: unknown) =>
+    new AcpProcessGroupTerminationError({
+      detail: `Cannot observe Linux ACP child topology for process ${pid}`,
+      ...(cause === undefined ? {} : { cause }),
+    });
+  const snapshot = () => {
+    const pids = procfs.readDirectory("/proc").filter((entry) => /^[1-9][0-9]*$/.test(entry));
+    if (pids.length > MAX_LINUX_PROC_SNAPSHOT_PROCESSES) {
+      throw new AcpProcessGroupTerminationError({
+        detail: "Linux ACP process snapshot limit exceeded",
+      });
+    }
+    return pids.flatMap((pid) => {
+      const process = identity(Number(pid));
+      return process === undefined ? [] : [process];
+    });
+  };
+  const observation = (): AcpPosixProcessTreeController => {
+    let index:
+      | {
+          readonly byPid: Map<number, AcpPosixProcessIdentity>;
+          readonly children: Map<number, Array<AcpPosixProcessIdentity>>;
+        }
+      | undefined;
+    const indexSnapshot = (table: ReadonlyArray<AcpPosixProcessIdentity>) => {
+      const children = new Map<number, Array<AcpPosixProcessIdentity>>();
+      for (const process of table) {
+        const siblings = children.get(process.ppid) ?? [];
+        siblings.push(process);
+        children.set(process.ppid, siblings);
+      }
+      index = { byPid: new Map(table.map((process) => [process.pid, process])), children };
+      return index;
+    };
+    const childPidsOf = (pid: number): ReadonlyArray<number> => {
+      const parent = identity(pid);
+      if (parent === undefined) throw unavailable(pid);
+      const childPids = new Set<number>();
+      let fallback = false;
+      try {
+        const tasks = procfs
+          .readDirectory(`/proc/${pid}/task`)
+          .filter((entry) => /^[1-9][0-9]*$/.test(entry));
+        if (tasks.length === 0) fallback = true;
+        for (const task of tasks) {
+          try {
+            for (const child of procfs
+              .readFile(`/proc/${pid}/task/${task}/children`)
+              .trim()
+              .split(/\s+/)) {
+              const childPid = Number(child);
+              if (Number.isSafeInteger(childPid) && childPid > 1) childPids.add(childPid);
+            }
+          } catch {
+            // Some hosts omit children files even for live tasks. A partial read
+            // must also fall back: the unreadable task could have forked a child.
+            fallback = true;
+          }
+        }
+      } catch {
+        fallback = true;
+      }
+      if (!sameObservation(parent, identity(pid))) return [];
+      if (!fallback) return [...childPids];
+      let topology;
+      try {
+        topology = index ?? indexSnapshot(snapshot());
+      } catch (cause) {
+        throw unavailable(pid, cause);
+      }
+      if (!sameObservation(parent, identity(pid))) return [];
+      const capturedParent = topology.byPid.get(pid);
+      if (capturedParent === undefined) throw unavailable(pid);
+      if (!sameObservation(parent, capturedParent)) return [];
+      const children = (topology.children.get(pid) ?? []).flatMap((child) =>
+        sameObservation(child, identity(child.pid)) ? [child.pid] : [],
+      );
+      return sameObservation(parent, identity(pid)) ? children : [];
+    };
+    return {
+      beginObservation: observation,
+      childPidsOf,
+      childrenOf: (pid) =>
+        childPidsOf(pid).flatMap((childPid) => {
+          const child = identity(childPid);
+          return child?.ppid === pid ? [child] : [];
+        }),
+      identity,
+      snapshot: () => {
+        const table = snapshot();
+        indexSnapshot(table);
+        return table;
+      },
+      signalProcess: (pid, signal) => process.kill(pid, signal),
+    };
+  };
   return {
-    childPidsOf: readLinuxChildPids,
-    childrenOf: (pid) =>
-      readLinuxChildPids(pid).flatMap((childPid) => {
-        const identity = readLinuxProcessIdentity(childPid);
-        return identity === undefined ? [] : [identity];
-      }),
-    identity: readLinuxProcessIdentity,
-    snapshot: () =>
-      NodeFS.readdirSync("/proc", { withFileTypes: true }).flatMap((entry) => {
-        if (!entry.isDirectory() || !/^[1-9][0-9]*$/.test(entry.name)) return [];
-        const identity = readLinuxProcessIdentity(Number(entry.name));
-        return identity === undefined ? [] : [identity];
-      }),
-    signalProcess: (pid, signal) => process.kill(pid, signal),
+    ...observation(),
+    // Unscoped callers get a fresh view; only an explicit pass reuses its index.
+    childPidsOf: (pid) => observation().childPidsOf(pid),
+    childrenOf: (pid) => observation().childrenOf(pid),
   };
 }
 
@@ -662,6 +751,7 @@ export function observePosixOwnershipLedger(input: {
   readonly root: AcpPosixOwnershipRoot;
   readonly rootPid: number;
 }): void {
+  const controller = input.controller.beginObservation?.() ?? input.controller;
   let rootIdentity: AcpPosixProcessIdentity | undefined = input.root.value;
   if (rootIdentity === undefined) {
     if (input.root.captureAttempted === true) {
@@ -670,13 +760,13 @@ export function observePosixOwnershipLedger(input: {
       });
     }
     input.root.captureAttempted = true;
-    rootIdentity = input.controller.identity(input.rootPid);
+    rootIdentity = controller.identity(input.rootPid);
     if (rootIdentity === undefined) {
       throw new AcpProcessGroupTerminationError({
         detail: `ACP process ${input.rootPid} exited before its ownership ledger was captured`,
       });
     }
-    const parent = input.controller.identity(rootIdentity.ppid);
+    const parent = controller.identity(rootIdentity.ppid);
     const ownedRoot = {
       ...rootIdentity,
       parentExecutable: parent?.executable,
@@ -698,7 +788,7 @@ export function observePosixOwnershipLedger(input: {
     if (visited.has(parent.pid)) continue;
     visited.add(parent.pid);
     remainingBudget -= 1;
-    const observedParent = input.controller.identity(parent.pid);
+    const observedParent = controller.identity(parent.pid);
     if (!samePosixProcessIdentity(parent, observedParent)) {
       input.childQueues.delete(parent.pid);
       continue;
@@ -710,13 +800,13 @@ export function observePosixOwnershipLedger(input: {
     if (queuedChildren === undefined) {
       if (remainingBudget === 0) continue;
       remainingBudget -= 1;
-      queuedChildren = [...input.controller.childPidsOf(refreshedParent.pid)];
+      queuedChildren = [...controller.childPidsOf(refreshedParent.pid)];
     }
     while (queuedChildren.length > 0 && remainingBudget > 0) {
       const childPid = queuedChildren.shift();
       if (childPid === undefined) continue;
       remainingBudget -= 1;
-      const child = input.controller.identity(childPid);
+      const child = controller.identity(childPid);
       if (child === undefined) continue;
       if (child.ppid !== parent.pid) continue;
       let reservedPid = input.frontier.get(child.pid);
@@ -935,10 +1025,11 @@ export function terminatePosixOwnedProcessTree(input: {
       table,
     });
   const signalPhase = (signal: NodeJS.Signals, includeRoot: boolean) => {
-    const table = snapshot();
+    const controller = input.controller.beginObservation?.() ?? input.controller;
+    const table = controller.snapshot();
     discover(table);
     const byPid = new Map(table.map((entry) => [entry.pid, entry]));
-    const current = input.controller.identity(process.pid);
+    const current = controller.identity(process.pid);
     if (current === undefined) throw fail("Cannot identify the current T3 process group");
     const ledgerByPid = new Map(
       [...ledger.values()].map((process) => [process.pid, process] as const),
@@ -960,7 +1051,7 @@ export function terminatePosixOwnedProcessTree(input: {
       );
       const candidate = pending.shift();
       if (candidate === undefined || signalled.has(candidate.pid)) continue;
-      const observed = input.controller.identity(candidate.pid);
+      const observed = controller.identity(candidate.pid);
       if (
         candidate.pid <= 1 ||
         candidate.pid === process.pid ||
@@ -971,8 +1062,9 @@ export function terminatePosixOwnedProcessTree(input: {
       ) {
         continue;
       }
-      for (const child of input.controller.childrenOf(candidate.pid)) {
+      for (const child of controller.childrenOf(candidate.pid)) {
         if (child.ppid !== candidate.pid) continue;
+        if (!samePosixProcessIdentity(observed, controller.identity(candidate.pid))) break;
         const reservedPid = retainedByPid.get(child.pid);
         if (reservedPid !== undefined && !samePosixProcessIdentity(reservedPid, child)) continue;
         const owned =
@@ -990,7 +1082,7 @@ export function terminatePosixOwnedProcessTree(input: {
         if (
           (includeRoot || child.pid !== input.rootPid) &&
           !signalled.has(child.pid) &&
-          samePosixProcessIdentity(owned, input.controller.identity(child.pid))
+          samePosixProcessIdentity(owned, controller.identity(child.pid))
         ) {
           pending.push(owned);
         }
@@ -998,10 +1090,16 @@ export function terminatePosixOwnedProcessTree(input: {
       try {
         // Linux starttime prevents PID reuse across observations, but Node does
         // not expose pidfd_send_signal. A final read-to-kill race remains.
-        input.controller.signalProcess(candidate.pid, signal);
+        const refreshed = controller.identity(candidate.pid);
+        if (
+          !samePosixProcessIdentity(candidate, refreshed) ||
+          candidate.executable !== refreshed?.executable
+        )
+          continue;
+        controller.signalProcess(candidate.pid, signal);
         signalled.add(candidate.pid);
       } catch (cause) {
-        if (samePosixProcessIdentity(candidate, input.controller.identity(candidate.pid))) {
+        if (samePosixProcessIdentity(candidate, controller.identity(candidate.pid))) {
           throw fail(`Failed to signal ACP process ${candidate.pid}`, cause);
         }
       }

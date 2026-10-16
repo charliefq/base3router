@@ -288,68 +288,35 @@ const waitForProcessesToExit = (pids: ReadonlyArray<number>) =>
     }
   }).pipe(Effect.timeoutOption("2 seconds"));
 
-function linuxProcessStart(pid: number): string | undefined {
-  try {
-    const stat = NodeFS.readFileSync(`/proc/${pid}/stat`, "utf8");
-    const commandEnd = stat.lastIndexOf(")");
-    return commandEnd < 0
-      ? undefined
-      : stat
-          .slice(commandEnd + 2)
-          .trim()
-          .split(/\s+/)[19];
-  } catch {
-    return undefined;
-  }
-}
-
-function cleanupPublishedDetachedFixture(path: string): void {
-  let published: Array<number>;
-  try {
-    published = NodeFS.readFileSync(path, "utf8")
-      .trim()
-      .split(/\s+/)
-      .map(Number)
-      .filter((pid) => Number.isSafeInteger(pid) && pid > 1);
-  } catch {
-    return;
-  }
-  const roots = published.filter((pid) => {
+const cleanupPublishedDetachedFixture = (path: string) =>
+  Effect.gen(function* () {
+    let published: Array<number>;
     try {
-      return NodeFS.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(path);
+      published = NodeFS.readFileSync(path, "utf8")
+        .trim()
+        .split(/\s+/)
+        .map(Number)
+        .filter((pid) => Number.isSafeInteger(pid) && pid > 1);
     } catch {
-      return false;
+      return;
     }
-  });
-  const owned = new Map<number, string>();
-  const pending = [...roots];
-  while (pending.length > 0) {
-    const pid = pending.shift();
-    if (pid === undefined || owned.has(pid)) continue;
-    const start = linuxProcessStart(pid);
-    if (start === undefined) continue;
-    owned.set(pid, start);
-    try {
-      pending.push(
-        ...NodeFS.readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8")
-          .trim()
-          .split(/\s+/)
-          .filter(Boolean)
-          .map(Number),
-      );
-    } catch {
-      // The process already exited.
+    const controller = AcpSessionRuntime.makePosixProcessTreeController("linux");
+    for (const pid of published) {
+      // These IDs come from this fixture's publication file, not a process search.
+      // Capture the live root before teardown; the runtime checks descendant
+      // parent chains and revalidates PID/starttime/executable before each signal.
+      try {
+        if (!NodeFS.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(path)) continue;
+      } catch {
+        continue;
+      }
+      yield* AcpSessionRuntime.terminatePosixOwnedProcessTree({
+        controller,
+        rootPid: pid,
+        grace: 0,
+      });
     }
-  }
-  for (const [pid, start] of [...owned.entries()].toReversed()) {
-    if (linuxProcessStart(pid) !== start) continue;
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // The exact fixture process already exited.
-    }
-  }
-}
+  }).pipe(Effect.orDie);
 
 const waitForPublishedProcessIds = (
   fileSystem: FileSystem.FileSystem,
@@ -1582,9 +1549,7 @@ describe("AcpAdapterV2", () => {
           const commandPidPath = yield* fileSystem.makeTempFileScoped({
             prefix: "t3-acp-forced-failure-command-",
           });
-          yield* Effect.addFinalizer(() =>
-            Effect.sync(() => cleanupPublishedDetachedFixture(commandPidPath)),
-          );
+          yield* Effect.addFinalizer(() => cleanupPublishedDetachedFixture(commandPidPath));
           const fixture = NodeChildProcess.spawn(
             "bash",
             [
@@ -1708,9 +1673,7 @@ describe("AcpAdapterV2", () => {
       const commandPidPath = yield* fileSystem.makeTempFileScoped({
         prefix: "t3-acp-provider-exit-command-",
       });
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => cleanupPublishedDetachedFixture(commandPidPath)),
-      );
+      yield* Effect.addFinalizer(() => cleanupPublishedDetachedFixture(commandPidPath));
       const instanceId = ProviderInstanceId.make("acp-test-provider-exit");
       const adapter = makeAcpAdapterV2({
         crypto: yield* Crypto.Crypto,
@@ -13452,9 +13415,7 @@ describe("AcpAdapterV2", () => {
       const commandPidPath = yield* fileSystem.makeTempFileScoped({
         prefix: "t3-acp-direct-stop-command-",
       });
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => cleanupPublishedDetachedFixture(commandPidPath)),
-      );
+      yield* Effect.addFinalizer(() => cleanupPublishedDetachedFixture(commandPidPath));
       let cancelCalled = false;
       const instanceId = ProviderInstanceId.make("acp-test");
       const adapter = makeAcpAdapterV2({
@@ -13895,9 +13856,7 @@ describe("AcpAdapterV2", () => {
       const commandPidPath = yield* fileSystem.makeTempFileScoped({
         prefix: "t3-acp-restart-active-command-",
       });
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => cleanupPublishedDetachedFixture(commandPidPath)),
-      );
+      yield* Effect.addFinalizer(() => cleanupPublishedDetachedFixture(commandPidPath));
       const instanceId = ProviderInstanceId.make("acp-test");
       const adapter = makeAcpAdapterV2({
         crypto: yield* Crypto.Crypto,
