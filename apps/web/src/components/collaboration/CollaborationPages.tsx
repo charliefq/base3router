@@ -1169,9 +1169,21 @@ export function AgentsPage() {
                   });
               }}
             />
-            {providers.length === 0 && snapshot ? (
+            {!providers.some(providerExecutable) && snapshot ? (
               <div className="rounded-xl border border-dashed border-border p-6 text-sm leading-relaxed text-muted-foreground">
-                No provider is configured. A provider CLI is not an employee.
+                <p>
+                  {providers.length === 0
+                    ? "No provider is configured. Saved agent and task records remain readable."
+                    : "No provider is ready for task execution. Saved agent and task records remain readable. Check provider setup and authentication."}
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void navigate({ to: "/settings/providers" })}
+                >
+                  Set up a provider
+                </Button>
               </div>
             ) : null}
           </WorkspacePageContainer>
@@ -1184,9 +1196,35 @@ export function AgentsPage() {
 export function TasksPage() {
   const navigate = useNavigate();
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
-  const { snapshot, error, refresh, refreshing, readVersion, invalidateReads } =
+  const providers = useAtomValue(primaryServerProvidersAtom);
+  const projects = useProjects().filter((project) => project.environmentId === environmentId);
+  const { snapshot, error, refresh, refreshing, fresh, canOperate, readVersion, invalidateReads } =
     useCollaboration(environmentId);
   const tasks = snapshot?.tasks ?? [];
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [providerId, setProviderId] = useState<string | null>(null);
+  const [creationRequest, setCreationRequest] = useState<{
+    providerId: string;
+    token: string;
+  } | null>(null);
+  const creationOwner = useRef<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const selectedProject =
+    projects.length === 1 ? projects[0] : projects.find((project) => project.id === projectId);
+  const readyProviders = providers.filter(providerExecutable);
+  const selectedProvider =
+    readyProviders.find((provider) => provider.instanceId === providerId) ??
+    (readyProviders.length === 1 ? readyProviders[0] : undefined);
+  const lockCreation = (owner: string) => {
+    creationOwner.current = owner;
+    setCreating(true);
+  };
+  const releaseCreation = (owner: string) => {
+    if (creationOwner.current !== owner) return;
+    creationOwner.current = null;
+    setCreating(false);
+    setCreationRequest(null);
+  };
 
   const openTask = (task: CollaborationTask) => {
     if (!environmentId || !task.threadId) return;
@@ -1205,9 +1243,116 @@ export function TasksPage() {
         <ScrollArea radius="none">
           <WorkspacePageContainer width="wide">
             <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
-              Cross-agent work, its owners and acceptance criteria. Return to a task's conversation
-              to inspect its evidence; opening a task does not grant execution.
+              Create a governed task, review its contract, then open its conversation to send
+              instructions. Refresh to see recorded execution status and result evidence. Creating
+              or opening a task does not start provider work.
             </p>
+            <section
+              aria-label="Create governed task"
+              className="space-y-3 rounded-xl border border-border/60 p-4"
+            >
+              <h2 className="text-base font-medium">Create task</h2>
+              {projects.length > 1 ? (
+                <label className="block space-y-1 text-sm">
+                  <span>Project</span>
+                  <Select
+                    value={projectId ?? ""}
+                    onValueChange={(value) => setProjectId(value || null)}
+                  >
+                    <SelectTrigger aria-label="Task project">
+                      <SelectValue placeholder="Select a project" />
+                    </SelectTrigger>
+                    <SelectPopup>
+                      {projects.map((project) => (
+                        <SelectItem key={project.id} value={project.id}>
+                          {project.title}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                </label>
+              ) : selectedProject ? (
+                <p className="text-sm">Project: {selectedProject.title}</p>
+              ) : null}
+              {readyProviders.length > 1 ? (
+                <label className="block space-y-1 text-sm">
+                  <span>Provider</span>
+                  <Select
+                    value={providerId ?? ""}
+                    onValueChange={(value) => setProviderId(value || null)}
+                  >
+                    <SelectTrigger aria-label="Task provider">
+                      <SelectValue placeholder="Select a provider" />
+                    </SelectTrigger>
+                    <SelectPopup>
+                      {readyProviders.map((provider) => (
+                        <SelectItem key={provider.instanceId} value={provider.instanceId}>
+                          {provider.displayName}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                </label>
+              ) : selectedProvider ? (
+                <p className="text-sm">Provider: {selectedProvider.displayName}</p>
+              ) : null}
+              {!selectedProject ? (
+                <p className="text-sm text-muted-foreground">
+                  Choose a project before creating a task.
+                </p>
+              ) : null}
+              {readyProviders.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No executable provider is ready. Configure and authenticate a supported provider
+                  to create a task. Existing tasks remain readable.
+                </p>
+              ) : null}
+              {readyProviders.length === 0 ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void navigate({ to: "/settings/providers" })}
+                >
+                  Set up a provider
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                size="sm"
+                disabled={!fresh || !!error || creating || !selectedProject || !selectedProvider}
+                onClick={() => {
+                  if (
+                    !canOperate() ||
+                    creationOwner.current ||
+                    !selectedProject ||
+                    !selectedProvider
+                  )
+                    return;
+                  const token = randomUUID();
+                  lockCreation(token);
+                  setCreationRequest({ providerId: selectedProvider.instanceId, token });
+                }}
+              >
+                Create governed task
+              </Button>
+              <AgentsTaskCreator
+                environmentId={environmentId}
+                project={selectedProject}
+                providers={providers}
+                request={creationRequest}
+                onLock={lockCreation}
+                onRelease={releaseCreation}
+                refresh={async () => await refresh()}
+                onOpen={(selectedEnvironment, threadId) => {
+                  if (environmentId === selectedEnvironment && selectedProject)
+                    void navigate({
+                      to: "/$environmentId/$threadId",
+                      params: { environmentId: selectedEnvironment, threadId },
+                    });
+                }}
+              />
+            </section>
             <div>
               <Button
                 size="sm"

@@ -1325,7 +1325,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
         </TooltipTrigger>
         <TooltipPopup side="top">
           {props.routingMode === "auto"
-            ? "Auto Route may fail over. Provenance stays on the bound route."
+            ? "Auto uses local task classification and available configured models. OpenRouter guidance is separate. The selected and executed route is recorded for each turn."
             : "Manual Route keeps the selected provider and model."}
         </TooltipPopup>
       </Tooltip>

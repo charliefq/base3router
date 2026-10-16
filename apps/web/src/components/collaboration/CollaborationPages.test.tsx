@@ -290,6 +290,28 @@ const select = async (value: string) => {
 };
 
 describe("Agents server conversation recovery", () => {
+  it("keeps the directory readable without a provider and links to setup", async () => {
+    state.providers = [];
+    await mount();
+    expect(text()).toContain("Saved agent and task records remain readable");
+    await creationClick("Set up a provider");
+    expect(state.navigate).toHaveBeenCalledWith({ to: "/settings/providers" });
+    expect(state.create).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unauthenticated provider visible with a setup action", async () => {
+    state.providers = configuredProviders.map((provider) => ({
+      ...provider,
+      auth: { status: "unauthenticated" },
+    }));
+    await mount();
+    expect(text()).toContain("No provider is ready for task execution");
+    expect(text()).toContain("Codex");
+    expect(creationButton("New task")!.props.disabled).toBe(true);
+    await creationClick("Set up a provider");
+    expect(state.navigate).toHaveBeenCalledWith({ to: "/settings/providers" });
+  });
+
   it("sends only the selected project/provider and navigates to the authoritative recovered thread", async () => {
     await mount();
     await click();
@@ -646,6 +668,35 @@ describe("Agents saved identity continuity", () => {
 });
 
 describe("Tasks loading and conversation access", () => {
+  it("keeps saved tasks readable without a ready provider and offers setup", async () => {
+    state.providers = [];
+    state.snapshot = { ...state.snapshot, tasks: [agentTaskFixture()] };
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    expect(text()).toContain("project-a running evidence");
+    expect(text()).toContain("No executable provider is ready");
+    expect(creationButton("Create governed task")!.props.disabled).toBe(true);
+    await creationClick("Set up a provider");
+    expect(state.navigate).toHaveBeenCalledWith({ to: "/settings/providers" });
+    expect(state.create).not.toHaveBeenCalled();
+  });
+
+  it("opens one governed creation draft from Tasks and cancel leaves no task", async () => {
+    creationStorage();
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    await creationClick("Create governed task", true);
+    expect(creationButton("Review new task")).toBeDefined();
+    expect(creationButton("Create governed task")!.props.disabled).toBe(true);
+    await creationClick("Cancel new task");
+    expect(creationButton("Review new task")).toBeUndefined();
+    expect(creationButton("Create governed task")!.props.disabled).toBe(false);
+    expect(state.create).not.toHaveBeenCalled();
+    expect(state.bind).not.toHaveBeenCalled();
+  });
+
   it("keeps loading distinct from a confirmed empty task list", async () => {
     const reading = deferred<CollaborationSnapshot>();
     state.load.mockReturnValueOnce(reading.promise);
@@ -2024,6 +2075,54 @@ it("creates two actual owned tasks from Agents, reloads exact enrollment and use
   );
 }, 60_000);
 
+it("creates a persisted governed task from Tasks without starting provider work", async () => {
+  creationStorage();
+  const module = await loadAgentsCreationFixture();
+  await EffectForFixture.runPromise(
+    module.withAgentsTaskCreationFixture((f) =>
+      EffectForFixture.promise(async () => {
+        state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+        state.create.mockImplementation(async ({ input }: { input: OrchestrationV2Command }) => ({
+          _tag: "Success",
+          value: await EffectForFixture.runPromise(f.dispatch(input)),
+        }));
+        state.readProjection.mockImplementation(
+          async ({ input }: { input: { threadId: string } }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(
+              f.orchestrator.getThreadProjection(input.threadId),
+            ),
+          }),
+        );
+        await act(async () => {
+          renderer = create(<TasksPage />);
+        });
+        await creationClick("Create governed task", true);
+        await fillCreation("Task page fixture");
+        await creationClick("Review new task");
+        await creationClick("Create task", true);
+        expect(state.create).toHaveBeenCalledTimes(1);
+        const command = state.create.mock.calls[0]![0].input as Extract<
+          OrchestrationV2Command,
+          { type: "thread.create" }
+        >;
+        expect(command.modelSelection).toEqual({ instanceId: "codex", model: "fake-model" });
+        const snapshot = await EffectForFixture.runPromise(f.readSnapshot());
+        expect(snapshot.tasks.find((task) => task.threadId === command.threadId)?.title).toBe(
+          "Task page fixture",
+        );
+        expect(await EffectForFixture.runPromise(f.noExecution())).toEqual({
+          runs: 0,
+          grants: 0,
+          outbox: 0,
+          messages: 0,
+        });
+        await act(async () => renderer.update(<TasksPage />));
+        expect(text()).toContain("Task page fixture");
+      }),
+    ),
+  );
+});
 it.each(["malformed-cache", "storage-read-throws", "absent-task"] as const)(
   "keeps Agents creation fail closed for %s recovery",
   async (mode) => {

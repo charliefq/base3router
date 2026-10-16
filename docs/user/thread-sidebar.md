@@ -104,7 +104,7 @@ To generate a fresh title from the conversation, open a thread's menu and choose
 **Regenerate title**. The action is unavailable while title generation is in progress
 or when the connected environment needs a server update.
 
-Agents connected through T3 Code can use the same server-owned metadata workflow to
+Agents connected through B3R can use the same server-owned metadata workflow to
 rename a thread, regenerate its title, or link and unlink a pull request. These changes
 appear on web, desktop, and mobile without requiring the originating browser to remain
 open.
@@ -197,6 +197,14 @@ snooze limit stops by default. Providers without a reset time offer manual
 retry and the normal snooze choices.
 
 On web and desktop, use **Agents** to follow work delegated to subagents.
+
+To start a governed task, open **Tasks**, choose its project and a ready provider,
+then select **Create governed task**. Review the goal, acceptance criteria and
+brakes before creating it. Creation records the contract without starting work.
+Open the new conversation to send instructions separately. Return to **Tasks**
+and refresh to read the recorded execution status and result. If no provider is
+ready, existing tasks remain readable and **Set up a provider** opens the
+configuration page.
 
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. When such a subagent needs an approval or an answer, the parent
