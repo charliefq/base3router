@@ -134,7 +134,10 @@ export function modelRouterCatalogFromProviders(
         driver: provider.driver,
         model: model.slug,
         isDefault: model.isDefault === true,
-        capabilities: structuralModelRouterCapabilities(declaredCapabilities?.get(key)),
+        capabilities: uniqueCapabilities([
+          ...structuralModelRouterCapabilities(declaredCapabilities?.get(key)),
+          ...(model.inputModalities?.includes("image") ? ["vision" as const] : []),
+        ]),
         availabilityReasons: modelRouterAvailabilityReasons(provider, model.slug),
         ...(metrics === undefined ? {} : { metrics }),
       });

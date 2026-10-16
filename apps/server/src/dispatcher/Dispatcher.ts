@@ -786,6 +786,7 @@ export function calculateDispatcherModelRoute(input: {
   readonly preferredTargets: ReadonlyArray<import("@t3tools/contracts").ModelRouterTarget>;
   readonly preferredModelSelection?: ModelSelection;
   readonly constraints?: import("@t3tools/contracts").ModelRouterConstraints;
+  readonly message?: Pick<DispatcherTurnMessage, "attachments" | "context">;
   readonly cooldowns?: ReadonlyArray<ModelRouterAvailabilityCooldown>;
   readonly nowMs: number;
   readonly localTaskProfile: LocalTaskProfile;
@@ -808,6 +809,25 @@ export function calculateDispatcherModelRoute(input: {
       input.cooldowns ?? [],
       input.nowMs,
     ),
+    task: {
+      attachmentCount: input.message?.attachments?.length ?? 0,
+      composerContextKinds: [
+        ...new Set((input.message?.context?.records ?? []).map((record) => record.kind)),
+      ].sort(),
+      // Typed image facts cannot be removed by caller constraints or a replacement selector.
+      requiredCapabilities:
+        input.mode === "auto" &&
+        (input.message?.attachments?.some(
+          (attachment) =>
+            attachment !== null &&
+            typeof attachment === "object" &&
+            "type" in attachment &&
+            attachment.type === "image",
+        ) ||
+          input.message?.context?.records?.some((record) => record.kind === "image"))
+          ? ["vision" as const]
+          : [],
+    },
     preferredTargets: input.preferredTargets,
     ...(input.constraints === undefined ? {} : { constraints: input.constraints }),
     ...(input.mode === "manual" && input.preferredModelSelection
@@ -820,10 +840,20 @@ export function calculateDispatcherModelRoute(input: {
       : {}),
     executionStatus: input.executionStatus ?? ("bound" as const),
   };
-  const effectiveInput = { ...base, ...input.hybrid, localTaskProfile: input.localTaskProfile };
+  const effectiveInput = { ...input.hybrid, ...base, localTaskProfile: input.localTaskProfile };
   const routedDecision = input.hybrid ? routeHybridModel(effectiveInput) : null;
+  const decision = routedDecision?.decision ?? routeModel(base);
   return {
-    decision: routedDecision?.decision ?? routeModel(base),
+    decision: decision.task.requiredCapabilities.includes("vision")
+      ? {
+          ...decision,
+          explanation:
+            `Image input required; only declared image-input support is eligible. ${decision.explanation}`.slice(
+              0,
+              512,
+            ),
+        }
+      : decision,
     hybrid: routedDecision?.hybrid,
     manualConstraintReasons:
       input.mode === "manual" ? manualModelRouterConstraintReasons(effectiveInput) : [],
@@ -927,6 +957,7 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
       ];
       const calculation = calculateDispatcherModelRoute({
         mode: routingMode,
+        message: command.message,
         providers: resolution.providers,
         preferredTargets,
         nowMs: dependencies.availabilityNowMs ?? (yield* Clock.currentTimeMillis),
@@ -949,7 +980,9 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
       }
       if (routingMode === "auto" && decision.selected === null) {
         return yield* new OrchestrationDispatchCommandError({
-          message: `Auto Route could not select a model (${decision.reasonCodes.join(",")}).`,
+          message: decision.task.requiredCapabilities.includes("vision")
+            ? "Auto Route requires declared image-input support. No available model meets the image requirement and constraints; choose an available model that declares image input, adjust constraints, or remove the image."
+            : `Auto Route could not select a model (${decision.reasonCodes.join(",")}).`,
         });
       }
       const routed =

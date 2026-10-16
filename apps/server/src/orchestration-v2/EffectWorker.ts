@@ -156,19 +156,21 @@ export const executorLayer: Layer.Layer<
                     }),
                 ),
               );
-          case "provider-turn.start":
+          case "provider-turn.start": {
+            const request = effect.request;
             return revalidateOutboxEffect({
               threadId: effect.threadId,
               commandId: effect.commandId,
               attemptCount: effect.attemptCount,
-              request: { type: effect.request.type, runId: effect.request.runId },
+              request: { type: request.type, runId: request.runId },
             })
               .pipe(
-                Effect.andThen(
+                Effect.andThen((validation) =>
                   providerTurnStart.start({
                     threadId: effect.threadId,
-                    runId: effect.request.runId,
+                    runId: request.runId,
                     willRetry,
+                    imageDenialOnly: validation === "image-denied",
                   }),
                 ),
               )
@@ -177,11 +179,12 @@ export const executorLayer: Layer.Layer<
                   (cause) =>
                     new OrchestrationEffectExecutionError({
                       effectId: effect.id,
-                      effectType: effect.request.type,
+                      effectType: request.type,
                       cause,
                     }),
                 ),
               );
+          }
           case "provider-turn.interrupt":
             return revalidateOutboxEffect({
               threadId: effect.threadId,
@@ -227,37 +230,39 @@ export const executorLayer: Layer.Layer<
                   ),
               ),
             );
-          case "provider-turn.steer":
+          case "provider-turn.steer": {
+            const request = effect.request;
             return revalidateOutboxEffect({
               threadId: effect.threadId,
-              request: { type: effect.request.type, messageId: effect.request.messageId },
+              request: { type: request.type, messageId: request.messageId },
             }).pipe(
               Effect.mapError(
                 (cause) =>
                   new OrchestrationEffectExecutionError({
                     effectId: effect.id,
-                    effectType: effect.request.type,
+                    effectType: request.type,
                     cause,
                   }),
               ),
-              Effect.andThen(
+              Effect.andThen((validation) =>
                 providerTurnControl
                   .steer({
                     threadId: effect.threadId,
-                    providerSessionId: effect.request.providerSessionId,
-                    providerThreadId: effect.request.providerThreadId,
-                    providerTurnId: effect.request.providerTurnId,
-                    messageId: effect.request.messageId,
+                    providerSessionId: request.providerSessionId,
+                    providerThreadId: request.providerThreadId,
+                    providerTurnId: request.providerTurnId,
+                    messageId: request.messageId,
+                    imageDenialOnly: validation === "image-denied",
                   })
                   .pipe(
                     Effect.tap(() =>
                       Effect.gen(function* () {
-                        if (effect.request.type !== "provider-turn.steer") return;
-                        const messageId = effect.request.messageId;
+                        if (request.type !== "provider-turn.steer") return;
+                        const messageId = request.messageId;
                         const projection = yield* threads.getThreadRecords(
                           effect.threadId,
                           ["messages", "runs"],
-                          { messageIds: [effect.request.messageId] },
+                          { messageIds: [request.messageId] },
                         );
                         const message = projection.messages.find((row) => row.id === messageId);
                         if (message?.delegatedCompletion === undefined) return;
@@ -274,16 +279,16 @@ export const executorLayer: Layer.Layer<
                         if (
                           !("turnCompleted" in error) ||
                           !error.turnCompleted ||
-                          effect.request.type !== "provider-turn.steer"
+                          request.type !== "provider-turn.steer"
                         ) {
                           return yield* error;
                         }
                         const projection = yield* threads.getThreadRecords(
                           effect.threadId,
                           ["messages", "runs"],
-                          { messageIds: [effect.request.messageId] },
+                          { messageIds: [request.messageId] },
                         );
-                        const messageId = effect.request.messageId;
+                        const messageId = request.messageId;
                         const message = projection.messages.find((item) => item.id === messageId);
                         const run = projection.runs.find((item) => item.id === message?.runId);
                         if (message === undefined || run === undefined) return yield* error;
@@ -330,77 +335,97 @@ export const executorLayer: Layer.Layer<
                       (cause) =>
                         new OrchestrationEffectExecutionError({
                           effectId: effect.id,
-                          effectType: effect.request.type,
+                          effectType: request.type,
                           cause,
                         }),
                     ),
                   ),
               ),
             );
-          case "provider-turn.restart":
+          }
+          case "provider-turn.restart": {
+            const request = effect.request;
             return revalidateOutboxEffect({
               threadId: effect.threadId,
               commandId: effect.commandId,
               attemptCount: effect.attemptCount,
-              request: { type: effect.request.type, runId: effect.request.runId },
+              request: { type: request.type, runId: request.runId },
             }).pipe(
               Effect.mapError(
                 (cause) =>
                   new OrchestrationEffectExecutionError({
                     effectId: effect.id,
-                    effectType: effect.request.type,
+                    effectType: request.type,
                     cause,
                   }),
               ),
-              Effect.andThen(
-                providerTurnControl
-                  .interruptAndAwaitTerminal({
-                    threadId: effect.threadId,
-                    providerSessionId: effect.request.providerSessionId,
-                    providerThreadId: effect.request.providerThreadId,
-                    providerTurnId: effect.request.providerTurnId,
-                    interruptedAttemptId: effect.request.interruptedAttemptId,
-                    ...(effect.request.sessionTransition?.type === "replace"
-                      ? {
-                          replacementProviderSessionId:
-                            effect.request.sessionTransition.replacementProviderSessionId,
-                        }
-                      : {}),
-                  })
-                  .pipe(
-                    Effect.andThen(
-                      effect.request.sessionTransition?.type === "replace"
-                        ? providerSessions.detach({
-                            providerSessionId: effect.request.providerSessionId,
-                            threadId: effect.threadId,
-                            detail: "Selection change requires a provider session restart.",
-                          })
-                        : effect.request.sessionTransition?.type === "detach"
-                          ? providerSessions.detach({
-                              providerSessionId: effect.request.providerSessionId,
-                              threadId: effect.threadId,
-                              detail: "Provider thread handoff replaced this session binding.",
-                            })
-                          : Effect.void,
-                    ),
-                    Effect.andThen(
-                      providerTurnStart.start({
+              Effect.andThen((validation) =>
+                validation === "image-denied"
+                  ? providerTurnStart
+                      .start({
                         threadId: effect.threadId,
-                        runId: effect.request.runId,
-                        willRetry,
-                      }),
-                    ),
-                    Effect.mapError(
-                      (cause) =>
-                        new OrchestrationEffectExecutionError({
-                          effectId: effect.id,
-                          effectType: effect.request.type,
-                          cause,
-                        }),
-                    ),
-                  ),
+                        runId: request.runId,
+                        imageDenialOnly: true,
+                      })
+                      .pipe(
+                        Effect.mapError(
+                          (cause) =>
+                            new OrchestrationEffectExecutionError({
+                              effectId: effect.id,
+                              effectType: request.type,
+                              cause,
+                            }),
+                        ),
+                      )
+                  : providerTurnControl
+                      .interruptAndAwaitTerminal({
+                        threadId: effect.threadId,
+                        providerSessionId: request.providerSessionId,
+                        providerThreadId: request.providerThreadId,
+                        providerTurnId: request.providerTurnId,
+                        interruptedAttemptId: request.interruptedAttemptId,
+                        ...(request.sessionTransition?.type === "replace"
+                          ? {
+                              replacementProviderSessionId:
+                                request.sessionTransition.replacementProviderSessionId,
+                            }
+                          : {}),
+                      })
+                      .pipe(
+                        Effect.andThen(
+                          request.sessionTransition?.type === "replace"
+                            ? providerSessions.detach({
+                                providerSessionId: request.providerSessionId,
+                                threadId: effect.threadId,
+                                detail: "Selection change requires a provider session restart.",
+                              })
+                            : request.sessionTransition?.type === "detach"
+                              ? providerSessions.detach({
+                                  providerSessionId: request.providerSessionId,
+                                  threadId: effect.threadId,
+                                  detail: "Provider thread handoff replaced this session binding.",
+                                })
+                              : Effect.void,
+                        ),
+                        Effect.andThen(
+                          providerTurnStart.start({
+                            threadId: effect.threadId,
+                            runId: request.runId,
+                            willRetry,
+                          }),
+                        ),
+                        Effect.mapError(
+                          (cause) =>
+                            new OrchestrationEffectExecutionError({
+                              effectId: effect.id,
+                              effectType: request.type,
+                              cause,
+                            }),
+                        ),
+                      ),
               ),
             );
+          }
           case "runtime-request.respond":
             return runtimeRequests
               .respond({

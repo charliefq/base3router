@@ -24,6 +24,8 @@ import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
+import * as EventSink from "./EventSink.ts";
+import * as IdAllocator from "./IdAllocator.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 
 const threadId = ThreadId.make("thread:control-reads");
@@ -346,7 +348,9 @@ it.effect.each(storageCases)(
       }).pipe(
         Effect.provide(
           Layer.merge(ProviderTurnControlService.layer, RuntimeRequestService.layer).pipe(
-            Layer.provide(sessions),
+            Layer.provide(
+              Layer.mergeAll(sessions, IdAllocator.layer, Layer.mock(EventSink.EventSinkV2)({})),
+            ),
           ),
         ),
       );

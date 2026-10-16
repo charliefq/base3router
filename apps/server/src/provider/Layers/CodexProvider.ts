@@ -222,7 +222,7 @@ export function mapCodexModelCapabilities(
   });
 }
 
-function parseCodexModelListResponse(
+export function parseCodexModelListResponse(
   response: CodexSchema.V2ModelListResponse,
 ): ReadonlyArray<ServerProviderModel> {
   return response.data.map((model) => ({
@@ -231,6 +231,7 @@ function parseCodexModelListResponse(
     isCustom: false,
     ...(model.isDefault ? { isDefault: true } : {}),
     capabilities: mapCodexModelCapabilities(model),
+    ...(model.inputModalities === undefined ? {} : { inputModalities: model.inputModalities }),
   }));
 }
 

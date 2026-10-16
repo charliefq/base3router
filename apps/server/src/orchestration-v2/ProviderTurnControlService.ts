@@ -1,3 +1,10 @@
+import { revalidateImageRoute, settleImageDeliveryDenial } from "../policy/Base3PolicyGate.ts";
+import { PolicyExecutionContext } from "../policy/executionContext.ts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as DateTime from "effect/DateTime";
+import * as EventSink from "./EventSink.ts";
+import * as IdAllocator from "./IdAllocator.ts";
+import { imageDeliveryDeniedFailure } from "./ProviderFailure.ts";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
   MessageId,
@@ -53,6 +60,7 @@ export interface ProviderTurnControlServiceV2Shape {
     readonly providerThreadId: ProviderThreadId;
     readonly providerTurnId: ProviderTurnId;
     readonly messageId: MessageId;
+    readonly imageDenialOnly?: boolean;
   }) => Effect.Effect<void, ProviderTurnControlError>;
   readonly interruptAndAwaitTerminal: (input: {
     readonly threadId: ThreadId;
@@ -72,12 +80,17 @@ export class ProviderTurnControlServiceV2 extends Context.Service<
 export const layer: Layer.Layer<
   ProviderTurnControlServiceV2,
   never,
-  ProjectionStore.ProjectionStoreV2 | ProviderSessionManager.ProviderSessionManagerV2
+  | ProjectionStore.ProjectionStoreV2
+  | ProviderSessionManager.ProviderSessionManagerV2
+  | EventSink.EventSinkV2
+  | IdAllocator.IdAllocatorV2
 > = Layer.effect(
   ProviderTurnControlServiceV2,
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+    const eventSink = yield* EventSink.EventSinkV2;
+    const ids = yield* IdAllocator.IdAllocatorV2;
 
     const load = (input: {
       readonly threadId: ThreadId;
@@ -282,6 +295,72 @@ export const layer: Layer.Layer<
             )
               return;
           }
+          const settleDenial = () =>
+            Effect.gen(function* () {
+              const { message, run, providerThread, providerTurn } = context;
+              if (
+                !message ||
+                !run ||
+                !providerThread ||
+                !providerTurn ||
+                !run.activeAttemptId ||
+                !run.rootNodeId
+              )
+                return yield* new ProviderTurnControlError({
+                  threadId: input.threadId,
+                  operation: "steer",
+                  providerTurnId: input.providerTurnId,
+                  cause: "The denied steering identity is missing.",
+                });
+              const now = yield* DateTime.now;
+              const messageItemId = ids.derive.runSignalTurnItem({
+                runId: run.id,
+                signal: `image-denied:${message.id}`,
+              });
+              yield* settleImageDeliveryDenial({
+                threadId: input.threadId,
+                messageId: input.messageId,
+                settle: eventSink.writeIfRunCurrent({
+                  threadId: input.threadId,
+                  runId: run.id,
+                  activeAttemptId: run.activeAttemptId,
+                  expectedStatus: run.status,
+                  events: [
+                    {
+                      id: yield* ids.allocate.event({ threadId: input.threadId }),
+                      type: "turn-item.updated",
+                      threadId: input.threadId,
+                      runId: run.id,
+                      nodeId: run.rootNodeId,
+                      providerInstanceId: run.providerInstanceId,
+                      occurredAt: now,
+                      payload: {
+                        id: messageItemId,
+                        threadId: input.threadId,
+                        runId: run.id,
+                        nodeId: run.rootNodeId,
+                        providerThreadId: providerThread.id,
+                        providerTurnId: providerTurn.id,
+                        nativeItemRef: null,
+                        parentItemId: null,
+                        ordinal: yield* projections.getNextTurnItemOrdinal(input.threadId),
+                        type: "error",
+                        status: "failed",
+                        title: "Image delivery denied",
+                        failure: imageDeliveryDeniedFailure(),
+                        startedAt: now,
+                        completedAt: now,
+                        updatedAt: now,
+                      },
+                    },
+                  ],
+                }),
+              });
+            });
+          if (input.imageDenialOnly) {
+            yield* settleDenial();
+            return;
+          }
           const loaded = yield* load({ ...input, operation: "steer" });
           if (Option.isNone(loaded.session)) return;
           const { message, run } = loaded.context;
@@ -292,6 +371,32 @@ export const layer: Layer.Layer<
               providerTurnId: input.providerTurnId,
               cause: "The persisted steering message or target run is missing.",
             });
+          }
+          if ((yield* PolicyExecutionContext).kind !== "kernel-test") {
+            const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+            if (Option.isNone(sql))
+              return yield* new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "steer",
+                providerTurnId: input.providerTurnId,
+                cause: "Policy store unavailable before image steering.",
+              });
+            const eligible = yield* Effect.result(
+              revalidateImageRoute({
+                sql: sql.value,
+                threadId: input.threadId,
+                messageId: input.messageId,
+                commandType: "provider-turn.steer",
+                target: {
+                  instanceId: loaded.providerThread.providerInstanceId,
+                  model: run.modelSelection.model,
+                },
+              }),
+            );
+            if (eligible._tag === "Failure") {
+              yield* settleDenial();
+              return;
+            }
           }
           yield* loaded.session.value
             .steerTurn({

@@ -28,6 +28,7 @@ import {
   makeSqlitePersistenceLive,
 } from "../persistence/Layers/Sqlite.ts";
 import { backupAndCheck, importBase3Policy } from "../persistence/Base3SchemaImport.ts";
+import { runBase3PolicyMigrations } from "../persistence/Base3PolicyMigrations.ts";
 import { initializeV2Database } from "../persistence/initializeV2Database.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import {
@@ -475,4 +476,21 @@ it.effect("does not copy a Base3 policy database into a fresh V2 file", () =>
     yield* initializeV2Database(destinationPath);
     expect(NodeFS.existsSync(destinationPath)).toBe(false);
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "existing policy ledgers gain durable image-denial recovery without rewriting grants",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DROP TABLE base3_image_delivery_denials`;
+      yield* sql`DELETE FROM base3_policy_migrations WHERE migration_id='b3-073'`;
+      yield* runBase3PolicyMigrations;
+      yield* sql`INSERT INTO base3_image_delivery_denials(thread_id,message_id,denied_at) VALUES ('fixture-thread','fixture-message','2026-10-15T00:00:00Z')`;
+      yield* runBase3PolicyMigrations;
+      const rows = yield* sql<{
+        settled_at: string | null;
+      }>`SELECT settled_at FROM base3_image_delivery_denials`;
+      expect(rows).toEqual([{ settled_at: null }]);
+    }).pipe(Effect.provide(SqlitePersistenceMemory)),
 );
