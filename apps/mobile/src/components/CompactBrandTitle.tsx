@@ -32,20 +32,13 @@ export function CompactBrandTitle(
   return (
     <View
       aria-level={1}
-      accessibilityLabel="T3 Code, Threads"
+      accessibilityLabel="B3R, Threads"
       accessible
       role="heading"
       className="flex-row items-center gap-1.5"
       style={[{ marginLeft: titleOffset }, Platform.OS === "android" && { gap: 5.25 * scale }]}
     >
       <T3Wordmark colorClassName="accent-icon" height={Math.round(15 * scale)} />
-      <Text
-        allowFontScaling={props.allowFontScaling}
-        className="font-t3-medium text-foreground-muted"
-        style={{ fontSize: 21 * scale, letterSpacing: -0.5 * scale }}
-      >
-        Code
-      </Text>
       <View
         className="rounded-full bg-subtle px-1.5 py-0.5"
         style={

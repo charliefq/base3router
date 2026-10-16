@@ -642,9 +642,9 @@ function ActionGateAndMemoryControls(props: {
       <article className="rounded-md border border-border/60 p-3" data-provider-disclosure="">
         <h3 className="text-xs font-medium">Provider capabilities</h3>
         <p className="mt-1 text-xs text-muted-foreground">
-          OpenRouter has no executable provider driver on this branch. It is guidance, Teacher, and
-          Shadow only. Cursor Cloud REST execution is unavailable for authenticated product sessions
-          and is not a second engine.
+          OpenRouter (text) has an executable driver when its provider is configured and ready.
+          Guidance, Teacher, and Shadow are separate routing features. Cursor Cloud REST execution
+          is unavailable for authenticated product sessions and is not a second engine.
         </p>
       </article>
       {error !== null ? (

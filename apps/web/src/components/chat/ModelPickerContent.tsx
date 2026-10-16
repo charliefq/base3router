@@ -40,6 +40,7 @@ import { cn } from "~/lib/utils";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
 import { TooltipProvider } from "../ui/tooltip";
 import { InlineButton } from "../ui/button";
+import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import {
   isProviderInstancePickerReady,
   isProviderInstancePickerVisible,
@@ -150,6 +151,7 @@ function ModelListSeparator() {
 }
 
 export const ModelPickerContent = memo(function ModelPickerContent(props: {
+  showCards?: boolean;
   /** The instance currently selected in the composer (combobox "value"). */
   activeInstanceId: ProviderInstanceId;
   model: string;
@@ -568,6 +570,16 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       ...(legacySection.isExpanded ? legacySection.legacyModels : []),
     ];
   }, [filteredModels, legacySection]);
+  const cardModels = useMemo(() => {
+    if (!props.showCards) return [];
+    const selected = visibleModels.filter((model) =>
+      selectedModelKeySet.has(modelPickerModelKey(model.instanceId, model.slug)),
+    );
+    return [...selected, ...visibleModels.filter((model) => !selected.includes(model))].slice(
+      0,
+      12,
+    );
+  }, [props.showCards, selectedModelKeySet, visibleModels]);
 
   const selectedEntry =
     selectedInstanceId === "favorites" ? undefined : entryByInstanceId.get(selectedInstanceId);
@@ -815,7 +827,10 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   return (
     <TooltipProvider delay={0}>
       <div
-        className="relative flex h-screen max-h-86.5 w-screen max-w-90 flex-row overflow-hidden"
+        className={cn(
+          "relative flex h-screen w-screen flex-row overflow-hidden",
+          props.showCards ? "max-h-110 max-w-[min(32rem,calc(100vw-2rem))]" : "max-h-86.5 max-w-90",
+        )}
         data-model-picker-content="true"
       >
         {/* Sidebar */}
@@ -886,6 +901,63 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
               showSidebar && "border-l border-border/70",
             )}
           >
+            {props.showCards && !searchQuery ? (
+              <div
+                aria-label="Model cards"
+                className="flex shrink-0 snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth border-b border-border p-3 motion-reduce:scroll-auto"
+              >
+                {cardModels.map((model) => {
+                  const key = modelPickerModelKey(model.instanceId, model.slug);
+                  const reason =
+                    getModelDisabledReason?.(model.instanceId, model.slug) ??
+                    (model.isUnavailable
+                      ? "This model is unavailable. Open provider settings to refresh its catalog."
+                      : null);
+                  return (
+                    <button
+                      type="button"
+                      key={key}
+                      aria-pressed={selectedModelKeySet.has(key)}
+                      disabled={Boolean(reason)}
+                      aria-label={`${model.name} · ${model.instanceDisplayName} · ${model.slug}${reason ? `: ${reason}` : ""}`}
+                      onClick={() => handleModelSelect(model.slug, model.instanceId)}
+                      onKeyDown={(event) => {
+                        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        const buttons = Array.from(
+                          event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
+                            "button:not(:disabled)",
+                          ) ?? [],
+                        );
+                        const index = buttons.indexOf(event.currentTarget);
+                        buttons[
+                          (index + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) %
+                            buttons.length
+                        ]?.focus();
+                      }}
+                      className="flex w-32 shrink-0 snap-center flex-col items-center gap-3 rounded-xl border border-border bg-background p-4 text-center transition-[transform,border-color,background-color] duration-150 hover:-translate-y-1 hover:border-primary/50 focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50 aria-pressed:border-primary aria-pressed:bg-primary/10 motion-reduce:transform-none motion-reduce:transition-none"
+                    >
+                      <ProviderInstanceIcon
+                        driverKind={model.driverKind}
+                        displayName={model.instanceDisplayName}
+                        className="size-9"
+                        iconClassName="size-9"
+                      />
+                      <span className="line-clamp-2 text-xs font-medium">
+                        {model.shortName ?? model.name}
+                      </span>
+                      <span className="text-2xs text-muted-foreground">
+                        {model.instanceDisplayName}
+                      </span>
+                      {reason ? (
+                        <span className="text-2xs text-muted-foreground">{reason}</span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
             <ComboboxSearchInput
               ref={searchInputRef}
               placeholder="Search models..."

@@ -104,7 +104,7 @@ To generate a fresh title from the conversation, open a thread's menu and choose
 **Regenerate title**. The action is unavailable while title generation is in progress
 or when the connected environment needs a server update.
 
-Agents connected through T3 Code can use the same server-owned metadata workflow to
+Agents connected through B3R can use the same server-owned metadata workflow to
 rename a thread, regenerate its title, or link and unlink a pull request. These changes
 appear on web, desktop, and mobile without requiring the originating browser to remain
 open.
@@ -196,7 +196,26 @@ the snooze. Enable **Snooze limited threads** in thread behavior settings to
 snooze limit stops by default. Providers without a reset time offer manual
 retry and the normal snooze choices.
 
-On web and desktop, use **Agents** to follow work delegated to subagents.
+On web and desktop, open **Agents → Create agent**, select a ready provider and
+project, then create its conversation. **Connect your agent** opens provider
+settings for the supported adapters. Opening a conversation does not start work.
+The directory keeps saved agent and task records readable while a provider needs
+setup.
+
+Use the model control inside the composer to choose **Auto** or **Manual**.
+Auto uses local task classification and eligible configured models. Manual binds
+the provider and model you select; choosing OpenRouter's Auto model delegates
+model selection to OpenRouter remotely. Switching modes retains your saved
+Manual choice. Read each turn's route details to compare the requested and
+executed model identities.
+
+To start a governed task, open **Tasks**, choose its project and a ready provider,
+then select **Create governed task**. Review the goal, acceptance criteria and
+brakes before creating it. Creation records the contract without starting work.
+Open the new conversation to send instructions separately. Return to **Tasks**
+and refresh to read the recorded execution status and result. If no provider is
+ready, existing tasks remain readable and **Set up a provider** opens the
+configuration page.
 
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. When such a subagent needs an approval or an answer, the parent

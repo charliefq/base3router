@@ -62,7 +62,19 @@ vi.mock("../../lib/attachmentUploadQueue", () => ({
   verifyStashedAttachmentUpload: vi.fn(),
 }));
 vi.mock("../ComposerPromptEditor", () => ({ ComposerPromptEditor: () => null }));
-vi.mock("./ProviderModelPicker", () => ({ ProviderModelPicker: () => null }));
+vi.mock("./ProviderModelPicker", () => ({
+  ProviderModelPicker: ({
+    routingMode,
+    onRoutingModeChange,
+  }: {
+    routingMode: "auto" | "manual";
+    onRoutingModeChange: (mode: "auto" | "manual") => void;
+  }) =>
+    createElement("button", {
+      "data-composer-routing": routingMode,
+      onClick: () => onRoutingModeChange(routingMode === "auto" ? "manual" : "auto"),
+    }),
+}));
 
 vi.mock("../ui/button", () => ({
   Button: ({ children, ...props }: { children: import("react").ReactNode }) =>
