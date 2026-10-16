@@ -23,11 +23,16 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import { persistTurnOutcomeFromV2ProviderTurn } from "../routerEvaluation/persistTurnOutcome.ts";
-import { confirmProviderTermination } from "../policy/Base3PolicyGate.ts";
+import {
+  confirmProviderTermination,
+  noteUnconfirmedDisconnect,
+} from "../policy/Base3PolicyGate.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as IdAllocator from "./IdAllocator.ts";
@@ -260,6 +265,7 @@ export const layer: Layer.Layer<
   Effect.gen(function* () {
     const eventSink = yield* EventSink.EventSinkV2;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const policySql = yield* Effect.serviceOption(SqlClient.SqlClient);
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const analytics = yield* ProviderTurnAnalytics;
     const completedTurnAnalytics = new Set<string>();
@@ -559,10 +565,19 @@ export const layer: Layer.Layer<
                 providerTurn.status !== "cancelled"
               )
                 return;
-              yield* confirmProviderTermination({
+              const termination = (
+                providerTurn.terminationConfirmed === false
+                  ? noteUnconfirmedDisconnect
+                  : confirmProviderTermination
+              )({
                 threadId: input.threadId,
                 ...(input.runId === undefined ? {} : { runId: input.runId }),
-              }).pipe(Effect.catch(() => Effect.void));
+              });
+              yield* (
+                Option.isSome(policySql)
+                  ? termination.pipe(Effect.provideService(SqlClient.SqlClient, policySql.value))
+                  : termination
+              ).pipe(Effect.ignore);
               const key = `${input.providerInstanceId}:${providerTurn.id}`;
               if (completedTurnAnalytics.has(key)) return;
               completedTurnAnalytics.add(key);

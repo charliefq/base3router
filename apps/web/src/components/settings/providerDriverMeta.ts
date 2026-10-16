@@ -7,6 +7,7 @@ import {
   GrokSettings,
   OpenCodeSettings,
   PiSettings,
+  OpenRouterExecutionSettings,
   ProviderDriverKind,
 } from "@t3tools/contracts";
 import type * as Schema from "effect/Schema";
@@ -47,6 +48,12 @@ export interface ProviderEnvironmentFieldDefinition {
 }
 
 const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
+  {
+    value: ProviderDriverKind.make("openrouter"),
+    label: "OpenRouter (text)",
+    settingsSchema: OpenRouterExecutionSettings,
+    hasDefaultInstance: false,
+  },
   {
     value: ProviderDriverKind.make("codex"),
     label: "Codex",

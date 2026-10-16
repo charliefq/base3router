@@ -6,7 +6,7 @@ import {
   CollaborationCommand,
   EnvironmentHttpApi,
   isProviderAvailable,
-  isProviderTextGenerationCapable,
+  isProviderTaskExecutionCapable,
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Layer from "effect/Layer";
@@ -50,7 +50,7 @@ const providerFact = (provider: ServerProvider): CollaborationProviderFact => ({
     provider.enabled &&
     provider.status === "ready" &&
     isProviderAvailable(provider) &&
-    isProviderTextGenerationCapable(provider) &&
+    isProviderTaskExecutionCapable(provider) &&
     provider.models.length > 0,
 });
 

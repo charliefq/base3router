@@ -151,6 +151,7 @@ export const CollaborationTaskResultReadout = Schema.Union([
     attemptId: Schema.NullOr(TrimmedNonEmptyString),
     providerTurnId: Schema.NullOr(TrimmedNonEmptyString),
     providerTurnStatus: Schema.NullOr(OrchestrationV2ProviderTurn.fields.status),
+    modelIdentity: OrchestrationV2ProviderTurn.fields.modelIdentity,
     content: Schema.Union([
       Schema.Struct({ status: Schema.Literal("unknown"), reason: Schema.String }),
       Schema.Struct({

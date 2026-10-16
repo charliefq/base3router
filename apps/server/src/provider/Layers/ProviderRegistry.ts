@@ -112,6 +112,8 @@ export function upsertProviderWorkspaceSnapshot(
 }
 
 const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean => {
+  // Execution opt-out and key removal must remove every OpenRouter target immediately.
+  if (provider.driver === "openrouter") return false;
   if (provider.driver === ProviderDriverKind.make("acpRegistry")) {
     // ACP Registry discovery probes return the agent's complete inventory, so
     // a completed probe (ready and authenticated) replaces the model list —

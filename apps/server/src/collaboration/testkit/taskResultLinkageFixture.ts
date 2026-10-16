@@ -1,3 +1,8 @@
+import {
+  makeOpenRouterAdapter,
+  OPENROUTER_DRIVER,
+} from "../../orchestration-v2/Adapters/OpenRouterAdapterV2.ts";
+import { PolicyExecutionContext } from "../../policy/executionContext.ts";
 import * as ProjectionMaintenance from "../../orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStore from "../../orchestration-v2/ProjectionStore.ts";
 import * as EventStore from "../../orchestration-v2/EventStore.ts";
@@ -40,6 +45,11 @@ import type {
 import { agentsCreationProvider } from "./agentsTaskCreationFixture.ts";
 type ProviderInstanceId = typeof agentsCreationProvider.instanceId;
 interface LinkageAdapterOptions {
+  readonly governedWorker?: boolean;
+  readonly terminalOnly?: boolean;
+  readonly fixtureOpenRouterModel?: string;
+  readonly adapter?: ProviderAdapterV2Shape;
+  readonly provider?: import("@t3tools/contracts").ServerProvider;
   readonly driver?: typeof agentsCreationProvider.driver;
   readonly appThread?: boolean;
   readonly runningFirst?: boolean;
@@ -302,7 +312,12 @@ const makeTaskResultLinkageAdapter = (options: LinkageAdapterOptions = {}) =>
   });
 
 type BaseFixture = Parameters<Parameters<typeof withAgentsTaskCreationFixture>[0]>[0];
-function linkageOperations(f: BaseFixture, settlements: Queue.Queue<string>) {
+function linkageOperations(
+  f: BaseFixture,
+  settlements: Queue.Queue<string>,
+  provider?: import("@t3tools/contracts").ServerProvider,
+  terminalOnly = false,
+) {
   const settle = (key: string) =>
     Stream.fromQueue(settlements).pipe(
       Stream.filter((messageId) => messageId === key),
@@ -313,6 +328,18 @@ function linkageOperations(f: BaseFixture, settlements: Queue.Queue<string>) {
     Effect.gen(function* () {
       const command = {
         ...agentsCreationCommand(key),
+        ...(provider
+          ? {
+              modelSelection: { instanceId: provider.instanceId, model: provider.models[0]!.slug },
+              taskCreationReview: {
+                ...agentsCreationCommand(key).taskCreationReview!,
+                modelSelection: {
+                  instanceId: provider.instanceId,
+                  model: provider.models[0]!.slug,
+                },
+              },
+            }
+          : {}),
         taskContract: {
           goal: `Run linkage ${key}`,
           redirect: "Keep disposable fixture scope",
@@ -341,7 +368,7 @@ function linkageOperations(f: BaseFixture, settlements: Queue.Queue<string>) {
             (e) =>
               e.type === "run.updated" &&
               e.payload.userMessageId === key &&
-              e.payload.status === "completed",
+              ["completed", "failed", "cancelled", "interrupted"].includes(e.payload.status),
           ),
           Stream.take(1),
           Stream.runDrain,
@@ -354,7 +381,15 @@ function linkageOperations(f: BaseFixture, settlements: Queue.Queue<string>) {
           messageId: MessageId.make(key),
           text: key,
           attachments: [],
-          routingMode: "auto",
+          routingMode: provider?.driver === "openrouter" ? "manual" : "auto",
+          ...(provider?.driver === "openrouter"
+            ? {
+                modelSelection: {
+                  instanceId: provider.instanceId,
+                  model: provider.models[0]!.slug,
+                },
+              }
+            : {}),
           dispatchMode: { type: "start_immediately" },
           ...routing,
           createdBy: "user",
@@ -362,6 +397,10 @@ function linkageOperations(f: BaseFixture, settlements: Queue.Queue<string>) {
         });
         yield* afterDispatch();
         yield* Fiber.join(completed);
+        if (terminalOnly) {
+          yield* f.worker.drain();
+          return;
+        }
         yield* Stream.fromQueue(settlements).pipe(
           Stream.filter((messageId) => messageId === key),
           Stream.take(1),
@@ -406,17 +445,51 @@ export const withTaskResultLinkageFixture = <E>(
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "b3r-linkage-a2-" });
       const dbPath = options.dbPath ?? path.join(directory, "state.sqlite");
       const cwd = yield* checkpointWorkspace("task-result-linkage");
+      if (options.fixtureOpenRouterModel) {
+        const model = options.fixtureOpenRouterModel;
+        options = {
+          ...options,
+          governedWorker: true,
+          provider: {
+            ...agentsCreationProvider,
+            driver: OPENROUTER_DRIVER,
+            models: [{ slug: model, name: model, isCustom: false, capabilities: null }],
+          },
+          adapter: makeOpenRouterAdapter({
+            instanceId: agentsCreationProvider.instanceId,
+            enabled: true,
+            models: [model],
+            apiKey: Effect.succeed("synthetic-fixture-key"),
+            fetch: async () =>
+              new Response(
+                'data: {"id":"gen-local-fixture","model":"fixture/resolved-model","choices":[{"delta":{"content":"LOCAL/FIXTURE streamed output"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+                { headers: { "content-type": "text/event-stream" } },
+              ),
+          }),
+        };
+      }
       const fake = yield* makeTaskResultLinkageAdapter(options);
+      const adapter = options.adapter ?? fake.adapter;
       yield* withAgentsTaskCreationFixture(
         (f) =>
           Effect.gen(function* () {
             yield* f.sql`UPDATE projection_projects SET workspace_root=${cwd} WHERE project_id='project-a'`;
-            f.setProviders([{ ...agentsCreationProvider, driver: fake.adapter.driver }]);
+            f.setProviders([
+              options.provider ?? { ...agentsCreationProvider, driver: adapter.driver },
+            ]);
             const settlements = yield* Queue.unbounded<string>();
             const notified = new Set<string>();
+            const govern = <A, E>(effect: Effect.Effect<A, E>) =>
+              options.governedWorker
+                ? effect.pipe(
+                    Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
+                    Effect.provideService(SqlClient.SqlClient, f.sql),
+                  )
+                : effect;
             const worker = {
               ...f.worker,
-              runOnce: f.worker.runOnce.pipe(
+              drain: () => govern(f.worker.drain()),
+              runOnce: govern(f.worker.runOnce).pipe(
                 Effect.tap((worked) =>
                   !worked
                     ? Effect.void
@@ -439,9 +512,15 @@ export const withTaskResultLinkageFixture = <E>(
               Effect.provideService(EffectWorker.OrchestrationEffectWorkerV2, worker),
               Effect.forkScoped,
             );
-            const operations = linkageOperations(f, settlements);
+            const operations = linkageOperations(
+              { ...f, worker },
+              settlements,
+              options.provider,
+              options.terminalOnly,
+            );
             yield* check({
               ...f,
+              worker,
               dbPath,
               started: fake.started,
               opened: fake.opened,
@@ -451,7 +530,7 @@ export const withTaskResultLinkageFixture = <E>(
           }),
         {
           dbPath,
-          adapterRegistryLayer: ProviderAdapterRegistry.makeLayer([fake.adapter]),
+          adapterRegistryLayer: ProviderAdapterRegistry.makeLayer([adapter]),
           ...(options.decorateEventSink === undefined
             ? {}
             : { decorateEventSink: options.decorateEventSink }),

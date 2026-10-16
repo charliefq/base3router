@@ -232,6 +232,8 @@ export const ServerProvider = Schema.Struct({
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   supportsConversationRollback: Schema.optional(Schema.Boolean),
   supportsTextGeneration: Schema.optional(Schema.Boolean),
+  /** Explicit text-task transport; does not imply coding tools or auxiliary generation. */
+  supportsTextTasks: Schema.optional(Schema.Boolean),
   setup: Schema.optional(
     Schema.Struct({
       canAuthenticate: Schema.Boolean,
@@ -515,6 +517,10 @@ export const ServerSignalProcessResult = Schema.Struct({
   message: Schema.Option(TrimmedNonEmptyString),
 });
 export type ServerSignalProcessResult = typeof ServerSignalProcessResult.Type;
+
+/** Task admission accepts an explicit text transport without enabling auxiliary generation. */
+export const isProviderTaskExecutionCapable = (snapshot: ServerProvider): boolean =>
+  snapshot.supportsTextTasks === true || isProviderTextGenerationCapable(snapshot);
 
 /**
  * A palette the environment's machine publishes for T3 Code to follow, read
