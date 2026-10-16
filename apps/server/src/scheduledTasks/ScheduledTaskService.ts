@@ -4,6 +4,7 @@ import {
   ScheduledTask,
   ScheduledTaskError,
   ScheduledTaskId,
+  ScheduledTaskOccurrence,
   ThreadId,
   type ScheduledTaskDeleteInput,
   type ScheduledTaskDeleteResult,
@@ -28,12 +29,18 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import * as EventStore from "../orchestration-v2/EventStore.ts";
+import * as CommandReceipts from "../orchestration-v2/CommandReceiptStore.ts";
 import { authorizeScheduleUpsert } from "../policy/Base3PolicyGate.ts";
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
+
+const occurrenceJson = Schema.fromJsonString(ScheduledTaskOccurrence);
+const encodeOccurrence = Schema.encodeSync(occurrenceJson);
+const decodeOccurrence = Schema.decodeUnknownEffect(occurrenceJson);
 
 const decodeTask = Schema.decodeUnknownEffect(ScheduledTask);
 const decodeTaskId = Schema.decodeUnknownOption(ScheduledTaskId);
@@ -68,6 +75,7 @@ interface ScheduledTaskRow {
   readonly last_run_status: string;
   readonly last_run_error: string | null;
   readonly run_count: number;
+  readonly last_occurrence_json: string | null;
 }
 
 export class ScheduledTaskService extends Context.Service<
@@ -155,6 +163,8 @@ const decodeRow = (row: ScheduledTaskRow) =>
       lastRunStatus: row.last_run_status,
       lastRunError: row.last_run_error,
       runCount: row.run_count,
+      lastOccurrence:
+        row.last_occurrence_json == null ? null : yield* decodeOccurrence(row.last_occurrence_json),
     });
   }).pipe(
     Effect.mapError((cause) => {
@@ -212,6 +222,8 @@ export const layer = Layer.effect(
     const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const scheduler = yield* Scheduler.Scheduler;
+    const events = yield* EventStore.EventStoreV2;
+    const receipts = yield* CommandReceipts.CommandReceiptStoreV2;
     const activeRuns = yield* Ref.make<ReadonlySet<ScheduledTaskId>>(new Set());
     // Sliding(1) coalesces the dirty-signal: every notification triggers a
     // full list() re-emit anyway, so a slow subscriber only ever needs the
@@ -240,7 +252,8 @@ export const layer = Layer.effect(
         last_run_at,
         last_run_status,
         last_run_error,
-        run_count
+        run_count,
+        last_occurrence_json
       FROM scheduled_tasks
       ORDER BY updated_at DESC, task_id ASC
     `;
@@ -272,7 +285,8 @@ export const layer = Layer.effect(
         last_run_at,
         last_run_status,
         last_run_error,
-        run_count
+        run_count,
+        last_occurrence_json
       FROM scheduled_tasks
       WHERE task_id = ${id}
     `;
@@ -383,79 +397,120 @@ export const layer = Layer.effect(
         ),
       );
 
+    // Legacy status values remain compatible: unknown is nonterminal running,
+    // cancellation is failed with a reason. lastOccurrence carries the precise
+    // lifecycle state; runCount counts admitted occurrences, not successes.
     // Run-state transitions use targeted UPDATEs (never the full-row upsert) so
     // a completing run cannot resurrect a deleted task or clobber concurrent
     // edits to the task definition.
-    const markRunning = (id: ScheduledTaskId, startedAtIso: string) =>
+    const saveOccurrence = (task: ScheduledTask, occurrence: ScheduledTaskOccurrence) =>
       sql`
         UPDATE scheduled_tasks
-        SET updated_at = ${startedAtIso},
-            last_run_at = ${startedAtIso},
-            last_run_status = 'running',
-            last_run_error = NULL
-        WHERE task_id = ${id}
-      `.pipe(
-        Effect.mapError((cause) =>
-          taskError("Could not mark schedule task as running.", { taskId: id, cause }),
-        ),
-      );
+        SET last_occurrence_json = ${encodeOccurrence(occurrence)},
+            last_run_status = ${occurrence.status === "succeeded" ? "succeeded" : occurrence.status === "failed" || occurrence.status === "cancelled" ? "failed" : "running"},
+            last_run_error = ${occurrence.blockedReason}
+        WHERE task_id = ${task.id}
+          AND json_extract(last_occurrence_json, '$.id') = ${occurrence.id}
+          AND json_extract(last_occurrence_json, '$.status') NOT IN ('succeeded', 'failed', 'cancelled')
+          AND json_extract(last_occurrence_json, '$.lastEventSequence') <= ${occurrence.lastEventSequence}
+          AND last_occurrence_json <> ${encodeOccurrence(occurrence)}
+        RETURNING task_id
+      `.pipe(Effect.flatMap((rows) => (rows.length > 0 ? notifyChanged : Effect.void)));
 
-    const markCompleted = (input: {
-      readonly id: ScheduledTaskId;
-      readonly completedAtIso: string;
-      readonly nextRunAtIso: string | null;
-      readonly status: "succeeded" | "failed";
-      readonly error: string | null;
-      readonly startedAtIso: string;
-    }) =>
-      sql`
-        UPDATE scheduled_tasks
-        SET updated_at = ${input.completedAtIso},
-            next_run_at = ${input.nextRunAtIso},
-            last_run_status = ${input.status},
-            last_run_error = ${input.error},
-            run_count = run_count + 1
-        WHERE task_id = ${input.id}
-          AND last_run_status = 'running'
-          AND last_run_at = ${input.startedAtIso}
-      `.pipe(
-        Effect.mapError((cause) =>
-          taskError("Could not record schedule task run.", { taskId: input.id, cause }),
-        ),
+    // Read durable run events, including events committed before dispatch returned.
+    // Command receipts acknowledge admission only; the existing outbox owns provider execution.
+    const reconcileOccurrence = Effect.fn("ScheduledTaskService.reconcileOccurrence")(function* (
+      task: ScheduledTask,
+    ) {
+      let occurrence = task.lastOccurrence;
+      if (occurrence == null || ["succeeded", "failed", "cancelled"].includes(occurrence.status))
+        return;
+      const messageCommandId = occurrence.commandId;
+      const messageId = occurrence.messageId;
+      const receipt = yield* receipts.getByCommandId(messageCommandId);
+      const admitted = yield* events
+        .readByCommandId({ commandId: messageCommandId })
+        .pipe(Stream.runCollect);
+      const admittedRun = admitted.findLast(
+        (stored) =>
+          (stored.event.type === "run.created" || stored.event.type === "run.updated") &&
+          stored.event.payload.userMessageId === messageId,
       );
+      if (
+        admittedRun !== undefined &&
+        (admittedRun.event.type === "run.created" || admittedRun.event.type === "run.updated")
+      ) {
+        occurrence = {
+          ...occurrence,
+          threadId: admittedRun.event.threadId,
+          runId: admittedRun.event.payload.id,
+        };
+      }
+      if (occurrence.threadId !== null && occurrence.runId !== null) {
+        const updates = yield* events
+          .read({
+            threadId: occurrence.threadId,
+            afterSequence: occurrence.lastEventSequence,
+            eventType: "run.updated",
+          })
+          .pipe(Stream.runCollect);
+        for (const stored of [...admitted, ...updates].sort(
+          (left, right) => left.sequence - right.sequence,
+        )) {
+          if (
+            stored.sequence <= occurrence.lastEventSequence ||
+            (stored.event.type !== "run.created" && stored.event.type !== "run.updated") ||
+            stored.event.payload.id !== occurrence.runId
+          )
+            continue;
+          const run = stored.event.payload;
+          const recovery = stored.commandId?.startsWith("command:runtime-reconcile:") === true;
+          const status: ScheduledTaskOccurrence["status"] = recovery
+            ? "unknown"
+            : run.status === "completed"
+              ? "succeeded"
+              : run.status === "failed"
+                ? "failed"
+                : ["cancelled", "interrupted", "rolled_back"].includes(run.status)
+                  ? "cancelled"
+                  : occurrence.status === "unknown"
+                    ? "unknown"
+                    : "running";
+          occurrence = {
+            ...occurrence,
+            status,
+            lastEventSequence: stored.sequence,
+            blockedReason:
+              status === "unknown"
+                ? "UNKNOWN: provider work lost during server recovery."
+                : status === "cancelled"
+                  ? "Run cancelled or interrupted."
+                  : status === "failed"
+                    ? "Run failed."
+                    : null,
+          };
+          if (["succeeded", "failed", "cancelled"].includes(status)) break;
+        }
+      } else if (Option.isSome(receipt) && receipt.value.status === "rejected") {
+        occurrence = {
+          ...occurrence,
+          status: "failed",
+          blockedReason: receipt.value.error ?? "Dispatch rejected.",
+        };
+      }
+      yield* saveOccurrence(task, occurrence);
+    });
 
-    // Best-effort escape hatch: if anything fails between markRunning and
-    // markCompleted, write a full terminal record so runDueTasks neither skips
-    // the task forever (it filters out 'running' rows) nor re-fires it
-    // immediately: the dispatch may already have gone out, so next_run_at must
-    // advance and run_count must count the attempt.
-    const releaseStuckRun = (task: ScheduledTask, message: string) =>
-      Effect.gen(function* () {
-        const now = yield* localNow;
-        // Compute the next occurrence from the current row so a schedule
-        // edited while the run was in flight is honoured; fall back to the
-        // run's snapshot only if the re-read itself fails.
-        const reread = yield* Effect.result(findTask(task.id));
-        if (Result.isSuccess(reread) && reread.success === null) return; // deleted — nothing to release
-        const source = Result.isSuccess(reread) && reread.success !== null ? reread.success : task;
-        yield* sql`
-          UPDATE scheduled_tasks
-          SET last_run_status = 'failed',
-              last_run_error = ${message},
-              next_run_at = ${nextRunAt(source, now)},
-              updated_at = ${iso(now)},
-              run_count = run_count + 1
-          WHERE task_id = ${task.id} AND last_run_status = 'running'
-        `;
-        yield* notifyChanged;
-      }).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("Could not release stuck schedule task run", {
-            taskId: task.id,
-            cause,
-          }),
-        ),
-      );
+    const reconcileOccurrences = Effect.fn("ScheduledTaskService.reconcileOccurrences")(
+      function* () {
+        const rows =
+          yield* sql<ScheduledTaskRow>`SELECT * FROM scheduled_tasks WHERE last_run_status = 'running' AND last_occurrence_json IS NOT NULL`;
+        for (const row of rows) {
+          const task = yield* Effect.result(decodeRow(row));
+          if (Result.isSuccess(task)) yield* reconcileOccurrence(task.success);
+        }
+      },
+    );
 
     const runTask = Effect.fn("ScheduledTaskService.runTask")(function* (
       task: ScheduledTask,
@@ -503,12 +558,39 @@ export const layer = Layer.effect(
           return active;
         }
 
-        yield* markRunning(active.id, startedAtIso);
-        yield* notifyChanged;
-
-        const fireKey = `${active.id}:${DateTime.toEpochMillis(startedAt)}:${trigger}`;
+        if (active.lastRunStatus === "running" && active.lastOccurrence?.status !== "unknown") {
+          return yield* taskError("Schedule task is already running.", { taskId: task.id });
+        }
+        const occurrenceId = yield* crypto.randomUUIDv4;
+        const fireKey = `${active.id}:${occurrenceId}`;
         const commandId = CommandId.make(`scheduled-task:${fireKey}`);
         const messageId = MessageId.make(`scheduled-task-message:${fireKey}`);
+        const occurrence: ScheduledTaskOccurrence = {
+          id: occurrenceId,
+          commandId:
+            active.threadId === null ? CommandId.make(`${commandId}:initial-message`) : commandId,
+          messageId,
+          threadId: active.threadId,
+          runId: null,
+          status: "dispatching",
+          lastEventSequence: 0,
+          blockedReason: null,
+        };
+        // Persist identity before any external effect. A restart reconciles this
+        // exact message and never sends it again with a fresh command id.
+        const claimed = yield* sql<{ task_id: string }>`
+          UPDATE scheduled_tasks SET last_occurrence_json = ${encodeOccurrence(occurrence)},
+            last_run_at = ${startedAtIso}, last_run_status = 'running', last_run_error = NULL,
+            updated_at = ${startedAtIso}, next_run_at = ${nextRunAt(active, startedAt)}, run_count = run_count + 1
+          WHERE task_id = ${active.id} AND (${trigger} = 'manual' OR (enabled = 1 AND next_run_at IS ${active.nextRunAt}))
+            AND last_occurrence_json IS ${active.lastOccurrence == null ? null : encodeOccurrence(active.lastOccurrence)}
+          RETURNING task_id
+        `;
+        if (claimed.length === 0)
+          return yield* taskError("Schedule occurrence changed before dispatch.", {
+            taskId: active.id,
+          });
+        yield* notifyChanged;
         // Dispatch from the fresh row so prompt/model/binding edits made
         // after the poll read are honoured.
         const prompt = active.prompt;
@@ -561,40 +643,22 @@ export const layer = Layer.effect(
                   ),
               );
 
-        const completedAt = yield* localNow;
-        const runSucceeded = result._tag === "Success";
-        const lastRunStatus = runSucceeded ? ("succeeded" as const) : ("failed" as const);
-        const lastRunError = runSucceeded ? null : errorMessage(result.cause);
-        // Re-read the task so the next run is computed from the schedule as it
-        // is *now* (the user may have edited or deleted it while we ran).
-        const current = yield* findTask(task.id);
-        const scheduleSource = current ?? task;
-        const completed: ScheduledTask = {
-          ...scheduleSource,
-          updatedAt: iso(completedAt),
-          lastRunAt: startedAtIso,
-          nextRunAt: nextRunAt(scheduleSource, completedAt),
-          lastRunStatus,
-          lastRunError,
-          runCount: scheduleSource.runCount + 1,
+        const outcome: ScheduledTaskOccurrence = {
+          ...occurrence,
+          status: result._tag === "Success" ? "accepted" : "unknown",
+          blockedReason:
+            result._tag === "Success"
+              ? null
+              : `UNKNOWN dispatch outcome: ${errorMessage(result.cause)}`,
         };
-        if (current !== null) {
-          // startedAtIso in the guard ensures this writes only to the row this
-          // run marked as running — a task deleted mid-run and recreated with
-          // the same id (idempotent commandId replay) must not be stamped.
-          yield* markCompleted({
-            id: task.id,
-            completedAtIso: completed.updatedAt,
-            nextRunAtIso: completed.nextRunAt,
-            status: lastRunStatus,
-            error: lastRunError,
-            startedAtIso,
-          });
-          yield* notifyChanged;
-        }
-        return completed;
+        yield* saveOccurrence(active, outcome);
+        yield* reconcileOccurrence({ ...active, lastOccurrence: outcome });
+        yield* notifyChanged;
+        return yield* loadTask(active.id);
       }).pipe(
-        Effect.onError((cause) => releaseStuckRun(task, errorMessage(cause))),
+        Effect.mapError((cause) =>
+          taskError("Could not dispatch schedule occurrence.", { taskId: task.id, cause }),
+        ),
         Effect.ensuring(
           Ref.update(activeRuns, (active) => {
             const next = new Set(active);
@@ -653,64 +717,29 @@ export const layer = Layer.effect(
       );
     });
 
-    // Recover from a crash or hard shutdown mid-run: rows stuck in 'running'
-    // would otherwise be skipped by the due-task filter forever. The dispatch
-    // may already have gone out before the crash, so next_run_at must advance
-    // and run_count must count the attempt — otherwise the first poll after
-    // every restart re-fires the interrupted task (same rationale as
-    // releaseStuckRun). Schedules are JSON, so this is per-row Effect work
-    // rather than a single UPDATE.
-    yield* Effect.gen(function* () {
-      const rows = yield* selectAllRows();
-      const stuck = rows.filter((row) => row.last_run_status === "running");
-      if (stuck.length === 0) return;
-      const now = yield* localNow;
-      yield* Effect.forEach(
-        stuck,
-        (row) =>
-          Effect.gen(function* () {
-            const decoded = yield* Effect.result(decodeRow(row));
-            if (Result.isSuccess(decoded)) {
-              yield* sql`
-                UPDATE scheduled_tasks
-                SET last_run_status = 'failed',
-                    last_run_error = 'Run was interrupted by a server restart.',
-                    next_run_at = ${nextRunAt(decoded.success, now)},
-                    updated_at = ${iso(now)},
-                    run_count = run_count + 1
-                WHERE task_id IS ${row.task_id} AND last_run_status = 'running'
-              `;
-              return;
-            }
-            // The schedule cannot be decoded, so the next occurrence cannot
-            // be computed — still release the row so it is not stuck in
-            // 'running' (the lenient poller skips it, so it cannot re-fire).
-            yield* Effect.logWarning(
-              "Recovering undecodable schedule task row without rescheduling",
-              { taskId: row.task_id, cause: decoded.failure },
-            );
-            yield* sql`
-              UPDATE scheduled_tasks
-              SET last_run_status = 'failed',
-                  last_run_error = 'Run was interrupted by a server restart.',
-                  updated_at = ${iso(now)},
-                  run_count = run_count + 1
-              WHERE task_id IS ${row.task_id} AND last_run_status = 'running'
-            `;
-          }),
-        { concurrency: 1, discard: true },
-      );
-      yield* notifyChanged;
-    }).pipe(
+    // Loss of a process is not proof of failure or success. Keep uncertain
+    // legacy and current occurrences blocked; reconciliation never redispatches.
+    yield* sql`
+      UPDATE scheduled_tasks SET last_run_error = 'UNKNOWN: server restarted before an outcome was observed.',
+        last_occurrence_json = CASE WHEN last_occurrence_json IS NULL THEN NULL
+          WHEN json_valid(last_occurrence_json) = 0 THEN last_occurrence_json
+          ELSE json_set(last_occurrence_json, '$.status', 'unknown', '$.blockedReason', 'UNKNOWN: server restarted before an outcome was observed.') END
+      WHERE last_run_status = 'running'
+    `;
+    yield* reconcileOccurrences().pipe(
       Effect.catch((cause) =>
-        Effect.logWarning("Could not reset interrupted schedule task runs", { cause }),
+        Effect.logWarning("Could not reconcile schedule outcomes", { cause }),
       ),
     );
 
-    yield* scheduler.register("scheduled-tasks", runDueTasks());
+    yield* scheduler.register(
+      "scheduled-tasks",
+      reconcileOccurrences().pipe(Effect.andThen(runDueTasks())),
+    );
 
     const list: ScheduledTaskService["Service"]["list"] = () =>
-      listRows().pipe(
+      reconcileOccurrences().pipe(
+        Effect.andThen(listRows()),
         Effect.map((tasks) => ({ tasks })),
         Effect.mapError((cause) => taskError("Could not list schedule tasks.", { cause })),
       );
@@ -775,6 +804,7 @@ export const layer = Layer.effect(
             ? existingTask.nextRunAt
             : nextRunAt({ enabled: input.enabled, schedule: input.schedule }, now),
           lastRunAt: existingTask?.lastRunAt ?? null,
+          lastOccurrence: existingTask?.lastOccurrence ?? null,
           lastRunStatus: existingTask?.lastRunStatus ?? "never",
           lastRunError: existingTask?.lastRunError ?? null,
           runCount: existingTask?.runCount ?? 0,
@@ -831,6 +861,12 @@ export const layer = Layer.effect(
 
     const runNow: ScheduledTaskService["Service"]["runNow"] = (input: ScheduledTaskRunNowInput) =>
       Effect.gen(function* () {
+        const snapshot = yield* loadTask(input.id);
+        yield* reconcileOccurrence(snapshot).pipe(
+          Effect.mapError((cause) =>
+            taskError("Could not reconcile schedule task.", { taskId: input.id, cause }),
+          ),
+        );
         const task = yield* loadTask(input.id);
         const next = yield* runTask(task, "manual").pipe(
           Effect.mapError((cause) =>
@@ -849,4 +885,4 @@ export const layer = Layer.effect(
       runNow,
     });
   }),
-);
+).pipe(Layer.provide(Layer.mergeAll(EventStore.layer, CommandReceipts.layer)));

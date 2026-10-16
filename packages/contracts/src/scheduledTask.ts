@@ -3,6 +3,9 @@ import * as Schema from "effect/Schema";
 import {
   CommandId,
   IsoDateTime,
+  MessageId,
+  RunId,
+  NonNegativeInt,
   ProjectId,
   ScheduledTaskId,
   ThreadId,
@@ -90,6 +93,27 @@ export type ScheduledTaskUpsertSchedule = typeof ScheduledTaskUpsertSchedule.Typ
 export const ScheduledTaskRunStatus = Schema.Literals(["never", "running", "succeeded", "failed"]);
 export type ScheduledTaskRunStatus = typeof ScheduledTaskRunStatus.Type;
 
+/** Dispatch acceptance and execution outcome are separate. Legacy lastRunStatus stays wire compatible. */
+export const ScheduledTaskOccurrence = Schema.Struct({
+  id: Schema.String,
+  commandId: CommandId,
+  messageId: MessageId,
+  threadId: Schema.NullOr(ThreadId),
+  runId: Schema.NullOr(RunId),
+  status: Schema.Literals([
+    "dispatching",
+    "accepted",
+    "running",
+    "unknown",
+    "succeeded",
+    "failed",
+    "cancelled",
+  ]),
+  lastEventSequence: NonNegativeInt,
+  blockedReason: Schema.NullOr(Schema.String),
+});
+export type ScheduledTaskOccurrence = typeof ScheduledTaskOccurrence.Type;
+
 export const ScheduledTask = Schema.Struct({
   id: ScheduledTaskId,
   title: TrimmedNonEmptyString,
@@ -108,6 +132,7 @@ export const ScheduledTask = Schema.Struct({
   updatedAt: IsoDateTime,
   nextRunAt: Schema.NullOr(IsoDateTime),
   lastRunAt: Schema.NullOr(IsoDateTime),
+  lastOccurrence: Schema.optional(Schema.NullOr(ScheduledTaskOccurrence)),
   lastRunStatus: ScheduledTaskRunStatus,
   lastRunError: Schema.NullOr(Schema.String),
   runCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),

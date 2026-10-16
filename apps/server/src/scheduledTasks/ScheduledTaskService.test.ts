@@ -157,7 +157,7 @@ it.effect("loads only due tasks and skips corrupt due rows without decoding sett
 );
 
 it.effect(
-  "releases interrupted runs on startup and still executes due tasks, skipping corrupt rows",
+  "preserves interrupted runs as unknown on startup and executes other due tasks, skipping corrupt rows",
   () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -240,26 +240,28 @@ it.effect(
        FROM scheduled_tasks ORDER BY task_id`;
       const byId = new Map(rows.map((row) => [row.task_id, row]));
       assert.equal(rows.length, 9);
-      // The decodable stuck run is rescheduled for its next occurrence; the
-      // undecodable and unrepresentable rows are released without a next run.
+      // Legacy in-flight rows retain uncertainty and are never redispatched.
       // A NULL id must still match its own row — `= NULL` never does.
-      assert.equal(byId.get("stuck-valid")?.last_run_status, "failed");
+      assert.equal(byId.get("stuck-valid")?.last_run_status, "running");
       assert.isNotNull(byId.get("stuck-valid")?.next_run_at);
-      assert.equal(byId.get("stuck-corrupt")?.last_run_status, "failed");
-      assert.equal(byId.get(null)?.last_run_status, "failed");
+      assert.equal(byId.get("stuck-corrupt")?.last_run_status, "running");
+      assert.equal(byId.get(null)?.last_run_status, "running");
       const stuckHuge = byId.get("stuck-huge");
-      assert.equal(stuckHuge?.last_run_status, "failed");
-      assert.isNull(stuckHuge?.next_run_at);
+      assert.equal(stuckHuge?.last_run_status, "running");
+      assert.isNotNull(stuckHuge?.next_run_at);
       for (const id of ["stuck-valid", "stuck-corrupt", "stuck-huge", null]) {
         const row = byId.get(id);
-        assert.equal(row?.last_run_error, "Run was interrupted by a server restart.");
-        assert.equal(row?.run_count, 1);
+        assert.equal(
+          row?.last_run_error,
+          "UNKNOWN: server restarted before an outcome was observed.",
+        );
+        assert.equal(row?.run_count, 0);
       }
-      // The healthy due tasks were dispatched and recorded failed runs; the
+      // The healthy due tasks retain unknown dispatch outcomes; the
       // corrupt due row was skipped without running.
       for (const id of ["due-healthy", "due-huge", "due-second"]) {
         const row = byId.get(id);
-        assert.equal(row?.last_run_status, "failed");
+        assert.equal(row?.last_run_status, "running");
         assert.isTrue(row?.last_run_error?.includes("test launch failure") === true);
         assert.equal(row?.run_count, 1);
       }
@@ -340,7 +342,7 @@ it.effect(
           assert.equal(victim?.next_run_at, "");
           for (const id of ["run-a", "run-c"]) {
             const row = byId.get(id);
-            assert.equal(row?.last_run_status, "failed");
+            assert.equal(row?.last_run_status, "running");
             assert.equal(row?.run_count, 1);
           }
           yield* Deferred.succeed(releaseLast, undefined);

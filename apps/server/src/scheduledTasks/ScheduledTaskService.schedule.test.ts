@@ -105,3 +105,57 @@ it.effect("preserves a due run when a save only pads the scheduled hour", () =>
     }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(dependencies))));
   }).pipe(Effect.provide(SqlitePersistenceMemory)),
 );
+
+it.effect(
+  "persists a lost dispatch acknowledgement as UNKNOWN across restart without resending",
+  () =>
+    Effect.gen(function* () {
+      let dispatches = 0;
+      const dependencies = Layer.mergeAll(
+        NodeCrypto.layer,
+        Layer.succeed(Scheduler.Scheduler, { register: () => Effect.void }),
+        Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+          launch: () =>
+            Effect.sync(() => {
+              dispatches += 1;
+            }).pipe(Effect.andThen(Effect.die("lost acknowledgement"))),
+        }),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+      );
+      const serviceLayer = ScheduledTaskService.layer.pipe(Layer.provide(dependencies));
+      const first = yield* Effect.gen(function* () {
+        const tasks = yield* ScheduledTaskService.ScheduledTaskService;
+        const { task } = yield* tasks.upsert(
+          yield* decodeUpsertInput({
+            id: "scheduled-task:lost-ack",
+            title: "Audit",
+            prompt: "Review",
+            enabled: true,
+            schedule: { type: "interval", everyMs: 60_000 },
+            projectId: "project:test",
+            workspaceStrategy: { type: "root" },
+            modelSelection: { instanceId: "codex", model: "fake" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          }),
+        );
+        const result = (yield* tasks.runNow({ id: task.id })).task;
+        expect(result.lastOccurrence?.status).toBe("unknown");
+        expect(result.lastRunStatus).toBe("running");
+        expect(result.runCount).toBe(1);
+        return result;
+      }).pipe(Effect.provide(serviceLayer));
+      yield* TestClock.adjust("2 minutes");
+      yield* Effect.gen(function* () {
+        const tasks = yield* ScheduledTaskService.ScheduledTaskService;
+        const result = (yield* tasks.list()).tasks[0]!;
+        expect(result.lastOccurrence?.id).toBe(first.lastOccurrence?.id);
+        expect(result.lastOccurrence?.status).toBe("unknown");
+        expect(result.lastRunError).toContain("UNKNOWN");
+        expect(result.runCount).toBe(1);
+        // The due-work selector is the real scheduler admission boundary.
+        expect(yield* ScheduledTaskService.listDueTasks(yield* DateTime.now)).toEqual([]);
+        expect(dispatches).toBe(1);
+      }).pipe(Effect.provide(Layer.fresh(serviceLayer)));
+    }).pipe(Effect.provide(SqlitePersistenceMemory)),
+);

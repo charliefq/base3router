@@ -16,6 +16,7 @@ import {
   ComposerContextId,
   type ChatAttachment,
   CommandId,
+  EventId,
   DEFAULT_SERVER_SETTINGS,
   GitCommandError,
   MessageId,
@@ -58,6 +59,7 @@ import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
+import * as EventStore from "./EventStore.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
@@ -347,7 +349,8 @@ it.effect.each(
       }
       const { task } = yield* asSession(tasks.upsert(upsertInput));
       const result = yield* tasks.runNow({ id: task.id });
-      assert.equal(result.task.lastRunStatus, "succeeded");
+      assert.equal(result.task.lastRunStatus, "running");
+      assert.equal(result.task.lastOccurrence?.status, "running");
       const projectThreads = yield* threads.listProjectThreads({
         projectId,
         includeSubagents: false,
@@ -2117,3 +2120,198 @@ it.effect.each([0, 1])("releases an async setup before its completion with exit 
     }).pipe(Effect.provide(harness.layer));
   }),
 );
+
+const outcomeScheduleInput = {
+  id: ScheduledTaskId.make("scheduled-task:outcome"),
+  title: "Audit",
+  prompt: "Audit performance.",
+  enabled: false,
+  schedule: { type: "interval", everyMs: 60_000 },
+  projectId,
+  workspaceStrategy: { type: "root" },
+  modelSelection,
+  runtimeMode: "full-access",
+  interactionMode: "default",
+} as const;
+
+function outcomeHarness() {
+  const harness = makeHarness();
+  const dependencies = Layer.mergeAll(
+    harness.layer,
+    NodeCrypto.layer,
+    Layer.succeed(Scheduler.Scheduler, { register: () => Effect.void }),
+  );
+  return {
+    dependencies,
+    layer: Layer.mergeAll(
+      ScheduledTasks.layer.pipe(Layer.provide(dependencies)),
+      EventStore.layer,
+    ).pipe(Layer.provideMerge(harness.layer)),
+  };
+}
+
+const createOutcomeTask = Effect.fn("test.createOutcomeTask")(function* (enabled = false) {
+  const launches = yield* ThreadLaunch.ThreadLaunchService;
+  const tasks = yield* ScheduledTasks.ScheduledTaskService;
+  const thread = yield* launches.launch(
+    launchInput({ command: "command:outcome-target", thread: "thread:outcome-target" }),
+  );
+  return yield* tasks.upsert({ ...outcomeScheduleInput, threadId: thread.threadId, enabled });
+});
+
+it.effect.each(["completed", "failed", "cancelled", "interrupted"] as const)(
+  "settles a scheduled occurrence only from durable run lifecycle %s and ignores duplicate completion",
+  (status) => {
+    const harness = outcomeHarness();
+    return Effect.gen(function* () {
+      const tasks = yield* ScheduledTasks.ScheduledTaskService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const events = yield* EventStore.EventStoreV2;
+      const { task } = yield* createOutcomeTask();
+      const dispatched = (yield* tasks.runNow({ id: task.id })).task;
+      assert.equal(dispatched.lastRunStatus, "running");
+      assert.equal(dispatched.runCount, 1);
+      const occurrence = dispatched.lastOccurrence!;
+      assert.isNotNull(occurrence.runId);
+      assert.isNotNull(occurrence.threadId);
+      const projection = yield* threads.getThreadProjection(occurrence.threadId!);
+      const run = projection.runs.find((candidate) => candidate.id === occurrence.runId)!;
+      assert.isDefined(run);
+      // The fake provider has not executed. Admission into the durable queue
+      // must not claim the queued work completed.
+      assert.include(["preparing", "queued", "starting", "running"], run.status);
+      for (const intermediate of ["running", "waiting"] as const) {
+        yield* events.append({
+          events: [
+            {
+              id: EventId.make(`event:${intermediate}`),
+              threadId: run.threadId,
+              occurredAt: yield* DateTime.now,
+              type: "run.updated",
+              payload: { ...run, status: intermediate },
+            },
+          ],
+        });
+        assert.equal((yield* tasks.list()).tasks[0]?.lastRunStatus, "running");
+      }
+      const event = {
+        id: EventId.make("event:outcome"),
+        threadId: run.threadId,
+        occurredAt: yield* DateTime.now,
+        type: "run.updated" as const,
+        payload: { ...run, status, completedAt: yield* DateTime.now },
+      };
+      yield* events.append({ events: [event] });
+      const settled = (yield* tasks.list()).tasks[0]!;
+      assert.equal(
+        settled.lastOccurrence?.status,
+        status === "completed" ? "succeeded" : status === "failed" ? "failed" : "cancelled",
+      );
+      assert.equal(settled.lastRunStatus, status === "completed" ? "succeeded" : "failed");
+      yield* events.append({ events: [{ ...event, id: EventId.make("event:duplicate-outcome") }] });
+      assert.deepEqual((yield* tasks.list()).tasks[0], settled);
+      assert.equal(settled.runCount, 1);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect(
+  "pause, edit, deletion and late completion cannot change a newer scheduled occurrence",
+  () => {
+    const harness = outcomeHarness();
+    return Effect.gen(function* () {
+      const tasks = yield* ScheduledTasks.ScheduledTaskService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const events = yield* EventStore.EventStoreV2;
+      const { task } = yield* createOutcomeTask(true);
+      const first = (yield* tasks.runNow({ id: task.id })).task;
+      const projection = yield* threads.getThreadProjection(first.lastOccurrence!.threadId!);
+      const run = projection.runs.find(
+        (candidate) => candidate.id === first.lastOccurrence!.runId,
+      )!;
+      yield* tasks.setEnabled({ id: task.id, enabled: false });
+      yield* tasks.upsert({
+        ...outcomeScheduleInput,
+        threadId: run.threadId,
+        title: "Edited during run",
+        schedule: { type: "interval", everyMs: 120_000 },
+      });
+      const complete = {
+        id: EventId.make("event:first-completed"),
+        threadId: run.threadId,
+        occurredAt: yield* DateTime.now,
+        type: "run.updated" as const,
+        payload: { ...run, status: "completed" as const, completedAt: yield* DateTime.now },
+      };
+      yield* events.append({ events: [complete] });
+      const paused = (yield* tasks.list()).tasks[0]!;
+      assert.equal(paused.enabled, false);
+      assert.isNull(paused.nextRunAt);
+      assert.equal(paused.title, "Edited during run");
+      const second = (yield* tasks.runNow({ id: task.id })).task;
+      assert.notEqual(second.lastOccurrence!.id, first.lastOccurrence!.id);
+      yield* events.append({ events: [{ ...complete, id: EventId.make("event:late-first") }] });
+      assert.deepEqual((yield* tasks.list()).tasks[0], second);
+      yield* tasks.delete({ id: task.id });
+      yield* events.append({ events: [{ ...complete, id: EventId.make("event:after-delete") }] });
+      assert.deepEqual((yield* tasks.list()).tasks, []);
+      yield* createOutcomeTask();
+      const recreated = (yield* tasks.runNow({ id: task.id })).task;
+      yield* events.append({ events: [{ ...complete, id: EventId.make("event:after-recreate") }] });
+      assert.deepEqual((yield* tasks.list()).tasks[0], recreated);
+      assert.equal(recreated.runCount, 1);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect("restart preserves unknown work, consumes recovery evidence and never resends", () => {
+  const harness = outcomeHarness();
+  return Effect.gen(function* () {
+    const tasks = yield* ScheduledTasks.ScheduledTaskService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const events = yield* EventStore.EventStoreV2;
+    const { task } = yield* createOutcomeTask();
+    const first = (yield* tasks.runNow({ id: task.id })).task;
+    const projection = yield* threads.getThreadProjection(first.lastOccurrence!.threadId!);
+    const run = projection.runs.find((candidate) => candidate.id === first.lastOccurrence!.runId)!;
+    yield* events.append({
+      commandId: CommandId.make(`command:runtime-reconcile:startup:${run.threadId}:test`),
+      events: [
+        {
+          id: EventId.make("event:recovery-cancel"),
+          threadId: run.threadId,
+          occurredAt: yield* DateTime.now,
+          type: "run.updated",
+          payload: { ...run, status: "cancelled", completedAt: yield* DateTime.now },
+        },
+      ],
+    });
+    const restartLayer = Layer.fresh(ScheduledTasks.layer).pipe(
+      Layer.provide(harness.dependencies),
+    );
+    yield* Effect.gen(function* () {
+      const restarted = yield* ScheduledTasks.ScheduledTaskService;
+      const result = (yield* restarted.list()).tasks[0]!;
+      assert.equal(result.lastOccurrence?.status, "unknown");
+      assert.equal(result.lastRunStatus, "running");
+      assert.include(result.lastRunError!, "UNKNOWN");
+      assert.equal(result.lastOccurrence?.id, first.lastOccurrence?.id);
+      assert.equal(result.runCount, 1);
+      assert.deepEqual((yield* restarted.list()).tasks[0], result);
+      assert.equal((yield* threads.getThreadProjection(run.threadId)).runs.length, 1);
+      // Later, authoritative lifecycle evidence can resolve the uncertainty.
+      yield* events.append({
+        events: [
+          {
+            id: EventId.make("event:late-real-completion"),
+            threadId: run.threadId,
+            occurredAt: yield* DateTime.now,
+            type: "run.updated",
+            payload: { ...run, status: "completed", completedAt: yield* DateTime.now },
+          },
+        ],
+      });
+      assert.equal((yield* restarted.list()).tasks[0]?.lastOccurrence?.status, "succeeded");
+    }).pipe(Effect.provide(restartLayer));
+  }).pipe(Effect.provide(harness.layer));
+});
