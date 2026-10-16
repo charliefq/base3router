@@ -172,6 +172,7 @@ vi.mock("../ui/sidebar", () => ({ SidebarInset: "main" }));
 vi.mock("../WorkspacePageHeader", () => ({ WorkspacePageHeader: "header" }));
 vi.mock("../WorkspacePageContainer", () => ({ WorkspacePageContainer: "div" }));
 vi.mock("../ui/badge", () => ({ Badge: "span" }));
+vi.mock("../chat/ProviderInstanceIcon", () => ({ ProviderInstanceIcon: () => null }));
 vi.mock("../ui/alert", () => ({ Alert: "div", AlertDescription: "p" }));
 vi.mock("../ui/scroll-area", () => ({ ScrollArea: "div" }));
 vi.mock("../ui/select", () => ({
@@ -290,6 +291,76 @@ const select = async (value: string) => {
 };
 
 describe("Agents server conversation recovery", () => {
+  it("creates from the hero through canonical provider recovery and deduplicates repeated submit", async () => {
+    const response = deferred<ReturnType<typeof bindResult>>();
+    state.recover.mockReturnValueOnce(response.promise);
+    await mount();
+    const show = renderer.root.findByProps({ "aria-controls": "create-agent" });
+    await act(async () => {
+      show.props.onClick();
+      show.props.onClick();
+    });
+    expect(renderer.root.findAllByProps({ id: "create-agent" })).toHaveLength(1);
+    await act(async () =>
+      renderer.root.findByType("select").props.onChange({ target: { value: "codex" } }),
+    );
+    const submit = renderer.root
+      .findAllByType("button")
+      .find((node) => node.children.join("") === "Create agent conversation")!;
+    expect(submit.props.disabled).toBe(false);
+    await act(async () => {
+      submit.props.onClick();
+      submit.props.onClick();
+    });
+    expect(state.recover).toHaveBeenCalledExactlyOnceWith({
+      projectId: "project-a",
+      providerId: "codex",
+    });
+    await act(async () =>
+      response.resolve(
+        bindResult({
+          type: "thread.bind",
+          commandId: "fixture-hero",
+          projectId: "project-a",
+          threadId: "hero-thread",
+        }),
+      ),
+    );
+    expect(state.navigate).toHaveBeenCalledWith({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: "environment-a", threadId: "hero-thread" },
+    });
+    expect(state.create).not.toHaveBeenCalled();
+  });
+
+  it("cancels hero creation without writes and connects through existing provider setup", async () => {
+    state.providers = [];
+    await mount();
+    await act(async () =>
+      renderer.root.findByProps({ "aria-controls": "create-agent" }).props.onClick(),
+    );
+    expect(
+      renderer.root
+        .findAllByType("button")
+        .find((node) => node.children.join("") === "Create agent conversation")!.props.disabled,
+    ).toBe(true);
+    await act(async () =>
+      renderer.root
+        .findAllByType("button")
+        .find((node) => node.children.join("") === "Cancel")!
+        .props.onClick(),
+    );
+    expect(renderer.root.findAllByProps({ id: "create-agent" })).toHaveLength(0);
+    expect(state.recover).not.toHaveBeenCalled();
+    expect(state.create).not.toHaveBeenCalled();
+    await act(async () =>
+      renderer.root
+        .findAllByType("button")
+        .find((node) => node.children.includes("Connect your agent"))!
+        .props.onClick(),
+    );
+    expect(state.navigate).toHaveBeenCalledWith({ to: "/settings/providers" });
+  });
   it("keeps the directory readable without a provider and links to setup", async () => {
     state.providers = [];
     await mount();

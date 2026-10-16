@@ -196,7 +196,18 @@ the snooze. Enable **Snooze limited threads** in thread behavior settings to
 snooze limit stops by default. Providers without a reset time offer manual
 retry and the normal snooze choices.
 
-On web and desktop, use **Agents** to follow work delegated to subagents.
+On web and desktop, open **Agents → Create agent**, select a ready provider and
+project, then create its conversation. **Connect your agent** opens provider
+settings for the supported adapters. Opening a conversation does not start work.
+The directory keeps saved agent and task records readable while a provider needs
+setup.
+
+Use the model control inside the composer to choose **Auto** or **Manual**.
+Auto uses local task classification and eligible configured models. Manual binds
+the provider and model you select; choosing OpenRouter's Auto model delegates
+model selection to OpenRouter remotely. Switching modes retains your saved
+Manual choice. Read each turn's route details to compare the requested and
+executed model identities.
 
 To start a governed task, open **Tasks**, choose its project and a ready provider,
 then select **Create governed task**. Review the goal, acceptance criteria and

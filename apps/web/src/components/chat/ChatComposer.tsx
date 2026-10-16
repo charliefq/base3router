@@ -1237,13 +1237,11 @@ const supervisedRuntimeModeOption = {
 const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
   showInteractionModeToggle: boolean;
   interactionMode: ProviderInteractionMode;
-  routingMode: "auto" | "manual";
   runtimeMode: RuntimeMode;
   runtimeModeOptions: ReadonlyArray<RuntimeModeOption>;
   size?: "sm" | "xs";
   hidden?: boolean;
   onToggleInteractionMode: () => void;
-  onRoutingModeChange: (mode: "auto" | "manual") => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
   const size = props.size ?? "sm";
@@ -1295,42 +1293,6 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
       </Tooltip>
     </>
   ) : null;
-
-  const routingModeToggle = (
-    <>
-      <ComposerControlSeparator size={size} />
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <ComposerControl
-              size={size}
-              className="shrink-0 whitespace-nowrap"
-              aria-pressed={props.routingMode === "auto"}
-              type="button"
-              data-composer-routing={props.routingMode}
-              onClick={() =>
-                props.onRoutingModeChange(props.routingMode === "auto" ? "manual" : "auto")
-              }
-              aria-label={
-                props.routingMode === "auto"
-                  ? "Auto route — click to bind the selected model"
-                  : "Manual route — click to let Auto choose an eligible model"
-              }
-            />
-          }
-        >
-          <span data-composer-control-label className="sr-only sm:not-sr-only">
-            {props.routingMode === "auto" ? "Auto" : "Manual"}
-          </span>
-        </TooltipTrigger>
-        <TooltipPopup side="top">
-          {props.routingMode === "auto"
-            ? "Auto uses local task classification and available configured models. OpenRouter guidance is separate. The selected and executed route is recorded for each turn."
-            : "Manual Route keeps the selected provider and model."}
-        </TooltipPopup>
-      </Tooltip>
-    </>
-  );
 
   return (
     <>
@@ -1385,7 +1347,6 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
       </Tooltip>
 
       {interactionModeToggle}
-      {routingModeToggle}
     </>
   );
 });
@@ -5384,13 +5345,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         <ComposerFooterModeControls
           showInteractionModeToggle={planModeUiEnabled}
           interactionMode={interactionMode}
-          routingMode={routingMode}
           runtimeMode={compatibleRuntimeMode}
           runtimeModeOptions={compatibleRuntimeModeOptions}
           size={composerControlsCollapsed ? "xs" : "sm"}
           hidden={composerControlsHidden || restingHiddenBlockCount > 0}
           onToggleInteractionMode={toggleInteractionMode}
-          onRoutingModeChange={setRoutingMode}
           onRuntimeModeChange={handleRuntimeModeChange}
         />
       ),
@@ -5426,6 +5385,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         />
       ) : null}
       <ProviderModelPicker
+        routingMode={routingMode}
+        onRoutingModeChange={setRoutingMode}
         compact={false}
         isComposerOwned
         disabled={providerCatalogPending || isSendBusy}
@@ -5548,7 +5509,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         >
           <CompactComposerControlsMenu
             interactionMode={interactionMode}
-            routingMode={routingMode}
             runtimeMode={compatibleRuntimeMode}
             runtimeModeOptions={compatibleRuntimeModeOptions}
             size={composerControlsCollapsed ? "xs" : "sm"}
@@ -5558,7 +5518,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               hiddenRestingBlockIds.includes("traits") ? providerTraitsMenuContent : undefined
             }
             onToggleInteractionMode={toggleInteractionMode}
-            onRoutingModeChange={setRoutingMode}
             onRuntimeModeChange={handleRuntimeModeChange}
           />
         </div>

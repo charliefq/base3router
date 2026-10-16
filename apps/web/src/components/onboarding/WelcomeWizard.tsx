@@ -222,9 +222,6 @@ export function WelcomeWizard({
           identity={
             <div className="flex items-baseline gap-1.5" role="img" aria-label="B3R">
               <T3Wordmark className="h-4 w-auto shrink-0" aria-hidden />
-              <span className="text-2xl font-medium tracking-tight text-muted-foreground">
-                Code
-              </span>
             </div>
           }
         >

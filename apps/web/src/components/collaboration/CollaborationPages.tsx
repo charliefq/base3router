@@ -39,6 +39,9 @@ import { Alert, AlertDescription } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { ScrollArea } from "../ui/scroll-area";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { BotIcon, PlusIcon, PlugIcon } from "lucide-react";
+import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import { deriveProviderInstanceEntries } from "../../providerInstances";
 
 const budgetIssueLabels: Readonly<Record<string, string>> = {
   paused: "Paused for revised instructions",
@@ -564,6 +567,15 @@ export function AgentsPage() {
     token: string;
   } | null>(null);
   const [creating, setCreating] = useState(false);
+  const [showAgentCreation, setShowAgentCreation] = useState(false);
+  const [newAgentChoice, setNewAgentChoice] = useState<{
+    environmentId: typeof environmentId;
+    providerId: string;
+  } | null>(null);
+  const newAgentProviderId =
+    newAgentChoice && newAgentChoice.environmentId === environmentId
+      ? newAgentChoice.providerId
+      : null;
   const creationOwner = useRef<string | null>(null);
   const lockCreation = useCallback((owner: string) => {
     creationOwner.current = owner;
@@ -864,6 +876,130 @@ export function AgentsPage() {
       <div className="min-h-0 flex-1">
         <ScrollArea radius="none">
           <WorkspacePageContainer width="wide">
+            <section
+              className="mx-auto flex max-w-2xl flex-col items-center gap-5 py-10 text-center sm:py-16"
+              aria-labelledby="agents-heading"
+            >
+              <div
+                className="flex size-20 items-center justify-center rounded-full bg-muted"
+                aria-hidden="true"
+              >
+                <BotIcon className="size-9" />
+              </div>
+              <h2 id="agents-heading" className="text-3xl font-semibold tracking-tight sm:text-4xl">
+                Build agents for your work
+              </h2>
+              <p className="max-w-lg text-sm leading-6 text-muted-foreground">
+                Choose a provider, open a project conversation, and give your agent a governed task.
+                Follow its execution and results in Tasks.
+              </p>
+              <div className="flex flex-wrap justify-center gap-3">
+                <Button
+                  onClick={() => setShowAgentCreation(true)}
+                  aria-expanded={showAgentCreation}
+                  aria-controls="create-agent"
+                >
+                  <PlusIcon />
+                  Create agent
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => void navigate({ to: "/settings/providers" })}
+                >
+                  <PlugIcon />
+                  Connect your agent
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Runs use your configured provider and existing approval controls.
+              </p>
+            </section>
+            {showAgentCreation ? (
+              <section
+                id="create-agent"
+                aria-label="Create agent"
+                className="mx-auto mb-6 flex w-full max-w-xl flex-col gap-4 rounded-xl border border-border bg-card p-5"
+              >
+                <div>
+                  <h3 className="font-medium">Create an agent conversation</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Select a ready provider below and a project. Creating the conversation does not
+                    start provider work.
+                  </p>
+                </div>
+                <label htmlFor="new-agent-provider" className="text-sm font-medium">
+                  Provider
+                </label>
+                <Select
+                  value={newAgentProviderId ?? ""}
+                  items={[
+                    { value: "", label: "Select a provider" },
+                    ...providers.filter(providerExecutable).map((provider) => ({
+                      value: provider.instanceId,
+                      label: provider.displayName ?? provider.instanceId,
+                    })),
+                  ]}
+                  onValueChange={(value) =>
+                    setNewAgentChoice(value ? { environmentId, providerId: value } : null)
+                  }
+                >
+                  <SelectTrigger id="new-agent-provider">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopup>
+                    <SelectItem value="">Select a provider</SelectItem>
+                    {providers.filter(providerExecutable).map((provider) => (
+                      <SelectItem key={provider.instanceId} value={provider.instanceId}>
+                        {provider.displayName ?? provider.instanceId}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+                {!providers.some(providerExecutable) ? (
+                  <p className="text-sm text-muted-foreground">
+                    No provider is ready. Connect your agent to configure a supported provider.
+                  </p>
+                ) : null}
+                {!selectedProject ? (
+                  <p className="text-sm text-muted-foreground">
+                    Select a project in the directory below to continue.
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Project: {selectedProject.title}</p>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    disabled={
+                      !newAgentProviderId ||
+                      !providers.some(
+                        (provider) =>
+                          provider.instanceId === newAgentProviderId &&
+                          providerExecutable(provider),
+                      ) ||
+                      !selectedProject ||
+                      !fresh ||
+                      !snapshot ||
+                      !!error ||
+                      pending ||
+                      opening ||
+                      creating
+                    }
+                    onClick={() => {
+                      if (newAgentProviderId) void openAgent(newAgentProviderId);
+                    }}
+                  >
+                    Create agent conversation
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={opening || creating || pending}
+                    onClick={() => setShowAgentCreation(false)}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </section>
+            ) : null}
             <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
               <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
                 Internal providers and external agents. Open a conversation in its project; opening
@@ -956,7 +1092,11 @@ export function AgentsPage() {
                 Reading the agent directory.
               </p>
             ) : null}
-            <ul aria-label="Agent directory" className="grid min-w-0 gap-4 md:grid-cols-2">
+            <h2 className="text-lg font-semibold">Your agents</h2>
+            <ul
+              aria-label="Agent directory"
+              className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3"
+            >
               {grokbot ? (
                 <li className="min-w-0 rounded-xl border border-border/60 bg-card/40 p-5 shadow-xs/5">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1005,9 +1145,23 @@ export function AgentsPage() {
                     className="min-w-0 rounded-xl border border-border/60 bg-card/40 p-5 shadow-xs/5"
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="min-w-0 space-y-1">
-                        <h2 className="wrap-anywhere text-base font-medium">{entry.displayName}</h2>
-                        <p className="text-xs text-muted-foreground">internal · provider</p>
+                      <div className="flex min-w-0 items-center gap-3">
+                        {provider ? (
+                          <ProviderInstanceIcon
+                            driverKind={deriveProviderInstanceEntries([provider])[0]!.driverKind}
+                            displayName={entry.displayName}
+                            className="size-9"
+                            iconClassName="size-9"
+                          />
+                        ) : (
+                          <BotIcon className="size-9 shrink-0 text-muted-foreground" />
+                        )}
+                        <div className="min-w-0 space-y-1">
+                          <h2 className="wrap-anywhere text-base font-medium">
+                            {entry.displayName}
+                          </h2>
+                          <p className="text-xs text-muted-foreground">internal · provider</p>
+                        </div>
                       </div>
                       <Badge variant="secondary">
                         {ready ? "Provider ready" : "Provider unavailable"}
@@ -1017,23 +1171,31 @@ export function AgentsPage() {
                       <p className="text-muted-foreground">
                         Provider readiness: {ready ? "ready" : "unavailable"}
                       </p>
-                      <p className="text-xs text-muted-foreground">
-                        Saved ledger availability: {bound?.availability ?? "not recorded"}. Ledger
-                        state does not confirm provider execution or owner acceptance.
-                      </p>
+                      <details className="text-xs text-muted-foreground">
+                        <summary className="cursor-pointer">Provider details</summary>
+                        <p className="mt-2">
+                          Saved ledger availability: {bound?.availability ?? "not recorded"}. Ledger
+                          state does not confirm provider execution or owner acceptance.
+                        </p>
+                        <p className="mt-2 wrap-anywhere">
+                          Capabilities:{" "}
+                          {bound?.capabilities.join(", ") || "No advertised capabilities."}
+                        </p>
+                      </details>
                       {!provider ? (
                         <p className="text-muted-foreground">
                           Provider configuration is missing. The saved identity and task records
                           remain available.
                         </p>
                       ) : null}
-                      <p className="wrap-anywhere text-muted-foreground">
-                        Capabilities:{" "}
-                        {bound?.capabilities.join(", ") || "No advertised capabilities."}
-                      </p>
                       <p className="wrap-anywhere">
                         {ready
-                          ? provider?.models.map((model) => model.slug).join(", ") || "No model"
+                          ? `${
+                              provider?.models
+                                .slice(0, 3)
+                                .map((model) => model.slug)
+                                .join(", ") || "No model"
+                            }${provider && provider.models.length > 3 ? ` · ${provider.models.length - 3} more models` : ""}`
                           : "This provider is not ready. No conversation was fabricated."}
                       </p>
                       <div className="space-y-1 border-t border-border/50 pt-3">
