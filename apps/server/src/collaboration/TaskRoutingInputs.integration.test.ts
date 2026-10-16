@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import { withTaskResultLinkageFixture } from "./testkit/taskResultLinkageFixture.ts";
 import { agentsCreationProvider } from "./testkit/agentsTaskCreationFixture.ts";
 
@@ -96,7 +97,7 @@ it.live.each(["auto", "manual"] as const)(
             route,
           );
           assert.deepEqual(yield* f.sql`SELECT total_changes() AS n`, before);
-          const encoded = JSON.stringify(inputsOf(route));
+          const encoded = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(inputsOf(route));
           for (const sentinel of [
             "PROMPT_SENTINEL",
             "/private/",

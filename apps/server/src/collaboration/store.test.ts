@@ -1367,7 +1367,7 @@ it.effect(
             profile: { status: "invalid" },
             facts: { status: "invalid" },
           });
-        const serialized = JSON.stringify(inputs);
+        const serialized = encodeEvidence(inputs);
         for (const secret of ["PRIVATE", "/private/", "future-kind", "provider-codex"])
           assert.notInclude(serialized, secret);
         assert.deepEqual(yield* f.sql`SELECT total_changes() AS n`, before);
