@@ -182,6 +182,25 @@ describe("Linux ACP child topology", () => {
     expect(fixture.controller.childrenOf(100)).toEqual([]);
   });
 
+  it("does not treat a denied stat in a fallback scan as proof of no child", () => {
+    const fixture = linuxTopologyFixture();
+    const readFile = fixture.readFile.getMockImplementation()!;
+    fixture.readFile.mockImplementation((path) => {
+      if (path === "/proc/110/stat")
+        throw Object.assign(new Error("stat denied"), { code: "EACCES" });
+      return readFile(path);
+    });
+    expect(() => fixture.controller.childPidsOf(100)).toThrow(
+      "Cannot observe Linux ACP child topology",
+    );
+    fixture.readFile.mockImplementation((path) => {
+      if (path === "/proc/110/stat")
+        throw Object.assign(new Error("process exited"), { code: "ENOENT" });
+      return readFile(path);
+    });
+    expect(fixture.controller.childPidsOf(100)).toEqual([]);
+  });
+
   it("surfaces unavailable topology and refuses an oversized incomplete snapshot", () => {
     const fixture = linuxTopologyFixture();
     const readDirectory = fixture.readDirectory.getMockImplementation()!;

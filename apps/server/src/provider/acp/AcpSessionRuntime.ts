@@ -584,11 +584,15 @@ const linuxProcfs: LinuxProcfs = {
 function readLinuxProcessIdentity(
   pid: number,
   procfs: LinuxProcfs,
+  requireReadable = false,
 ): AcpPosixProcessIdentity | undefined {
   try {
     const stat = procfs.readFile(`/proc/${pid}/stat`);
     const commandEnd = stat.lastIndexOf(")");
-    if (commandEnd < 0) return undefined;
+    if (commandEnd < 0) {
+      if (requireReadable) throw new Error(`Malformed ACP proc stat for process ${pid}`);
+      return undefined;
+    }
     const fields = stat
       .slice(commandEnd + 2)
       .trim()
@@ -606,6 +610,7 @@ function readLinuxProcessIdentity(
       !Number.isSafeInteger(sid) ||
       startTime === undefined
     ) {
+      if (requireReadable) throw new Error(`Malformed ACP proc stat for process ${pid}`);
       return undefined;
     }
     let executable: string | undefined;
@@ -615,7 +620,11 @@ function readLinuxProcessIdentity(
       executable = undefined;
     }
     return { executable, pgid, pid, ppid, sid, startTime, state };
-  } catch {
+  } catch (cause) {
+    const code = (cause as NodeJS.ErrnoException | undefined)?.code;
+    // A process disappearing during a scan is expected. Denied or malformed
+    // identities leave the topology unknown, not an authoritative empty set.
+    if (requireReadable && code !== "ENOENT" && code !== "ESRCH") throw cause;
     return undefined;
   }
 }
@@ -651,7 +660,7 @@ export function makeLinuxProcessTreeController(
       });
     }
     return pids.flatMap((pid) => {
-      const process = identity(Number(pid));
+      const process = readLinuxProcessIdentity(Number(pid), procfs, true);
       return process === undefined ? [] : [process];
     });
   };
