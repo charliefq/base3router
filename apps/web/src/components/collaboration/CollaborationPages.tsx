@@ -8,6 +8,7 @@ import {
   type CollaborationSnapshot,
   type CollaborationTask,
   type CollaborationTaskRoutingReadout,
+  type CollaborationRecordedRoutingInputs,
   type CollaborationTaskResultReadout,
   type CollaborationTaskBudgetReadout,
   type EnvironmentId,
@@ -171,6 +172,80 @@ const routingUnknownReason = (reason: string | null) => {
   }
 };
 
+const categoryLabels = {
+  coding: "Coding",
+  debugging: "Debugging",
+  multi_step_agent: "Multi-step agent",
+  research: "Research",
+  reasoning: "Reasoning",
+  mathematics: "Mathematics",
+  summarization: "Summarization",
+  simple_qa: "Simple question answering",
+  writing: "Writing",
+  data_analysis: "Data analysis",
+  other: "Other",
+  unknown: "Unknown category",
+} as const;
+const contextLabels = {
+  image: "Image",
+  file: "File",
+  terminal: "Terminal",
+  element: "Element",
+  "preview-annotation": "Preview annotation",
+  "review-comment": "Review comment",
+  mention: "Mention",
+  skill: "Skill",
+  thread: "Thread",
+} as const;
+const capabilityLabels = {
+  code: "Code",
+  tools: "Tools",
+  vision: "Image input",
+  "long-context": "Long context",
+} as const;
+function RecordedRoutingInputs({
+  inputs,
+  routeOnly,
+}: {
+  inputs: CollaborationRecordedRoutingInputs | undefined;
+  routeOnly: boolean;
+}) {
+  const profile = inputs?.profile;
+  const facts = inputs?.facts;
+  return (
+    <div className="space-y-1 text-sm">
+      <h4 className="font-medium">Recorded routing inputs</h4>
+      {routeOnly && <p>Route only — no correlated run recorded.</p>}
+      <p>
+        {profile?.status === "available"
+          ? `${categoryLabels[profile.category]} · Local heuristic · ${profile.classifierVersion}`
+          : profile?.status === "unsupported"
+            ? "Category unavailable: unsupported classifier version."
+            : profile?.status === "invalid"
+              ? "Category unavailable: invalid routing evidence."
+              : "Category not recorded."}
+      </p>
+      {facts?.status === "available" ? (
+        <>
+          <p>{`Attachments: ${facts.attachmentCount}`}</p>
+          <p>{`Context kinds: ${[...facts.contextKinds.map((kind) => contextLabels[kind]), ...(facts.unsupportedContextKind ? ["Unsupported context kind"] : [])].join(", ") || "None recorded"}`}</p>
+          <p>{`Required capabilities: ${facts.requiredCapabilities.map((capability) => capabilityLabels[capability]).join(", ") || "None recorded"}`}</p>
+        </>
+      ) : (
+        <p>
+          {facts?.status === "invalid"
+            ? "Input facts unavailable: invalid routing evidence."
+            : "Input facts not recorded."}
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">
+        Local heuristic labels are not semantic or LLM understanding and do not establish why a
+        model was selected. Recorded requirements are not provider-attested support.
+      </p>
+    </div>
+  );
+}
+
 function TaskRoutingReadout({ readout }: { readout: CollaborationTaskRoutingReadout | undefined }) {
   return (
     <div className="mt-4 space-y-2 rounded-lg border border-border/50 p-3">
@@ -216,6 +291,10 @@ function TaskRoutingReadout({ readout }: { readout: CollaborationTaskRoutingRead
               </dd>
             </div>
           </dl>
+          <RecordedRoutingInputs
+            inputs={readout.recordedInputs}
+            routeOnly={readout.runId === null}
+          />
           <SelectionBasisReadout basis={readout.selectionBasis} />
           <p className="text-xs text-muted-foreground">
             The configured runtime model is not provider-attested.

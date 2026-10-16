@@ -6125,3 +6125,69 @@ it("Manual target cap mounted Tasks refresh and remount show persisted explanati
     ),
   );
 });
+
+it("recorded routing inputs mounted exact-message refresh and remount survive different sends", async () => {
+  const module = (await import(
+    /* @vite-ignore */ new URL(
+      "../../../../server/src/collaboration/testkit/taskResultLinkageFixture.ts",
+      import.meta.url,
+    ).href
+  )) as {
+    withTaskResultLinkageFixture: (
+      check: (fixture: {
+        sql: SqlClientForFixture.SqlClient;
+        createTask: (
+          key: string,
+        ) => EffectForFixture.Effect<
+          Extract<OrchestrationV2Command, { type: "thread.create" }>,
+          Error
+        >;
+        execute: (
+          creation: Extract<OrchestrationV2Command, { type: "thread.create" }>,
+          key: string,
+          routing: { text: string },
+        ) => EffectForFixture.Effect<void, Error>;
+        readSnapshot: () => EffectForFixture.Effect<CollaborationSnapshot, Error>;
+      }) => EffectForFixture.Effect<void, Error>,
+    ) => EffectForFixture.Effect<void, Error>;
+  };
+  await EffectForFixture.runPromise(
+    module.withTaskResultLinkageFixture((f) =>
+      EffectForFixture.gen(function* () {
+        const c = yield* f.createTask("linkage-mounted");
+        state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+        yield* EffectForFixture.promise(async () => {
+          await act(async () => {
+            renderer = create(<TasksPage />);
+          });
+          expect(text()).not.toContain("Linked task output");
+        });
+        for (const [key, prompt, label] of [
+          ["recorded-debug", "debug stack trace", "Debugging"],
+          ["recorded-write", "write an email", "Writing"],
+        ]) {
+          yield* f.execute(c, key!, { text: prompt! });
+          const writes = yield* f.sql`SELECT total_changes() AS n`;
+          yield* EffectForFixture.promise(async () => {
+            await creationClick("Refresh tasks");
+            expect(text()).toContain("Recorded routing inputs");
+            expect(text()).toContain(label!);
+            expect(text()).toContain("Local heuristic");
+            expect(text()).toContain("local-task.heuristic.v1.0.0");
+            expect(text()).toContain("Attachments: 0");
+            if (label === "Writing") expect(text()).not.toContain("Debugging");
+            await act(async () => {
+              renderer.unmount();
+              renderer = create(<TasksPage />);
+            });
+            expect(text()).toContain(label!);
+            expect(text()).toContain(key!);
+          });
+          expect(yield* f.sql`SELECT total_changes() AS n`).toEqual(writes);
+        }
+        expect(state.bind).not.toHaveBeenCalled();
+        expect(state.navigate).not.toHaveBeenCalled();
+      }),
+    ),
+  );
+});

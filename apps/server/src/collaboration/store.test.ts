@@ -1302,3 +1302,81 @@ it.effect.each(["instance", "model", "null", "hybrid"] as const)(
       assert.deepEqual(yield* f.sql`SELECT * FROM projection_dispatcher_task_routes`, beforeRows);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
+
+it.effect(
+  "recorded routing inputs keep independent absence and sanitize unsupported persisted facts",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* routingFixture;
+      const base = f.binding;
+      const readInputs = () =>
+        f
+          .read()
+          .pipe(
+            Effect.map((route) =>
+              route?.status === "available" ? route.recordedInputs : undefined,
+            ),
+          );
+      const initial = yield* readInputs();
+      assert.equal(initial?.profile.status, "missing");
+      assert.equal(initial?.facts.status, "available");
+      const profile = {
+        classifierVersion: "local-task.heuristic.v1.0.0",
+        category: "unknown",
+        source: "local-heuristic",
+      };
+      const fixtures = [
+        { ...base, modelRoute: undefined, localTaskProfile: profile },
+        {
+          ...base,
+          localTaskProfile: { ...profile, classifierVersion: "sk-PRIVATE_VERSION" },
+          modelRoute: {
+            ...base.modelRoute,
+            task: {
+              attachmentCount: 0,
+              composerContextKinds: ["file", "/private/future-kind", "file"],
+              requiredCapabilities: ["vision"],
+            },
+          },
+        },
+        { ...base, localTaskProfile: { ...profile, category: "PRIVATE_CATEGORY" } },
+        { ...base, localTaskProfile: profile, target: { ...base.target, model: "mismatch" } },
+      ];
+      for (const [index, binding] of fixtures.entries()) {
+        yield* f.sql`UPDATE projection_dispatcher_task_routes SET binding_json=${encodeEvidence(binding)}`;
+        const beforeRows = yield* f.sql`SELECT * FROM projection_dispatcher_task_routes`;
+        const before = yield* f.sql`SELECT total_changes() AS n`;
+        const inputs = yield* readInputs();
+        assert.ok(inputs);
+        if (index === 0) {
+          assert.equal(inputs.profile.status, "available");
+          if (inputs.profile.status === "available")
+            assert.equal(inputs.profile.category, "unknown");
+          assert.equal(inputs.facts.status, "missing");
+        } else if (index === 1) {
+          assert.deepEqual(inputs.profile, { status: "unsupported" });
+          assert.deepEqual(inputs.facts, {
+            status: "available",
+            attachmentCount: 0,
+            contextKinds: ["file"],
+            unsupportedContextKind: true,
+            requiredCapabilities: ["vision"],
+          });
+        } else
+          assert.deepEqual(inputs, {
+            profile: { status: "invalid" },
+            facts: { status: "invalid" },
+          });
+        const serialized = encodeEvidence(inputs);
+        for (const secret of ["PRIVATE", "/private/", "future-kind", "provider-codex"])
+          assert.notInclude(serialized, secret);
+        assert.deepEqual(yield* f.sql`SELECT total_changes() AS n`, before);
+        assert.deepEqual(yield* f.sql`SELECT * FROM projection_dispatcher_task_routes`, beforeRows);
+      }
+      yield* f.sql`UPDATE orchestration_v2_projection_runs SET payload_json=${encodeEvidence({ ...f.run, userMessageId: "newer-missing" })}`;
+      assert.deepEqual(yield* readInputs(), {
+        profile: { status: "invalid" },
+        facts: { status: "invalid" },
+      });
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);

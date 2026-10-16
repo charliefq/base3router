@@ -35,6 +35,9 @@ import {
   type CollaborationTaskRoutingReadout,
   MODEL_ROUTER_POLICY_VERSION,
   DispatcherTaskRouteBinding,
+  LOCAL_TASK_CLASSIFIER_VERSION,
+  CollaborationRoutingContextKind,
+  type CollaborationRecordedRoutingInputs,
   OrchestrationV2Run,
   OrchestrationV2RunAttempt,
   OrchestrationV2ProviderThread,
@@ -183,6 +186,38 @@ const unknownExecution = (reason: string) => ({
   startedAt: null,
 });
 
+const recordedRoutingInputs = (
+  binding: typeof DispatcherTaskRouteBinding.Type | null,
+): CollaborationRecordedRoutingInputs => {
+  if (binding === null) return { profile: { status: "invalid" }, facts: { status: "invalid" } };
+  const profile = binding.localTaskProfile;
+  const task = binding.modelRoute?.task;
+  const isKnownKind = Schema.is(CollaborationRoutingContextKind);
+  return {
+    profile:
+      profile === undefined
+        ? { status: "missing" }
+        : profile.classifierVersion !== LOCAL_TASK_CLASSIFIER_VERSION
+          ? { status: "unsupported" }
+          : {
+              status: "available",
+              category: profile.category,
+              source: profile.source,
+              classifierVersion: LOCAL_TASK_CLASSIFIER_VERSION,
+            },
+    facts:
+      task === undefined
+        ? { status: "missing" }
+        : {
+            status: "available",
+            attachmentCount: task.attachmentCount,
+            contextKinds: [...new Set(task.composerContextKinds.filter(isKnownKind))],
+            unsupportedContextKind: task.composerContextKinds.some((kind) => !isKnownKind(kind)),
+            requiredCapabilities: [...new Set(task.requiredCapabilities)],
+          },
+  };
+};
+
 const readRoutingEvidence = (
   sql: SqlClient.SqlClient,
   threadId: string,
@@ -262,6 +297,7 @@ const readRoutingEvidence = (
       reasons: routeConsistent ? (decision?.reasonCodes ?? binding.gate.reasonCodes) : [],
       explanation: routeConsistent ? (decision?.explanation ?? null) : null,
       ...(basisConsistent ? { selectionBasis: basis } : {}),
+      recordedInputs: recordedRoutingInputs(routeConsistent ? binding : null),
       selectionUnknownReason:
         routeRow === undefined
           ? "route_missing"
