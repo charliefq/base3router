@@ -343,70 +343,89 @@ export const executorLayer: Layer.Layer<
               ),
             );
           }
-          case "provider-turn.restart":
+          case "provider-turn.restart": {
+            const request = effect.request;
             return revalidateOutboxEffect({
               threadId: effect.threadId,
               commandId: effect.commandId,
               attemptCount: effect.attemptCount,
-              request: { type: effect.request.type, runId: effect.request.runId },
+              request: { type: request.type, runId: request.runId },
             }).pipe(
               Effect.mapError(
                 (cause) =>
                   new OrchestrationEffectExecutionError({
                     effectId: effect.id,
-                    effectType: effect.request.type,
+                    effectType: request.type,
                     cause,
                   }),
               ),
-              Effect.andThen(
-                providerTurnControl
-                  .interruptAndAwaitTerminal({
-                    threadId: effect.threadId,
-                    providerSessionId: effect.request.providerSessionId,
-                    providerThreadId: effect.request.providerThreadId,
-                    providerTurnId: effect.request.providerTurnId,
-                    interruptedAttemptId: effect.request.interruptedAttemptId,
-                    ...(effect.request.sessionTransition?.type === "replace"
-                      ? {
-                          replacementProviderSessionId:
-                            effect.request.sessionTransition.replacementProviderSessionId,
-                        }
-                      : {}),
-                  })
-                  .pipe(
-                    Effect.andThen(
-                      effect.request.sessionTransition?.type === "replace"
-                        ? providerSessions.detach({
-                            providerSessionId: effect.request.providerSessionId,
-                            threadId: effect.threadId,
-                            detail: "Selection change requires a provider session restart.",
-                          })
-                        : effect.request.sessionTransition?.type === "detach"
-                          ? providerSessions.detach({
-                              providerSessionId: effect.request.providerSessionId,
-                              threadId: effect.threadId,
-                              detail: "Provider thread handoff replaced this session binding.",
-                            })
-                          : Effect.void,
-                    ),
-                    Effect.andThen(
-                      providerTurnStart.start({
+              Effect.andThen((validation) =>
+                validation === "image-denied"
+                  ? providerTurnStart
+                      .start({
                         threadId: effect.threadId,
-                        runId: effect.request.runId,
-                        willRetry,
-                      }),
-                    ),
-                    Effect.mapError(
-                      (cause) =>
-                        new OrchestrationEffectExecutionError({
-                          effectId: effect.id,
-                          effectType: effect.request.type,
-                          cause,
-                        }),
-                    ),
-                  ),
+                        runId: request.runId,
+                        imageDenialOnly: true,
+                      })
+                      .pipe(
+                        Effect.mapError(
+                          (cause) =>
+                            new OrchestrationEffectExecutionError({
+                              effectId: effect.id,
+                              effectType: request.type,
+                              cause,
+                            }),
+                        ),
+                      )
+                  : providerTurnControl
+                      .interruptAndAwaitTerminal({
+                        threadId: effect.threadId,
+                        providerSessionId: request.providerSessionId,
+                        providerThreadId: request.providerThreadId,
+                        providerTurnId: request.providerTurnId,
+                        interruptedAttemptId: request.interruptedAttemptId,
+                        ...(request.sessionTransition?.type === "replace"
+                          ? {
+                              replacementProviderSessionId:
+                                request.sessionTransition.replacementProviderSessionId,
+                            }
+                          : {}),
+                      })
+                      .pipe(
+                        Effect.andThen(
+                          request.sessionTransition?.type === "replace"
+                            ? providerSessions.detach({
+                                providerSessionId: request.providerSessionId,
+                                threadId: effect.threadId,
+                                detail: "Selection change requires a provider session restart.",
+                              })
+                            : request.sessionTransition?.type === "detach"
+                              ? providerSessions.detach({
+                                  providerSessionId: request.providerSessionId,
+                                  threadId: effect.threadId,
+                                  detail: "Provider thread handoff replaced this session binding.",
+                                })
+                              : Effect.void,
+                        ),
+                        Effect.andThen(
+                          providerTurnStart.start({
+                            threadId: effect.threadId,
+                            runId: request.runId,
+                            willRetry,
+                          }),
+                        ),
+                        Effect.mapError(
+                          (cause) =>
+                            new OrchestrationEffectExecutionError({
+                              effectId: effect.id,
+                              effectType: request.type,
+                              cause,
+                            }),
+                        ),
+                      ),
               ),
             );
+          }
           case "runtime-request.respond":
             return runtimeRequests
               .respond({

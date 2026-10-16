@@ -253,6 +253,9 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
       SqlClient.SqlClient,
       MigrationError | PlatformError.PlatformError | SqlError
     >;
+    readonly decorateSessionManager?: (
+      service: ProviderSessionManager.ProviderSessionManagerV2["Service"],
+    ) => ProviderSessionManager.ProviderSessionManagerV2["Service"];
     readonly decorateCheckpointService?: (
       service: CheckpointService.CheckpointServiceV2["Service"],
     ) => CheckpointService.CheckpointServiceV2["Service"];
@@ -363,9 +366,17 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     IdAllocator.layer,
     providerEventIngestorProvided,
   );
-  const providerSessionManagerProvided = ProviderSessionManager.layerWithOptions({
-    configureMcp: false,
-  }).pipe(
+  const sessionLayer =
+    options.decorateSessionManager === undefined
+      ? ProviderSessionManager.layerWithOptions({ configureMcp: false })
+      : Layer.effect(
+          ProviderSessionManager.ProviderSessionManagerV2,
+          Effect.map(
+            ProviderSessionManager.ProviderSessionManagerV2,
+            options.decorateSessionManager,
+          ),
+        ).pipe(Layer.provide(ProviderSessionManager.layerWithOptions({ configureMcp: false })));
+  const providerSessionManagerProvided = sessionLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
         providedRegistryLayer,

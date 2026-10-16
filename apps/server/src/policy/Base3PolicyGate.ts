@@ -1093,6 +1093,7 @@ export const revalidateOutboxEffect = (effect: {
     }
     if (
       (effect.request.type === "provider-turn.start" ||
+        effect.request.type === "provider-turn.restart" ||
         effect.request.type === "provider-turn.steer") &&
       (yield* imageDeliveryDenialStatus(effect.threadId, messageId ?? "").pipe(
         Effect.provideService(SqlClient.SqlClient, sql),

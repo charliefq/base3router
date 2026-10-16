@@ -49,7 +49,11 @@ import type {
 } from "./ProviderAdapter.ts";
 import { ProviderAdapterTurnStartError } from "./ProviderAdapter.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
-import { makeProviderFailure, makeProviderFailureTurnItem } from "./ProviderFailure.ts";
+import {
+  makeProviderFailure,
+  makeProviderFailureTurnItem,
+  imageDeliveryDeniedFailure,
+} from "./ProviderFailure.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
 
 export interface ProviderEventRoutingState {
@@ -706,10 +710,28 @@ export const layer: Layer.Layer<
       };
     }) =>
       Effect.gen(function* () {
+        const denied = yield* imageDeliveryDenialStatus(
+          input.run.threadId,
+          input.run.userMessageId,
+        );
+        if (denied === "settled") return false;
+        // The persisted denial is authoritative even through adapter-error wrappers.
+        const terminal: ProviderTerminalEvent =
+          denied === "pending"
+            ? {
+                ...input.terminal,
+                status: "failed" as const,
+                failure: imageDeliveryDeniedFailure(),
+                failureItemOrdinal:
+                  "failureItemOrdinal" in input.terminal
+                    ? input.terminal.failureItemOrdinal
+                    : input.run.ordinal * 100 + 99,
+              }
+            : input.terminal;
         const completedAt = yield* DateTime.now;
         const finalizedAttempt: OrchestrationV2RunAttempt | null = {
           ...input.attempt,
-          status: input.terminal.status,
+          status: terminal.status,
           completedAt,
         };
         const shouldFinalizeRun =
@@ -718,7 +740,7 @@ export const layer: Layer.Layer<
           // Superseded attempt (steer / selection restart). Emit
           // run_interrupt_result only when hard Stop left an unpaired request
           // for this run; plain steers and already-paired stops emit nothing.
-          if (input.terminal.status === "interrupted") {
+          if (terminal.status === "interrupted") {
             const hasUnpairedRequest =
               input.hasUnpairedRunInterruptRequest === undefined
                 ? false
@@ -758,17 +780,16 @@ export const layer: Layer.Layer<
           open.childTurnItems.size > 0 ||
           open.nodes.size > 0;
         const cascadedSubagentEvents =
-          isRunOwnedSubagentTerminalStatus(input.terminal.status) && hasOpenSubagentProjection
+          isRunOwnedSubagentTerminalStatus(terminal.status) && hasOpenSubagentProjection
             ? yield* cascadeTerminalizeRunOwnedSubagents({
                 run: input.run,
                 open,
-                status: input.terminal.status,
+                status: terminal.status,
                 completedAt,
                 allocateEventId,
               })
             : [];
-        const persistedStatus =
-          input.terminal.status === "completed" ? "waiting" : input.terminal.status;
+        const persistedStatus = terminal.status === "completed" ? "waiting" : terminal.status;
         // Completion cohorts are advanced by Orchestrator while a provider
         // turn is in flight. Do not replay the run snapshot captured at start
         // over a newer acknowledgement, successor, or Stop barrier.
@@ -777,17 +798,17 @@ export const layer: Layer.Layer<
         const finalizedRun: OrchestrationV2Run = {
           ...runWithoutDelegatedCompletion,
           status: persistedStatus,
-          completedAt: input.terminal.status === "completed" ? null : completedAt,
+          completedAt: terminal.status === "completed" ? null : completedAt,
         };
         const finalizedRootNode: OrchestrationV2ExecutionNode = {
           ...input.rootNode,
           status: persistedStatus,
-          completedAt: input.terminal.status === "completed" ? null : completedAt,
+          completedAt: terminal.status === "completed" ? null : completedAt,
           checkpointScopeId: input.checkpointScope.id,
         };
         const finalizedProviderThread: OrchestrationV2ProviderThread = {
           ...input.providerThread,
-          status: finalProviderThreadStatus(input.terminal.threadDisposition),
+          status: finalProviderThreadStatus(terminal.threadDisposition),
           updatedAt: completedAt,
         };
         const runEventId = yield* allocateEventId();
@@ -801,9 +822,9 @@ export const layer: Layer.Layer<
         // ahead of any later run's start on this thread's effect lane.
         const finalization = {
           effects:
-            input.terminal.status === "completed" ||
-            input.terminal.status === "interrupted" ||
-            input.terminal.status === "cancelled"
+            terminal.status === "completed" ||
+            terminal.status === "interrupted" ||
+            terminal.status === "cancelled"
               ? [
                   {
                     id: `effect:checkpoint.capture:${input.run.id}`,
@@ -835,7 +856,7 @@ export const layer: Layer.Layer<
                     payload: finalizedAttempt,
                   },
                 ]),
-            ...(input.terminal.status === "interrupted"
+            ...(terminal.status === "interrupted"
               ? [
                   {
                     id: yield* allocateEventId(),
@@ -855,7 +876,7 @@ export const layer: Layer.Layer<
                   },
                 ]
               : []),
-            ...(input.terminal.status === "failed" && !input.failureItemPersisted
+            ...(terminal.status === "failed" && !input.failureItemPersisted
               ? [
                   {
                     id: yield* allocateEventId(),
@@ -867,14 +888,14 @@ export const layer: Layer.Layer<
                     occurredAt: completedAt,
                     payload: makeProviderFailureTurnItem({
                       idAllocator,
-                      driver: input.terminal.driver,
+                      driver: terminal.driver,
                       threadId: input.run.threadId,
                       runId: input.run.id,
                       nodeId: input.rootNode.id,
-                      providerThreadId: input.terminal.providerThreadId,
-                      providerTurnId: input.terminal.providerTurnId,
-                      itemOrdinal: input.terminal.failureItemOrdinal,
-                      failure: input.terminal.failure,
+                      providerThreadId: terminal.providerThreadId,
+                      providerTurnId: terminal.providerTurnId,
+                      itemOrdinal: terminal.failureItemOrdinal,
+                      failure: terminal.failure,
                       occurredAt: completedAt,
                     }),
                   },
@@ -910,11 +931,6 @@ export const layer: Layer.Layer<
             },
           ],
         } satisfies Parameters<typeof eventSink.writeWithEffects>[0];
-        const denied = yield* imageDeliveryDenialStatus(
-          input.run.threadId,
-          input.run.userMessageId,
-        );
-        if (denied === "settled") return false;
         const write = eventSink.writeIfRunCurrent({
           threadId: input.run.threadId,
           runId: input.run.id,

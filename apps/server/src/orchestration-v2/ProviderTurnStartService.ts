@@ -51,7 +51,7 @@ import {
 import * as IdAllocator from "./IdAllocator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
-import { makeProviderFailure } from "./ProviderFailure.ts";
+import { makeProviderFailure, imageDeliveryDeniedFailure } from "./ProviderFailure.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import {
@@ -69,7 +69,6 @@ export class ProviderTurnStartError extends Schema.TaggedError<ProviderTurnStart
 ) {}
 
 const isProviderTurnStartError = Schema.is(ProviderTurnStartError);
-const isBase3PolicyDeniedError = Schema.is(Base3PolicyDeniedError);
 
 export interface ProviderTurnStartServiceV2Shape {
   /**
@@ -378,7 +377,7 @@ export const layer: Layer.Layer<
           });
         },
       );
-      const settleImageDenial = (failure: unknown) =>
+      const settleImageDenial = () =>
         Effect.gen(function* () {
           return yield* settleImageDeliveryDenial({
             threadId: input.threadId,
@@ -392,19 +391,13 @@ export const layer: Layer.Layer<
               item: {
                 type: "error",
                 title: "Image delivery denied",
-                failure: makeProviderFailure({
-                  cause: failure,
-                  message: isBase3PolicyDeniedError(failure)
-                    ? failure.message
-                    : "Image delivery eligibility could not be verified.",
-                  class: "validation_error",
-                }),
+                failure: imageDeliveryDeniedFailure(),
               },
             }),
           });
         });
       if (input.imageDenialOnly) {
-        yield* settleImageDenial("Recorded image delivery denial");
+        yield* settleImageDenial();
         return;
       }
       if (message.attachments.length === 0 && message.text.trimStart().startsWith("/")) {
@@ -546,7 +539,7 @@ export const layer: Layer.Layer<
           }),
         );
         if (eligibility._tag === "Failure") {
-          yield* settleImageDenial(eligibility.failure);
+          yield* settleImageDenial();
           return;
         }
       }

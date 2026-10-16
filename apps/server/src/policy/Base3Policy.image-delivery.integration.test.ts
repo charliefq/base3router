@@ -16,6 +16,7 @@ import {
   type ChatAttachment,
   type ServerProvider,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2ProviderTurn,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -89,6 +90,8 @@ function makeAdapter(
   controls: {
     beforeEnsure?: Effect.Effect<void>;
     keepRunning?: boolean;
+    restartSession?: boolean;
+    onInterrupt?: Effect.Effect<void>;
     onSteer?: (message: ProviderAdapterV2TurnMessage) => Effect.Effect<void>;
   } = {},
 ): ProviderAdapterV2Shape {
@@ -96,10 +99,14 @@ function makeAdapter(
     instanceId: instanceId,
     driver: driver,
     getCapabilities: () => Effect.succeed(capabilities),
-    planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
+    planSelectionTransition: () =>
+      Effect.succeed(
+        controls.restartSession ? { type: "restart_session" } : { type: "apply_on_next_turn" },
+      ),
     openSession: (sessionInput) =>
       Effect.gen(function* () {
         const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+        let stopActive: Effect.Effect<void> = Effect.void;
         const now = yield* DateTime.now;
         return {
           instanceId: instanceId,
@@ -157,24 +164,48 @@ function makeAdapter(
               const providerTurnId = ProviderTurnId.make(
                 `provider-turn:handoff:${input.attemptId}`,
               );
+              const activeTurn: OrchestrationV2ProviderTurn = {
+                id: providerTurnId,
+                providerThreadId: input.providerThread.id,
+                nodeId: input.rootNodeId,
+                runAttemptId: input.attemptId,
+                nativeTurnRef: {
+                  driver: driver,
+                  nativeId: `native:${providerTurnId}`,
+                  strength: "strong",
+                },
+                ordinal: input.providerTurnOrdinal,
+                status: controls.keepRunning ? "running" : "completed",
+                startedAt: occurredAt,
+                completedAt: controls.keepRunning ? null : occurredAt,
+              };
               yield* Queue.offer(events, {
                 type: "provider_turn.updated",
-                driver: driver,
-                providerTurn: {
-                  id: providerTurnId,
-                  providerThreadId: input.providerThread.id,
-                  nodeId: input.rootNodeId,
-                  runAttemptId: input.attemptId,
-                  nativeTurnRef: {
-                    driver: driver,
-                    nativeId: `native:${providerTurnId}`,
-                    strength: "strong",
+                driver,
+                providerTurn: activeTurn,
+              });
+              stopActive = Effect.gen(function* () {
+                if (controls.onInterrupt) yield* controls.onInterrupt;
+                const interruptedAt = yield* DateTime.now;
+                yield* Queue.offer(events, {
+                  type: "provider_turn.updated",
+                  driver,
+                  providerTurn: {
+                    ...activeTurn,
+                    status: "interrupted",
+                    completedAt: interruptedAt,
                   },
-                  ordinal: input.providerTurnOrdinal,
-                  status: controls.keepRunning ? "running" : "completed",
-                  startedAt: occurredAt,
-                  completedAt: controls.keepRunning ? null : occurredAt,
-                },
+                });
+                yield* Queue.offer(events, {
+                  type: "turn.terminal",
+                  driver,
+                  providerThreadId: input.providerThread.id,
+                  providerTurnId,
+                  runOrdinal: input.runOrdinal,
+                  status: "interrupted",
+                  failure: null,
+                  threadDisposition: "reusable",
+                });
               });
               if (resultText !== undefined) {
                 const ids = yield* IdAllocator.IdAllocatorV2.pipe(
@@ -251,7 +282,7 @@ function makeAdapter(
               });
             }),
           steerTurn: (input) => controls.onSteer?.(input.message) ?? Effect.void,
-          interruptTurn: () => Effect.void,
+          interruptTurn: () => stopActive,
           respondToRuntimeRequest: () => Effect.void,
           readThreadSnapshot: () => Effect.die("unused readThreadSnapshot"),
           rollbackThread: () => Effect.die("unused rollbackThread"),
@@ -269,7 +300,12 @@ type Fixture = {
 };
 const fixture = (
   label: string,
-  controls: { boundary?: "ensure" | "checkpoint"; active?: boolean; failOnce?: boolean },
+  controls: {
+    boundary?: "ensure" | "checkpoint";
+    active?: boolean;
+    failOnce?: boolean;
+    restart?: boolean;
+  },
   body: (
     f: Fixture & {
       reached: Deferred.Deferred<void>;
@@ -278,6 +314,8 @@ const fixture = (
       delivered: Ref.Ref<ReadonlyArray<ReadonlyArray<ChatAttachment>>>;
       steered: Ref.Ref<ReadonlyArray<ProviderAdapterV2TurnMessage>>;
       failedWrites: Ref.Ref<number>;
+      interrupts: Ref.Ref<number>;
+      detaches: Ref.Ref<number>;
       reopen: (
         check: (
           f: Fixture,
@@ -297,11 +335,28 @@ const fixture = (
       const barrier = Deferred.succeed(reached, undefined).pipe(
         Effect.andThen(Deferred.await(release)),
       );
-      const providers = yield* Ref.make<ReadonlyArray<ServerProvider>>([provider]);
+      const initialProvider = controls.restart
+        ? {
+            ...provider,
+            models: [
+              ...provider.models,
+              {
+                slug: "old-text",
+                name: "Old text fixture",
+                isCustom: false,
+                capabilities: null,
+                inputModalities: ["text"],
+              },
+            ],
+          }
+        : provider;
+      const providers = yield* Ref.make<ReadonlyArray<ServerProvider>>([initialProvider]);
       const delivered = yield* Ref.make<ReadonlyArray<ReadonlyArray<ChatAttachment>>>([]);
       const steered = yield* Ref.make<ReadonlyArray<ProviderAdapterV2TurnMessage>>([]);
       const started = yield* Ref.make<ReadonlyArray<ModelSelection>>([]);
       const failedWrites = yield* Ref.make(0);
+      const interrupts = yield* Ref.make(0);
+      const detaches = yield* Ref.make(0);
       const runtime = Layer.mergeAll(
         database,
         Layer.mock(ProviderRegistry)({ getProviders: Ref.get(providers) }),
@@ -310,13 +365,21 @@ const fixture = (
           ProviderAdapterRegistry.makeLayer([
             makeAdapter(started, instanceId, "Earlier output", delivered, {
               ...(controls.boundary === "ensure" ? { beforeEnsure: barrier } : {}),
-              ...(controls.active ? { keepRunning: true } : {}),
+              ...(controls.active || controls.restart ? { keepRunning: true } : {}),
+              ...(controls.restart
+                ? { restartSession: true, onInterrupt: Ref.update(interrupts, (n) => n + 1) }
+                : {}),
               onSteer: (message) => Ref.update(steered, (rows) => [...rows, message]),
             }),
           ]),
           {
             databaseLayer: database,
             runEffectWorker: false,
+            decorateSessionManager: (service) => ({
+              ...service,
+              detach: (input) =>
+                Ref.update(detaches, (n) => n + 1).pipe(Effect.andThen(service.detach(input))),
+            }),
             decorateCheckpointService: (service) => ({
               ...service,
               captureBaseline: (input) =>
@@ -400,6 +463,8 @@ const fixture = (
             delivered,
             steered,
             failedWrites,
+            interrupts,
+            detaches,
             reopen,
           });
         }).pipe(Effect.provide(runtime)),
@@ -465,6 +530,17 @@ it.live.each([
         assert.equal(p.runs[0]?.status, "failed");
         assert.equal(p.attempts[0]?.status, "failed");
         assert.equal(p.nodes.find((n) => n.id === p.runs[0]?.rootNodeId)?.status, "failed");
+        const denied = p.turnItems.find((i) => i.type === "error");
+        assert.isDefined(denied);
+        if (denied?.type !== "error") throw new Error("Missing denial output");
+        assert.equal(denied.failure.class, "validation_error");
+        assert.equal(denied.failure.retryable, false);
+        assert.include(denied.failure.message, "declared image-input support");
+        assert.include(denied.failure.message, "remove the image");
+        assert.notInclude(denied.failure.message, image.name);
+        assert.notInclude(denied.failure.message, image.id);
+        assert.notInclude(denied.failure.message, "Bearer");
+        assert.notInclude(denied.failure.message, "/private/");
         const grants = yield* f.sql<{
           revoked_at: string | null;
         }>`SELECT revoked_at FROM base3_execution_grants WHERE message_id=${command.messageId}`;
@@ -709,6 +785,88 @@ it.live(
             assert.deepEqual(yield* Ref.get(f.delivered), [[]]);
           }),
         );
+      }),
+    ),
+);
+
+it.live.each([false, true])(
+  "real Auto model-change restart denial recovers fail-once terminal write reopen=%s",
+  (reopenPending) =>
+    fixture(`restart-denial-${reopenPending}`, { restart: true, failOnce: true }, (f) =>
+      Effect.gen(function* () {
+        const foreground = {
+          ...messageCommand(f.threadId, "restart-old", []),
+          routingMode: "manual" as const,
+          modelSelection: { instanceId, model: "old-text" },
+        };
+        const output = yield* f.orchestrator.streamDomainEvents.pipe(
+          Stream.filter(
+            (e) => e.type === "turn-item.updated" && e.payload.type === "assistant_message",
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
+        yield* f.orchestrator.dispatch(foreground);
+        yield* f.worker.drain();
+        yield* Fiber.join(output);
+        const before = yield* f.orchestrator.getThreadProjection(f.threadId);
+        const oldAttempt = before.attempts[0]!;
+        const oldTurn = before.providerTurns[0]!;
+        const command = {
+          ...messageCommand(f.threadId, "restart-image"),
+          deliveryIntent: "auto" as const,
+          dispatchMode: { type: "queue_after_active" as const },
+        };
+        yield* f.orchestrator.dispatch(command);
+        const effects = yield* f.sql<{
+          payload_json: string;
+        }>`SELECT payload_json FROM orchestration_v2_effect_outbox WHERE command_id=${command.commandId}`;
+        assert.isTrue(
+          effects.some((e) => e.payload_json.includes("provider-turn.restart")),
+          "actual Auto selection change produces restart",
+        );
+        yield* removeCapability(f.providers);
+        while ((yield* Ref.get(f.failedWrites)) === 0) assert.isTrue(yield* f.worker.runOnce);
+        assert.equal(yield* Ref.get(f.interrupts), 1);
+        assert.equal(yield* Ref.get(f.detaches), 1);
+        const grants = yield* f.sql<{
+          revoked_at: string | null;
+        }>`SELECT revoked_at FROM base3_execution_grants WHERE message_id=${command.messageId}`;
+        assert.isString(grants[0]?.revoked_at);
+        yield* Ref.set(f.providers, [provider]);
+        const check = (fresh: Fixture) =>
+          Effect.gen(function* () {
+            yield* fresh.worker.drain();
+            const after = yield* fresh.orchestrator.getThreadProjection(fresh.threadId);
+            const run = after.runs.find((r) => r.userMessageId === command.messageId);
+            assert.equal(run?.id, before.runs[0]?.id, "restart retains the actual run ownership");
+            assert.equal(run?.status, "failed");
+            assert.equal(
+              after.attempts.find((a) => a.id === run?.activeAttemptId)?.status,
+              "failed",
+            );
+            assert.notEqual(run?.activeAttemptId, oldAttempt.id);
+            assert.equal(after.attempts.find((a) => a.id === oldAttempt.id)?.status, "superseded");
+            assert.equal(
+              after.providerTurns.find((t) => t.id === oldTurn.id)?.status,
+              "interrupted",
+            );
+            assert.deepEqual(
+              after.turnItems.filter((i) => i.type === "assistant_message"),
+              before.turnItems.filter((i) => i.type === "assistant_message"),
+            );
+            assert.equal(yield* Ref.get(f.interrupts), 1, "denial retry cannot replay interrupt");
+            assert.equal(yield* Ref.get(f.detaches), 1, "denial retry cannot replay detach");
+            assert.deepEqual(yield* Ref.get(f.delivered), [[]]);
+            yield* fresh.orchestrator.dispatch(command);
+            yield* fresh.worker.drain();
+            assert.deepEqual(yield* Ref.get(f.delivered), [[]]);
+            assert.equal(yield* Ref.get(f.interrupts), 1);
+            assert.equal(yield* Ref.get(f.detaches), 1);
+          });
+        if (reopenPending) yield* f.reopen(check);
+        else yield* check(f);
       }),
     ),
 );

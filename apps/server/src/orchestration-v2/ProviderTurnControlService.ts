@@ -4,7 +4,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as DateTime from "effect/DateTime";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "./IdAllocator.ts";
-import { makeProviderFailure } from "./ProviderFailure.ts";
+import { imageDeliveryDeniedFailure } from "./ProviderFailure.ts";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
   MessageId,
@@ -347,11 +347,7 @@ export const layer: Layer.Layer<
                         type: "error",
                         status: "failed",
                         title: "Image delivery denied",
-                        failure: makeProviderFailure({
-                          message:
-                            "The new image was not delivered because the bound model lacks available declared image-input support. Existing work was preserved.",
-                          class: "validation_error",
-                        }),
+                        failure: imageDeliveryDeniedFailure(),
                         startedAt: now,
                         completedAt: now,
                         updatedAt: now,

@@ -134,6 +134,15 @@ function boundedText(value: string, maxLength: number): string {
   return `${redacted.slice(0, end)}…`;
 }
 
+/** Durable image denial is a validation failure, not a retryable provider fault. */
+export const imageDeliveryDeniedFailure = (): OrchestrationV2ProviderFailure => ({
+  class: "validation_error",
+  code: "image-input-ineligible",
+  message:
+    "Image delivery denied: the bound model no longer has available declared image-input support. Send again with an eligible model or remove the image.",
+  retryable: false,
+});
+
 export function makeProviderFailure(input: {
   readonly cause?: unknown;
   readonly message?: string | undefined;
@@ -189,7 +198,12 @@ export function makeProviderFailureTurnItem(input: {
     parentItemId: null,
     ordinal: input.itemOrdinal,
     status: "failed",
-    title: input.failure.class === "usage_limit" ? "Usage limit reached" : "Provider error",
+    title:
+      input.failure.code === "image-input-ineligible"
+        ? "Image delivery denied"
+        : input.failure.class === "usage_limit"
+          ? "Usage limit reached"
+          : "Provider error",
     startedAt: input.retryStartedAt ?? input.occurredAt,
     completedAt: input.occurredAt,
     updatedAt: input.occurredAt,
