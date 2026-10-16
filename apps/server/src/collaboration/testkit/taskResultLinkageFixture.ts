@@ -1,3 +1,4 @@
+import { confirmProviderTermination } from "../../policy/Base3PolicyGate.ts";
 import * as ProjectionMaintenance from "../../orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStore from "../../orchestration-v2/ProjectionStore.ts";
 import * as EventStore from "../../orchestration-v2/EventStore.ts";
@@ -329,7 +330,7 @@ function linkageOperations(f: BaseFixture, settlements: Queue.Queue<string>) {
     routing: Partial<
       Pick<
         Extract<OrchestrationV2Command, { type: "message.dispatch" }>,
-        "routingMode" | "modelSelection" | "dispatchMode"
+        "routingMode" | "modelSelection" | "dispatchMode" | "text" | "attachments" | "context"
       >
     > = {},
     afterDispatch: () => Effect.Effect<void> = () => Effect.void,
@@ -368,6 +369,18 @@ function linkageOperations(f: BaseFixture, settlements: Queue.Queue<string>) {
           Stream.runDrain,
         );
         yield* f.worker.drain();
+        // This reduced harness omits the normal runtime reactor's terminal cleanup.
+        const projection = yield* f.orchestrator.getThreadProjection(creation.threadId);
+        const run = projection.runs.find((run) => run.userMessageId === key);
+        const attempt = projection.attempts.find((attempt) => attempt.id === run?.activeAttemptId);
+        const turn = projection.providerTurns.find((turn) => turn.id === attempt?.providerTurnId);
+        if (run?.status !== "completed" || turn?.status !== "completed")
+          return yield* Effect.die(
+            "Fixture cannot release capacity without a matching terminal turn",
+          );
+        yield* confirmProviderTermination({ threadId: creation.threadId, messageId: key }).pipe(
+          Effect.provideService(SqlClient.SqlClient, f.sql),
+        );
       }),
     );
   const rebuild = ProjectionMaintenance.ProjectionMaintenanceV2.use(

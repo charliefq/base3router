@@ -17,8 +17,14 @@ import {
   TaskContractReviewInput,
   TaskContractReviewReference,
 } from "./taskContract.ts";
-import { ExplicitUserFeedbackV0 } from "./routerEvaluation.ts";
-import { ModelRouterMode, ModelRouterTarget, ModelRouterSelectionBasis } from "./modelRouter.ts";
+import { LOCAL_TASK_CLASSIFIER_VERSION, ExplicitUserFeedbackV0 } from "./routerEvaluation.ts";
+import {
+  ModelRouterMode,
+  ModelRouterTarget,
+  ModelRouterSelectionBasis,
+  ModelRouterCapability,
+} from "./modelRouter.ts";
+import { TaskMacroCategory } from "./openRouter.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
@@ -94,6 +100,41 @@ export const CollaborationTaskContractReadout = Schema.Union([
 ]);
 export type CollaborationTaskContractReadout = typeof CollaborationTaskContractReadout.Type;
 
+/** Fixed display vocabulary; open-ended stored context kinds never cross this boundary. */
+export const CollaborationRoutingContextKind = Schema.Literals([
+  "image",
+  "file",
+  "terminal",
+  "element",
+  "preview-annotation",
+  "review-comment",
+  "mention",
+  "skill",
+  "thread",
+]);
+export const CollaborationRecordedRoutingInputs = Schema.Struct({
+  profile: Schema.Union([
+    Schema.Struct({ status: Schema.Literals(["missing", "invalid", "unsupported"]) }),
+    Schema.Struct({
+      status: Schema.Literal("available"),
+      category: TaskMacroCategory,
+      source: Schema.Literal("local-heuristic"),
+      classifierVersion: Schema.Literal(LOCAL_TASK_CLASSIFIER_VERSION),
+    }),
+  ]),
+  facts: Schema.Union([
+    Schema.Struct({ status: Schema.Literals(["missing", "invalid"]) }),
+    Schema.Struct({
+      status: Schema.Literal("available"),
+      attachmentCount: NonNegativeInt,
+      contextKinds: Schema.Array(CollaborationRoutingContextKind).check(Schema.isMaxLength(9)),
+      unsupportedContextKind: Schema.Boolean,
+      requiredCapabilities: Schema.Array(ModelRouterCapability).check(Schema.isMaxLength(8)),
+    }),
+  ]),
+});
+export type CollaborationRecordedRoutingInputs = typeof CollaborationRecordedRoutingInputs.Type;
+
 /** Persisted dispatch facts; a configured model is not provider-attested execution. */
 export const CollaborationTaskRoutingReadout = Schema.Union([
   Schema.Struct({
@@ -111,6 +152,7 @@ export const CollaborationTaskRoutingReadout = Schema.Union([
     reasons: Schema.Array(Schema.String),
     explanation: Schema.NullOr(Schema.String),
     selectionBasis: Schema.optional(ModelRouterSelectionBasis),
+    recordedInputs: Schema.optional(CollaborationRecordedRoutingInputs),
     selectionUnknownReason: Schema.NullOr(Schema.String),
     configuredModel: Schema.NullOr(ModelSelection),
     execution: Schema.Union([
