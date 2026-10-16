@@ -12,6 +12,7 @@ import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
 
 import {
+  AcpProcessGroupTerminationError,
   capturePosixOwnershipLedger,
   isSafeCgroupPath,
   makeLinuxCgroupController,
@@ -224,6 +225,153 @@ describe("Linux ACP child topology", () => {
       "Cannot observe Linux ACP child topology",
     );
   });
+});
+
+describe("cached topology revalidation", () => {
+  for (const method of ["childPidsOf", "childrenOf"] as const) {
+    it.each(["EACCES", "malformed"])(`${method} surfaces a cached child becoming %s`, (failure) => {
+      const fixture = linuxTopologyFixture();
+      const pass = fixture.controller.beginObservation?.() ?? fixture.controller;
+      expect(pass.childPidsOf(100)).toEqual([110]);
+      const readFile = fixture.readFile.getMockImplementation()!;
+      fixture.readFile.mockImplementation((path) => {
+        if (path === "/proc/110/stat") {
+          if (failure === "malformed") return "invalid stat";
+          throw Object.assign(new Error("child denied"), { code: failure });
+        }
+        return readFile(path);
+      });
+      expect(() => pass[method](100)).toThrow("Cannot observe Linux ACP child topology");
+      // Generic identity remains deliberately tolerant; topology is stricter.
+      expect(pass.identity(110)).toBeUndefined();
+    });
+
+    it(`${method} surfaces parent denial after enumeration of a primed cache`, () => {
+      const fixture = linuxTopologyFixture();
+      const pass = fixture.controller.beginObservation?.() ?? fixture.controller;
+      expect(pass.childPidsOf(100)).toEqual([110]);
+      const readDirectory = fixture.readDirectory.getMockImplementation()!;
+      const readFile = fixture.readFile.getMockImplementation()!;
+      let denied = false;
+      fixture.readDirectory.mockImplementation((path) => {
+        if (path === "/proc/100/task") denied = true;
+        return readDirectory(path);
+      });
+      fixture.readFile.mockImplementation((path) => {
+        if (denied && path === "/proc/100/stat")
+          throw Object.assign(new Error("parent denied"), { code: "EACCES" });
+        return readFile(path);
+      });
+      expect(() => pass[method](100)).toThrow("Cannot observe Linux ACP child topology");
+    });
+  }
+
+  it.each(["ENOENT", "ESRCH"])(
+    "keeps genuine cached child disappearance %s distinct from denial",
+    (code) => {
+      const fixture = linuxTopologyFixture();
+      const pass = fixture.controller.beginObservation?.() ?? fixture.controller;
+      expect(pass.childPidsOf(100)).toEqual([110]);
+      const readFile = fixture.readFile.getMockImplementation()!;
+      fixture.readFile.mockImplementation((path) => {
+        if (path === "/proc/110/stat") throw Object.assign(new Error("child exited"), { code });
+        return readFile(path);
+      });
+      expect(pass.childPidsOf(100)).toEqual([]);
+      expect(pass.childrenOf(100)).toEqual([]);
+    },
+  );
+
+  it.each(["ENOENT", "ESRCH", "replacement"])(
+    "does not admit descendants after parent %s during enumeration",
+    (change) => {
+      const fixture = linuxTopologyFixture();
+      const pass = fixture.controller.beginObservation?.() ?? fixture.controller;
+      expect(pass.childPidsOf(100)).toEqual([110]);
+      const readFile = fixture.readFile.getMockImplementation()!;
+      const readDirectory = fixture.readDirectory.getMockImplementation()!;
+      let changed = false;
+      fixture.readDirectory.mockImplementation((path) => {
+        if (path === "/proc/100/task") changed = true;
+        return readDirectory(path);
+      });
+      fixture.readFile.mockImplementation((path) => {
+        if (changed && path === "/proc/100/stat") {
+          if (change !== "replacement")
+            throw Object.assign(new Error("parent exited"), { code: change });
+          fixture.processes.set(100, identity(100, 1, 100, 100, "replacement"));
+        }
+        return readFile(path);
+      });
+      expect(pass.childPidsOf(100)).toEqual([]);
+    },
+  );
+
+  it("childrenOf surfaces denial on its final child identity read", () => {
+    const fixture = linuxTopologyFixture();
+    const pass = fixture.controller.beginObservation?.() ?? fixture.controller;
+    expect(pass.childPidsOf(100)).toEqual([110]);
+    const readFile = fixture.readFile.getMockImplementation()!;
+    let reads = 0;
+    fixture.readFile.mockImplementation((path) => {
+      if (path === "/proc/110/stat" && ++reads === 2)
+        throw Object.assign(new Error("child denied after enumeration"), { code: "EACCES" });
+      return readFile(path);
+    });
+    expect(() => pass.childrenOf(100)).toThrow("Cannot observe Linux ACP child topology");
+  });
+});
+
+describe("scoped snapshot failures", () => {
+  it.live.each(["EACCES", "malformed"])("tags scoped snapshot %s and sends no signals", (failure) =>
+    Effect.gen(function* () {
+      const fixture = makeController({ processes: [server(), identity(100, 1, 100, 100)] });
+      const cause =
+        failure === "EACCES"
+          ? Object.assign(new Error("snapshot denied"), { code: failure })
+          : new Error("malformed snapshot");
+      const controller: AcpPosixProcessTreeController = {
+        ...fixture.controller,
+        beginObservation: () => ({
+          ...fixture.controller,
+          snapshot: () => {
+            throw cause;
+          },
+        }),
+      };
+      const error = yield* Effect.flip(
+        terminatePosixOwnedProcessTree({ controller, rootPid: 100, grace: 0 }),
+      );
+      expect(error).toBeInstanceOf(AcpProcessGroupTerminationError);
+      expect(error).toMatchObject({
+        _tag: "AcpProcessGroupTerminationError",
+        detail: "Failed to snapshot ACP process tree 100",
+        cause,
+      });
+      expect(fixture.signals).toEqual([]);
+    }),
+  );
+
+  it.live("preserves an already tagged scoped snapshot failure", () =>
+    Effect.gen(function* () {
+      const fixture = makeController({ processes: [server(), identity(100, 1, 100, 100)] });
+      const cause = new AcpProcessGroupTerminationError({ detail: "topology unavailable" });
+      const controller: AcpPosixProcessTreeController = {
+        ...fixture.controller,
+        beginObservation: () => ({
+          ...fixture.controller,
+          snapshot: () => {
+            throw cause;
+          },
+        }),
+      };
+      const error = yield* Effect.flip(
+        terminatePosixOwnedProcessTree({ controller, rootPid: 100, grace: 0 }),
+      );
+      expect(error).toBe(cause);
+      expect(fixture.signals).toEqual([]);
+    }),
+  );
 });
 
 describe("terminatePosixOwnedProcessTree", () => {

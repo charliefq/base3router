@@ -652,6 +652,13 @@ export function makeLinuxProcessTreeController(
       detail: `Cannot observe Linux ACP child topology for process ${pid}`,
       ...(cause === undefined ? {} : { cause }),
     });
+  const topologyIdentity = (pid: number) => {
+    try {
+      return readLinuxProcessIdentity(pid, procfs, true);
+    } catch (cause) {
+      throw unavailable(pid, cause);
+    }
+  };
   const snapshot = () => {
     const pids = procfs.readDirectory("/proc").filter((entry) => /^[1-9][0-9]*$/.test(entry));
     if (pids.length > MAX_LINUX_PROC_SNAPSHOT_PROCESSES) {
@@ -682,8 +689,8 @@ export function makeLinuxProcessTreeController(
       return index;
     };
     const childPidsOf = (pid: number): ReadonlyArray<number> => {
-      const parent = identity(pid);
-      if (parent === undefined) throw unavailable(pid);
+      const parent = topologyIdentity(pid);
+      if (parent === undefined) return [];
       const childPids = new Set<number>();
       let fallback = false;
       try {
@@ -709,7 +716,7 @@ export function makeLinuxProcessTreeController(
       } catch {
         fallback = true;
       }
-      if (!sameObservation(parent, identity(pid))) return [];
+      if (!sameObservation(parent, topologyIdentity(pid))) return [];
       if (!fallback) return [...childPids];
       let topology;
       try {
@@ -717,23 +724,27 @@ export function makeLinuxProcessTreeController(
       } catch (cause) {
         throw unavailable(pid, cause);
       }
-      if (!sameObservation(parent, identity(pid))) return [];
+      if (!sameObservation(parent, topologyIdentity(pid))) return [];
       const capturedParent = topology.byPid.get(pid);
       if (capturedParent === undefined) throw unavailable(pid);
       if (!sameObservation(parent, capturedParent)) return [];
       const children = (topology.children.get(pid) ?? []).flatMap((child) =>
-        sameObservation(child, identity(child.pid)) ? [child.pid] : [],
+        sameObservation(child, topologyIdentity(child.pid)) ? [child.pid] : [],
       );
-      return sameObservation(parent, identity(pid)) ? children : [];
+      return sameObservation(parent, topologyIdentity(pid)) ? children : [];
     };
     return {
       beginObservation: observation,
       childPidsOf,
-      childrenOf: (pid) =>
-        childPidsOf(pid).flatMap((childPid) => {
-          const child = identity(childPid);
+      childrenOf: (pid) => {
+        const parent = topologyIdentity(pid);
+        if (parent === undefined) return [];
+        const children = childPidsOf(pid).flatMap((childPid) => {
+          const child = topologyIdentity(childPid);
           return child?.ppid === pid ? [child] : [];
-        }),
+        });
+        return sameObservation(parent, topologyIdentity(pid)) ? children : [];
+      },
       identity,
       snapshot: () => {
         const table = snapshot();
@@ -1018,11 +1029,17 @@ export function terminatePosixOwnedProcessTree(input: {
 
   const fail = (detail: string, cause?: unknown) =>
     new AcpProcessGroupTerminationError({ detail, ...(cause === undefined ? {} : { cause }) });
-  const snapshot = () => {
+  const taggedFailure = (cause: unknown) =>
+    isAcpProcessGroupTerminationError(cause)
+      ? cause
+      : fail(`Failed to observe ACP process tree ${input.rootPid}`, cause);
+  const snapshot = (controller = input.controller) => {
     try {
-      return input.controller.snapshot();
+      return controller.snapshot();
     } catch (cause) {
-      throw fail(`Failed to snapshot ACP process tree ${input.rootPid}`, cause);
+      throw isAcpProcessGroupTerminationError(cause)
+        ? cause
+        : fail(`Failed to snapshot ACP process tree ${input.rootPid}`, cause);
     }
   };
   const discover = (table: ReadonlyArray<AcpPosixProcessIdentity>) =>
@@ -1035,7 +1052,7 @@ export function terminatePosixOwnedProcessTree(input: {
     });
   const signalPhase = (signal: NodeJS.Signals, includeRoot: boolean) => {
     const controller = input.controller.beginObservation?.() ?? input.controller;
-    const table = controller.snapshot();
+    const table = snapshot(controller);
     discover(table);
     const byPid = new Map(table.map((entry) => [entry.pid, entry]));
     const current = controller.identity(process.pid);
@@ -1120,24 +1137,24 @@ export function terminatePosixOwnedProcessTree(input: {
     for (let pass = 0; pass < passes; pass += 1) {
       yield* Effect.try({
         try: () => signalPhase("SIGTERM", false),
-        catch: (cause) => cause as AcpProcessGroupTerminationError,
+        catch: taggedFailure,
       });
       yield* Effect.sleep("10 millis");
     }
     yield* Effect.try({
       try: () => signalPhase("SIGTERM", true),
-      catch: (cause) => cause as AcpProcessGroupTerminationError,
+      catch: taggedFailure,
     });
     const grace = input.grace ?? "1 second";
     if (grace !== 0) yield* Effect.sleep(grace);
     for (let pass = 0; pass < passes; pass += 1) {
       yield* Effect.try({
         try: () => signalPhase("SIGKILL", true),
-        catch: (cause) => cause as AcpProcessGroupTerminationError,
+        catch: taggedFailure,
       });
       yield* Effect.sleep("10 millis");
     }
-    const finalTable = snapshot();
+    const finalTable = yield* Effect.try({ try: () => snapshot(), catch: taggedFailure });
     discover(finalTable);
     const survivors = new Map(finalTable.map((entry) => [entry.pid, entry]));
     const residual = [...ledger.values()].filter((owned) => {
