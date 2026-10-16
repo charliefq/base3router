@@ -13,6 +13,15 @@ import {
   type ModelSelection,
   type OrchestrationV2DomainEvent,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as Layer from "effect/Layer";
+import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
+import * as Scheduler from "../scheduling/Scheduler.ts";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as ThreadManagement from "./ThreadManagementService.ts";
+import * as ThreadLaunch from "./ThreadLaunchService.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
+import { makeProviderFailure } from "./ProviderFailure.ts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -417,7 +426,10 @@ const composerSelection = {
   options: [...runSelection.options, { id: "fastMode", value: false }],
 };
 
-const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function* (name: string) {
+const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function* (
+  name: string,
+  selection: ModelSelection = runSelection,
+) {
   const cwd = yield* checkpointWorkspace(name);
   const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
   const started: ProviderAdapterV2TurnInput[] = [];
@@ -448,7 +460,7 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
             providerInstanceId: instanceId,
             status: "ready",
             cwd,
-            model: runSelection.model,
+            model: selection.model,
             capabilities,
             createdAt: now,
             updatedAt: now,
@@ -525,7 +537,7 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
       threadId,
       projectId: ProjectId.make(`project:${name}`),
       title: "Steer with changed options",
-      modelSelection: runSelection,
+      modelSelection: selection,
       runtimeMode: "full-access",
       interactionMode: "default",
       branch: null,
@@ -548,7 +560,7 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
       messageId: MessageId.make("message:first"),
       text: "first",
       attachments: [],
-      modelSelection: runSelection,
+      modelSelection: selection,
       dispatchMode: { type: "start_immediately" },
       createdBy: "user",
       creationSource: "web",
@@ -701,4 +713,190 @@ it.effect("starts a steer that missed the turn on the saved next-turn selection"
       }).pipe(Effect.provide(layer));
     }),
   ),
+);
+
+it.effect.each(["completed", "failed", "cancelled"] as const)(
+  "queues scheduled occurrences behind a steer-capable active run and settles their own %s outcome",
+  (status) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const name = `scheduled-busy-${status}`;
+        const fixture = yield* nextTurnSelectionHarness(name, modelSelection);
+        const dependencies = Layer.mergeAll(
+          fixture.layer,
+          ThreadManagement.layer.pipe(Layer.provide(fixture.layer)),
+          NodeCrypto.layer,
+          Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
+          Layer.succeed(Scheduler.Scheduler, { register: () => Effect.void }),
+        );
+        const layer = Layer.mergeAll(
+          dependencies,
+          ScheduledTasks.layer.pipe(Layer.provide(dependencies)),
+          EffectOutbox.layer,
+        ).pipe(Layer.provideMerge(SqlitePersistenceMemory));
+        yield* Effect.gen(function* () {
+          const tasks = yield* ScheduledTasks.ScheduledTaskService;
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const sink = yield* EventSink.EventSinkV2;
+          const outbox = yield* EffectOutbox.EffectOutboxV2;
+          const threadId = yield* fixture.startFirstTurn;
+          const first = fixture.started[0]!;
+          const active = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(active.runs[0]?.status, "running");
+          assert.isNotNull(active.runs[0]?.activeAttemptId);
+          assert.equal(active.providerTurns[0]?.status, "running");
+          assert.isTrue(active.providerSessions[0]?.capabilities.turns.supportsActiveSteering);
+
+          const { task } = yield* tasks.upsert({
+            title: "Scheduled work",
+            prompt: "Audit independently of the active turn.",
+            enabled: false,
+            schedule: { type: "interval", everyMs: 60_000 },
+            projectId: ProjectId.make(`project:${name}`),
+            threadId,
+            workspaceStrategy: { type: "root" },
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          });
+          const dispatched = (yield* tasks.runNow({ id: task.id })).task;
+          const occurrence = dispatched.lastOccurrence!;
+          assert.isNotNull(occurrence.runId, occurrence.blockedReason ?? occurrence.status);
+          assert.notEqual(occurrence.runId, first.runId);
+          assert.equal(dispatched.lastRunStatus, "running");
+          assert.equal(dispatched.runCount, 1);
+          const queued = yield* orchestrator.getThreadProjection(threadId);
+          const scheduledRun = queued.runs.find((run) => run.id === occurrence.runId)!;
+          assert.equal(scheduledRun.status, "queued");
+          assert.equal(scheduledRun.userMessageId, occurrence.messageId);
+          assert.notEqual(scheduledRun.userMessageId, first.message.messageId);
+          assert.equal(
+            queued.messages.find((message) => message.id === occurrence.messageId)?.runId,
+            scheduledRun.id,
+          );
+          assert.deepEqual(fixture.steered, []);
+          assert.isFalse(
+            (yield* outbox.listByCommandId(occurrence.commandId)).some(
+              (effect) => effect.request.type === "provider-turn.steer",
+            ),
+          );
+          yield* worker.drain();
+          assert.lengthOf(fixture.started, 1);
+          assert.deepEqual(fixture.steered, []);
+
+          const watch = (predicate: (event: OrchestrationV2DomainEvent) => boolean) =>
+            orchestrator.streamDomainEvents.pipe(
+              Stream.filter(predicate),
+              Stream.take(1),
+              Stream.runDrain,
+              Effect.forkScoped,
+            );
+          const finish = Effect.fn("test.finishScheduledProviderTurn")(function* (
+            input: ProviderAdapterV2TurnInput,
+            outcome: "completed" | "failed" | "cancelled",
+          ) {
+            const projection = yield* orchestrator.getThreadProjection(threadId);
+            const turn = projection.providerTurns.find(
+              (candidate) => candidate.runAttemptId === input.attemptId,
+            )!;
+            const settled = yield* watch(
+              (event) =>
+                event.type === "run.updated" &&
+                event.payload.id === input.runId &&
+                event.payload.status === (outcome === "completed" ? "waiting" : outcome),
+            );
+            yield* Queue.offer(fixture.events, {
+              type: "provider_turn.updated",
+              driver,
+              providerTurn: { ...turn, status: outcome, completedAt: yield* DateTime.now },
+            });
+            const identity = {
+              type: "turn.terminal" as const,
+              driver,
+              providerThreadId: turn.providerThreadId,
+              providerTurnId: turn.id,
+              runOrdinal: input.runOrdinal,
+              threadDisposition: "reusable" as const,
+            };
+            yield* Queue.offer(
+              fixture.events,
+              outcome === "failed"
+                ? {
+                    ...identity,
+                    status: "failed",
+                    failureItemOrdinal: 100,
+                    failure: makeProviderFailure({
+                      message: "Fixture failure",
+                      code: "fixture_failure",
+                      class: "unknown",
+                    }),
+                  }
+                : { ...identity, status: outcome, failure: null },
+            );
+            yield* Fiber.join(settled);
+            yield* worker.drain();
+          });
+
+          const ownRunning = yield* watch(
+            (event) =>
+              event.type === "provider-turn.updated" &&
+              event.payload.runAttemptId !== first.attemptId &&
+              event.payload.status === "running",
+          );
+          yield* finish(first, "completed");
+          // Completion of the original active turn must never settle its queued neighbour.
+          const afterUnrelated = (yield* tasks.list()).tasks[0]!;
+          assert.equal(afterUnrelated.lastOccurrence?.id, occurrence.id);
+          assert.equal(afterUnrelated.lastRunStatus, "running");
+          assert.equal(afterUnrelated.runCount, 1);
+          yield* orchestrator.resumeQueuedRuns;
+          yield* worker.drain();
+          yield* Fiber.join(ownRunning);
+          const own = fixture.started[1]!;
+          assert.equal(own.runId, occurrence.runId);
+          assert.equal(own.message.messageId, occurrence.messageId);
+          assert.deepEqual(fixture.steered, []);
+          yield* finish(own, status);
+          const settled = (yield* tasks.list()).tasks[0]!;
+          assert.equal(
+            settled.lastOccurrence?.status,
+            status === "completed" ? "succeeded" : status,
+          );
+          assert.equal(settled.lastRunStatus, status === "completed" ? "succeeded" : "failed");
+          assert.equal(settled.runCount, 1);
+          const terminal = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+            (run) => run.id === own.runId,
+          )!;
+          const duplicateCompletion = (id: string) =>
+            sink.write({
+              events: [
+                {
+                  id: EventId.make(id),
+                  threadId,
+                  type: "run.updated",
+                  occurredAt: terminal.completedAt!,
+                  payload: terminal,
+                },
+              ],
+            });
+          yield* duplicateCompletion("duplicate-scheduled-outcome");
+          assert.deepEqual((yield* tasks.list()).tasks[0], settled);
+          const next = (yield* tasks.runNow({ id: task.id })).task;
+          assert.notEqual(next.lastOccurrence?.id, occurrence.id);
+          assert.isNotNull(next.lastOccurrence?.runId);
+          assert.notEqual(next.lastOccurrence?.runId, own.runId);
+          const nextProjection = yield* orchestrator.getThreadProjection(threadId);
+          assert.notEqual(
+            nextProjection.runs.find((run) => run.id === next.lastOccurrence?.runId)?.status,
+            "queued",
+          );
+          assert.equal(next.lastRunStatus, "running");
+          assert.equal(next.runCount, 2);
+          yield* duplicateCompletion("late-scheduled-outcome");
+          assert.deepEqual((yield* tasks.list()).tasks[0], next);
+          assert.deepEqual(fixture.steered, []);
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
 );

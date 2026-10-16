@@ -634,7 +634,8 @@ export const layer = Layer.effect(
                     text: prompt,
                     attachments: [],
                     modelSelection: active.modelSelection,
-                    mode: "auto",
+                    // Every occurrence owns a run, even when the target can steer.
+                    mode: "queue",
                     createdBy: active.createdBy,
                     creationSource: active.creationSource,
                   })
