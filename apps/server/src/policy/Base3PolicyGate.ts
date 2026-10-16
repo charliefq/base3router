@@ -1188,8 +1188,7 @@ export const authorizeScheduleUpsert = (input: {
   readonly taskId: string;
   readonly threadId: string | null;
   readonly prompt: string;
-  readonly model: string | null;
-  readonly instanceId: string | null;
+  readonly modelSelection?: ModelSelection;
   readonly createdBy: string;
   readonly creationSource: string;
 }) =>
@@ -1237,12 +1236,18 @@ export const authorizeScheduleUpsert = (input: {
       actorId,
       scopes,
       expiresAt: null,
-      hash: argumentHash({
-        text: input.prompt,
-        model: input.model,
-        instanceId: input.instanceId,
-        attachmentIds: [],
-      }),
+      // Bind the same message arguments that firing revalidates, including option presence.
+      // Old grants that omit saved options need an authorized re-save; never repair at fire time.
+      // Governed threads additionally bind contractGrantFields at continuation admission;
+      // this schedule grant does not authorize a contract and must still fail closed there.
+      hash: argumentHash(
+        messageArguments({
+          type: "message.dispatch",
+          commandId: `schedule:${input.taskId}`,
+          text: input.prompt,
+          ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+        }),
+      ),
       approvalId,
     });
   });

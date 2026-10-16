@@ -814,8 +814,7 @@ export const layer = Layer.effect(
           taskId: id,
           threadId: task.threadId,
           prompt: task.prompt,
-          model: task.modelSelection?.model ?? null,
-          instanceId: task.modelSelection?.instanceId ?? null,
+          modelSelection: task.modelSelection,
           createdBy: task.createdBy,
           creationSource: task.creationSource,
         }).pipe(

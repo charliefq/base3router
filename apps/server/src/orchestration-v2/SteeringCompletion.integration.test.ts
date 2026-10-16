@@ -756,7 +756,7 @@ it.effect.each(["completed", "failed", "cancelled"] as const)(
             projectId: ProjectId.make(`project:${name}`),
             threadId,
             workspaceStrategy: { type: "root" },
-            modelSelection,
+            modelSelection: composerSelection,
             runtimeMode: "full-access",
             interactionMode: "default",
           });
@@ -769,6 +769,7 @@ it.effect.each(["completed", "failed", "cancelled"] as const)(
           const queued = yield* orchestrator.getThreadProjection(threadId);
           const scheduledRun = queued.runs.find((run) => run.id === occurrence.runId)!;
           assert.equal(scheduledRun.status, "queued");
+          assert.deepEqual(scheduledRun.modelSelection, composerSelection);
           assert.equal(scheduledRun.userMessageId, occurrence.messageId);
           assert.notEqual(scheduledRun.userMessageId, first.message.messageId);
           assert.equal(
@@ -855,6 +856,7 @@ it.effect.each(["completed", "failed", "cancelled"] as const)(
           yield* Fiber.join(ownRunning);
           const own = fixture.started[1]!;
           assert.equal(own.runId, occurrence.runId);
+          assert.deepEqual(own.modelSelection, composerSelection);
           assert.equal(own.message.messageId, occurrence.messageId);
           assert.deepEqual(fixture.steered, []);
           yield* finish(own, status);

@@ -44,7 +44,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import { ActionGateService, layer as actionGateLayer } from "../actionGate/ActionGateService.ts";
-import { Base3PolicyDeniedError } from "../policy/Base3PolicyGate.ts";
+import { argumentHash, Base3PolicyDeniedError } from "../policy/Base3PolicyGate.ts";
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
 
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
@@ -71,6 +71,7 @@ import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderRep
 
 const projectId = ProjectId.make("project:launch-test");
 const otherProjectId = ProjectId.make("project:launch-other");
+const decodeScheduleInput = Schema.decodeUnknownEffect(ScheduledTaskUpsertInput);
 const encodeThreadProjection = Schema.encodeEffect(OrchestrationV2ThreadProjectionJson);
 const modelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
@@ -283,11 +284,21 @@ function waitUntil<E, R>(predicate: () => Effect.Effect<boolean, E, R>): Effect.
 
 it.effect.each(
   (["new", "existing"] as const).flatMap((target) =>
-    (["user", "agent"] as const).map((createdBy) => ({ target, createdBy })),
+    (["user", "agent"] as const).flatMap((createdBy) =>
+      [
+        { name: "omitted", selection: modelSelection },
+        { name: "empty array", selection: { ...modelSelection, options: [] } },
+        { name: "legacy empty object", selection: { ...modelSelection, options: {} } },
+        {
+          name: "nonempty",
+          selection: { ...modelSelection, options: [{ value: "high", id: "effort" }] },
+        },
+      ].map(({ name, selection }) => ({ target, createdBy, name, selection })),
+    ),
   ),
 )(
-  "attributes $createdBy-configured automations in $target threads without changing their prompt",
-  ({ target, createdBy }) => {
+  "delivers $name options and $createdBy attribution from upsert to fire in $target threads",
+  ({ target, createdBy, selection }) => {
     const harness = makeHarness();
     const gate = actionGateLayer.pipe(Layer.provide(harness.layer));
     const scheduledTasks = ScheduledTasks.layer.pipe(
@@ -309,7 +320,7 @@ it.effect.each(
               launchInput({ command: "command:existing", thread: "thread:existing" }),
             )
           : null;
-      const upsertInput: typeof ScheduledTaskUpsertInput.Type = {
+      const upsertInput = yield* decodeScheduleInput({
         id: ScheduledTaskId.make("scheduled-task:attribution"),
         title: "Daily audit",
         prompt: "Audit performance and crashes.",
@@ -318,12 +329,12 @@ it.effect.each(
         projectId,
         threadId: existing?.threadId ?? null,
         workspaceStrategy: { type: "root" },
-        modelSelection,
+        modelSelection: selection,
         runtimeMode: "full-access",
         interactionMode: "default",
         createdBy,
         creationSource: createdBy === "agent" ? "mcp" : "web",
-      };
+      });
       const asSession = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         createdBy === "agent"
           ? effect.pipe(Effect.provideService(PolicyExecutionContext, session))
@@ -362,6 +373,8 @@ it.effect.each(
       const projection = yield* threads.getThreadProjection(thread!.id);
       // Encoding the persisted projection exercises both message and turn-item wire schemas.
       const wire = yield* encodeThreadProjection(projection);
+      assert.deepEqual(projection.runs[0]?.modelSelection, upsertInput.modelSelection);
+      assert.deepEqual(task.modelSelection, upsertInput.modelSelection);
       assert.equal(wire.messages[0]?.text, task.prompt);
       assert.equal(wire.messages[0]?.scheduledTaskId, task.id);
       assert.equal(wire.messages[0]?.createdBy, createdBy);
@@ -2149,6 +2162,53 @@ function outcomeHarness() {
     ).pipe(Layer.provideMerge(harness.layer)),
   };
 }
+
+it.effect.each(["new", "existing"] as const)(
+  "keeps a persisted legacy schedule grant rejected in a %s thread until authorized re-save",
+  (target) => {
+    const harness = outcomeHarness();
+    return Effect.gen(function* () {
+      const tasks = yield* ScheduledTasks.ScheduledTaskService;
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const sql = yield* SqlClient.SqlClient;
+      const existing =
+        target === "existing"
+          ? yield* launches.launch(
+              launchInput({ command: "legacy-target", thread: "thread:legacy-target" }),
+            )
+          : null;
+      const input = {
+        ...outcomeScheduleInput,
+        threadId: existing?.threadId ?? null,
+        modelSelection: { ...modelSelection, options: [{ id: "effort", value: "high" }] },
+      };
+      const { task } = yield* tasks.upsert(input);
+      // Model the old persisted grant bytes without modifying the saved selection.
+      const legacyHash = argumentHash({
+        text: input.prompt,
+        model: modelSelection.model,
+        instanceId: modelSelection.instanceId,
+        attachmentIds: [],
+      });
+      yield* sql`UPDATE base3_execution_grants SET argument_hash = ${legacyHash}
+        WHERE grant_id = ${`grant:schedule:${task.id}`}`;
+      const rejected = (yield* tasks.runNow({ id: task.id })).task;
+      assert.equal(rejected.lastOccurrence?.status, "failed");
+      const grants = yield* sql<{ argument_hash: string }>`SELECT argument_hash
+        FROM base3_execution_grants WHERE grant_id = ${`grant:schedule:${task.id}`}`;
+      assert.equal(grants[0]?.argument_hash, legacyHash);
+      const runs = yield* sql`SELECT run_id FROM orchestration_v2_projection_runs`;
+      assert.deepEqual(runs, []);
+      yield* tasks.upsert({ ...input, id: task.id });
+      const accepted = (yield* tasks.runNow({ id: task.id })).task;
+      assert.equal(accepted.lastOccurrence?.status, "running");
+      assert.isNotNull(accepted.lastOccurrence?.runId);
+      const projection = yield* threads.getThreadProjection(accepted.lastOccurrence!.threadId!);
+      assert.deepEqual(projection.runs[0]?.modelSelection, input.modelSelection);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
 
 const createOutcomeTask = Effect.fn("test.createOutcomeTask")(function* (enabled = false) {
   const launches = yield* ThreadLaunch.ThreadLaunchService;

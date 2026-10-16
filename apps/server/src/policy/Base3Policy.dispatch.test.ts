@@ -1,6 +1,7 @@
 import {
   ActionApprovalId,
   ModelRouterDecision,
+  ModelSelection,
   AuthOrchestrationOperateScope,
   EnvironmentId,
   ProviderDriverKind,
@@ -74,6 +75,9 @@ const gateLayer = actionGateLayer.pipe(
   Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provideMerge(providers),
 );
+
+const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
 
 const model = { instanceId: ready.instanceId, model: "gpt-5.4" as const };
 
@@ -206,8 +210,7 @@ it.effect("schedule execution requires a grant and revalidates the prompt", () =
         taskId: "task-agent",
         threadId: "thread-schedule",
         prompt: "nightly review",
-        model: "gpt-5.4",
-        instanceId: "codex-work",
+        modelSelection: model,
         createdBy: "agent",
         creationSource: "mcp",
       }).pipe(Effect.provideService(PolicyExecutionContext, session)),
@@ -230,8 +233,7 @@ it.effect("schedule execution requires a grant and revalidates the prompt", () =
       taskId: "task-agent",
       threadId: "thread-schedule",
       prompt: "nightly review",
-      model: "gpt-5.4",
-      instanceId: "codex-work",
+      modelSelection: model,
       createdBy: "agent",
       creationSource: "mcp",
     }).pipe(Effect.provideService(PolicyExecutionContext, session));
@@ -239,8 +241,7 @@ it.effect("schedule execution requires a grant and revalidates the prompt", () =
       taskId: "task-user",
       threadId: "thread-schedule",
       prompt: "weekday digest",
-      model: "gpt-5.4",
-      instanceId: "codex-work",
+      modelSelection: model,
       createdBy: "user",
       creationSource: "web",
     }).pipe(Effect.provideService(PolicyExecutionContext, session));
@@ -275,6 +276,148 @@ it.effect("schedule execution requires a grant and revalidates the prompt", () =
     `;
     expect(attempts[0]?.count).toBe(1);
   }).pipe(Effect.provide(gateLayer)),
+);
+
+const scheduleGrant = (taskId: string, modelSelection: ModelSelection) =>
+  authorizeScheduleUpsert({
+    taskId,
+    threadId: "thread-options",
+    prompt: "Scheduled review",
+    modelSelection,
+    createdBy: "user",
+    creationSource: "web",
+  }).pipe(Effect.provideService(PolicyExecutionContext, session));
+
+const scheduleFire = (taskId: string, modelSelection: ModelSelection, text = "Scheduled review") =>
+  authorizeDispatch({
+    type: "message.dispatch",
+    commandId: `fire:${taskId}`,
+    threadId: "thread-options",
+    messageId: `message:${taskId}`,
+    scheduledTaskId: taskId,
+    text,
+    modelSelection,
+    attachments: [],
+    dispatchMode: { type: "queue_after_active" },
+  }).pipe(Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }));
+
+it.effect.each([
+  { name: "omitted", selection: model },
+  { name: "empty array", selection: { ...model, options: [] } },
+  { name: "legacy empty object", selection: { ...model, options: {} } },
+  { name: "nonempty", selection: { ...model, options: [{ id: "effort", value: "high" }] } },
+])("schedule grants accept unchanged $name options", ({ selection }) =>
+  Effect.gen(function* () {
+    const decoded = yield* decodeModelSelection(selection);
+    yield* scheduleGrant("unchanged", decoded);
+    yield* scheduleFire("unchanged", decoded);
+  }).pipe(Effect.provide(gateLayer)),
+);
+
+it.effect("schedule grants canonicalize option object keys without losing presence or values", () =>
+  Effect.gen(function* () {
+    const selected = { ...model, options: [{ id: "effort", value: "high" }] };
+    yield* scheduleGrant("options", selected);
+    yield* scheduleFire("options", { ...model, options: [{ value: "high", id: "effort" }] });
+    for (const [selection, text] of [
+      [selected, "Changed prompt"],
+      [{ ...selected, model: "different-model" }, "Scheduled review"],
+      [{ ...selected, instanceId: ProviderInstanceId.make("other-instance") }, "Scheduled review"],
+      [{ ...model, options: [{ id: "effort", value: "low" }] }, "Scheduled review"],
+      [{ ...model, options: [{ id: "fastMode", value: "high" }] }, "Scheduled review"],
+      [{ ...model, options: [] }, "Scheduled review"],
+      [model, "Scheduled review"],
+    ] as const) {
+      const denied = yield* Effect.flip(scheduleFire("options", selection, text));
+      expect(denied.reason).toBe("argument-mismatch");
+    }
+    yield* scheduleGrant("omitted", model);
+    expect((yield* Effect.flip(scheduleFire("omitted", { ...model, options: [] }))).reason).toBe(
+      "argument-mismatch",
+    );
+    yield* scheduleGrant("empty", { ...model, options: [] });
+    expect((yield* Effect.flip(scheduleFire("empty", model))).reason).toBe("argument-mismatch");
+  }).pipe(Effect.provide(gateLayer)),
+);
+
+it.effect("missing, revoked and legacy options-omitting schedule grants stay fail-closed", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const selection = { ...model, options: [{ id: "effort", value: "high" }] };
+    expect((yield* Effect.flip(scheduleFire("missing", selection))).reason).toBe("grant-missing");
+    yield* scheduleGrant("revoked", selection);
+    yield* sql`UPDATE base3_execution_grants SET revoked_at = '2026-10-16T00:00:00.000Z'
+      WHERE grant_id = 'grant:schedule:revoked'`;
+    expect((yield* Effect.flip(scheduleFire("revoked", selection))).reason).toBe("grant-revoked");
+    yield* scheduleGrant("legacy", model);
+    const before =
+      yield* sql`SELECT * FROM base3_execution_grants WHERE grant_id = 'grant:schedule:legacy'`;
+    expect((yield* Effect.flip(scheduleFire("legacy", selection))).reason).toBe(
+      "argument-mismatch",
+    );
+    const after =
+      yield* sql`SELECT * FROM base3_execution_grants WHERE grant_id = 'grant:schedule:legacy'`;
+    expect(after).toEqual(before);
+    yield* scheduleGrant("legacy", selection);
+    yield* scheduleFire("legacy", selection);
+  }).pipe(Effect.provide(gateLayer)),
+);
+
+it.effect("schedule grants do not authorize governed-thread contract fields", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const selection = { ...model, options: [] };
+    yield* scheduleGrant("governed", selection);
+    const payload = yield* encodeJson({
+      taskGovernance: "required",
+      taskContract: {
+        revision: 1,
+        goal: "Review the work",
+        redirect: "Pause when requirements change",
+        acceptance: "Review complete",
+        brake: { maxProviderStarts: 2, stopConditions: "Stop after the budget" },
+      },
+      taskContractPhase: "active",
+      taskAcceptedRevision: 1,
+      lineage: { rootThreadId: "thread-options" },
+    });
+    yield* sql`INSERT INTO orchestration_v2_projection_threads (
+      thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+      created_at, updated_at, payload_json
+    ) VALUES (
+      'thread-options', 'project-options', 'Governed', 'codex', 'full-access', 'default',
+      '2026-10-16T00:00:00.000Z', '2026-10-16T00:00:00.000Z', ${payload}
+    )`;
+    const denied = yield* Effect.flip(scheduleFire("governed", selection));
+    expect(denied.reason).toBe("argument-mismatch");
+    const attempts =
+      yield* sql`SELECT * FROM base3_execution_attempts WHERE thread_id = 'thread-options'`;
+    expect(attempts).toEqual([]);
+  }).pipe(Effect.provide(gateLayer)),
+);
+
+it.effect.each([
+  { createdBy: "agent", creationSource: "web" },
+  { createdBy: "user", creationSource: "mcp" },
+])(
+  "$createdBy/$creationSource schedules cannot use the kernel test subject to bypass ASK",
+  (source) =>
+    Effect.gen(function* () {
+      const denied = yield* Effect.flip(
+        authorizeScheduleUpsert({
+          taskId: "unattended",
+          threadId: null,
+          prompt: "Scheduled review",
+          modelSelection: { ...model, options: [] },
+          ...source,
+        }),
+      );
+      expect(denied.reason).toBe("unauthenticated");
+      const sql = yield* SqlClient.SqlClient;
+      const rows =
+        yield* sql`SELECT * FROM base3_execution_grants WHERE grant_id = 'grant:schedule:unattended'`;
+      expect(rows).toEqual([]);
+    }).pipe(Effect.provide(gateLayer)),
 );
 
 it.effect("usage-limit continuation keeps the prior actor and rejects a mismatched prompt", () =>
