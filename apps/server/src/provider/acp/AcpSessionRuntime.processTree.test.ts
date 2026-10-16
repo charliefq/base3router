@@ -228,25 +228,31 @@ describe("Linux ACP child topology", () => {
 });
 
 describe("cached topology revalidation", () => {
-  for (const method of ["childPidsOf", "childrenOf"] as const) {
-    it.each(["EACCES", "malformed"])(`${method} surfaces a cached child becoming %s`, (failure) => {
-      const fixture = linuxTopologyFixture();
-      const pass = fixture.controller.beginObservation?.() ?? fixture.controller;
-      expect(pass.childPidsOf(100)).toEqual([110]);
-      const readFile = fixture.readFile.getMockImplementation()!;
-      fixture.readFile.mockImplementation((path) => {
-        if (path === "/proc/110/stat") {
-          if (failure === "malformed") return "invalid stat";
-          throw Object.assign(new Error("child denied"), { code: failure });
-        }
-        return readFile(path);
-      });
-      expect(() => pass[method](100)).toThrow("Cannot observe Linux ACP child topology");
-      // Generic identity remains deliberately tolerant; topology is stricter.
-      expect(pass.identity(110)).toBeUndefined();
+  it.each([
+    ["childPidsOf", "EACCES"],
+    ["childPidsOf", "malformed"],
+    ["childrenOf", "EACCES"],
+    ["childrenOf", "malformed"],
+  ] as const)("%s surfaces a cached child becoming %s", (method, failure) => {
+    const fixture = linuxTopologyFixture();
+    const pass = fixture.controller.beginObservation?.() ?? fixture.controller;
+    expect(pass.childPidsOf(100)).toEqual([110]);
+    const readFile = fixture.readFile.getMockImplementation()!;
+    fixture.readFile.mockImplementation((path) => {
+      if (path === "/proc/110/stat") {
+        if (failure === "malformed") return "invalid stat";
+        throw Object.assign(new Error("child denied"), { code: failure });
+      }
+      return readFile(path);
     });
+    expect(() => pass[method](100)).toThrow("Cannot observe Linux ACP child topology");
+    // Generic identity remains deliberately tolerant; topology is stricter.
+    expect(pass.identity(110)).toBeUndefined();
+  });
 
-    it(`${method} surfaces parent denial after enumeration of a primed cache`, () => {
+  it.each(["childPidsOf", "childrenOf"] as const)(
+    "%s surfaces parent denial after enumeration of a primed cache",
+    (method) => {
       const fixture = linuxTopologyFixture();
       const pass = fixture.controller.beginObservation?.() ?? fixture.controller;
       expect(pass.childPidsOf(100)).toEqual([110]);
@@ -263,8 +269,8 @@ describe("cached topology revalidation", () => {
         return readFile(path);
       });
       expect(() => pass[method](100)).toThrow("Cannot observe Linux ACP child topology");
-    });
-  }
+    },
+  );
 
   it.each(["ENOENT", "ESRCH"])(
     "keeps genuine cached child disappearance %s distinct from denial",
