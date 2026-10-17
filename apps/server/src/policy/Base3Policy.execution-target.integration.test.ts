@@ -1591,7 +1591,15 @@ it.live(
     ).pipe(Effect.provide(NodeServices.layer)),
 );
 
-it.live.each(["control", "immediate", "queued", "availability", "constraints"] as const)(
+it.live.each([
+  "control",
+  "immediate",
+  "queued",
+  "availability",
+  "constraints",
+  "saved-signed-out",
+  "saved-signed-out-race",
+] as const)(
   "eligible cap governed disk SQLite preview and real worker %s preserve authorization and replay",
   (mode) =>
     Effect.scoped(
@@ -1601,16 +1609,39 @@ it.live.each(["control", "immediate", "queued", "availability", "constraints"] a
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "b3r-cap-a2-" });
         const cwd = yield* checkpointWorkspace(`eligible-cap-${mode}`);
         const started = yield* Ref.make<ReadonlyArray<ModelSelection>>([]);
+        const savedSignedOut = mode === "saved-signed-out" || mode === "saved-signed-out-race";
+        const antigravity: ServerProvider = {
+          ...agentsCreationProvider,
+          instanceId: ProviderInstanceId.make("antigravity"),
+          driver: ProviderDriverKind.make("antigravity"),
+          status: "error",
+          auth: { status: "unauthenticated" },
+        };
+        const manualSelection: ModelSelection = {
+          instanceId: antigravity.instanceId,
+          model: "fake-model",
+          options: [{ id: "effort", value: "high" }],
+        };
+        const antigravityCalls = vi.fn();
         const expected = { instanceId: agentsCreationProvider.instanceId, model: "fake-model" };
         yield* withAgentsTaskCreationFixture(
           (f) =>
             Effect.gen(function* () {
               f.setProviders(
-                mode === "control" ? [agentsCreationProvider] : eligibleCapProviders(),
+                savedSignedOut
+                  ? [antigravity, agentsCreationProvider]
+                  : mode === "control"
+                    ? [agentsCreationProvider]
+                    : eligibleCapProviders(),
               );
               yield* f.sql`UPDATE projection_projects SET workspace_root=${cwd} WHERE project_id='project-a'`;
+              const { taskCreationReview, ...ordinaryCreate } = agentsCreationCommand(
+                `cap-${mode}`,
+              );
               const c = {
-                ...agentsCreationCommand(`cap-${mode}`),
+                ...ordinaryCreate,
+                ...(savedSignedOut ? {} : { taskCreationReview }),
+                ...(savedSignedOut ? { modelSelection: manualSelection } : {}),
                 taskContract: {
                   goal: "Run the cap fixture",
                   redirect: "Keep fixture scope",
@@ -1648,7 +1679,7 @@ it.live.each(["control", "immediate", "queued", "availability", "constraints"] a
               assert.deepEqual(preview.decision.selected?.target, expected);
               assert.equal(
                 preview.decision.selectionBasis?.excludedCount,
-                mode === "control" ? 0 : 32,
+                savedSignedOut ? 1 : mode === "control" ? 0 : 32,
               );
               yield* Effect.log("Eligible cap preview zero-write disk SQLite", {
                 tables: before.contents.length,
@@ -1656,6 +1687,7 @@ it.live.each(["control", "immediate", "queued", "availability", "constraints"] a
               });
               if (mode === "availability")
                 f.setProviders(eligibleCapProviders().map((p) => ({ ...p, installed: false })));
+              if (mode === "saved-signed-out-race") f.setProviders([antigravity]);
               const constraints =
                 mode === "constraints" ? { allowedModels: [] } : { allowedModels: ["fake-model"] };
               const command = {
@@ -1666,6 +1698,7 @@ it.live.each(["control", "immediate", "queued", "availability", "constraints"] a
                 text: "Inspect the eligible cap fixture",
                 attachments: [],
                 routingMode: "auto" as const,
+                ...(savedSignedOut ? { modelSelection: manualSelection } : {}),
                 modelRouteConstraints: constraints,
                 dispatchMode: {
                   type:
@@ -1676,7 +1709,11 @@ it.live.each(["control", "immediate", "queued", "availability", "constraints"] a
                 createdBy: "user" as const,
                 creationSource: "web" as const,
               };
-              if (mode === "availability" || mode === "constraints") {
+              if (
+                mode === "availability" ||
+                mode === "constraints" ||
+                mode === "saved-signed-out-race"
+              ) {
                 const effects = yield* f.noExecution();
                 yield* Effect.flip(f.dispatch(command));
                 yield* Effect.flip(f.dispatch(command));
@@ -1688,6 +1725,7 @@ it.live.each(["control", "immediate", "queued", "availability", "constraints"] a
                   [],
                 );
                 assert.deepEqual(yield* f.sql`SELECT * FROM task_contract_admissions`, []);
+                assert.equal(antigravityCalls.mock.calls.length, 0);
                 return;
               }
               if (mode === "queued") {
@@ -1864,6 +1902,7 @@ it.live.each(["control", "immediate", "queued", "availability", "constraints"] a
               const decodedAttempt = yield* decodeLinkedAttempt(persistedAttempt.payload_json);
               assert.equal(decodedAttempt.providerTurnId, turn.id);
 
+              assert.equal(antigravityCalls.mock.calls.length, 0);
               const starts = yield* Ref.get(started);
               assert.deepEqual(
                 starts,
@@ -1880,11 +1919,26 @@ it.live.each(["control", "immediate", "queued", "availability", "constraints"] a
                 yield* f.sql`SELECT argument_hash FROM base3_execution_grants WHERE message_id=${command.messageId}`,
                 grants,
               );
+              assert.equal(antigravityCalls.mock.calls.length, 0);
             }),
           {
             dbPath: path.join(directory, "state.sqlite"),
             adapterRegistryLayer: ProviderAdapterRegistry.makeLayer([
               makeAdapter(started, expected.instanceId, "Eligible fake result"),
+              {
+                ...makeAdapter(started, antigravity.instanceId),
+                driver: antigravity.driver,
+                getCapabilities: () =>
+                  Effect.sync(() => {
+                    antigravityCalls("capabilities");
+                    throw new Error("Antigravity must never be called");
+                  }),
+                openSession: () =>
+                  Effect.sync(() => {
+                    antigravityCalls("session");
+                    throw new Error("Antigravity must never be called");
+                  }),
+              },
             ]),
           },
         );

@@ -88,6 +88,7 @@ import { listContinuationForEnter, listIndentForTab } from "../../composer-list-
 import {
   deriveComposerSendState,
   getAntigravitySendBlockReason,
+  getAutoTurnSendBlockReason,
   readFileAsDataUrl,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
@@ -2164,17 +2165,41 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     projectModelSelection: activeProjectDefaultModelSelection,
     settings,
   });
+  const routingMode = composerDraft.routingMode === "auto" ? "auto" : "manual";
+  // Auto can choose another eligible instance for an ordinary unlocked turn.
+  // Continuations, queued edits, and plan/pending controls retain their selected-provider rules.
+  const usesAutoTurnRouting =
+    routingMode === "auto" &&
+    lockedProvider === null &&
+    phase === "ready" &&
+    !isEditingQueuedMessage &&
+    !(canResume && !composerDraftHasUserContent(composerDraft)) &&
+    multipleModelSelections === null &&
+    requestedInteractionMode === "default" &&
+    !showPlanFollowUpPrompt &&
+    activePendingProgress === null &&
+    activePendingApproval === null;
+  const autoTurnSendBlockReason = useMemo(
+    () => getAutoTurnSendBlockReason(providerInstanceEntries, providerCatalogKnown),
+    [providerInstanceEntries, providerCatalogKnown],
+  );
+  const noTurnProviderAvailable = usesAutoTurnRouting
+    ? autoTurnSendBlockReason !== null
+    : noProviderAvailable;
   const providerSendBlockReason = getAntigravitySendBlockReason(
     selectedProviderEntry?.snapshot,
     selectedModel,
   );
+  const turnProviderSendBlockReason = usesAutoTurnRouting
+    ? autoTurnSendBlockReason
+    : providerSendBlockReason;
   const sendDisabledReason =
     externalSendDisabledReason ??
     (multipleModelSelections?.length === 0 ? "Select at least one model." : null) ??
     (activePendingProgress
       ? attachmentBlockReason
       : (attachmentBlockReason ??
-        (multipleModelSelections === null ? providerSendBlockReason : null)));
+        (multipleModelSelections === null ? turnProviderSendBlockReason : null)));
   const isSendDisabled = sendDisabledReason !== null;
   const selectedProviderStatus = useMemo(
     () => selectedProviderEntry?.snapshot ?? null,
@@ -2378,7 +2403,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   useEffect(() => {
     setTaskContractDraft(EMPTY_TASK_CONTRACT_DRAFT);
   }, [draftId, routeKind, activeThreadId]);
-  const routingMode = composerDraft.routingMode === "auto" ? "auto" : "manual";
   const setComposerRoutingMode = useComposerDraftStore((store) => store.setRoutingMode);
   const setRoutingMode = useCallback(
     (mode: "auto" | "manual") => setComposerRoutingMode(composerDraftTarget, mode),
@@ -2964,7 +2988,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isSendBusy ||
     isSendDisabled ||
     isConnecting ||
-    noProviderAvailable ||
+    noTurnProviderAvailable ||
     projectSelectionRequired ||
     environmentUnavailable !== null ||
     (!composerSendState.hasSendableContent && !showResumeAction);
@@ -4095,7 +4119,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       isSendBusy ||
       isSendDisabled ||
       isConnecting ||
-      noProviderAvailable ||
+      noTurnProviderAvailable ||
       environmentUnavailable !== null ||
       phase === "running"
     ) {
@@ -4114,7 +4138,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isMobileViewport,
     isSendBusy,
     isSendDisabled,
-    noProviderAvailable,
+    noTurnProviderAvailable,
     phase,
     showPlanFollowUpPrompt,
   ]);
@@ -4125,7 +4149,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       dispatchMode?: ComposerDispatchMode,
       submissionIntent?: ComposerSubmissionIntent,
     ) => {
-      if (noProviderAvailable || isSendDisabled) {
+      if (
+        noTurnProviderAvailable ||
+        isSendDisabled ||
+        isConnecting ||
+        isSendBusy ||
+        environmentUnavailable !== null
+      ) {
         event?.preventDefault();
         return;
       }
@@ -4189,7 +4219,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       attachmentTargetKey,
       blurMobileComposerAfterSend,
       isSendDisabled,
-      noProviderAvailable,
+      isConnecting,
+      isSendBusy,
+      environmentUnavailable,
+      noTurnProviderAvailable,
       onSend,
       settings.followUpBehavior,
       phase,
@@ -6435,7 +6468,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             : null,
         providerAvailable:
           multipleModelSelections !== null ||
-          (!noProviderAvailable && providerSendBlockReason === null),
+          (!noTurnProviderAvailable &&
+            turnProviderSendBlockReason === null &&
+            !isConnecting &&
+            environmentUnavailable === null),
         selectedProvider,
         selectedModel,
         selectedProviderModels,
@@ -6483,6 +6519,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       focusComposer,
       environmentId,
       primaryEnvironmentId,
+      environmentUnavailable,
       isConnecting,
       isComposerApprovalState,
       isChoiceOnlyPendingQuestion,
@@ -6500,8 +6537,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       multipleModelSelections,
       setMultipleModelSelections,
       routeKind,
-      noProviderAvailable,
-      providerSendBlockReason,
+      noTurnProviderAvailable,
+      turnProviderSendBlockReason,
       selectedPromptEffort,
       selectedProvider,
       selectedProviderModels,
@@ -6728,7 +6765,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               isConnecting={isConnecting}
                               isEnvironmentUnavailable={
                                 environmentUnavailable !== null ||
-                                noProviderAvailable ||
+                                noTurnProviderAvailable ||
                                 projectSelectionRequired
                               }
                               isPreparingWorktree={false}
@@ -7413,7 +7450,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       isConnecting={isConnecting}
                       isEnvironmentUnavailable={
                         environmentUnavailable !== null ||
-                        noProviderAvailable ||
+                        noTurnProviderAvailable ||
                         projectSelectionRequired
                       }
                       isPreparingWorktree={false}
@@ -7537,7 +7574,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     isConnecting={isConnecting}
                     isEnvironmentUnavailable={
                       environmentUnavailable !== null ||
-                      noProviderAvailable ||
+                      noTurnProviderAvailable ||
                       projectSelectionRequired
                     }
                     isPreparingWorktree={isPreparingWorktree}

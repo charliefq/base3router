@@ -36,6 +36,10 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import {
+  modelRouterCatalogForMode,
+  modelRouterCatalogFromProviders,
+} from "@t3tools/shared/modelRouter";
 import { videoMimeType } from "@t3tools/shared/video";
 import {
   appendCodexArtifactTemplateUsePrompt,
@@ -636,6 +640,23 @@ export function resolveComposerInteractionMode(input: {
     enabled,
     interactionMode: enabled ? input.interactionMode : "default",
   };
+}
+
+/** Auto readiness is a catalog preflight; the server still selects and authorizes the target. */
+export function getAutoTurnSendBlockReason(
+  entries: ReadonlyArray<ProviderInstanceEntry>,
+  catalogKnown: boolean,
+): string | null {
+  if (!catalogKnown) return "Waiting for provider models.";
+  const catalog = modelRouterCatalogForMode(
+    modelRouterCatalogFromProviders(
+      entries.map((entry) => ({ ...entry.snapshot, enabled: entry.enabled })),
+    ),
+    "auto",
+  );
+  return catalog.some((entry) => entry.availabilityReasons.length === 0)
+    ? null
+    : "No eligible provider is available for Auto.";
 }
 
 export function getAntigravitySendBlockReason(

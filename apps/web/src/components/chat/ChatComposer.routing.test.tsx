@@ -21,7 +21,7 @@ import {
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
 import { captureComposerSendDispatch } from "../ChatView.logic";
-import { act, createElement, createRef } from "react";
+import { act, cloneElement, createElement, createRef, type ReactElement } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import {
@@ -32,6 +32,7 @@ import {
 } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { AttachmentUploadState } from "../../lib/attachmentUploadState";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { ChatComposer, type ChatComposerHandle, type ChatComposerProps } from "./ChatComposer";
 vi.mock("../../state/environments", () => ({ usePrimaryEnvironmentId: () => "env-a" }));
@@ -51,17 +52,35 @@ vi.mock("../../panelAnimations", () => ({
   usePanelAnimationSettings: () => ({ active: false, durationMs: 0 }),
 }));
 vi.mock("../../hooks/useSettings", () => ({ useEnvironmentIdentificationMode: () => "none" }));
+const uploadFixture = vi.hoisted(() => ({ uploads: {} as Record<string, AttachmentUploadState> }));
 vi.mock("../../lib/attachmentUploadQueue", () => ({
-  useAttachmentUploadStore: () => ({}),
+  useAttachmentUploadStore: () => uploadFixture.uploads,
   releaseAttachmentUpload: vi.fn(),
   releaseDraftAttachment: vi.fn(),
   releasePersistedAttachmentUpload: vi.fn(),
-  readAttachmentUpload: () => null,
+  readAttachmentUpload: (id: string) => uploadFixture.uploads[id] ?? null,
   startAttachmentUpload: vi.fn(),
   retryAttachmentUpload: vi.fn(),
   verifyStashedAttachmentUpload: vi.fn(),
 }));
-vi.mock("../ComposerPromptEditor", () => ({ ComposerPromptEditor: () => null }));
+vi.mock("../ComposerPromptEditor", () => ({
+  ComposerPromptEditor: ({
+    value,
+    onCommandKeyDown,
+  }: {
+    value: string;
+    onCommandKeyDown: (key: string, event: KeyboardEvent) => boolean;
+  }) =>
+    createElement("textarea", {
+      value,
+      readOnly: true,
+      onKeyDown: (event: KeyboardEvent) => onCommandKeyDown(event.key, event),
+    }),
+}));
+vi.mock("../SidebarStageBackdrop", () => ({
+  useSidebarStageBackdropVariant: () => null,
+  StageBackdropButtonArt: () => null,
+}));
 vi.mock("./ProviderModelPicker", () => ({
   ProviderModelPicker: ({
     routingMode,
@@ -89,7 +108,10 @@ vi.mock("../ui/tooltip", () => ({
   }: {
     children: import("react").ReactNode;
     render?: import("react").ReactNode;
-  }) => render ?? children,
+  }) =>
+    render
+      ? cloneElement(render as ReactElement<{ children?: import("react").ReactNode }>, {}, children)
+      : children,
 }));
 vi.mock("@base-ui/react/select", () => ({
   Select: {
@@ -103,7 +125,6 @@ vi.mock("../ui/select", () => ({
   SelectPopup: () => null,
   SelectValue: () => null,
 }));
-vi.mock("./ComposerPrimaryActions", () => ({ ComposerPrimaryActions: () => null }));
 vi.mock("./ComposerBannerStack", () => ({ ComposerBannerStack: () => null }));
 vi.mock("./ComposerStashMenu", () => ({ ComposerStashMenu: () => null }));
 vi.mock("./ComposerTasksBadge", () => ({
@@ -185,7 +206,13 @@ function propsFor(environment = "env-a", id = "a"): ChatComposerProps {
     compactDisabled: false,
     compactDisabledReason: null,
     resolvedTheme: "light",
-    settings: DEFAULT_UNIFIED_SETTINGS,
+    settings: {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providers: {
+        ...DEFAULT_UNIFIED_SETTINGS.providers,
+        antigravity: { ...DEFAULT_UNIFIED_SETTINGS.providers.antigravity, enabled: true },
+      },
+    },
     keybindings: [],
     terminalOpen: false,
     gitCwd: null,
@@ -235,6 +262,7 @@ function propsFor(environment = "env-a", id = "a"): ChatComposerProps {
 }
 let renderer: ReactTestRenderer;
 beforeEach(() => {
+  uploadFixture.uploads = {};
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const events = new EventTarget();
   vi.stubGlobal("window", {
@@ -248,6 +276,7 @@ beforeEach(() => {
   vi.stubGlobal("document", {
     addEventListener: noop,
     removeEventListener: noop,
+    getElementById: () => ({}),
     activeElement: null,
     hasFocus: () => true,
   });
@@ -458,3 +487,334 @@ effectIt.effect(
       ),
     ),
 );
+
+const signedOut: ServerProvider = {
+  ...provider,
+  instanceId: ProviderInstanceId.make("antigravity"),
+  driver: "antigravity" as ServerProvider["driver"],
+  status: "error",
+  auth: { status: "unauthenticated" },
+  models: [
+    {
+      slug: "gemini-pro",
+      name: "Gemini",
+      isCustom: false,
+      capabilities: {
+        optionDescriptors: [
+          {
+            id: "effort",
+            label: "Effort",
+            type: "select",
+            options: [
+              { id: "high", label: "High" },
+              { id: "low", label: "Low" },
+            ],
+          },
+        ],
+      },
+    },
+  ],
+};
+const manualSelection = {
+  instanceId: signedOut.instanceId,
+  model: "gemini-pro",
+  options: [{ id: "effort", value: "high" }],
+};
+const primarySend = () =>
+  renderer.root.findAllByType("button").find((b) => b.props.type === "submit")!;
+
+it.each([
+  { method: "click", routeKind: "draft" },
+  { method: "keyboard", routeKind: "draft" },
+  { method: "click", routeKind: "server" },
+  { method: "keyboard", routeKind: "server" },
+] as const)(
+  "Auto can submit $method in $routeKind with signed-out saved Manual Antigravity and ready Codex",
+  async ({ method, routeKind }) => {
+    const props = {
+      ...propsFor(),
+      routeKind,
+      isLocalDraftThread: routeKind === "draft",
+      isServerThread: routeKind === "server",
+    };
+    const onSend = vi.fn();
+    const store = useComposerDraftStore.getState();
+    store.setModelSelection(props.composerDraftTarget, manualSelection, { explicit: true });
+    store.setPrompt(props.composerDraftTarget, "Explain this code");
+    await act(async () => {
+      renderer = create(
+        <ChatComposer {...props} providerStatuses={[signedOut, provider]} onSend={onSend} />,
+      );
+    });
+    if (routeKind === "draft") {
+      const input = (key: string) =>
+        renderer.root.findAllByType("input").find((node) => node.props[key] !== undefined)!;
+      await act(async () =>
+        input("data-task-contract-toggle").props.onChange({ target: { checked: true } }),
+      );
+      for (const [key, value] of [
+        ["goal", "Explain this code"],
+        ["redirect", "Keep fixture scope"],
+        ["acceptance", "Owner checks the fake result"],
+        ["max-starts", "3"],
+        ["stop", "Scope changed"],
+      ]) {
+        await act(async () =>
+          input(`data-task-contract-${key}`).props.onChange({ target: { value } }),
+        );
+      }
+      expect(handle.current!.getSendContext().taskContractError).toBeNull();
+      expect(handle.current!.getSendContext().taskContract?.brake.maxProviderStarts).toBe(3);
+    }
+    expect(primarySend().props.disabled).toBe(true);
+    expect(handle.current!.getSendContext().selectedModelSelection).toEqual(manualSelection);
+    await act(async () => toggle().props.onClick());
+    expect(primarySend().props.disabled).toBe(false);
+    expect(handle.current!.getSendContext().providerAvailable).toBe(true);
+    await act(async () => {
+      if (method === "click")
+        primarySend().props.onClick({ preventDefault: noop, metaKey: false, ctrlKey: false });
+      else pressEnter();
+    });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(handle.current!.getSendContext().routingMode).toBe("auto");
+    await act(async () => renderer.unmount());
+    await act(async () => {
+      renderer = create(
+        <ChatComposer {...props} providerStatuses={[signedOut, provider]} onSend={onSend} />,
+      );
+    });
+    expect(primarySend().props.disabled).toBe(false);
+    expect(handle.current!.getSendContext().routingMode).toBe("auto");
+    await act(async () =>
+      renderer.update(
+        <ChatComposer {...propsFor("env-a", "other")} providerStatuses={[signedOut, provider]} />,
+      ),
+    );
+    expect(handle.current!.getSendContext().routingMode).toBe("manual");
+    await act(async () =>
+      renderer.update(
+        <ChatComposer {...propsFor("env-b", "a")} providerStatuses={[signedOut, provider]} />,
+      ),
+    );
+    expect(handle.current!.getSendContext().routingMode).toBe("manual");
+    await act(async () =>
+      renderer.update(
+        <ChatComposer {...props} providerStatuses={[signedOut, provider]} onSend={onSend} />,
+      ),
+    );
+    expect(handle.current!.getSendContext().routingMode).toBe("auto");
+    expect(handle.current!.getSendContext().selectedModelSelection).toEqual(manualSelection);
+    await act(async () => toggle().props.onClick());
+    expect(primarySend().props.disabled).toBe(true);
+    expect(handle.current!.getSendContext().selectedModelSelection).toEqual(manualSelection);
+  },
+);
+
+function pressEnter() {
+  renderer.root.findByType("textarea").props.onKeyDown({
+    key: "Enter",
+    code: "Enter",
+    keyCode: 13,
+    isComposing: false,
+    shiftKey: false,
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    preventDefault: noop,
+  });
+}
+const unusableManualCases: ReadonlyArray<{ name: string; snapshot: ServerProvider }> = [
+  { name: "uninstalled", snapshot: { ...signedOut, installed: false } },
+  {
+    name: "unloaded models",
+    snapshot: { ...signedOut, status: "ready", auth: { status: "authenticated" }, models: [] },
+  },
+  {
+    name: "unavailable saved model",
+    snapshot: {
+      ...signedOut,
+      status: "ready",
+      auth: { status: "authenticated" },
+      models: provider.models,
+    },
+  },
+];
+it.each(unusableManualCases)(
+  "Auto allows an alternative with $name while Manual stays blocked",
+  async ({ snapshot }) => {
+    const props = propsFor();
+    const store = useComposerDraftStore.getState();
+    store.setModelSelection(props.composerDraftTarget, manualSelection, { explicit: true });
+    store.setPrompt(props.composerDraftTarget, "Explain this code");
+    const onSend = vi.fn();
+    await act(async () => {
+      renderer = create(
+        <ChatComposer {...props} providerStatuses={[snapshot, provider]} onSend={onSend} />,
+      );
+    });
+    expect(primarySend().props.disabled).toBe(true);
+    await act(async () => pressEnter());
+    expect(onSend).not.toHaveBeenCalled();
+    await act(async () => toggle().props.onClick());
+    expect(primarySend().props.disabled).toBe(false);
+    expect(handle.current!.getSendContext().providerAvailable).toBe(true);
+    await act(async () => pressEnter());
+    expect(onSend).toHaveBeenCalledTimes(1);
+    await act(async () => toggle().props.onClick());
+    expect(primarySend().props.disabled).toBe(true);
+    expect(
+      store.getComposerDraft(props.composerDraftTarget)?.modelSelectionByProvider[
+        signedOut.instanceId
+      ],
+    ).toEqual(manualSelection);
+  },
+);
+const blockedAutoCases: ReadonlyArray<{
+  name: string;
+  changes: Partial<ChatComposerProps>;
+  attachment?: boolean;
+}> = [
+  { name: "no eligible provider", changes: { providerStatuses: [signedOut] } },
+  {
+    name: "uninstalled alternative",
+    changes: { providerStatuses: [signedOut, { ...provider, installed: false }] },
+  },
+  { name: "unloaded catalog", changes: { providerCatalogKnown: false } },
+  { name: "connecting", changes: { isConnecting: true } },
+  {
+    name: "disconnected",
+    changes: {
+      environmentUnavailable: {
+        label: "Disconnected",
+        connection: { phase: "offline", error: null, traceId: null },
+      },
+    },
+  },
+  {
+    name: "locked continuation",
+    changes: { lockedProvider: signedOut.driver, activeThreadModelSelection: manualSelection },
+  },
+  { name: "queued edit", changes: { editingQueuedAttachments: [] } },
+  { name: "plan mode", changes: { interactionMode: "plan" } },
+  { name: "plan follow up", changes: { showPlanFollowUpPrompt: true } },
+  { name: "failed attachment", changes: { supportsAttachmentUploads: true }, attachment: true },
+];
+it.each(blockedAutoCases)("Auto fails safely for $name", async ({ changes, attachment }) => {
+  const props = { ...propsFor(), providerStatuses: [signedOut, provider], ...changes };
+  const store = useComposerDraftStore.getState();
+  store.setModelSelection(props.composerDraftTarget, manualSelection, { explicit: true });
+  store.setPrompt(props.composerDraftTarget, "Explain this code");
+  store.setRoutingMode(props.composerDraftTarget, "auto");
+  if (attachment) {
+    uploadFixture.uploads.failed = {
+      status: "failed",
+      environmentId: props.environmentId,
+      reason: "Fixture upload rejected",
+    };
+    store.addFiles(props.composerDraftTarget, [
+      {
+        type: "file",
+        id: "failed",
+        name: "fixture.txt",
+        mimeType: "text/plain",
+        sizeBytes: 3,
+        file: null,
+        uploadedAttachmentId: "prior-upload",
+        uploadEnvironmentId: props.environmentId,
+      },
+    ]);
+  }
+  const onSend = vi.fn();
+  await act(async () => {
+    renderer = create(<ChatComposer {...props} onSend={onSend} />);
+  });
+  if (!props.showPlanFollowUpPrompt) expect(primarySend().props.disabled).toBe(true);
+  await act(async () => pressEnter());
+  expect(onSend).not.toHaveBeenCalled();
+  expect(
+    store.getComposerDraft(props.composerDraftTarget)?.modelSelectionByProvider[
+      signedOut.instanceId
+    ],
+  ).toEqual(manualSelection);
+});
+it("excludes ready OpenRouter from local Auto and closes readiness when the eligible catalog changes", async () => {
+  const props = propsFor();
+  const store = useComposerDraftStore.getState();
+  store.setModelSelection(props.composerDraftTarget, manualSelection, { explicit: true });
+  store.setPrompt(props.composerDraftTarget, "Explain this code");
+  store.setRoutingMode(props.composerDraftTarget, "auto");
+  const onSend = vi.fn();
+  const remote: ServerProvider = {
+    ...provider,
+    driver: "openrouter" as ServerProvider["driver"],
+    instanceId: ProviderInstanceId.make("openrouter"),
+  };
+  const settings = {
+    ...props.settings,
+    providerInstances: {
+      ...props.settings.providerInstances,
+      [remote.instanceId]: { driver: remote.driver, enabled: true },
+    },
+  };
+  await act(async () => {
+    renderer = create(
+      <ChatComposer
+        {...props}
+        settings={settings}
+        providerStatuses={[signedOut, provider, remote]}
+        onSend={onSend}
+      />,
+    );
+  });
+  expect(primarySend().props.disabled).toBe(false);
+  await act(async () =>
+    renderer.update(
+      <ChatComposer
+        {...props}
+        settings={settings}
+        providerStatuses={[signedOut, remote]}
+        onSend={onSend}
+      />,
+    ),
+  );
+  expect(primarySend().props.disabled).toBe(true);
+  expect(handle.current!.getSendContext().providerAvailable).toBe(false);
+  await act(async () => pressEnter());
+  expect(onSend).not.toHaveBeenCalled();
+  await act(async () =>
+    renderer.update(
+      <ChatComposer
+        {...props}
+        settings={settings}
+        providerStatuses={[signedOut, provider, remote]}
+        onSend={onSend}
+      />,
+    ),
+  );
+  expect(primarySend().props.disabled).toBe(false);
+  await act(async () => pressEnter());
+  expect(onSend).toHaveBeenCalledTimes(1);
+});
+
+it("Auto does not relax a disabled compaction operation", async () => {
+  const props = propsFor();
+  const store = useComposerDraftStore.getState();
+  store.setModelSelection(props.composerDraftTarget, manualSelection, { explicit: true });
+  store.setPrompt(props.composerDraftTarget, "Explain this code");
+  store.setRoutingMode(props.composerDraftTarget, "auto");
+  const onCompactContext = vi.fn();
+  await act(async () => {
+    renderer = create(
+      <ChatComposer
+        {...props}
+        providerStatuses={[signedOut, provider]}
+        compactDisabled
+        onCompactContext={onCompactContext}
+      />,
+    );
+  });
+  expect(primarySend().props.disabled).toBe(false);
+  await act(async () => handle.current!.compactContext());
+  expect(onCompactContext).not.toHaveBeenCalled();
+});
