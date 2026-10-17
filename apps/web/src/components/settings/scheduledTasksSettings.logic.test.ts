@@ -1,4 +1,7 @@
 import {
+  CommandId,
+  MessageId,
+  type ScheduledTaskOccurrence,
   EnvironmentId,
   ProjectId,
   DEFAULT_SERVER_SETTINGS,
@@ -18,6 +21,7 @@ import { resolveSettingsScope, type SettingsScopeSearch } from "./settingsScope"
 import { deriveProviderInstanceEntries } from "../../providerInstances";
 import {
   scheduledTaskDefaultModel,
+  scheduledTaskRunPresentation,
   matchesScheduledTaskScope,
   taskToDraft,
 } from "./scheduledTasksSettings.logic";
@@ -260,5 +264,82 @@ describe("scheduled task model defaults", () => {
         null,
       ),
     ).toBeNull();
+  });
+});
+
+function occurrence(
+  status: ScheduledTaskOccurrence["status"],
+  blockedReason: string | null = null,
+): ScheduledTaskOccurrence {
+  return {
+    id: "occurrence",
+    commandId: CommandId.make("command"),
+    messageId: MessageId.make("message"),
+    threadId: null,
+    runId: null,
+    status,
+    lastEventSequence: 0,
+    blockedReason,
+  };
+}
+
+describe("scheduled task run presentation", () => {
+  it.each([
+    ["dispatching", "Dispatching", "info"],
+    ["accepted", "Accepted · execution unconfirmed", "info"],
+    ["running", "In progress", "info"],
+    ["unknown", "Outcome unknown", "warning"],
+    ["succeeded", "Succeeded", "success"],
+    ["failed", "Failed", "error"],
+    ["cancelled", "Cancelled", "outline"],
+  ] as const)("prefers precise %s over the coarse success status", (status, label, variant) => {
+    const task = Object.freeze({
+      ...legacyTask,
+      lastRunStatus: "succeeded" as const,
+      lastRunError: "Legacy reason",
+      lastOccurrence: Object.freeze(occurrence(status, "Precise reason")),
+    });
+    expect(scheduledTaskRunPresentation(task)).toEqual({
+      label,
+      variant,
+      reason: "Precise reason",
+    });
+  });
+
+  it.each([
+    ["never", null, "outline"],
+    ["running", "In progress", "info"],
+    ["succeeded", "Succeeded", "success"],
+    ["failed", "Failed", "error"],
+  ] as const)("preserves legacy %s without occurrence data", (lastRunStatus, label, variant) => {
+    for (const task of [
+      { ...legacyTask, lastRunStatus, lastRunError: "Legacy reason" },
+      { ...legacyTask, lastRunStatus, lastRunError: "Legacy reason", lastOccurrence: null },
+    ]) {
+      expect(scheduledTaskRunPresentation(task)).toEqual({
+        label,
+        variant,
+        reason: "Legacy reason",
+      });
+    }
+  });
+
+  it("does not resurrect a stale legacy error when the precise reason is cleared", () => {
+    expect(
+      scheduledTaskRunPresentation({
+        ...legacyTask,
+        lastRunStatus: "failed",
+        lastRunError: "Old failure",
+        lastOccurrence: occurrence("succeeded"),
+      }),
+    ).toEqual({ label: "Succeeded", variant: "success", reason: null });
+  });
+
+  it("handles a never-run legacy task with no reason", () => {
+    expect(scheduledTaskRunPresentation(legacyTask)).toEqual({
+      label: null,
+      variant: "outline",
+      reason: null,
+    });
   });
 });

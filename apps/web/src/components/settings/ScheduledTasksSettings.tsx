@@ -48,6 +48,7 @@ import { useSettingsScope } from "./SettingsScopeContext";
 import {
   matchesScheduledTaskScope,
   scheduledTaskDefaultModel,
+  scheduledTaskRunPresentation,
   taskToDraft,
   type DraftState,
   type WorkspaceMode,
@@ -197,13 +198,6 @@ export function relativeLabel(value: string | null): string {
   const hours = Math.round(minutes / 60);
   if (hours < 24) return `in ${hours}h`;
   return `in ${Math.round(hours / 24)}d`;
-}
-
-function statusVariant(status: ScheduledTask["lastRunStatus"]) {
-  if (status === "failed") return "error";
-  if (status === "succeeded") return "success";
-  if (status === "running") return "info";
-  return "outline";
 }
 
 export function ScheduledTasksSettings(target: {
@@ -377,6 +371,7 @@ function ScheduledTaskRow({
   readonly task: ScheduledTask;
   readonly onEdit: () => void;
 }) {
+  const runPresentation = scheduledTaskRunPresentation(task);
   const [busy, setBusy] = useState(false);
   const toggle = useAtomCommand(serverEnvironment.setScheduledTaskEnabled, {
     label: "scheduled task enabled",
@@ -421,10 +416,14 @@ function ScheduledTaskRow({
                 : "Not scheduled"
               : "Paused"}
           </span>
-          {task.lastRunStatus !== "never" ? (
-            <Badge variant={statusVariant(task.lastRunStatus)}>{task.lastRunStatus}</Badge>
+          {runPresentation.label ? (
+            <Badge variant={runPresentation.variant}>{runPresentation.label}</Badge>
           ) : null}
-          {task.lastRunError ? <span className="text-destructive">{task.lastRunError}</span> : null}
+          {runPresentation.reason ? (
+            <span className={runPresentation.variant === "error" ? "text-destructive" : undefined}>
+              {runPresentation.reason}
+            </span>
+          ) : null}
         </div>
       }
       control={

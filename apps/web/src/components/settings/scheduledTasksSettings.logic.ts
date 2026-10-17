@@ -3,6 +3,7 @@ import {
   type ProjectId,
   ScheduledTaskId,
   type ScheduledTask,
+  type ScheduledTaskOccurrence,
   type ModelSelection,
   type RuntimeMode,
   type ProviderInteractionMode,
@@ -16,6 +17,35 @@ import {
 import type { ProviderInstanceEntry } from "../../providerInstances";
 
 import type { ResolvedSettingsScope } from "./settingsScope";
+
+const OCCURRENCE_PRESENTATION = {
+  dispatching: { label: "Dispatching", variant: "info" },
+  accepted: { label: "Accepted · execution unconfirmed", variant: "info" },
+  // The backend also uses this state for queued runs; execution is not confirmed here.
+  running: { label: "In progress", variant: "info" },
+  unknown: { label: "Outcome unknown", variant: "warning" },
+  succeeded: { label: "Succeeded", variant: "success" },
+  failed: { label: "Failed", variant: "error" },
+  cancelled: { label: "Cancelled", variant: "outline" },
+} as const satisfies Record<
+  ScheduledTaskOccurrence["status"],
+  { readonly label: string; readonly variant: string }
+>;
+
+export function scheduledTaskRunPresentation(
+  task: Pick<ScheduledTask, "lastOccurrence" | "lastRunStatus" | "lastRunError">,
+) {
+  const occurrence = task.lastOccurrence;
+  const presentation = occurrence
+    ? OCCURRENCE_PRESENTATION[occurrence.status]
+    : task.lastRunStatus === "never"
+      ? { label: null, variant: "outline" as const }
+      : OCCURRENCE_PRESENTATION[task.lastRunStatus];
+  return {
+    ...presentation,
+    reason: (occurrence ? occurrence.blockedReason : task.lastRunError) ?? null,
+  };
+}
 
 /** Project IDs belong to an environment, including when a grouped project spans machines. */
 export function matchesScheduledTaskScope(
