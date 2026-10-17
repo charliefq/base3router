@@ -1,7 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
+import { useNavigate } from "@tanstack/react-router";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { buildThreadRouteParams } from "../../threadRoutes";
 import {
   Clock3Icon,
   MoreHorizontalIcon,
+  MessageSquareIcon,
   PencilIcon,
   PlayIcon,
   PlusIcon,
@@ -371,6 +375,15 @@ function ScheduledTaskRow({
   readonly task: ScheduledTask;
   readonly onEdit: () => void;
 }) {
+  const navigate = useNavigate();
+  const occurrenceThreadId = task.lastOccurrence?.threadId;
+  const openLatestRun = () => {
+    if (!occurrenceThreadId) return;
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(scopeThreadRef(environmentId, occurrenceThreadId)),
+    });
+  };
   const runPresentation = scheduledTaskRunPresentation(task);
   const [busy, setBusy] = useState(false);
   const toggle = useAtomCommand(serverEnvironment.setScheduledTaskEnabled, {
@@ -448,6 +461,12 @@ function ScheduledTaskRow({
               <MoreHorizontalIcon className="size-4" />
             </MenuTrigger>
             <MenuPopup align="end">
+              {occurrenceThreadId ? (
+                <MenuItem onClick={openLatestRun}>
+                  <MessageSquareIcon />
+                  Open latest run conversation
+                </MenuItem>
+              ) : null}
               <MenuItem onClick={onEdit}>
                 <PencilIcon />
                 Edit
