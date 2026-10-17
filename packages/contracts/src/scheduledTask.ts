@@ -14,6 +14,7 @@ import {
 import { ModelSelection } from "./modelSelection.ts";
 import {
   OrchestrationV2Actor,
+  OrchestrationV2RunStatus,
   OrchestrationV2CreationSource,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
 } from "./orchestrationV2.ts";
@@ -109,6 +110,8 @@ export const ScheduledTaskOccurrence = Schema.Struct({
     "failed",
     "cancelled",
   ]),
+  /** Latest guarded durable run event; absent when execution evidence is unknown. */
+  runStatus: Schema.optional(OrchestrationV2RunStatus),
   lastEventSequence: NonNegativeInt,
   blockedReason: Schema.NullOr(Schema.String),
 });

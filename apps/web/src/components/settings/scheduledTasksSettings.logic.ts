@@ -21,7 +21,7 @@ import type { ResolvedSettingsScope } from "./settingsScope";
 const OCCURRENCE_PRESENTATION = {
   dispatching: { label: "Dispatching", variant: "info" },
   accepted: { label: "Accepted · execution unconfirmed", variant: "info" },
-  // The backend also uses this state for queued runs; execution is not confirmed here.
+  // Legacy records have no precise run evidence; avoid claiming active execution.
   running: { label: "In progress", variant: "info" },
   unknown: { label: "Outcome unknown", variant: "warning" },
   succeeded: { label: "Succeeded", variant: "success" },
@@ -36,11 +36,20 @@ export function scheduledTaskRunPresentation(
   task: Pick<ScheduledTask, "lastOccurrence" | "lastRunStatus" | "lastRunError">,
 ) {
   const occurrence = task.lastOccurrence;
-  const presentation = occurrence
-    ? OCCURRENCE_PRESENTATION[occurrence.status]
-    : task.lastRunStatus === "never"
-      ? { label: null, variant: "outline" as const }
-      : OCCURRENCE_PRESENTATION[task.lastRunStatus];
+  const runStatus =
+    occurrence?.status === "running" && occurrence.runId !== null
+      ? occurrence.runStatus
+      : undefined;
+  const presentation =
+    runStatus === "queued"
+      ? { label: "Queued", variant: "info" as const }
+      : runStatus === "running"
+        ? { label: "Running", variant: "info" as const }
+        : occurrence
+          ? OCCURRENCE_PRESENTATION[occurrence.status]
+          : task.lastRunStatus === "never"
+            ? { label: null, variant: "outline" as const }
+            : OCCURRENCE_PRESENTATION[task.lastRunStatus];
   return {
     ...presentation,
     reason: (occurrence ? occurrence.blockedReason : task.lastRunError) ?? null,

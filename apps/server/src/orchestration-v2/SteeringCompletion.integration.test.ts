@@ -769,6 +769,9 @@ it.effect.each(["completed", "failed", "cancelled"] as const)(
           const queued = yield* orchestrator.getThreadProjection(threadId);
           const scheduledRun = queued.runs.find((run) => run.id === occurrence.runId)!;
           assert.equal(scheduledRun.status, "queued");
+          assert.equal(occurrence.runStatus, "queued");
+          assert.isAbove(occurrence.lastEventSequence, 0);
+          assert.deepEqual((yield* tasks.list()).tasks[0]?.lastOccurrence, occurrence);
           assert.deepEqual(scheduledRun.modelSelection, composerSelection);
           assert.equal(scheduledRun.userMessageId, occurrence.messageId);
           assert.notEqual(scheduledRun.userMessageId, first.message.messageId);
@@ -857,6 +860,12 @@ it.effect.each(["completed", "failed", "cancelled"] as const)(
           const own = fixture.started[1]!;
           assert.equal(own.runId, occurrence.runId);
           assert.deepEqual(own.modelSelection, composerSelection);
+          const activeOccurrence = (yield* tasks.list()).tasks[0]!.lastOccurrence!;
+          assert.equal(activeOccurrence.status, "running");
+          assert.equal(activeOccurrence.runStatus, "running");
+          assert.isAbove(activeOccurrence.lastEventSequence, occurrence.lastEventSequence);
+          // Re-reading replays the older queued admission; it must not regress the evidence.
+          assert.deepEqual((yield* tasks.list()).tasks[0]?.lastOccurrence, activeOccurrence);
           assert.equal(own.message.messageId, occurrence.messageId);
           assert.deepEqual(fixture.steered, []);
           yield* finish(own, status);
@@ -866,6 +875,11 @@ it.effect.each(["completed", "failed", "cancelled"] as const)(
             status === "completed" ? "succeeded" : status,
           );
           assert.equal(settled.lastRunStatus, status === "completed" ? "succeeded" : "failed");
+          assert.equal(settled.lastOccurrence?.runStatus, status);
+          assert.isAbove(
+            settled.lastOccurrence!.lastEventSequence,
+            activeOccurrence.lastEventSequence,
+          );
           assert.equal(settled.runCount, 1);
           const terminal = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
             (run) => run.id === own.runId,

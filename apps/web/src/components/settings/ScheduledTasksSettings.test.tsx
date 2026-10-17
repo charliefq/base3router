@@ -4,6 +4,7 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import {
   CommandId,
+  RunId,
   MessageId,
   ProjectId,
   ProviderInstanceId,
@@ -197,3 +198,52 @@ it.each([
     expect(badge().classList.contains("text-success-foreground")).toBe(status === "succeeded");
   },
 );
+
+it.each([
+  ["succeeded", "completed", "Succeeded"],
+  ["failed", "failed", "Failed"],
+  ["cancelled", "cancelled", "Cancelled"],
+] as const)(
+  "updates durable queued → running → %s evidence without mutations",
+  async (status, runStatus, label) => {
+    const queued = task("running", null);
+    const occurrence = {
+      ...queued.lastOccurrence!,
+      runId: RunId.make("run"),
+      runStatus: "queued" as const,
+    };
+    await render({ ...queued, lastOccurrence: occurrence });
+    expect(badge().textContent).toBe("Queued");
+    await render({ ...queued, lastOccurrence: { ...occurrence, runStatus: "running" } });
+    expect(badge().textContent).toBe("Running");
+    await render({ ...queued, lastOccurrence: { ...occurrence, status, runStatus } });
+    expect(badge().textContent).toBe(label);
+    expect(badge().classList.contains("text-success-foreground")).toBe(status === "succeeded");
+    expect(badge().classList.contains("text-destructive-foreground")).toBe(status === "failed");
+  },
+);
+
+it("keeps restart UNKNOWN ahead of stale queued evidence and legacy records in progress", async () => {
+  const unknown = task("unknown", "Server restarted");
+  await render({
+    ...unknown,
+    lastOccurrence: { ...unknown.lastOccurrence!, runId: RunId.make("run"), runStatus: "queued" },
+  });
+  expect(badge().textContent).toBe("Outcome unknown");
+  expect(container.textContent).toContain("Server restarted");
+  const legacy = task("running", null);
+  await render({
+    ...legacy,
+    lastOccurrence: { ...legacy.lastOccurrence!, runId: RunId.make("run") },
+  });
+  expect(badge().textContent).toBe("In progress");
+});
+
+it("does not turn accepted/no-run data into queued or active execution", async () => {
+  const accepted = task("accepted", null);
+  await render({
+    ...accepted,
+    lastOccurrence: { ...accepted.lastOccurrence!, runStatus: "queued" },
+  });
+  expect(badge().textContent).toBe("Accepted · execution unconfirmed");
+});

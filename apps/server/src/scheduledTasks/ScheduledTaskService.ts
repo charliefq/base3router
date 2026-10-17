@@ -479,6 +479,7 @@ export const layer = Layer.effect(
           occurrence = {
             ...occurrence,
             status,
+            runStatus: status === "unknown" ? undefined : run.status,
             lastEventSequence: stored.sequence,
             blockedReason:
               status === "unknown"
@@ -724,7 +725,7 @@ export const layer = Layer.effect(
       UPDATE scheduled_tasks SET last_run_error = 'UNKNOWN: server restarted before an outcome was observed.',
         last_occurrence_json = CASE WHEN last_occurrence_json IS NULL THEN NULL
           WHEN json_valid(last_occurrence_json) = 0 THEN last_occurrence_json
-          ELSE json_set(last_occurrence_json, '$.status', 'unknown', '$.blockedReason', 'UNKNOWN: server restarted before an outcome was observed.') END
+          ELSE json_set(json_remove(last_occurrence_json, '$.runStatus'), '$.status', 'unknown', '$.blockedReason', 'UNKNOWN: server restarted before an outcome was observed.') END
       WHERE last_run_status = 'running'
     `;
     yield* reconcileOccurrences().pipe(

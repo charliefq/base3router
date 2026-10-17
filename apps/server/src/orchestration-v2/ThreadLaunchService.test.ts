@@ -2210,6 +2210,37 @@ it.effect.each(["new", "existing"] as const)(
   },
 );
 
+it.effect("dispatch acceptance without durable run evidence stays unconfirmed", () => {
+  const harness = outcomeHarness();
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const emptyThread = yield* launches.launch(
+      launchInput({ command: "empty-target", thread: "empty-target" }),
+    );
+    const acceptedOnly = Layer.fresh(ScheduledTasks.layer).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          harness.dependencies,
+          Layer.succeed(ThreadLaunch.ThreadLaunchService, {
+            ...launches,
+            launch: () => Effect.succeed(emptyThread),
+          }),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const tasks = yield* ScheduledTasks.ScheduledTaskService;
+      const { task } = yield* tasks.upsert(outcomeScheduleInput);
+      const result = (yield* tasks.runNow({ id: task.id })).task;
+      assert.equal(result.lastOccurrence?.status, "accepted");
+      assert.isNull(result.lastOccurrence?.runId);
+      assert.isUndefined(result.lastOccurrence?.runStatus);
+      assert.equal(result.lastRunStatus, "running");
+      assert.deepEqual((yield* tasks.list()).tasks[0], result);
+    }).pipe(Effect.provide(acceptedOnly));
+  }).pipe(Effect.provide(harness.layer));
+});
+
 const createOutcomeTask = Effect.fn("test.createOutcomeTask")(function* (enabled = false) {
   const launches = yield* ThreadLaunch.ThreadLaunchService;
   const tasks = yield* ScheduledTasks.ScheduledTaskService;
@@ -2270,6 +2301,19 @@ it.effect.each(["completed", "failed", "cancelled", "interrupted"] as const)(
       assert.equal(settled.lastRunStatus, status === "completed" ? "succeeded" : "failed");
       yield* events.append({ events: [{ ...event, id: EventId.make("event:duplicate-outcome") }] });
       assert.deepEqual((yield* tasks.list()).tasks[0], settled);
+      assert.equal(settled.lastOccurrence?.runStatus, status);
+      yield* events.append({
+        events: [
+          {
+            id: EventId.make("event:queued-after-terminal"),
+            threadId: run.threadId,
+            occurredAt: yield* DateTime.now,
+            type: "run.updated",
+            payload: { ...run, status: "queued" },
+          },
+        ],
+      });
+      assert.deepEqual((yield* tasks.list()).tasks[0], settled);
       assert.equal(settled.runCount, 1);
     }).pipe(Effect.provide(harness.layer));
   },
@@ -2324,54 +2368,94 @@ it.effect(
   },
 );
 
-it.effect("restart preserves unknown work, consumes recovery evidence and never resends", () => {
-  const harness = outcomeHarness();
-  return Effect.gen(function* () {
-    const tasks = yield* ScheduledTasks.ScheduledTaskService;
-    const threads = yield* ThreadManagement.ThreadManagementService;
-    const events = yield* EventStore.EventStoreV2;
-    const { task } = yield* createOutcomeTask();
-    const first = (yield* tasks.runNow({ id: task.id })).task;
-    const projection = yield* threads.getThreadProjection(first.lastOccurrence!.threadId!);
-    const run = projection.runs.find((candidate) => candidate.id === first.lastOccurrence!.runId)!;
-    yield* events.append({
-      commandId: CommandId.make(`command:runtime-reconcile:startup:${run.threadId}:test`),
-      events: [
-        {
-          id: EventId.make("event:recovery-cancel"),
-          threadId: run.threadId,
-          occurredAt: yield* DateTime.now,
-          type: "run.updated",
-          payload: { ...run, status: "cancelled", completedAt: yield* DateTime.now },
-        },
-      ],
-    });
-    const restartLayer = Layer.fresh(ScheduledTasks.layer).pipe(
-      Layer.provide(harness.dependencies),
-    );
-    yield* Effect.gen(function* () {
-      const restarted = yield* ScheduledTasks.ScheduledTaskService;
-      const result = (yield* restarted.list()).tasks[0]!;
-      assert.equal(result.lastOccurrence?.status, "unknown");
-      assert.equal(result.lastRunStatus, "running");
-      assert.include(result.lastRunError!, "UNKNOWN");
-      assert.equal(result.lastOccurrence?.id, first.lastOccurrence?.id);
-      assert.equal(result.runCount, 1);
-      assert.deepEqual((yield* restarted.list()).tasks[0], result);
-      assert.equal((yield* threads.getThreadProjection(run.threadId)).runs.length, 1);
-      // Later, authoritative lifecycle evidence can resolve the uncertainty.
+it.effect.each([false, true])(
+  "restart preserves UNKNOWN with recovery event %s and never resends",
+  (withRecovery) => {
+    const harness = outcomeHarness();
+    return Effect.gen(function* () {
+      const tasks = yield* ScheduledTasks.ScheduledTaskService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const events = yield* EventStore.EventStoreV2;
+      const { task } = yield* createOutcomeTask();
+      const first = (yield* tasks.runNow({ id: task.id })).task;
+      assert.isDefined(first.lastOccurrence?.runStatus);
+      const projection = yield* threads.getThreadProjection(first.lastOccurrence!.threadId!);
+      const run = projection.runs.find(
+        (candidate) => candidate.id === first.lastOccurrence!.runId,
+      )!;
       yield* events.append({
         events: [
           {
-            id: EventId.make("event:late-real-completion"),
+            id: EventId.make("event:queued-before-restart"),
             threadId: run.threadId,
             occurredAt: yield* DateTime.now,
             type: "run.updated",
-            payload: { ...run, status: "completed", completedAt: yield* DateTime.now },
+            payload: { ...run, status: "queued" },
           },
         ],
       });
-      assert.equal((yield* restarted.list()).tasks[0]?.lastOccurrence?.status, "succeeded");
-    }).pipe(Effect.provide(restartLayer));
-  }).pipe(Effect.provide(harness.layer));
-});
+      assert.equal((yield* tasks.list()).tasks[0]?.lastOccurrence?.runStatus, "queued");
+      if (withRecovery) {
+        yield* events.append({
+          commandId: CommandId.make(`command:runtime-reconcile:startup:${run.threadId}:test`),
+          events: [
+            {
+              id: EventId.make("event:recovery-cancel"),
+              threadId: run.threadId,
+              occurredAt: yield* DateTime.now,
+              type: "run.updated",
+              payload: { ...run, status: "cancelled", completedAt: yield* DateTime.now },
+            },
+          ],
+        });
+      }
+      const restartLayer = Layer.fresh(ScheduledTasks.layer).pipe(
+        Layer.provide(harness.dependencies),
+      );
+      yield* Effect.gen(function* () {
+        const restarted = yield* ScheduledTasks.ScheduledTaskService;
+        const result = (yield* restarted.list()).tasks[0]!;
+        assert.equal(result.lastOccurrence?.status, "unknown");
+        assert.isUndefined(result.lastOccurrence?.runStatus);
+        assert.equal(result.lastRunStatus, "running");
+        assert.include(result.lastRunError!, "UNKNOWN");
+        assert.equal(result.lastOccurrence?.id, first.lastOccurrence?.id);
+        assert.equal(result.runCount, 1);
+        assert.deepEqual((yield* restarted.list()).tasks[0], result);
+        assert.equal((yield* threads.getThreadProjection(run.threadId)).runs.length, 1);
+        // Even a later nonterminal event cannot turn UNKNOWN into apparent queued execution.
+        yield* events.append({
+          events: [
+            {
+              id: EventId.make("event:stale-queue-after-restart"),
+              threadId: run.threadId,
+              occurredAt: yield* DateTime.now,
+              type: "run.updated",
+              payload: { ...run, status: "queued" },
+            },
+          ],
+        });
+        const stillUnknown = (yield* restarted.list()).tasks[0]!;
+        assert.equal(stillUnknown.lastOccurrence?.status, "unknown");
+        assert.isUndefined(stillUnknown.lastOccurrence?.runStatus);
+        assert.isAbove(
+          stillUnknown.lastOccurrence!.lastEventSequence,
+          result.lastOccurrence!.lastEventSequence,
+        );
+        // Later, authoritative lifecycle evidence can resolve the uncertainty.
+        yield* events.append({
+          events: [
+            {
+              id: EventId.make("event:late-real-completion"),
+              threadId: run.threadId,
+              occurredAt: yield* DateTime.now,
+              type: "run.updated",
+              payload: { ...run, status: "completed", completedAt: yield* DateTime.now },
+            },
+          ],
+        });
+        assert.equal((yield* restarted.list()).tasks[0]?.lastOccurrence?.status, "succeeded");
+      }).pipe(Effect.provide(restartLayer));
+    }).pipe(Effect.provide(harness.layer));
+  },
+);

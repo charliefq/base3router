@@ -1,5 +1,6 @@
 import {
   CommandId,
+  RunId,
   MessageId,
   type ScheduledTaskOccurrence,
   EnvironmentId,
@@ -342,4 +343,35 @@ describe("scheduled task run presentation", () => {
       reason: null,
     });
   });
+});
+
+describe("scheduled task durable run presentation", () => {
+  it.each([
+    ["running", "queued", true, "Queued", "info"],
+    ["running", "running", true, "Running", "info"],
+    ["running", "starting", true, "In progress", "info"],
+    ["running", "preparing", true, "In progress", "info"],
+    ["running", "waiting", true, "In progress", "info"],
+    ["running", "queued", false, "In progress", "info"],
+    ["accepted", "queued", false, "Accepted · execution unconfirmed", "info"],
+    ["accepted", "running", true, "Accepted · execution unconfirmed", "info"],
+    ["unknown", "queued", true, "Outcome unknown", "warning"],
+    ["unknown", "running", true, "Outcome unknown", "warning"],
+    ["cancelled", "queued", true, "Cancelled", "outline"],
+    ["succeeded", "queued", true, "Succeeded", "success"],
+  ] as const)(
+    "presents %s / %s with run binding %s as %s",
+    (status, runStatus, bound, label, variant) => {
+      expect(
+        scheduledTaskRunPresentation({
+          ...legacyTask,
+          lastOccurrence: {
+            ...occurrence(status),
+            runId: bound ? RunId.make("run") : null,
+            runStatus,
+          },
+        }),
+      ).toEqual({ label, variant, reason: null });
+    },
+  );
 });
