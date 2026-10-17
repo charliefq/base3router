@@ -4258,6 +4258,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (
       compactDisabled ||
       noProviderAvailable ||
+      providerSendBlockReason !== null ||
       activePendingApproval !== null ||
       pendingUserInputs.length > 0 ||
       phase === "running" ||
@@ -4275,6 +4276,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isConnecting,
     isSendBusy,
     noProviderAvailable,
+    providerSendBlockReason,
     onCompactContext,
     pendingUserInputs.length,
     phase,

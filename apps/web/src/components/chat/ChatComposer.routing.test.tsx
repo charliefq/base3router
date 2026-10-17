@@ -9,6 +9,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { EnvironmentSupervisor } from "@t3tools/client-runtime/connection";
 import {
   startThreadTurn,
+  setThreadRuntimeMode,
   editQueuedRun,
   type StartThreadTurnInput,
   type EditQueuedRunInput,
@@ -20,7 +21,7 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
-import { captureComposerSendDispatch } from "../ChatView.logic";
+import { captureComposerSendDispatch, readComposerSendContextForTarget } from "../ChatView.logic";
 import { act, cloneElement, createElement, createRef, type ReactElement } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -797,24 +798,130 @@ it("excludes ready OpenRouter from local Auto and closes readiness when the elig
   expect(onSend).toHaveBeenCalledTimes(1);
 });
 
-it("Auto does not relax a disabled compaction operation", async () => {
-  const props = propsFor();
-  const store = useComposerDraftStore.getState();
-  store.setModelSelection(props.composerDraftTarget, manualSelection, { explicit: true });
-  store.setPrompt(props.composerDraftTarget, "Explain this code");
-  store.setRoutingMode(props.composerDraftTarget, "auto");
-  const onCompactContext = vi.fn();
-  await act(async () => {
-    renderer = create(
-      <ChatComposer
-        {...props}
-        providerStatuses={[signedOut, provider]}
-        compactDisabled
-        onCompactContext={onCompactContext}
-      />,
-    );
-  });
-  expect(primarySend().props.disabled).toBe(false);
-  await act(async () => handle.current!.compactContext());
-  expect(onCompactContext).not.toHaveBeenCalled();
-});
+effectIt.effect.each([false, true])(
+  "Compact retains original provider readiness with healthy selected model=%s while Auto Send works",
+  (healthy) =>
+    Effect.gen(function* () {
+      const props = propsFor();
+      const store = useComposerDraftStore.getState();
+      store.setModelSelection(props.composerDraftTarget, manualSelection, { explicit: true });
+      store.setPrompt(props.composerDraftTarget, "Explain this code");
+      store.setRoutingMode(props.composerDraftTarget, "auto");
+      const selected: ServerProvider = {
+        ...signedOut,
+        status: "ready",
+        auth: { status: "authenticated" },
+        slashCommands: [{ name: "compact", description: "Compact context" }],
+        models: healthy ? signedOut.models : provider.models,
+      };
+      const commands: OrchestrationV2Command[] = [];
+      const session = yield* SubscriptionRef.make(
+        Option.some({
+          client: {
+            [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
+              Effect.sync(() => {
+                commands.push(command);
+                return { sequence: commands.length };
+              }),
+          },
+          initialConfig: Effect.succeed({
+            environment: { capabilities: { serverResolvedCommandContext: true } },
+          }),
+        } as never),
+      );
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target: { environmentId: props.environmentId, label: "Fake only" },
+        session,
+      } as never);
+      let compactRequest: Effect.Effect<unknown, never, Crypto.Crypto> | undefined;
+      let turnRequest: Effect.Effect<unknown, never, Crypto.Crypto> | undefined;
+      const start = (text: string, id: string) => {
+        const context = readComposerSendContextForTarget(
+          props.composerDraftTarget,
+          props.environmentId,
+          handle.current,
+        )!;
+        return startThreadTurn({
+          commandId: CommandId.make(id),
+          threadId: props.activeThreadId!,
+          message: { messageId: MessageId.make(id), role: "user", text, attachments: [] },
+          modelSelection: context.selectedModelSelection,
+          runtimeMode: "approval-required",
+          interactionMode: context.interactionMode,
+          routingMode: context.routingMode,
+        });
+      };
+      // Exercise the settings and /compact client requests used by ChatView's consumer.
+      // The shared compactContext entry point must stop before this consumer is entered.
+      const onCompactContext = () => {
+        const context = readComposerSendContextForTarget(
+          props.composerDraftTarget,
+          props.environmentId,
+          handle.current,
+        );
+        if (!context?.providerAvailable) return;
+        compactRequest = setThreadRuntimeMode({
+          commandId: CommandId.make("compact-settings"),
+          threadId: props.activeThreadId!,
+          runtimeMode: "approval-required",
+        }).pipe(
+          Effect.andThen(start("/compact", "compact-turn")),
+          Effect.orDie,
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        );
+      };
+      const onSend = () => {
+        turnRequest = start("Explain this code", "ordinary-turn").pipe(
+          Effect.orDie,
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        );
+      };
+      yield* Effect.promise(() =>
+        act(async () => {
+          renderer = create(
+            <ChatComposer
+              {...props}
+              providerStatuses={[selected, provider]}
+              compactDisabled={false}
+              onCompactContext={onCompactContext}
+              onSend={onSend}
+            />,
+          );
+        }),
+      );
+      expect(primarySend().props.disabled).toBe(false);
+      yield* Effect.promise(() => act(async () => handle.current!.compactContext()));
+      if (compactRequest) yield* compactRequest;
+      expect(commands.map((command) => command.type)).toEqual(
+        healthy ? ["thread.runtime-mode.set", "message.dispatch"] : [],
+      );
+      expect(
+        commands
+          .filter((command) => command.type === "message.dispatch")
+          .map((command) => command.text),
+      ).toEqual(healthy ? ["/compact"] : []);
+      yield* Effect.promise(() => act(async () => pressEnter()));
+      expect(turnRequest).toBeDefined();
+      if (turnRequest) yield* turnRequest;
+      expect(
+        commands.filter(
+          (command) => command.type === "message.dispatch" && command.text === "Explain this code",
+        ),
+      ).toHaveLength(1);
+      expect(
+        store.getComposerDraft(props.composerDraftTarget)?.modelSelectionByProvider[
+          signedOut.instanceId
+        ],
+      ).toEqual(manualSelection);
+    }).pipe(
+      Effect.provide(
+        Layer.succeed(
+          Crypto.Crypto,
+          Crypto.make({
+            randomBytes: (size) => new Uint8Array(size),
+            digest: (_algorithm, data) => Effect.succeed(data),
+          }),
+        ),
+      ),
+    ),
+);
