@@ -34,6 +34,7 @@ import {
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { AttachmentUploadState } from "../../lib/attachmentUploadState";
+import { makeThreadFixture } from "../../test-fixtures";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { ChatComposer, type ChatComposerHandle, type ChatComposerProps } from "./ChatComposer";
 vi.mock("../../state/environments", () => ({ usePrimaryEnvironmentId: () => "env-a" }));
@@ -802,7 +803,18 @@ effectIt.effect.each([false, true])(
   "Compact retains original provider readiness with healthy selected model=%s while Auto Send works",
   (healthy) =>
     Effect.gen(function* () {
-      const props = propsFor();
+      const baseProps = propsFor();
+      const props = {
+        ...baseProps,
+        activeThread: makeThreadFixture({
+          id: baseProps.activeThreadId!,
+          environmentId: baseProps.environmentId,
+          modelSelection: manualSelection,
+          runtimeMode: "approval-required",
+          runtime: null,
+        }),
+        activeThreadModelSelection: manualSelection,
+      };
       const store = useComposerDraftStore.getState();
       store.setModelSelection(props.composerDraftTarget, manualSelection, { explicit: true });
       store.setPrompt(props.composerDraftTarget, "Explain this code");
@@ -811,6 +823,7 @@ effectIt.effect.each([false, true])(
         ...signedOut,
         status: "ready",
         auth: { status: "authenticated" },
+        continuation: { groupKey: "google-fixture" },
         slashCommands: [{ name: "compact", description: "Compact context" }],
         models: healthy ? signedOut.models : provider.models,
       };
@@ -853,7 +866,7 @@ effectIt.effect.each([false, true])(
       };
       // Exercise the settings and /compact client requests used by ChatView's consumer.
       // The shared compactContext entry point must stop before this consumer is entered.
-      const onCompactContext = () => {
+      const onCompactContext = vi.fn(() => {
         const context = readComposerSendContextForTarget(
           props.composerDraftTarget,
           props.environmentId,
@@ -869,7 +882,7 @@ effectIt.effect.each([false, true])(
           Effect.orDie,
           Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
         );
-      };
+      });
       const onSend = () => {
         turnRequest = start("Explain this code", "ordinary-turn").pipe(
           Effect.orDie,
@@ -892,6 +905,7 @@ effectIt.effect.each([false, true])(
       expect(primarySend().props.disabled).toBe(false);
       yield* Effect.promise(() => act(async () => handle.current!.compactContext()));
       if (compactRequest) yield* compactRequest;
+      expect(onCompactContext).toHaveBeenCalledTimes(healthy ? 1 : 0);
       expect(commands.map((command) => command.type)).toEqual(
         healthy ? ["thread.runtime-mode.set", "message.dispatch"] : [],
       );
