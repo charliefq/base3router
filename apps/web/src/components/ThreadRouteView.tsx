@@ -1,12 +1,13 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { useNavigate } from "@tanstack/react-router";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import ChatView from "./ChatView";
 import { resolveDraftPromotionNavigationTarget, threadHasStarted } from "./ChatView.logic";
 import { waitForDraftHeroTransition } from "./chat/draftHeroTransition";
 import { SidebarInset } from "./ui/sidebar";
+import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from "./ui/empty";
 import {
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThreadByRef,
@@ -38,6 +39,13 @@ import {
  */
 export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   const navigate = useNavigate();
+  const inspectionTarget = useLocation({
+    select: (location) => location.state.scheduledTaskInspection,
+  });
+  const inspectingScheduledRun =
+    target.kind === "server" &&
+    inspectionTarget?.environmentId === target.threadRef.environmentId &&
+    inspectionTarget?.threadId === target.threadRef.threadId;
   const draftId = target.kind === "draft" ? target.draftId : null;
   const draftSession = useComposerDraftStore((store) =>
     draftId === null ? null : store.getDraftSession(draftId),
@@ -102,7 +110,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
     bootstrapComplete,
     serverThreadExists: serverThreadShell !== null,
     serverThreadDeleted: serverThreadShell?.deletedAt != null,
-    draftThreadExists: draftThread !== null,
+    draftThreadExists: !inspectingScheduledRun && draftThread !== null,
   });
   const serverThreadStarted = threadHasStarted(serverThreadShell);
   const environmentHasAnyThreads = environmentThreadRefs.length > 0 || environmentHasDraftThreads;
@@ -142,7 +150,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   }, [canonicalThreadRef, draftSession, navigate, target.kind]);
 
   useEffect(() => {
-    if (target.kind !== "server" || !bootstrapComplete) {
+    if (target.kind !== "server" || !bootstrapComplete || inspectingScheduledRun) {
       return;
     }
     // Navigation already resolved onto this path, so a drop aimed here
@@ -155,14 +163,26 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
         void navigate({ to: "/", replace: true });
       }
     }
-  }, [bootstrapComplete, environmentHasAnyThreads, navigate, renderState, target]);
+  }, [
+    bootstrapComplete,
+    environmentHasAnyThreads,
+    inspectingScheduledRun,
+    navigate,
+    renderState,
+    target,
+  ]);
 
   useEffect(() => {
-    if (target.kind !== "server" || !serverThreadStarted || !draftThread) {
+    if (
+      target.kind !== "server" ||
+      inspectingScheduledRun ||
+      !serverThreadStarted ||
+      !draftThread
+    ) {
       return;
     }
     finalizePromotedDraftThreadByRef(target.threadRef);
-  }, [draftThread, serverThreadStarted, target]);
+  }, [draftThread, inspectingScheduledRun, serverThreadStarted, target]);
 
   let view: React.ReactNode = null;
   if (target.kind === "draft") {
@@ -178,6 +198,20 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
         />
       );
     }
+  } else if (
+    inspectingScheduledRun &&
+    (renderState === "missing" || serverThreadShell?.deletedAt != null)
+  ) {
+    view = (
+      <Empty role="status">
+        <EmptyHeader>
+          <EmptyTitle>Conversation unavailable</EmptyTitle>
+          <EmptyDescription>
+            The latest scheduled run conversation is no longer available in this environment.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
   } else if (renderState === "ready" || (renderState === "loading" && serverThreadShell !== null)) {
     view = (
       <ChatView

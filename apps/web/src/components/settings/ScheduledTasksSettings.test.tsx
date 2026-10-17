@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, type ReactNode } from "react";
+import { act, useSyncExternalStore, type ReactNode } from "react";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -13,6 +13,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { makeThreadFixture } from "../../test-fixtures";
 import { resolveThreadRouteRef } from "../../threadRoutes";
 import { ThreadRouteView } from "../ThreadRouteView";
+import { Route as ChatIndexRoute } from "../../routes/_chat.index";
+import * as DateTime from "effect/DateTime";
 import {
   CommandId,
   EnvironmentId,
@@ -35,6 +37,20 @@ interface TestEnvironment {
 }
 const state = vi.hoisted(() => ({
   environments: [] as TestEnvironment[],
+  projects: [] as Array<{
+    environmentId: EnvironmentId;
+    id: ProjectId;
+    title: string;
+    createdAt: DateTime.Utc;
+    updatedAt: DateTime.Utc;
+  }>,
+  revision: 0,
+  listeners: new Set<() => void>(),
+  newThread: vi.fn(),
+  draftWrite: vi.fn(),
+  expectedDraftStarts: 0,
+  draftThread: null as object | null,
+  threadStarted: false,
   tasksByEnvironment: {} as Record<string, ScheduledTask[]>,
   threads: [] as ReturnType<typeof makeThreadFixture>[],
   bootstrap: true,
@@ -53,6 +69,25 @@ const state = vi.hoisted(() => ({
     serverConfig: { environment: { platform: { machine: "linux" } } },
   },
 }));
+
+function useFixtureVersion() {
+  useSyncExternalStore(
+    (listener) => {
+      state.listeners.add(listener);
+      return () => {
+        state.listeners.delete(listener);
+      };
+    },
+    () => state.revision,
+  );
+}
+async function publishFixture() {
+  await act(async () => {
+    state.revision += 1;
+    for (const listener of state.listeners) listener();
+  });
+}
+vi.mock("../../hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => state.newThread }));
 
 vi.mock("../../state/server", () => ({
   EMPTY_SERVER_PROVIDERS: [],
@@ -74,13 +109,15 @@ vi.mock("../../state/use-atom-command", () => ({
     state[command],
 }));
 vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: (atom: { kind: string; environmentId: string }) =>
-    atom?.kind === "shell"
+  useEnvironmentQuery: (atom: { kind: string; environmentId: string }) => {
+    useFixtureVersion();
+    return atom?.kind === "shell"
       ? { data: { snapshot: { _tag: state.bootstrap ? "Some" : "None" } }, error: null }
       : {
           data: { tasks: state.tasksByEnvironment[atom?.environmentId] ?? state.tasks },
           error: null,
-        },
+        };
+  },
 }));
 vi.mock("./SettingsScopeContext", () => ({
   useSettingsScope: () => ({
@@ -91,19 +128,28 @@ vi.mock("./SettingsScopeContext", () => ({
   }),
 }));
 vi.mock("../../hooks/useSettings", () => ({ useEnvironmentSettings: () => ({}) }));
-vi.mock("../../state/environments", () => ({ useEnvironment: () => state.environment }));
+vi.mock("../../state/environments", () => ({
+  useEnvironment: () => state.environment,
+  useEnvironments: () => ({ environments: state.environments, isReady: true }),
+}));
 vi.mock("../../state/entities", () => ({
-  useProjects: () => [],
+  useProjects: () => state.projects,
+  useThreadShells: () => state.threads,
+  useAllEnvironmentShellsBootstrapped: () => true,
   useThreadRefs: () =>
     state.threads.map((thread) => ({ environmentId: thread.environmentId, threadId: thread.id })),
   useEnvironmentThreadRefs: (environmentId: string | null) =>
     state.threads
       .filter((thread) => thread.environmentId === environmentId && thread.deletedAt === null)
       .map((thread) => ({ environmentId: thread.environmentId, threadId: thread.id })),
-  useThreadShell: (ref: { environmentId: string; threadId: string } | null) =>
-    state.threads.find(
-      (thread) => thread.environmentId === ref?.environmentId && thread.id === ref.threadId,
-    ) ?? null,
+  useThreadShell: (ref: { environmentId: string; threadId: string } | null) => {
+    useFixtureVersion();
+    return (
+      state.threads.find(
+        (thread) => thread.environmentId === ref?.environmentId && thread.id === ref.threadId,
+      ) ?? null
+    );
+  },
 }));
 vi.mock("../../state/shell", () => ({
   environmentShell: { stateAtom: (environmentId: string) => ({ kind: "shell", environmentId }) },
@@ -112,9 +158,9 @@ vi.mock("../../composerDraftStore", () => ({
   useComposerDraftStore: (select: (store: object) => unknown) =>
     select({
       getDraftSession: () => null,
-      getDraftThreadByRef: () => null,
-      getDraftIdByRef: () => null,
-      hasDraftThreadsInEnvironment: () => false,
+      getDraftThreadByRef: () => state.draftThread,
+      getDraftIdByRef: () => (state.draftThread ? "local-reservation" : null),
+      hasDraftThreadsInEnvironment: () => state.draftThread !== null,
     }),
   useBackgroundDraftSubmissionPending: () => false,
   markPromotedDraftThreadByRef: (...args: unknown[]) => state.create(...args),
@@ -127,7 +173,11 @@ vi.mock("../../sidebarPendingFileDropStore", () => ({
 }));
 vi.mock("../ChatView.logic", () => ({
   resolveDraftPromotionNavigationTarget: () => null,
-  threadHasStarted: () => false,
+  threadHasStarted: () => state.threadStarted,
+}));
+vi.mock("../NoProjectsHero", () => ({ NoProjectsHero: () => <div>No projects</div> }));
+vi.mock("../WorkspacePageHeader", () => ({
+  WorkspacePageHeader: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock("../ChatView", () => ({
   default: ({ environmentId, threadId }: { environmentId: string; threadId: string }) => (
@@ -179,7 +229,7 @@ vi.mock("./settingsLayout", () => ({
 
 import { ScheduledTasksSettings } from "./ScheduledTasksSettings";
 
-function createTestRouter() {
+function createTestRouter(history = createMemoryHistory({ initialEntries: ["/settings"] })) {
   const rootRoute = createRootRoute();
   const settings = createRoute({ getParentRoute: () => rootRoute, path: "/settings" });
   const conversation = createRoute({
@@ -194,11 +244,12 @@ function createTestRouter() {
   const home = createRoute({
     getParentRoute: () => rootRoute,
     path: "/",
-    component: () => <div data-existing-home="">Home</div>,
+    component: ChatIndexRoute.options.component!,
   });
   return createRouter({
+    isServer: false,
     routeTree: rootRoute.addChildren([settings, conversation, home]),
-    history: createMemoryHistory({ initialEntries: ["/settings"] }),
+    history,
   });
 }
 let router: ReturnType<typeof createTestRouter>;
@@ -243,6 +294,30 @@ function task(status: ScheduledTaskOccurrence["status"], reason: string | null):
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+  vi.spyOn(ChatIndexRoute, "useRouteContext").mockReturnValue({
+    authGateState: { status: "hosted-static" },
+  } as never);
+  state.revision = 0;
+  state.listeners.clear();
+  state.expectedDraftStarts = 0;
+  state.draftThread = null;
+  state.threadStarted = false;
+  state.newThread.mockClear();
+  state.draftWrite.mockClear();
+  state.newThread.mockImplementation((project) => {
+    state.draftWrite(project);
+    return Promise.resolve(null);
+  });
+  const now = DateTime.makeUnsafe("2026-10-17T00:00:00Z");
+  state.projects = [
+    {
+      environmentId: EnvironmentId.make("other-environment"),
+      id: ProjectId.make("recent-project"),
+      title: "Recent project in another environment",
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
   state.environment.environmentId = "test-environment";
   state.environments = [state.environment];
   state.tasksByEnvironment = {};
@@ -267,6 +342,8 @@ afterEach(async () => {
   container.remove();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  expect(state.newThread).toHaveBeenCalledTimes(state.expectedDraftStarts);
+  expect(state.draftWrite).toHaveBeenCalledTimes(state.expectedDraftStarts);
   expect(state.create).not.toHaveBeenCalled();
   expect(state.send).not.toHaveBeenCalled();
   expect(state.upsert).not.toHaveBeenCalled();
@@ -274,6 +351,13 @@ afterEach(async () => {
   expect(state.run).not.toHaveBeenCalled();
   expect(state.remove).not.toHaveBeenCalled();
 });
+
+async function mountRoutedView() {
+  await act(async () => root.render(<RouterProvider router={router} />));
+  await act(async () => {
+    await router.load();
+  });
+}
 
 async function render(task: ScheduledTask) {
   state.tasks = [task];
@@ -418,7 +502,7 @@ it.each(["succeeded", "failed"] as const)(
         id: ThreadId.make("exact-occurrence-thread"),
       }),
     ];
-    await act(async () => root.render(<RouterProvider router={router} />));
+    await mountRoutedView();
     expect(
       container.querySelector('[data-conversation="test-environment/exact-occurrence-thread"]'),
     ).not.toBeNull();
@@ -527,7 +611,7 @@ it.each([
   },
 );
 it.each(["missing", "deleted"] as const)(
-  "hands a %s target to existing missing-thread handling without replacement or dispatch",
+  "shows a %s inspection target unavailable without entering the real index draft landing",
   async (kind) => {
     const scheduled = occurrenceTask("gone");
     const environmentId = EnvironmentId.make(state.environment.environmentId);
@@ -543,20 +627,176 @@ it.each(["missing", "deleted"] as const)(
     await render(scheduled);
     await openLatest();
     expect(router.history.location.pathname).toBe("/test-environment/gone");
-    await act(async () => {
-      root.render(<RouterProvider router={router} />);
-    });
-    expect(state.clearDrops).toHaveBeenCalledWith({ environmentId, threadId: "gone" });
-    expect(router.history.location.pathname).toBe("/");
+    await mountRoutedView();
+    expect(state.clearDrops).not.toHaveBeenCalled();
+    expect(router.history.location.pathname).toBe("/test-environment/gone");
+    expect(container.textContent).toContain("Conversation unavailable");
     expect(container.querySelector("[data-conversation]")).toBeNull();
   },
 );
 it("keeps an absent target empty when the environment has no other threads", async () => {
   await render(occurrenceTask("absent"));
   await openLatest();
-  await act(async () => {
-    root.render(<RouterProvider router={router} />);
-  });
+  await mountRoutedView();
   expect(router.history.location.pathname).toBe("/test-environment/absent");
   expect(container.querySelector("[data-conversation]")).toBeNull();
+});
+
+it.each([false, true])(
+  "preserves ordinary missing-thread navigation with foreign inspection marker=%s and proves the real index trap",
+  async (foreignMarker) => {
+    state.expectedDraftStarts = 1;
+    state.threads = [
+      makeThreadFixture({
+        environmentId: EnvironmentId.make("test-environment"),
+        id: ThreadId.make("other"),
+      }),
+    ];
+    await router.navigate({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: "test-environment", threadId: "ordinary-missing" },
+      ...(foreignMarker
+        ? {
+            state: {
+              scheduledTaskInspection: {
+                environmentId: EnvironmentId.make("other-environment"),
+                threadId: ThreadId.make("ordinary-missing"),
+              },
+            },
+          }
+        : {}),
+    });
+    await mountRoutedView();
+    expect(router.history.location.pathname).toBe("/");
+    expect(state.newThread).toHaveBeenCalledWith(
+      { environmentId: "other-environment", projectId: "recent-project" },
+      { replace: true },
+    );
+  },
+);
+it.each([
+  { kind: "missing", bootstrap: false },
+  { kind: "deleted", bootstrap: false },
+  { kind: "missing", bootstrap: true },
+  { kind: "deleted", bootstrap: true },
+] as const)(
+  "does not substitute a draft when target becomes $kind, initially bootstrapped=$bootstrap",
+  async ({ kind, bootstrap }) => {
+    const environmentId = EnvironmentId.make("test-environment");
+    state.bootstrap = bootstrap;
+    state.threads = [
+      makeThreadFixture({ environmentId, id: ThreadId.make("disappearing") }),
+      makeThreadFixture({ environmentId, id: ThreadId.make("other") }),
+    ];
+    await render(occurrenceTask("disappearing"));
+    await openLatest();
+    await mountRoutedView();
+    expect(router.history.location.pathname).toBe("/test-environment/disappearing");
+    state.threads =
+      kind === "missing"
+        ? state.threads.filter((thread) => thread.id !== "disappearing")
+        : [
+            makeThreadFixture({
+              environmentId,
+              id: ThreadId.make("disappearing"),
+              deletedAt: "2026-10-17T00:00:00Z",
+            }),
+            state.threads[1]!,
+          ];
+    state.bootstrap = true;
+    await publishFixture();
+    await act(async () => {
+      await router.load();
+    });
+    expect(router.history.location.pathname).toBe("/test-environment/disappearing");
+    expect(container.textContent).toContain("Conversation unavailable");
+    expect(container.querySelector("[data-conversation]")).toBeNull();
+  },
+);
+
+it.each(["missing", "deleted"] as const)(
+  "keeps inspection safe when the target becomes %s after the click before the route mounts",
+  async (kind) => {
+    const environmentId = EnvironmentId.make("test-environment");
+    state.threads = [
+      makeThreadFixture({ environmentId, id: ThreadId.make("late-target") }),
+      makeThreadFixture({ environmentId, id: ThreadId.make("other") }),
+    ];
+    await render(occurrenceTask("late-target"));
+    await openLatest();
+    state.threads =
+      kind === "missing"
+        ? [state.threads[1]!]
+        : [
+            makeThreadFixture({
+              environmentId,
+              id: ThreadId.make("late-target"),
+              deletedAt: "2026-10-17T00:00:00Z",
+            }),
+            state.threads[1]!,
+          ];
+    await mountRoutedView();
+    expect(router.history.location.pathname).toBe("/test-environment/late-target");
+    expect(container.textContent).toContain("Conversation unavailable");
+  },
+);
+it.each([false, true])(
+  "never substitutes or finalizes a same-ID local draft during inspection, server exists=%s",
+  async (serverExists) => {
+    state.draftThread = {};
+    state.threadStarted = true;
+    if (serverExists)
+      state.threads = [
+        makeThreadFixture({
+          environmentId: EnvironmentId.make("test-environment"),
+          id: ThreadId.make("reserved"),
+        }),
+      ];
+    await render(occurrenceTask("reserved"));
+    await openLatest();
+    await mountRoutedView();
+    expect(router.history.location.pathname).toBe("/test-environment/reserved");
+    if (serverExists)
+      expect(
+        container.querySelector('[data-conversation="test-environment/reserved"]'),
+      ).not.toBeNull();
+    else {
+      expect(container.textContent).toContain("Conversation unavailable");
+      expect(container.querySelector("[data-conversation]")).toBeNull();
+    }
+  },
+);
+
+it("keeps a known deleted target unavailable before bootstrap completes", async () => {
+  state.bootstrap = false;
+  state.threads = [
+    makeThreadFixture({
+      environmentId: EnvironmentId.make("test-environment"),
+      id: ThreadId.make("tombstone"),
+      deletedAt: "2026-10-17T00:00:00Z",
+    }),
+  ];
+  await render(occurrenceTask("tombstone"));
+  await openLatest();
+  await mountRoutedView();
+  expect(container.textContent).toContain("Conversation unavailable");
+  expect(container.querySelector("[data-conversation]")).toBeNull();
+  state.bootstrap = true;
+  await publishFixture();
+  expect(router.history.location.pathname).toBe("/test-environment/tombstone");
+});
+it("retains scoped inspection protection across a history-state reload", async () => {
+  await render(occurrenceTask("not-there"));
+  await openLatest();
+  const location = router.history.location;
+  const savedState = structuredClone(location.state);
+  await act(async () => root.unmount());
+  const restoredHistory = createMemoryHistory({ initialEntries: [location.href] });
+  restoredHistory.replace(location.href, savedState);
+  router = createTestRouter(restoredHistory);
+  await router.load();
+  root = createRoot(container);
+  await mountRoutedView();
+  expect(router.history.location.pathname).toBe("/test-environment/not-there");
+  expect(container.textContent).toContain("Conversation unavailable");
 });

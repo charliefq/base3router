@@ -379,9 +379,11 @@ function ScheduledTaskRow({
   const occurrenceThreadId = task.lastOccurrence?.threadId;
   const openLatestRun = () => {
     if (!occurrenceThreadId) return;
+    const threadRef = scopeThreadRef(environmentId, occurrenceThreadId);
     void navigate({
       to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(scopeThreadRef(environmentId, occurrenceThreadId)),
+      params: buildThreadRouteParams(threadRef),
+      state: { scheduledTaskInspection: threadRef },
     });
   };
   const runPresentation = scheduledTaskRunPresentation(task);

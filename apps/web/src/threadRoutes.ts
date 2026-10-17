@@ -2,6 +2,13 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import type { DraftId } from "./composerDraftStore";
 
+declare module "@tanstack/react-router" {
+  interface HistoryState {
+    /** Keep scheduled-run inspection from falling through to automatic draft creation. */
+    scheduledTaskInspection?: ScopedThreadRef;
+  }
+}
+
 export type ThreadRouteTarget =
   | {
       kind: "server";
