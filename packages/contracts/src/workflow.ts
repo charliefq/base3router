@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { ModelSelection } from "./modelSelection.ts";
 
 import {
   IsoDateTime,
@@ -56,7 +57,30 @@ export const WorkflowCapabilityPreference = Schema.Literals([
   "independent-review",
 ]);
 
+const ConfigurationDraftBinding = Schema.Struct({
+  environmentId: EnvironmentId,
+  modelSelection: ModelSelection,
+});
+export const AgentConfigurationSnapshot = Schema.Struct({
+  id: AgentProfileId,
+  revision: Version,
+  name: Label,
+  projectId: ProjectId,
+  environmentId: EnvironmentId,
+  ownerId: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  instructions: Instruction,
+});
+export type AgentConfigurationSnapshot = typeof AgentConfigurationSnapshot.Type;
+
 export const AgentProfile = Schema.Struct({
+  taskConfiguration: Schema.optionalKey(
+    Schema.Struct({
+      ...ConfigurationDraftBinding.fields,
+      ownerId: TrimmedNonEmptyString,
+      commandId: RecordId,
+    }),
+  ),
   id: AgentProfileId,
   version: Version,
   projectId: Schema.NullOr(ProjectId),
@@ -192,6 +216,7 @@ export const WorkflowReadInput = Schema.Struct({ projectId: ProjectId });
 export const WorkflowReadRunInput = Schema.Struct({ projectId: ProjectId, runId: WorkflowRunId });
 
 export const AgentProfileDraft = Schema.Struct({
+  taskConfiguration: Schema.optionalKey(ConfigurationDraftBinding),
   id: AgentProfileId,
   displayName: AgentProfile.fields.displayName,
   description: AgentProfile.fields.description,
@@ -226,11 +251,13 @@ export const WorkflowActionInput = Schema.Union([
   Schema.Struct({
     ...WorkflowActionBase,
     type: Schema.Literal("profile.archive"),
+    expectedVersion: Schema.optionalKey(Version),
     profileId: AgentProfileId,
   }),
   Schema.Struct({
     ...WorkflowActionBase,
     type: Schema.Literal("profile.restore"),
+    expectedVersion: Schema.optionalKey(Version),
     profileId: AgentProfileId,
   }),
   Schema.Struct({

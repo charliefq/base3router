@@ -357,6 +357,11 @@ memoryLayer("workflow human decisions", (it) => {
       const second = yield* performWorkflowAction(input, noopDispatch);
       assert.equal(first.runs[0]?.currentStageId, "architecture");
       assert.equal(second.runs[0]?.currentStageId, "architecture");
+      // Receipts written before configuration support have no original input field.
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE base3_workflow_commands SET mutation_json=json_remove(mutation_json,'$.input') WHERE command_id=${input.commandId}`;
+      const legacyReplay = yield* performWorkflowAction(input, noopDispatch);
+      assert.equal(legacyReplay.runs[0]?.currentStageId, "architecture");
       assert.equal(
         second.runs[0]?.decisions.filter((entry) => entry.id === "decision-2").length,
         1,

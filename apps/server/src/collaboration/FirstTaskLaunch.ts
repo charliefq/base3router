@@ -141,6 +141,9 @@ export const validateFirstTaskLaunch = Effect.fn("FirstTaskLaunch.validate")(fun
   }>`SELECT payload_json FROM orchestration_v2_projection_threads WHERE thread_id=${c.threadId}`;
   if (!rows[0]) return yield* deny();
   const t = yield* decodeThread(rows[0].payload_json);
+  const configured = t.agentsTaskCreation?.review;
+  if (configured?.configuration && m.text !== configured.effectiveInstructions)
+    return yield* deny();
   if (
     t.projectId !== m.reference.projectId ||
     t.taskGovernance !== "required" ||

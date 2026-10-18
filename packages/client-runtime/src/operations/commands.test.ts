@@ -40,6 +40,7 @@ import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import { v2Now, v2Projection, v2ThreadId } from "../state/orchestrationV2TestFixtures.ts";
 import {
+  writeConfiguration,
   decideTaskContract,
   readTaskReview,
   readAgentsCreationStatus,
@@ -80,6 +81,8 @@ const TARGET = new PrimaryConnectionTarget({
 });
 
 const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(function* (input: {
+  readonly configurationState?: "unsupported" | "unknown" | "committed" | "conflict";
+  readonly configurationWrites?: unknown[];
   readonly dispatchResult?: OrchestrationV2DispatchCommandResult;
   readonly commands: OrchestrationV2Command[];
   readonly reviewRequests?: unknown[];
@@ -93,6 +96,15 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly advertiseServerResolvedCommandContext?: boolean;
 }) {
   const client = {
+    ...(input.configurationState && input.configurationState !== "unsupported"
+      ? { [WS_METHODS.workflowConfigurationStatus]: () => Effect.succeed(input.configurationState) }
+      : {}),
+    [WS_METHODS.workflowAction]: (action: unknown) =>
+      Effect.sync(() => {
+        input.configurationWrites?.push(action);
+        return { profiles: [], templates: [], runs: [] };
+      }),
+    [WS_METHODS.workflowCatalog]: () => Effect.succeed({ profiles: [], templates: [], runs: [] }),
     [ORCHESTRATION_V2_WS_METHODS.getTaskFirstLaunchStatus]: (inputStatus: unknown) =>
       Effect.gen(function* () {
         input.statusRequests?.push(inputStatus);
@@ -1458,4 +1470,51 @@ it.effect(
         expect(commands).toEqual([]);
       }),
     ),
+);
+
+it.effect(
+  "configuration writes fail closed on unsupported/conflicting servers and reconcile committed originals without mutation",
+  () =>
+    Effect.gen(function* () {
+      for (const state of ["unsupported", "conflict", "unknown", "committed"] as const) {
+        const writes: unknown[] = [];
+        const supervisor = yield* makeSupervisor({
+          commands: [],
+          projects: [],
+          configurationState: state,
+          configurationWrites: writes,
+        });
+        const result = yield* Effect.exit(
+          writeConfiguration({
+            type: "profile.save",
+            commandId: "original-configuration",
+            projectId: ProjectId.make("project-1"),
+            expectedVersion: 0,
+            draft: {
+              id: "saved-input",
+              displayName: "Saved",
+              description: "Task input",
+              purpose: "Visible instructions",
+              instructions: "Read the source.",
+              responsibilities: [],
+              exclusions: [],
+              requiredOutputSections: ["Result"],
+              artifactKind: "task-input",
+              capabilityPreferences: [],
+              taskConfiguration: {
+                environmentId: EnvironmentId.make("environment-1"),
+                modelSelection: {
+                  instanceId: ProviderInstanceId.make("codex"),
+                  model: "fake-model",
+                },
+              },
+            },
+          }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor)),
+        );
+        expect(result._tag).toBe(
+          state === "unknown" || state === "committed" ? "Success" : "Failure",
+        );
+        expect(writes).toHaveLength(state === "unknown" ? 1 : 0);
+      }
+    }),
 );

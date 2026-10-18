@@ -21,6 +21,7 @@ import {
 import * as Crypto from "effect/Crypto";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
+  request,
   EnvironmentRpcRequestObserver,
   makeRpcSessionFactory,
   type RpcSession,
@@ -32,6 +33,7 @@ type ServerFixture = {
   providers: ReadonlyArray<ServerProvider>;
   connection: (
     scopes?: ReadonlyArray<AuthEnvironmentScope>,
+    subject?: string,
   ) => Promise<{ httpBaseUrl: string; socketUrl: string; token: string; sessionId: string }>;
   revoke: (id: string) => Promise<void>;
   dropNextReply: () => void;
@@ -106,8 +108,9 @@ const makeClientFixture = Effect.fn("TaskTransport.makeClientFixture")(function*
     scopes?: ReadonlyArray<AuthEnvironmentScope>,
     expectedEnvironment = "environment-a",
     retained = false,
+    subject?: string,
   ) => {
-    const details = retained ? currentDetails : await server.connection(scopes);
+    const details = retained ? currentDetails : await server.connection(scopes, subject);
     if (!details) throw new Error("No original fixture session");
     currentDetails = details;
     const connection: PreparedConnection = {
@@ -173,9 +176,18 @@ const makeClientFixture = Effect.fn("TaskTransport.makeClientFixture")(function*
     identity: () => identity,
     reconnectRetained: () => connect(undefined, "environment-a", true),
     connect,
+    connectAs: (subject: string) => connect(undefined, "environment-a", false, subject),
     disconnect,
     snapshot,
     methods,
+    catalog: (input: Parameters<typeof Commands.readConfigurationCatalog>[0]) =>
+      command(Commands.readConfigurationCatalog(input)),
+    configurationStatus: (input: Parameters<typeof Commands.readConfigurationCommandStatus>[0]) =>
+      command(Commands.readConfigurationCommandStatus(input)),
+    workflowAction: (input: Parameters<typeof Commands.writeConfiguration>[0]) =>
+      command(request("workflow.action", input)),
+    configuration: (input: Parameters<typeof Commands.writeConfiguration>[0]) =>
+      command(Commands.writeConfiguration(input)),
     create: (input: Parameters<typeof Commands.createThread>[0]) =>
       command(Commands.createThread(input)),
     start: (input: Parameters<typeof Commands.startThreadTurn>[0]) =>

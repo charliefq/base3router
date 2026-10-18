@@ -2,12 +2,15 @@ import { RpcGroup } from "effect/unstable/rpc";
 import {
   ORCHESTRATION_V2_WS_METHODS,
   WsRpcGroup,
+  WS_METHODS,
+  WorkflowOperationError,
   ThreadId,
   EnvironmentAuthorizationError,
   OrchestrationV2DispatchCommandError,
   OrchestrationV2GetThreadProjectionError,
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
+import * as Workflow from "./workflow/Workflow.ts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as DateTime from "effect/DateTime";
@@ -40,7 +43,10 @@ export const TaskRpcGroup = RpcGroup.make(
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getAgentsCreationStatus ||
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskFirstLaunchStatus ||
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskAutoPreview ||
-      rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskReview,
+      rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskReview ||
+      rpc._tag === WS_METHODS.workflowCatalog ||
+      rpc._tag === WS_METHODS.workflowAction ||
+      rpc._tag === WS_METHODS.workflowConfigurationStatus,
   ),
 );
 
@@ -90,7 +96,38 @@ export const makeTaskRpcHandlers = Effect.fn("ws.makeTaskRpcHandlers")(function*
     );
     return instrumentRpcEffect(method, authorized, attributes);
   };
+  const workflowFailure = () =>
+    new WorkflowOperationError({
+      message: "Workflow action or catalog is unavailable, unauthorized or stale.",
+    });
   return TaskRpcGroup.of({
+    [WS_METHODS.workflowConfigurationStatus]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.workflowConfigurationStatus,
+        Workflow.readConfigurationCommandStatus(input).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.provideService(ServerEnvironment.ServerEnvironment, serverEnvironment),
+          Effect.catchCause(() => Effect.fail(workflowFailure())),
+        ),
+      ),
+    [WS_METHODS.workflowCatalog]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.workflowCatalog,
+        Workflow.workflowCatalogForProject(input.projectId).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.provideService(ServerEnvironment.ServerEnvironment, serverEnvironment),
+          Effect.catchCause(() => Effect.fail(workflowFailure())),
+        ),
+      ),
+    [WS_METHODS.workflowAction]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.workflowAction,
+        Workflow.performWorkflowAction(input, () => Effect.succeed({ sequence: 1 })).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.provideService(ServerEnvironment.ServerEnvironment, serverEnvironment),
+          Effect.catchCause(() => Effect.fail(workflowFailure())),
+        ),
+      ),
     [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
       observeRpcEffect(
         ORCHESTRATION_V2_WS_METHODS.dispatchCommand,

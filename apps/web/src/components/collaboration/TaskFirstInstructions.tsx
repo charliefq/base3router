@@ -218,12 +218,14 @@ export function TaskFirstInstructions(props: {
       reviewRef.current = facts;
       setReview(facts);
       setLaunchThread(fresh!.thread);
-      promptRef.current = facts.contract.goal;
+      const initial =
+        fresh!.thread.agentsTaskCreation?.review.effectiveInstructions ?? facts.contract.goal;
+      promptRef.current = initial;
       textEpoch.current++;
       previewOwner.current = null;
       setPreview(null);
       setPreviewBusy(false);
-      setPrompt(facts.contract.goal);
+      setPrompt(initial);
     } catch {
       if (current(generation))
         setNotice(
@@ -423,10 +425,22 @@ export function TaskFirstInstructions(props: {
                   </>
                 ) : null}
               </dl>
+              {launchThread?.agentsTaskCreation?.review.configuration ? (
+                <p>
+                  Saved configuration: {launchThread.agentsTaskCreation.review.configuration.name},
+                  revision {launchThread.agentsTaskCreation.review.configuration.revision}. The
+                  following frozen instructions are ordinary visible task input.
+                </p>
+              ) : null}
               <Textarea
                 aria-label="Initial instructions"
                 value={prompt}
-                disabled={busy || executionBusy || launch.busy}
+                disabled={
+                  busy ||
+                  executionBusy ||
+                  launch.busy ||
+                  launchThread?.agentsTaskCreation?.review.configuration !== undefined
+                }
                 onChange={(event) => {
                   promptRef.current = event.target.value;
                   textEpoch.current++;

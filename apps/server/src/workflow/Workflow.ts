@@ -12,6 +12,7 @@ import {
   WorkflowTemplateDraft,
   type ServerProvider,
   type WorkflowActionInput,
+  WorkflowActionInput as WorkflowActionInputSchema,
   type WorkflowCatalog,
   WorkflowDispatchStageInput,
   WorkflowDispatchStageResult,
@@ -25,6 +26,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { authorizeProfileAction, visibleConfiguration } from "./TaskConfigurations.ts";
 import * as Dispatcher from "../dispatcher/Dispatcher.ts";
 import { projectedSummarySection } from "../dispatcher/Handoff.ts";
 import { BUILTIN_AGENT_PROFILES, BUILTIN_WORKFLOW_TEMPLATES } from "./Builtins.ts";
@@ -86,14 +88,20 @@ const SourceRows = Schema.Array(
     worktreePath: Schema.NullOr(Schema.String),
   }),
 );
-const ExistingActionRows = Schema.Array(
-  Schema.Struct({
-    eventType: Schema.String,
-    payload: Schema.fromJsonString(
-      Schema.Struct({ projectId: ProjectId, mutation: WorkflowMutation }),
-    ),
-  }),
+const decodeActionReceipts = Schema.decodeUnknownEffect(
+  Schema.Array(
+    Schema.Struct({
+      payload: Schema.fromJsonString(
+        Schema.Struct({
+          projectId: ProjectId,
+          mutation: WorkflowMutation,
+          input: Schema.optionalKey(WorkflowActionInputSchema),
+        }),
+      ),
+    }),
+  ),
 );
+const sameAction = Schema.toEquivalence(WorkflowActionInputSchema);
 const sameProfileDraft = Schema.toEquivalence(AgentProfileDraft);
 const sameTemplateDraft = Schema.toEquivalence(WorkflowTemplateDraft);
 
@@ -113,6 +121,7 @@ const matchesExistingAction = (input: WorkflowActionInput, mutation: WorkflowMut
         requiredOutputSections,
         artifactKind,
         capabilityPreferences,
+        taskConfiguration,
       } = mutation.profile;
       return (
         mutation.profile.version === input.expectedVersion + 1 &&
@@ -127,6 +136,14 @@ const matchesExistingAction = (input: WorkflowActionInput, mutation: WorkflowMut
           requiredOutputSections,
           artifactKind,
           capabilityPreferences,
+          ...(taskConfiguration
+            ? {
+                taskConfiguration: {
+                  environmentId: taskConfiguration.environmentId,
+                  modelSelection: taskConfiguration.modelSelection,
+                },
+              }
+            : {}),
         })
       );
     }
@@ -193,7 +210,10 @@ export const workflowCatalogForProject = Effect.fn("Workflow.catalog")(function*
   yield* requireWorkflowProject(projectId);
   const stored = yield* readWorkflowCatalog(projectId);
   return {
-    profiles: [...BUILTIN_AGENT_PROFILES, ...stored.profiles],
+    profiles: [
+      ...BUILTIN_AGENT_PROFILES,
+      ...(yield* Effect.filter(stored.profiles, visibleConfiguration)),
+    ],
     templates: [...BUILTIN_WORKFLOW_TEMPLATES, ...stored.templates],
     runs: stored.runs,
   } satisfies WorkflowCatalog;
@@ -219,6 +239,7 @@ export const makeWorkflowActionMutation = (
   input: WorkflowActionInput,
   stored: WorkflowCatalog,
   at: string,
+  configurationBinding?: NonNullable<AgentProfile["taskConfiguration"]>,
 ): WorkflowMutation => {
   switch (input.type) {
     case "profile.save": {
@@ -226,8 +247,12 @@ export const makeWorkflowActionMutation = (
         .filter((profile) => profile.id === input.draft.id)
         .toSorted((a, b) => b.version - a.version)[0];
       if ((prior?.version ?? 0) !== input.expectedVersion) fail("Profile version is stale.");
+      if (input.draft.taskConfiguration && !configurationBinding)
+        fail("Configuration authority is required.");
+      const { taskConfiguration: _binding, ...draft } = input.draft;
       const profile: AgentProfile = {
-        ...input.draft,
+        ...draft,
+        ...(configurationBinding ? { taskConfiguration: configurationBinding } : {}),
         version: input.expectedVersion + 1,
         projectId: input.projectId,
         origin: "custom",
@@ -302,6 +327,7 @@ export const makeWorkflowActionMutation = (
 
 const persistWorkflowMutation = Effect.fn("Workflow.persistMutation")(function* (
   command: WorkflowRecordCommand,
+  originalInput?: WorkflowActionInput,
 ) {
   const sql = yield* SqlClient.SqlClient;
   return yield* sql.withTransaction(
@@ -323,7 +349,11 @@ const persistWorkflowMutation = Effect.fn("Workflow.persistMutation")(function* 
     VALUES (${command.commandId}, ${command.projectId}, ${
       // The workflow command ledger stores the mutation the action already validated.
       // @effect-diagnostics-next-line preferSchemaOverJson:off
-      JSON.stringify({ projectId: command.projectId, mutation: command.mutation })
+      JSON.stringify({
+        projectId: command.projectId,
+        mutation: command.mutation,
+        input: originalInput,
+      })
     }, ${command.createdAt})
   `;
       return sequence;
@@ -331,33 +361,25 @@ const persistWorkflowMutation = Effect.fn("Workflow.persistMutation")(function* 
   );
 });
 
-export const performWorkflowAction = Effect.fn("Workflow.action")(function* (
+const performWorkflowActionTransaction = Effect.fn("Workflow.actionTransaction")(function* (
   input: WorkflowActionInput,
   dispatch: (command: WorkflowRecordCommand) => Effect.Effect<{ readonly sequence: number }, Error>,
 ) {
   yield* requireWorkflowProject(input.projectId);
   const sql = yield* SqlClient.SqlClient;
+  const stored = yield* readWorkflowCatalog(input.projectId);
+  const configurationBinding = yield* authorizeProfileAction(input, stored);
   const priorRaw = yield* sql`
     SELECT mutation_json AS "payload"
     FROM base3_workflow_commands
     WHERE command_id = ${input.commandId}
     LIMIT 1
   `;
-  const priorRows = yield* Schema.decodeUnknownEffect(
-    Schema.Array(
-      Schema.Struct({
-        payload: Schema.fromJsonString(
-          Schema.Struct({
-            projectId: ProjectId,
-            mutation: WorkflowMutation,
-          }),
-        ),
-      }),
-    ),
-  )(priorRaw);
+  const priorRows = yield* decodeActionReceipts(priorRaw);
   const prior = priorRows[0];
   if (prior) {
     if (
+      (prior.payload.input !== undefined && !sameAction(input, prior.payload.input)) ||
       prior.payload.projectId !== input.projectId ||
       !matchesExistingAction(input, prior.payload.mutation)
     )
@@ -366,7 +388,6 @@ export const performWorkflowAction = Effect.fn("Workflow.action")(function* (
       });
     return yield* workflowCatalogForProject(input.projectId);
   }
-  const stored = yield* readWorkflowCatalog(input.projectId);
   if (input.type === "decision.record") {
     const existing = stored.runs
       .find((run) => run.id === input.runId)
@@ -385,7 +406,7 @@ export const performWorkflowAction = Effect.fn("Workflow.action")(function* (
     }
   }
   const at = yield* nowIso;
-  const mutation = makeWorkflowActionMutation(input, stored, at);
+  const mutation = makeWorkflowActionMutation(input, stored, at, configurationBinding);
   const command: WorkflowRecordCommand = {
     type: "workflow.record",
     commandId: CommandId.make(input.commandId),
@@ -393,13 +414,50 @@ export const performWorkflowAction = Effect.fn("Workflow.action")(function* (
     mutation,
     createdAt: at,
   };
-  yield* persistWorkflowMutation(command);
+  yield* persistWorkflowMutation(command, input);
   yield* dispatch(command).pipe(
     Effect.mapError(
       () => new WorkflowOperationError({ message: "Workflow action was rejected or is stale." }),
     ),
   );
   return yield* workflowCatalogForProject(input.projectId);
+});
+
+export const performWorkflowAction = Effect.fn("Workflow.action")(function* (
+  input: WorkflowActionInput,
+  dispatch: (command: WorkflowRecordCommand) => Effect.Effect<{ readonly sequence: number }, Error>,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  return yield* sql.withTransaction(performWorkflowActionTransaction(input, dispatch));
+});
+
+export const readConfigurationCommandStatus = Effect.fn("Workflow.configurationStatus")(function* (
+  input: WorkflowActionInput,
+) {
+  if (
+    input.type !== "profile.save" &&
+    input.type !== "profile.archive" &&
+    input.type !== "profile.restore"
+  )
+    return yield* new WorkflowOperationError({ message: "A configuration command is required." });
+  yield* requireWorkflowProject(input.projectId);
+  const stored = yield* readWorkflowCatalog(input.projectId);
+  const id = input.type === "profile.save" ? input.draft.id : input.profileId;
+  if (
+    !(input.type === "profile.save" && input.draft.taskConfiguration) &&
+    !stored.profiles.some((p) => p.id === id && p.taskConfiguration)
+  )
+    return yield* new WorkflowOperationError({ message: "A configuration command is required." });
+  yield* authorizeProfileAction(input, stored, true);
+  const sql = yield* SqlClient.SqlClient;
+  const raw =
+    yield* sql`SELECT mutation_json AS payload FROM base3_workflow_commands WHERE command_id=${input.commandId}`;
+  const rows = yield* decodeActionReceipts(raw);
+  const prior = rows[0]?.payload;
+  if (!prior) return "unknown" as const;
+  return prior.projectId === input.projectId && prior.input && sameAction(prior.input, input)
+    ? ("committed" as const)
+    : ("conflict" as const);
 });
 
 const stageContext = (catalog: WorkflowCatalog, projectId: ProjectId, runId: string) => {

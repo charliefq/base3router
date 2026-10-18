@@ -96,6 +96,13 @@ vi.mock("../../state/session", () => ({
 }));
 vi.mock("../../state/server", () => ({ primaryServerProvidersAtom: "providers" }));
 vi.mock("../../state/entities", () => ({ useProjects: () => state.projects }));
+vi.mock("../../state/workflow", () => ({
+  workflowEnvironment: {
+    configurationAction: "configuration-action",
+    readCatalog: "configuration-catalog",
+    configurationStatus: "configuration-status",
+  },
+}));
 vi.mock("../../state/threads", () => ({
   threadEnvironment: {
     create: "create",

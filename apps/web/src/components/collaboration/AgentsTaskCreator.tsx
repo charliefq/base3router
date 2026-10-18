@@ -1,3 +1,6 @@
+import { TaskConfigurations } from "./TaskConfigurations";
+import { configurationInput } from "@t3tools/shared/agentConfiguration";
+import type { AgentConfigurationSnapshot } from "@t3tools/contracts";
 import { planTaskCapabilities } from "@t3tools/shared/taskCapabilityPlan";
 import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
 import { TaskFirstInstructions } from "./TaskFirstInstructions";
@@ -124,6 +127,13 @@ export function AgentsTaskCreator(props: {
   const editingOwner = useRef<string | null>(null);
   const draftThreadIdentity = useRef<ThreadId | null>(null);
   const [draft, setDraft] = useState(blank);
+  const [configuration, setConfiguration] = useState<AgentConfigurationSnapshot | null>(null);
+  const [configurationBlocked, setConfigurationBlocked] = useState(false);
+  const configurationBlockedRef = useRef(false);
+  const onConfigurationBlocked = useCallback((value: boolean) => {
+    configurationBlockedRef.current = value;
+    setConfigurationBlocked(value);
+  }, []);
   const [modelChoice, setModelChoice] = useState<{ token: string; model: string } | null>(null);
   const modelChoiceRef = useRef(modelChoice);
   const [review, setReview] = useState<Create | null>(null);
@@ -219,6 +229,7 @@ export function AgentsTaskCreator(props: {
         editingOwner.current = null;
         setEditing(null);
         setDraft(blank);
+        setConfiguration(null);
         modelChoiceRef.current = null;
         setModelChoice(null);
         draftThreadIdentity.current = null;
@@ -390,6 +401,7 @@ export function AgentsTaskCreator(props: {
     const command = review;
     if (
       !command ||
+      configurationBlockedRef.current ||
       reviewRef.current !== command ||
       mutationOwner.current ||
       !editing ||
@@ -501,6 +513,7 @@ export function AgentsTaskCreator(props: {
       modelChoiceRef.current !== modelChoice ||
       modelChoice?.token !== editing.token ||
       !proposed ||
+      configurationBlockedRef.current ||
       !props.environmentId ||
       !props.project ||
       !provider ||
@@ -528,6 +541,15 @@ export function AgentsTaskCreator(props: {
       taskGovernance: "required",
       taskContract: proposed.contract,
       taskCreationReview: {
+        ...(configuration
+          ? {
+              configuration,
+              effectiveInstructions: configurationInput(
+                configuration.instructions,
+                proposed.contract.goal,
+              ),
+            }
+          : {}),
         environmentId: props.environmentId,
         projectId: ProjectId.make(props.project.id),
         modelSelection,
@@ -570,6 +592,29 @@ export function AgentsTaskCreator(props: {
     props.project?.id === attempt.command.projectId;
   return (
     <section aria-label="Governed task creation">
+      <TaskConfigurations
+        key={`${props.environmentId}:${props.project?.id}`}
+        environmentId={props.environmentId}
+        projectId={props.project?.id}
+        modelSelection={
+          editing
+            ? { instanceId: ProviderInstanceId.make(editing.providerId), model: chosenModel ?? "" }
+            : null
+        }
+        open={editing !== null}
+        disabled={review !== null || pending}
+        onBlocked={onConfigurationBlocked}
+        onSelect={(value) => {
+          if (!editing || reviewRef.current) return;
+          if (value !== null) setConfiguration(value);
+          if (value) {
+            const choice = { token: editing.token, model: value.modelSelection.model };
+            modelChoiceRef.current = choice;
+            setModelChoice(choice);
+          }
+          closeReview();
+        }}
+      />
       {notice ? <p role={attempt?.status === "confirmed" ? "status" : "alert"}>{notice}</p> : null}
       {attempt && attempt.status !== "confirmed" && attempt.status !== "rejected" ? (
         <>
@@ -637,6 +682,26 @@ export function AgentsTaskCreator(props: {
             Task provider: {selectedProviderId}. Chosen model: {chosenModel ?? "Choose explicitly"}
             {chosenModel && !modelAvailable ? " (Unavailable)" : ""}.
           </p>
+          {configuration ? (
+            <p>
+              Selected saved configuration: {configuration.name}, revision {configuration.revision}.
+              Creation verifies this exact current revision.
+            </p>
+          ) : (
+            <p>No saved configuration selected.</p>
+          )}
+          {configuration ? (
+            <Button
+              type="button"
+              disabled={review !== null || configurationBlocked}
+              onClick={() => {
+                setConfiguration(null);
+                closeReview();
+              }}
+            >
+              Use custom task input
+            </Button>
+          ) : null}
           <ProviderModelPicker
             activeInstanceId={ProviderInstanceId.make(editing.providerId)}
             model={chosenModel ?? ""}
@@ -656,6 +721,7 @@ export function AgentsTaskCreator(props: {
               )
                 return;
               const choice = { token: editing.token, model };
+              setConfiguration(null);
               modelChoiceRef.current = choice;
               setModelChoice(choice);
               closeReview();
@@ -702,6 +768,7 @@ export function AgentsTaskCreator(props: {
           <Button
             type="button"
             disabled={
+              configurationBlocked ||
               !parseDraft(draft) ||
               review !== null ||
               !modelAvailable ||
@@ -735,6 +802,17 @@ export function AgentsTaskCreator(props: {
                     {review.modelSelection.instanceId}. Configured model:{" "}
                     {review.modelSelection.model}. This is not a promise of the eventual Auto route.
                   </p>
+                  {review.taskCreationReview?.configuration ? (
+                    <>
+                      <p>
+                        Saved configuration: {review.taskCreationReview.configuration.name},
+                        revision {review.taskCreationReview.configuration.revision}. Configuration
+                        ID: {review.taskCreationReview.configuration.id}.
+                      </p>
+                      <p>Effective visible initial instructions (ordinary task input):</p>
+                      <pre>{review.taskCreationReview.effectiveInstructions}</pre>
+                    </>
+                  ) : null}
                   <p>
                     Title: {review.title}. Goal: {review.taskContract?.goal}. Redirect:{" "}
                     {review.taskContract?.redirect}. Acceptance: {review.taskContract?.acceptance}.

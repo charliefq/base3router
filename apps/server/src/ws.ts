@@ -2007,20 +2007,6 @@ const makeWsRpcLayer = (
             authorizeEffect(AuthOrchestrationReadScope, readGovernanceSnapshot(input)),
             { "rpc.aggregate": "governance" },
           ),
-        [WS_METHODS.workflowCatalog]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.workflowCatalog,
-            Workflow.workflowCatalogForProject(input.projectId).pipe(
-              Effect.catchCause((cause) => {
-                const error = Cause.squash(cause);
-                if (Schema.is(WorkflowOperationError)(error)) return Effect.fail(error);
-                return Effect.fail(
-                  new WorkflowOperationError({ message: "Workflow catalog is unavailable." }),
-                );
-              }),
-            ),
-            { "rpc.aggregate": "workflow" },
-          ),
         [WS_METHODS.workflowReadRun]: (input) =>
           observeRpcEffect(
             WS_METHODS.workflowReadRun,
@@ -2033,22 +2019,6 @@ const makeWsRpcLayer = (
                 if (Schema.is(WorkflowOperationError)(error)) return Effect.fail(error);
                 return Effect.fail(
                   new WorkflowOperationError({ message: "Workflow run is unavailable." }),
-                );
-              }),
-            ),
-            { "rpc.aggregate": "workflow" },
-          ),
-        [WS_METHODS.workflowAction]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.workflowAction,
-            Workflow.performWorkflowAction(input, () => Effect.succeed({ sequence: 1 })).pipe(
-              Effect.catchCause((cause) => {
-                const error = Cause.squash(cause);
-                if (Schema.is(WorkflowOperationError)(error)) return Effect.fail(error);
-                return Effect.fail(
-                  new WorkflowOperationError({
-                    message: "Workflow action was rejected or is stale.",
-                  }),
                 );
               }),
             ),

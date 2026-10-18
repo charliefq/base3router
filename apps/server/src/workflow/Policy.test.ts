@@ -1,5 +1,6 @@
 import {
   ProjectId,
+  EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -534,4 +535,37 @@ describe("generic workflow policy", () => {
     expect(resumed.runs[0]?.attempts).toEqual(original.runs[0]?.attempts);
     expect(resumed.runs[0]?.pausedAt).toBeNull();
   });
+});
+
+it("saved task configuration cannot become an executable workflow role", () => {
+  const profile: AgentProfile = {
+    ...BUILTIN_AGENT_PROFILES[0]!,
+    id: "saved-task-input",
+    projectId,
+    origin: "custom",
+    taskConfiguration: {
+      ownerId: "owner",
+      commandId: "save-input",
+      environmentId: EnvironmentId.make("environment-1"),
+      modelSelection: { instanceId: ProviderInstanceId.make("codex-work"), model: "gpt-5.4" },
+    },
+  };
+  const configured: WorkflowTemplate = {
+    ...template,
+    projectId,
+    origin: "custom",
+    id: "configured-template",
+    stages: template.stages.map((stage, index) =>
+      index === 0 ? { ...stage, profileId: profile.id, profileVersion: profile.version } : stage,
+    ),
+  };
+  expect(() =>
+    validateTemplate(configured, { ...emptyWorkflowCatalog(), profiles: [profile] }),
+  ).toThrow("unavailable");
+  expect(() =>
+    validateTemplate(
+      { ...configured, stages: template.stages },
+      { ...emptyWorkflowCatalog(), profiles: [profile] },
+    ),
+  ).not.toThrow();
 });

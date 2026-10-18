@@ -498,6 +498,10 @@
     "./taskCapabilityPlan": {
       "types": "./src/taskCapabilityPlan.ts",
       "import": "./src/taskCapabilityPlan.ts"
+    },
+    "./agentConfiguration": {
+      "types": "./src/agentConfiguration.ts",
+      "import": "./src/agentConfiguration.ts"
     }
   },
   "scripts": {

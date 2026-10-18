@@ -76,6 +76,12 @@ returns to the remembered selection.
 
 Leaving reasoning level or service tier unset uses the provider's own configuration.
 
+## Reuse task configurations
+
+From Agents or Tasks, choose New task and an exact model, then save a named configuration with working instructions. Select its revision explicitly and review the instructions together with your task's Goal, Redirect, Acceptance and Brake. Saving or creating a task starts no work; use the separate reviewed Start action.
+
+Configurations belong to your environment and project. They reuse an existing provider rather than creating another online agent or granting permissions. Edits apply to future tasks; created tasks retain their reviewed instructions. Archive a configuration to stop selecting it, or restore it for future tasks. If a save response is lost, recover the original command before saving again.
+
 ## Quote an assistant response
 
 On web and desktop, select text within one assistant response and choose

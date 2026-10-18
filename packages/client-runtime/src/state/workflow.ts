@@ -2,8 +2,13 @@ import { WS_METHODS } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { Atom } from "effect/unstable/reactivity";
 
+import { writeConfiguration } from "../operations/commands.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
-import { createEnvironmentRpcCommand, createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
+import {
+  createEnvironmentCommand,
+  createEnvironmentRpcCommand,
+  createEnvironmentRpcQueryAtomFamily,
+} from "./runtime.ts";
 
 export function createWorkflowEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
@@ -14,6 +19,18 @@ export function createWorkflowEnvironmentAtoms<R, E>(
   });
   return {
     catalog,
+    configurationAction: createEnvironmentCommand(runtime, {
+      label: "environment-data:workflow:configuration-action",
+      execute: writeConfiguration,
+    }),
+    configurationStatus: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:workflow:configuration-status",
+      tag: WS_METHODS.workflowConfigurationStatus,
+    }),
+    readCatalog: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:workflow:read-catalog",
+      tag: WS_METHODS.workflowCatalog,
+    }),
     readRun: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:workflow:read-run",
       tag: WS_METHODS.workflowReadRun,

@@ -78,6 +78,7 @@ export async function withTaskCreationTransportFixture(
     providers: ReadonlyArray<ServerProvider>;
     connection: (
       scopes?: ReadonlyArray<AuthEnvironmentScope>,
+      subject?: string,
     ) => Promise<{ httpBaseUrl: string; socketUrl: string; token: string; sessionId: string }>;
     revoke: (sessionId: string) => Promise<void>;
     dropNextReply: () => void;
@@ -177,8 +178,21 @@ export async function withTaskCreationTransportFixture(
                   Effect.provide(context),
                 );
                 const actualDispatch = handlers[ORCHESTRATION_V2_WS_METHODS.dispatchCommand];
+                const actualConfiguration = handlers[WS_METHODS.workflowAction];
                 const layer = group.toLayer({
                   ...handlers,
+                  [WS_METHODS.workflowAction]: (input) =>
+                    actualConfiguration(input).pipe(
+                      Effect.flatMap((result) =>
+                        drop
+                          ? Effect.gen(function* () {
+                              drop = false;
+                              yield* Deferred.succeed(dropped, undefined);
+                              return yield* Effect.never;
+                            })
+                          : Effect.succeed(result),
+                      ),
+                    ),
                   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) => {
                     commands.push(command);
                     rpcMethods.push(ORCHESTRATION_V2_WS_METHODS.dispatchCommand);
@@ -256,8 +270,9 @@ export async function withTaskCreationTransportFixture(
                 providers: configuredProviders,
                 connection: async (
                   scopes = [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+                  subject = "fixture-owner",
                 ) => {
-                  const issued = await run(auth.issueSession({ subject: "fixture-owner", scopes }));
+                  const issued = await run(auth.issueSession({ subject, scopes }));
                   const ticket = await run(auth.issueWebSocketTicket(issued));
                   const url = new URL("/ws", httpBaseUrl);
                   url.protocol = "ws:";

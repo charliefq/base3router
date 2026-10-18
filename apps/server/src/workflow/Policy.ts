@@ -36,7 +36,10 @@ const availableProfiles = (
   projectId: string,
 ): ReadonlyArray<AgentProfile> => [
   ...BUILTIN_AGENT_PROFILES,
-  ...catalog.profiles.filter((profile) => profile.projectId === projectId),
+  // Saved task input does not become an executable workflow role.
+  ...catalog.profiles.filter(
+    (profile) => profile.projectId === projectId && !profile.taskConfiguration,
+  ),
 ];
 
 const availableTemplates = (

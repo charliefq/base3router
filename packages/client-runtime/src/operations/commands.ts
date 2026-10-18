@@ -13,6 +13,7 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationV2CheckpointUnavailableError,
   WS_METHODS,
+  WorkflowOperationError,
   type ChatAttachment,
   type MessageId,
   type ModelSelection,
@@ -276,6 +277,25 @@ const allocateCommandId = Effect.fn("EnvironmentCommands.allocateCommandId")(fun
   if (input.commandId !== undefined) return input.commandId;
   const crypto = yield* Crypto.Crypto;
   return CommandId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie));
+});
+
+export const readConfigurationCatalog = (
+  input: typeof import("@t3tools/contracts").WorkflowReadInput.Type,
+) => request("workflow.catalog", input);
+export const readConfigurationCommandStatus = (
+  input: import("@t3tools/contracts").WorkflowActionInput,
+) => request(WS_METHODS.workflowConfigurationStatus, input);
+export const writeConfiguration = Effect.fn("EnvironmentCommands.writeConfiguration")(function* (
+  input: import("@t3tools/contracts").WorkflowActionInput,
+) {
+  // Old servers must not strip the binding and save a legacy workflow role.
+  const state = yield* readConfigurationCommandStatus(input);
+  if (state === "committed") return yield* readConfigurationCatalog({ projectId: input.projectId });
+  if (state !== "unknown")
+    return yield* new WorkflowOperationError({
+      message: "Original configuration command conflicts; no mutation was sent.",
+    });
+  return yield* request(WS_METHODS.workflowAction, input);
 });
 
 const dispatch = (command: OrchestrationV2Command) =>

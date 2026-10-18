@@ -1,3 +1,6 @@
+import { configurationInput, configurationSnapshot } from "@t3tools/shared/agentConfiguration";
+import { readWorkflowCatalog } from "../workflow/Projection.ts";
+import { AgentConfigurationSnapshot } from "@t3tools/contracts";
 import { planTaskCapabilities } from "@t3tools/shared/taskCapabilityPlan";
 import {
   AgentsTaskCreationReview,
@@ -15,7 +18,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
@@ -145,6 +148,27 @@ export const validateReviewedCreate = Effect.fn("governedCreation.validateReview
     const projects =
       yield* sql`SELECT project_id,workspace_root FROM projection_projects WHERE project_id=${command.projectId} AND deleted_at IS NULL`;
     if (projects.length !== 1) return yield* refuse();
+    if (review.configuration !== undefined) {
+      const selected = review.configuration;
+      const catalog = yield* readWorkflowCatalog(command.projectId).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+      );
+      const profile = catalog.profiles
+        .filter((p) => p.id === selected.id)
+        .toSorted((a, b) => b.version - a.version)[0];
+      const snapshot = profile ? configurationSnapshot(profile) : null;
+      if (
+        !snapshot ||
+        profile?.status !== "active" ||
+        snapshot.ownerId !== actorId ||
+        snapshot.environmentId !== review.environmentId ||
+        !Schema.toEquivalence(AgentConfigurationSnapshot)(snapshot, selected) ||
+        !sameSelection(snapshot.modelSelection, command.modelSelection) ||
+        review.effectiveInstructions !==
+          configurationInput(snapshot.instructions, command.taskContract!.goal)
+      )
+        return yield* refuse();
+    } else if (review.effectiveInstructions !== undefined) return yield* refuse();
     if (review.capabilityPlan !== undefined) {
       const expected = planTaskCapabilities({
         environmentId: review.environmentId,

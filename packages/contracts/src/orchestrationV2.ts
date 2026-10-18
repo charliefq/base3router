@@ -54,6 +54,7 @@ import {
   OrchestrationGetTurnDiffResult,
 } from "./checkpointDiff.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { AgentConfigurationSnapshot } from "./workflow.ts";
 import { LocalTaskProfile, HybridRouteDecisionV1 } from "./routerEvaluation.ts";
 import { ModelRouterDecision, ModelRouterConstraints } from "./modelRouter.ts";
 import {
@@ -97,6 +98,8 @@ export const OrchestrationV2CreationSource = Schema.Literals([
 export type OrchestrationV2CreationSource = typeof OrchestrationV2CreationSource.Type;
 
 export const AgentsTaskCreationReview = Schema.Struct({
+  configuration: Schema.optionalKey(AgentConfigurationSnapshot),
+  effectiveInstructions: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(20_000))),
   capabilityPlan: Schema.optionalKey(TaskCapabilityPlan),
   environmentId: EnvironmentId,
   projectId: ProjectId,

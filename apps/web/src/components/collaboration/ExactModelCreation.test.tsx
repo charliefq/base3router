@@ -23,6 +23,9 @@ const state = vi.hoisted(() => ({
   creationStatus: vi.fn(),
   launchStatus: vi.fn(),
   start: vi.fn(),
+  configuration: vi.fn(),
+  catalog: vi.fn(),
+  configurationStatus: vi.fn(),
 }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: string) => (atom === "providers" ? state.providers : {}),
@@ -35,6 +38,13 @@ vi.mock("../../state/session", async () => {
   const Option = await import("effect/Option");
   return { usePreparedConnection: () => Option.fromNullishOr(state.fixture?.identity()) };
 });
+vi.mock("../../state/workflow", () => ({
+  workflowEnvironment: {
+    configurationAction: "configuration",
+    readCatalog: "catalog",
+    configurationStatus: "configurationStatus",
+  },
+}));
 vi.mock("../../state/threads", () => ({
   threadEnvironment: {
     create: "create",
@@ -223,6 +233,9 @@ beforeEach(() => {
     state.creationStatus,
     state.launchStatus,
     state.start,
+    state.configuration,
+    state.catalog,
+    state.configurationStatus,
   ])
     mock.mockReset();
 });
@@ -232,7 +245,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 const button = (name: string) =>
-  renderer.root.findAllByType("button").find((b) => b.children.includes(name));
+  renderer.root.findAllByType("button").find((b) => b.children.join("") === name);
 const click = async (name: string, twice = false) => {
   await act(async () => {
     const b = button(name);
@@ -245,6 +258,16 @@ const click = async (name: string, twice = false) => {
 const wire = (f: Fixture) => {
   state.fixture = f;
   state.providers = f.providers;
+  state.configuration.mockImplementation(
+    ({ input }: { input: Parameters<Fixture["configuration"]>[0] }) => f.configuration(input),
+  );
+  state.catalog.mockImplementation(({ input }: { input: Parameters<Fixture["catalog"]>[0] }) =>
+    f.catalog(input),
+  );
+  state.configurationStatus.mockImplementation(
+    ({ input }: { input: Parameters<Fixture["configurationStatus"]>[0] }) =>
+      f.configurationStatus(input),
+  );
   state.create.mockImplementation(({ input }: { input: Parameters<Fixture["create"]>[0] }) =>
     f.create(input),
   );
@@ -291,6 +314,323 @@ const selectModel = async (model: string) => {
   expect(item).toBeDefined();
   await act(async () => item!.props.onClick());
 };
+it.each(["manual", "auto"] as const)(
+  "mounted saved configuration flow freezes visible input, creates two tasks, and separately starts one through actual %s transport",
+  async (mode) => {
+    await withTaskTransportFixture(async (f) => {
+      wire(f);
+      const refresh = vi.fn(f.snapshot);
+      const props = {
+        environmentId: EnvironmentId.make("environment-a"),
+        project: { id: "project-a", title: "Fixture" },
+        providers: f.providers,
+        request: { providerId: "codex", token: "configuration-task-one" },
+        onLock: vi.fn(),
+        onRelease: vi.fn(),
+        onOpen: vi.fn(),
+        refresh,
+      };
+      await act(async () => {
+        renderer = create(<AgentsTaskCreator {...props} />);
+      });
+      await fields();
+      await selectModel("exact-second");
+      for (const [label, value] of [
+        ["Configuration name", "Careful reviewer"],
+        ["Working instructions", "Read the bounded source and report evidence."],
+      ])
+        await act(async () =>
+          renderer.root.findByProps({ "aria-label": label }).props.onChange({ target: { value } }),
+        );
+      await click("Save new configuration", true);
+      await act(async () => {
+        await state.configuration.mock.results[0]!.value;
+      });
+      expect(state.configuration).toHaveBeenCalledTimes(1);
+      await click("Use saved configuration Careful reviewer r1");
+      await click("Review new task");
+      expect(JSON.stringify(renderer.toJSON())).toContain("Careful reviewer");
+      expect(JSON.stringify(renderer.toJSON())).toContain(
+        "Read the bounded source and report evidence.",
+      );
+      expect((await f.inspect()).starts).toHaveLength(0);
+      await click("Create task");
+      await act(async () => {
+        await state.create.mock.results[0]!.value;
+        await Promise.all([
+          refresh.mock.results.at(-1)!.value,
+          state.projection.mock.results.at(-1)!.value,
+        ]);
+      });
+      const first = readAgentsCreationAttempt().attempt!.command;
+      expect(first.taskCreationReview!.configuration!.revision).toBe(1);
+      await act(async () =>
+        renderer.update(
+          <AgentsTaskCreator
+            {...props}
+            request={{ providerId: "codex", token: "configuration-task-two" }}
+          />,
+        ),
+      );
+      await fields();
+      await click("Load saved configurations");
+      await act(async () => {
+        await state.catalog.mock.results.at(-1)!.value;
+      });
+      await click("Use saved configuration Careful reviewer r1");
+      await click("Review new task");
+      await click("Create task");
+      await act(async () => {
+        await state.create.mock.results[1]!.value;
+        await Promise.all([
+          refresh.mock.results.at(-1)!.value,
+          state.projection.mock.results.at(-1)!.value,
+        ]);
+      });
+      const second = readAgentsCreationAttempt().attempt!.command;
+      expect(second.threadId).not.toBe(first.threadId);
+      expect(second.taskCreationReview!.configuration).toEqual(
+        first.taskCreationReview!.configuration,
+      );
+      expect((await f.snapshot()).tasks).toHaveLength(2);
+      expect((await f.inspect()).starts).toHaveLength(0);
+      const reads = state.review.mock.results.length;
+      await click("Prepare created task for review/start");
+      await act(async () => {
+        await state.review.mock.results[reads]!.value;
+        await state.projection.mock.results.at(-1)!.value;
+        await state.review.mock.results[reads + 1]!.value;
+      });
+      const initial = renderer.root.findByProps({ "aria-label": "Initial instructions" });
+      expect(initial.props.value).toBe(second.taskCreationReview!.effectiveInstructions);
+      expect(initial.props.disabled).toBe(true);
+      await click(mode === "manual" ? "Choose Manual" : "Choose Auto");
+      await click("Review ordinary task launch");
+      if (mode === "auto")
+        f.setProviders([
+          {
+            ...f.providers[0]!,
+            models: [
+              {
+                ...f.providers[0]!.models[0]!,
+                slug: "aaa-configured-auto",
+                name: "Actual configured Auto",
+              },
+              ...f.providers[0]!.models,
+            ],
+          },
+        ]);
+      await click("Start reviewed ordinary task", true);
+      await act(async () => {
+        await state.start.mock.results[0]!.value;
+        await state.launchStatus.mock.results.at(-1)!.value;
+      });
+      await f.drain();
+      await click("Read original launch status");
+      await act(async () => {
+        await state.launchStatus.mock.results.at(-1)!.value;
+      });
+      expect((await f.inspect()).inputs).toEqual([
+        second.taskCreationReview!.effectiveInstructions,
+      ]);
+      expect(JSON.stringify(renderer.toJSON())).toContain(
+        "Transport answer: Read the bounded source and report evidence.",
+      );
+      expect(state.start).toHaveBeenCalledTimes(1);
+      expect((await f.inspect()).starts[0]!.model).toBe(
+        mode === "auto" ? "aaa-configured-auto" : "exact-second",
+      );
+      expect(second.taskCreationReview!.configuration!.modelSelection.model).toBe("exact-second");
+    });
+  },
+  30000,
+);
+it("mounted lost configuration reply retains its original identity after remount and reads recovery without resend", async () => {
+  await withTaskTransportFixture(async (f) => {
+    wire(f);
+    const props = {
+      environmentId: EnvironmentId.make("environment-a"),
+      project: { id: "project-a", title: "Fixture" },
+      providers: f.providers,
+      request: { providerId: "codex", token: "lost-configuration-task" },
+      onLock: vi.fn(),
+      onRelease: vi.fn(),
+      onOpen: vi.fn(),
+      refresh: f.snapshot,
+    };
+    await act(async () => {
+      renderer = create(<AgentsTaskCreator {...props} />);
+    });
+    await fields();
+    await selectModel("exact-second");
+    for (const [label, value] of [
+      ["Configuration name", "Lost reply"],
+      ["Working instructions", "Retain the original reviewed identity."],
+    ])
+      await act(async () =>
+        renderer.root.findByProps({ "aria-label": label }).props.onChange({ target: { value } }),
+      );
+    f.dropNextReply();
+    await click("Save new configuration");
+    await Promise.race([
+      f.awaitDroppedReply(),
+      state.configuration.mock.results[0]!.value.then(() => {
+        throw new Error("No drop");
+      }),
+    ]);
+    const original = state.configuration.mock.calls[0]![0].input;
+    await act(async () => renderer.unmount());
+    await f.disconnect();
+    await state.configuration.mock.results[0]!.value;
+    await f.connect();
+    await act(async () => {
+      renderer = create(<AgentsTaskCreator {...props} />);
+    });
+    expect(button("Review new task")!.props.disabled).toBe(true);
+    await click("Recover saved configuration");
+    await act(async () => {
+      await state.configurationStatus.mock.results[0]!.value;
+    });
+    expect(state.configurationStatus.mock.calls[0]![0].input).toEqual(original);
+    expect(state.configuration).toHaveBeenCalledTimes(1);
+    await click("Load saved configurations");
+    await act(async () => {
+      await state.catalog.mock.results.at(-1)!.value;
+    });
+    expect(button("Use saved configuration Lost reply r1")).toBeDefined();
+    expect((await f.inspect()).starts).toHaveLength(0);
+    expect(state.create).not.toHaveBeenCalled();
+  });
+}, 30000);
+
+it.each(["edit", "archive"] as const)(
+  "mounted selected configuration fails closed after a concurrent %s",
+  async (operation) => {
+    await withTaskTransportFixture(async (f) => {
+      wire(f);
+      const props = {
+        environmentId: EnvironmentId.make("environment-a"),
+        project: { id: "project-a", title: "Fixture" },
+        providers: f.providers,
+        request: { providerId: "codex", token: `stale-configuration-${operation}` },
+        onLock: vi.fn(),
+        onRelease: vi.fn(),
+        onOpen: vi.fn(),
+        refresh: f.snapshot,
+      };
+      await act(async () => {
+        renderer = create(<AgentsTaskCreator {...props} />);
+      });
+      await fields();
+      await selectModel("exact-second");
+      for (const [label, value] of [
+        ["Configuration name", "Selected revision"],
+        ["Working instructions", "Only this reviewed input."],
+      ])
+        await act(async () =>
+          renderer.root.findByProps({ "aria-label": label }).props.onChange({ target: { value } }),
+        );
+      await click("Save new configuration");
+      await act(async () => {
+        await state.configuration.mock.results[0]!.value;
+      });
+      const original = state.configuration.mock.calls[0]![0].input;
+      await click("Use saved configuration Selected revision r1");
+      const concurrent =
+        operation === "edit"
+          ? {
+              ...original,
+              commandId: "concurrent-edit",
+              expectedVersion: 1,
+              draft: { ...original.draft, instructions: "Different future instructions." },
+            }
+          : {
+              type: "profile.archive" as const,
+              commandId: "concurrent-archive",
+              projectId: original.projectId,
+              profileId: original.draft.id,
+              expectedVersion: 1,
+            };
+      expect((await f.configuration(concurrent))._tag).toBe("Success");
+      await click("Review new task");
+      await click("Create task");
+      await act(async () => {
+        await state.create.mock.results[0]!.value;
+      });
+      expect((await state.create.mock.results[0]!.value)._tag).toBe("Failure");
+      expect(
+        readAgentsCreationAttempt().attempt!.command.taskCreationReview!.configuration!.revision,
+      ).toBe(1);
+      expect((await f.snapshot()).tasks).toHaveLength(0);
+      expect((await f.inspect()).starts).toHaveLength(0);
+    });
+  },
+  30000,
+);
+
+it("mounted save/edit/archive/restore keeps selection explicit and preserves revision identity", async () => {
+  await withTaskTransportFixture(async (f) => {
+    wire(f);
+    const props = {
+      environmentId: EnvironmentId.make("environment-a"),
+      project: { id: "project-a", title: "Fixture" },
+      providers: f.providers,
+      request: { providerId: "codex", token: "configuration-controls" },
+      onLock: vi.fn(),
+      onRelease: vi.fn(),
+      onOpen: vi.fn(),
+      refresh: f.snapshot,
+    };
+    await act(async () => {
+      renderer = create(<AgentsTaskCreator {...props} />);
+    });
+    await fields();
+    await selectModel("exact-second");
+    for (const [label, value] of [
+      ["Configuration name", "Reusable input"],
+      ["Working instructions", "First reviewed instruction."],
+    ])
+      await act(async () =>
+        renderer.root.findByProps({ "aria-label": label }).props.onChange({ target: { value } }),
+      );
+    await click("Save new configuration");
+    await act(async () => {
+      await state.configuration.mock.results.at(-1)!.value;
+    });
+    await click("Use saved configuration Reusable input r1");
+    await click("Edit saved configuration Reusable input");
+    await act(async () =>
+      renderer.root
+        .findByProps({ "aria-label": "Working instructions" })
+        .props.onChange({ target: { value: "Second reviewed instruction." } }),
+    );
+    await click("Save configuration revision");
+    await act(async () => {
+      await state.configuration.mock.results.at(-1)!.value;
+    });
+    expect(JSON.stringify(renderer.toJSON())).toContain("Selected saved configuration: ");
+    await click("Review new task");
+    expect(JSON.stringify(renderer.toJSON())).toContain("First reviewed instruction.");
+    await click("Back to task draft");
+    await click("Use saved configuration Reusable input r2");
+    await click("Archive saved configuration Reusable input");
+    await act(async () => {
+      await state.configuration.mock.results.at(-1)!.value;
+    });
+    expect(button("Use saved configuration Reusable input r2")!.props.disabled).toBe(true);
+    await click("Restore saved configuration Reusable input");
+    await act(async () => {
+      await state.configuration.mock.results.at(-1)!.value;
+    });
+    await click("Use saved configuration Reusable input r2");
+    await click("Review new task");
+    expect(JSON.stringify(renderer.toJSON())).toContain("Second reviewed instruction.");
+    expect(state.configuration).toHaveBeenCalledTimes(4);
+    expect((await f.inspect()).starts).toHaveLength(0);
+    expect(state.create).not.toHaveBeenCalled();
+  });
+}, 30000);
+
 it.each(["manual", "auto"] as const)(
   "real picker creation and production client %s transport reach exact correlated result and reconnect",
   async (mode) => {
