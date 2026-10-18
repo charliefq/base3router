@@ -374,6 +374,7 @@ export const layer: Layer.Layer<
             runId,
             activeAttemptId: attempt.id,
             expectedStatus: run.status,
+            providerNotStarted: true,
             events,
           });
         },

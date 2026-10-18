@@ -125,7 +125,12 @@ import {
   ThreadForkServiceV2,
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
-import { readTaskAutoPreview, authorizeDispatch } from "../policy/Base3PolicyGate.ts";
+import {
+  readTaskAutoPreview,
+  authorizeDispatch,
+  isActiveRunControl,
+  verifyActiveControlReplay,
+} from "../policy/Base3PolicyGate.ts";
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import {
   readTaskReview,
@@ -4059,27 +4064,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         startedAt: null,
         completedAt: null,
       };
-      if (currentAttempt !== undefined) {
-        yield* emitEvent({
-          type: "run-attempt.updated",
-          threadId: input.command.threadId,
-          runId: targetRun.id,
-          nodeId: rootNodeId,
-          providerInstanceId: targetRun.providerInstanceId,
-          occurredAt: now,
-          payload: { ...currentAttempt, status: "superseded", completedAt: now },
-        });
-      }
-      if (currentRootNode !== undefined) {
-        yield* emitEvent({
-          type: "node.updated",
-          threadId: input.command.threadId,
-          runId: targetRun.id,
-          nodeId: rootNodeId,
-          providerInstanceId: targetRun.providerInstanceId,
-          occurredAt: now,
-          payload: { ...currentRootNode, status: "interrupted", completedAt: now },
-        });
+      // Replacing orchestration ownership is not proof that the old native
+      // attempt stopped. Authenticated runs settle it from confirmed events.
+      if ((yield* PolicyExecutionContext).kind === "kernel-test") {
+        if (currentAttempt !== undefined) {
+          yield* emitEvent({
+            type: "run-attempt.updated",
+            threadId: input.command.threadId,
+            runId: targetRun.id,
+            nodeId: rootNodeId,
+            providerInstanceId: targetRun.providerInstanceId,
+            occurredAt: now,
+            payload: { ...currentAttempt, status: "superseded", completedAt: now },
+          });
+        }
+        if (currentRootNode !== undefined) {
+          yield* emitEvent({
+            type: "node.updated",
+            threadId: input.command.threadId,
+            runId: targetRun.id,
+            nodeId: rootNodeId,
+            providerInstanceId: targetRun.providerInstanceId,
+            occurredAt: now,
+            payload: { ...currentRootNode, status: "interrupted", completedAt: now },
+          });
+        }
       }
       if (selectionChanged) {
         yield* emitEvent({
@@ -4190,6 +4199,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             providerThreadId: providerThread.id,
             providerTurnId: providerTurn.id,
             interruptedAttemptId,
+            replacementAttemptId: nextAttemptId,
+            messageId: input.messageId,
             runId: targetRun.id,
             ...(restartSessionTransition === null
               ? {}
@@ -4214,7 +4225,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             modelSelection: command.modelSelection ?? projection.thread.modelSelection,
           }).pipe(mapDispatchError(command))
         : undefined;
-      if (startState.governance === "required") {
+      if (startState.governance === "required" && !isActiveRunControl(command)) {
         const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
         if (Option.isNone(sqlOption)) {
           return yield* new OrchestratorDispatchError({
@@ -8065,6 +8076,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           occurredAt: now,
           payload: { ...run, status: "interrupted", completedAt: now },
         });
+        if ((yield* PolicyExecutionContext).kind !== "kernel-test") {
+          for (const retired of projection.providerTurns.filter(
+            (turn) =>
+              turn.runAttemptId !== run.activeAttemptId &&
+              (turn.status === "running" || turn.terminationConfirmed === false) &&
+              projection.attempts.some((a) => a.id === turn.runAttemptId && a.runId === run.id),
+          )) {
+            const oldThread = projection.providerThreads.find(
+              (t) => t.id === retired.providerThreadId,
+            );
+            if (oldThread?.providerSessionId == null) continue;
+            yield* Ref.update(effects, (existing) => [
+              ...existing,
+              {
+                id: `effect:${command.commandId}:provider-turn.interrupt:${retired.id}`,
+                commandId: command.commandId,
+                threadId: command.threadId,
+                request: {
+                  type: "provider-turn.interrupt" as const,
+                  providerSessionId: oldThread.providerSessionId!,
+                  providerThreadId: oldThread.id,
+                  providerTurnId: retired.id,
+                },
+              },
+            ]);
+          }
+        }
         if (command.holdQueue === true) yield* holdQueuedRuns;
         yield* stopCompletionCohort();
         return {
@@ -9763,6 +9801,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }
         }
       }
+      yield* verifyActiveControlReplay(command).pipe(mapDispatchError(command));
       const storedEvents = yield* eventSink.readByCommandId({ commandId: command.commandId }).pipe(
         Stream.runCollect,
         Effect.map((events): ReadonlyArray<OrchestrationV2StoredEvent> => Array.from(events)),

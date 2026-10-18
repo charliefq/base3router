@@ -55,6 +55,7 @@ import {
   nextTaskContractThread,
   revokeTaskContractGrants,
 } from "../policy/TaskContract.ts";
+import { verifyActiveRunLease, confirmProviderTermination } from "../policy/Base3PolicyGate.ts";
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import {
   enrollGovernedTask,
@@ -172,6 +173,8 @@ export interface EventSinkV2Shape {
     readonly runId: RunId;
     readonly activeAttemptId: RunAttemptId;
     readonly expectedStatus: OrchestrationV2Run["status"];
+    /** Trusted start preflight settled this attempt without calling the provider. */
+    readonly providerNotStarted?: boolean;
     readonly effects?: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
     readonly rootExecution?: {
       readonly rootThreadAlias?: OrchestrationV2ProviderThread;
@@ -407,6 +410,37 @@ const baseLayer: Layer.Layer<
         yield* Effect.forEach(storedEvents, (stored) => projectionStore.apply(stored.event), {
           concurrency: 1,
         });
+        for (const stored of storedEvents) {
+          const event = stored.event;
+          if (
+            event.type === "provider-turn.updated" &&
+            event.runId !== undefined &&
+            event.payload.terminationConfirmed === true &&
+            terminalWorkStatus(event.payload.status)
+          ) {
+            if (event.payload.runAttemptId !== null) {
+              yield* confirmProviderTermination({
+                threadId: event.threadId,
+                runId: event.runId,
+                attemptId: event.payload.runAttemptId,
+              }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+            } else {
+              // Legacy runs without any attempt history have no newer attempt
+              // to confuse with this native terminal. Keep their compatibility
+              // path narrow; an unattributed event cannot release modern runs.
+              const legacy = yield* sql`SELECT run_id FROM orchestration_v2_projection_runs AS run
+                WHERE run.run_id=${event.runId} AND run.thread_id=${event.threadId}
+                  AND json_extract(run.payload_json,'$.activeAttemptId') IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_run_attempts AS attempt
+                    WHERE attempt.run_id=run.run_id)`;
+              if (legacy.length === 1)
+                yield* confirmProviderTermination({
+                  threadId: event.threadId,
+                  runId: event.runId,
+                }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+            }
+          }
+        }
         const sequence = storedEvents.at(-1)?.sequence;
         if (sequence !== undefined) {
           const now = DateTime.formatIso(yield* DateTime.now);
@@ -567,6 +601,39 @@ const baseLayer: Layer.Layer<
             !terminalWorkStatus(turn.status)
           )
             return [];
+          if (turn.terminationConfirmed === true && a.status === "running") {
+            const roots = yield* sql<{ payload_json: string }>`SELECT payload_json
+              FROM orchestration_v2_projection_nodes WHERE node_id=${owner.rootNodeId}
+                AND thread_id=${input.threadId} AND run_id=${input.runId} LIMIT 1`;
+            const root = roots[0] === undefined ? Option.none() : decodeNode(roots[0].payload_json);
+            return [
+              event,
+              {
+                ...event,
+                id: EventId.make(`${event.id}:retired-attempt`),
+                type: "run-attempt.updated" as const,
+                payload: {
+                  ...a,
+                  status: turn.status,
+                  completedAt: turn.completedAt ?? event.occurredAt,
+                },
+              },
+              ...(Option.isNone(root)
+                ? []
+                : [
+                    {
+                      ...event,
+                      id: EventId.make(`${event.id}:retired-root`),
+                      type: "node.updated" as const,
+                      payload: {
+                        ...root.value,
+                        status: turn.status,
+                        completedAt: turn.completedAt ?? event.occurredAt,
+                      },
+                    },
+                  ]),
+            ];
+          }
           return [event];
         }
         // A terminal root observation authorizes only lifecycle cleanup of its
@@ -1096,6 +1163,12 @@ const baseLayer: Layer.Layer<
                   : event,
               );
             }
+            const neverStarted =
+              input.providerNotStarted === true && current.status === "starting"
+                ? yield* sql`SELECT attempt_id FROM orchestration_v2_projection_run_attempts
+                  WHERE attempt_id=${input.activeAttemptId} AND run_id=${input.runId}
+                    AND thread_id=${input.threadId} AND status='pending' AND provider_turn_id IS NULL`
+                : [];
             const normalized = yield* normalizeEvents(
               input.guardPendingUserInputCancellations === true
                 ? yield* guardUserInputCancellations(events)
@@ -1106,6 +1179,21 @@ const baseLayer: Layer.Layer<
               events: normalized,
             });
             yield* applyStoredEvents(storedEvents);
+            if (neverStarted.length === 1) {
+              const now = DateTime.formatIso(yield* DateTime.now);
+              yield* sql`UPDATE base3_capacity_leases SET status='released',released_at=${now}
+                WHERE thread_id=${input.threadId} AND run_id=${input.runId} AND released_at IS NULL
+                  AND EXISTS (SELECT 1 FROM orchestration_v2_projection_runs AS run
+                    WHERE run.run_id=${input.runId} AND run.thread_id=${input.threadId}
+                      AND json_extract(run.payload_json,'$.activeAttemptId')=${input.activeAttemptId}
+                      AND run.status IN ('completed','failed','cancelled','interrupted','rolled_back'))
+                  AND NOT EXISTS (
+                    SELECT 1 FROM orchestration_v2_projection_provider_turns AS native
+                    JOIN orchestration_v2_projection_run_attempts AS attempt ON attempt.attempt_id=native.run_attempt_id
+                    WHERE attempt.run_id=${input.runId} AND attempt.thread_id=${input.threadId}
+                      AND (native.status IN ('pending','running') OR COALESCE(json_extract(native.payload_json,'$.terminationConfirmed'),0)<>1)
+                  )`;
+            }
             yield* effectOutbox.enqueue(input.effects ?? []);
             return { committed: true as const, storedEvents };
           }),
@@ -1307,6 +1395,43 @@ const baseLayer: Layer.Layer<
               cancelledEffectIds: [],
               ...(taskEnrollment === undefined ? {} : { taskEnrollment }),
             };
+          }
+
+          // Native completion does not take the command lock. Validate the old
+          // attempt and slot again inside this transaction before replacing it.
+          if (
+            input.commandType === "message.dispatch" &&
+            (yield* PolicyExecutionContext).kind !== "kernel-test"
+          ) {
+            for (const effect of input.effects) {
+              const request = effect.request;
+              if (
+                request.type !== "provider-turn.restart" &&
+                request.type !== "provider-turn.steer"
+              )
+                continue;
+              const turns = yield* sql<{ run_id: string; attempt_id: string }>`
+                SELECT attempt.run_id, attempt.attempt_id
+                FROM orchestration_v2_projection_provider_turns AS turn
+                JOIN orchestration_v2_projection_run_attempts AS attempt
+                  ON attempt.attempt_id=turn.run_attempt_id
+                WHERE turn.provider_turn_id=${request.providerTurnId}
+                  AND turn.thread_id=${input.threadId} AND turn.status='running'
+              `;
+              const target = turns[0];
+              if (target === undefined)
+                return yield* new EventSinkWriteError({
+                  commandId: input.commandId,
+                  eventCount: input.events.length,
+                });
+              yield* verifyActiveRunLease({
+                sql,
+                threadId: input.threadId,
+                runId: target.run_id,
+                attemptId: target.attempt_id,
+                commandType: input.commandType,
+              });
+            }
           }
 
           if (
@@ -1549,6 +1674,26 @@ const baseLayer: Layer.Layer<
             );
           }
           yield* applyStoredEvents(storedEvents);
+          // A cancelled pending replacement has no native event of its own.
+          // Release only if its immediately preceding attempt has persisted
+          // native termination proof; a recovery projection alone is not proof.
+          yield* sql`
+            UPDATE base3_capacity_leases SET status='released', released_at=${DateTime.formatIso(input.acceptedAt)}
+            WHERE thread_id=${input.threadId} AND released_at IS NULL AND EXISTS (
+              SELECT 1 FROM orchestration_v2_projection_runs AS run
+              JOIN orchestration_v2_projection_run_attempts AS current
+                ON current.attempt_id=json_extract(run.payload_json,'$.activeAttemptId')
+              JOIN orchestration_v2_projection_run_attempts AS old
+                ON old.run_id=run.run_id AND old.attempt_ordinal=current.attempt_ordinal-1
+              JOIN orchestration_v2_projection_provider_turns AS native ON native.provider_turn_id=old.provider_turn_id
+              WHERE run.run_id=base3_capacity_leases.run_id AND run.thread_id=${input.threadId}
+                AND run.status IN ('completed','failed','cancelled','interrupted','rolled_back')
+                AND current.provider_turn_id IS NULL
+                AND json_extract(current.payload_json,'$.startedAt') IS NULL
+                AND native.status IN ('completed','failed','cancelled','interrupted')
+                AND json_extract(native.payload_json,'$.terminationConfirmed')=1
+            )
+          `;
           if (input.governedTaskOwner !== undefined)
             yield* enrollGovernedTask(sql, {
               principalId: input.governedTaskOwner,

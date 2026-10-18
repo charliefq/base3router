@@ -162,7 +162,10 @@ export const executorLayer: Layer.Layer<
               threadId: effect.threadId,
               commandId: effect.commandId,
               attemptCount: effect.attemptCount,
-              request: { type: request.type, runId: request.runId },
+              request: {
+                type: request.type,
+                runId: request.runId,
+              },
             })
               .pipe(
                 Effect.andThen((validation) =>
@@ -305,9 +308,10 @@ export const executorLayer: Layer.Layer<
                           // A user's follow-up starts on the thread's saved selection,
                           // which already holds the steer's choice. A delegated
                           // completion stays pinned to the run it reports to.
-                          ...(message.delegatedCompletion === undefined
-                            ? {}
-                            : { modelSelection: run.modelSelection }),
+                          modelSelection:
+                            message.delegatedCompletion === undefined
+                              ? projection.thread.modelSelection
+                              : run.modelSelection,
                           dispatchMode: {
                             type:
                               message.delegatedCompletion === undefined
@@ -349,7 +353,12 @@ export const executorLayer: Layer.Layer<
               threadId: effect.threadId,
               commandId: effect.commandId,
               attemptCount: effect.attemptCount,
-              request: { type: request.type, runId: request.runId },
+              request: {
+                type: request.type,
+                runId: request.runId,
+                messageId: request.messageId,
+                replacementAttemptId: request.replacementAttemptId,
+              },
             }).pipe(
               Effect.mapError(
                 (cause) =>
@@ -392,6 +401,20 @@ export const executorLayer: Layer.Layer<
                           : {}),
                       })
                       .pipe(
+                        Effect.tap(() =>
+                          revalidateOutboxEffect({
+                            threadId: effect.threadId,
+                            commandId: effect.commandId,
+                            attemptCount: effect.attemptCount,
+                            afterInterrupt: true,
+                            request: {
+                              type: request.type,
+                              runId: request.runId,
+                              messageId: request.messageId,
+                              replacementAttemptId: request.replacementAttemptId,
+                            },
+                          }),
+                        ),
                         Effect.andThen(
                           request.sessionTransition?.type === "replace"
                             ? providerSessions.detach({

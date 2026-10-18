@@ -87,7 +87,11 @@ export interface DispatchPolicyCommand {
   readonly manualContinuationOfRunId?: string;
   readonly restartContinuationOfRunId?: string;
   readonly delegatedCompletion?: unknown;
-  readonly dispatchMode?: { readonly type: string };
+  readonly dispatchMode?: {
+    readonly type: string;
+    readonly targetRunId?: string;
+    readonly targetAttemptId?: string | undefined;
+  };
   readonly attachments?: ReadonlyArray<ChatAttachment>;
   readonly context?: OrchestrationMessageContext;
   readonly task?: string;
@@ -113,6 +117,10 @@ function canonicalJson(value: unknown): string {
 }
 
 const decodeModelSelection = Schema.decodeEffect(Schema.fromJsonString(ModelSelection));
+const decodeGrantScopes = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Array(Schema.String)),
+);
+const isPolicyDenied = Schema.is(Base3PolicyDeniedError);
 
 const messageArguments = (command: DispatchPolicyCommand) => ({
   text: command.text ?? "",
@@ -194,6 +202,121 @@ export const countOccupied = (input: {
           `;
   return query.pipe(Effect.map((rows) => rows[0]?.count ?? 0));
 };
+
+/** Active controls keep the occupied run's slot; they never admit a second turn. */
+export const verifyActiveRunLease = (input: {
+  readonly sql: SqlClient.SqlClient;
+  readonly threadId: string;
+  readonly runId: string;
+  readonly attemptId?: string;
+  readonly commandType: string;
+}) =>
+  Effect.gen(function* () {
+    const context = yield* PolicyExecutionContext;
+    if (context.kind === "kernel-test") return;
+    if (context.kind !== "session" || !hasOperate(context.scopes))
+      return yield* deny(input.commandType, "unauthenticated");
+    const env = yield* environmentId;
+    const now = DateTime.formatIso(yield* DateTime.now);
+    if (context.expiresAt !== undefined && context.expiresAt <= now)
+      return yield* deny(input.commandType, "grant-expired");
+    const rows = yield* input.sql<{ attempt_id: string; message_id: string }>`
+    SELECT attempt.attempt_id, json_extract(run.payload_json,'$.userMessageId') AS message_id
+    FROM orchestration_v2_projection_runs AS run
+    JOIN orchestration_v2_projection_run_attempts AS attempt
+      ON attempt.attempt_id=json_extract(run.payload_json,'$.activeAttemptId')
+      AND attempt.run_id=run.run_id AND attempt.thread_id=run.thread_id
+    JOIN base3_capacity_leases AS lease
+      ON lease.run_id=run.run_id AND lease.thread_id=run.thread_id
+    WHERE run.run_id=${input.runId} AND run.thread_id=${input.threadId}
+      AND run.status='running' AND attempt.status='running'
+      AND lease.environment_id=${env} AND lease.workload_class='foreground-turn'
+      AND lease.status='active' AND lease.released_at IS NULL
+      AND lease.interrupt_requested=0 AND lease.disconnect_unconfirmed=0
+  `;
+    const row = rows[0];
+    if (
+      rows.length !== 1 ||
+      row === undefined ||
+      (input.attemptId !== undefined && input.attemptId !== row.attempt_id)
+    )
+      return yield* deny(
+        input.commandType,
+        "active-run-ownership",
+        "The exact active run, attempt and occupied slot are required.",
+      );
+    const grant = (yield* loadGrant(
+      input.sql,
+      `grant:message:${input.threadId}:${row.message_id}`,
+    ))[0];
+    if (grant === undefined || grant.revoked_at !== null)
+      return yield* deny(input.commandType, "grant-missing");
+    if (grant.actor_id !== context.actorId)
+      return yield* deny(input.commandType, "active-run-ownership");
+    if (grant.expires_at !== null && grant.expires_at <= now)
+      return yield* deny(input.commandType, "grant-expired");
+    const scopes = yield* decodeGrantScopes(grant.scopes_json);
+    if (!scopes.includes(AuthOrchestrationOperateScope))
+      return yield* deny(input.commandType, "missing-operate-scope");
+  }).pipe(
+    Effect.mapError((cause) =>
+      isPolicyDenied(cause)
+        ? cause
+        : new Base3PolicyDeniedError({
+            commandType: input.commandType,
+            reason: "policy-store-unavailable",
+          }),
+    ),
+  );
+
+export const isActiveRunControl = (command: {
+  readonly type: string;
+  readonly dispatchMode?: { readonly type: string } | undefined;
+}): boolean =>
+  command.type === "message.dispatch" &&
+  (command.dispatchMode?.type === "restart_active" ||
+    command.dispatchMode?.type === "steer_active");
+
+/** A receipt is not authority for a different authenticated principal. */
+export const verifyActiveControlReplay = (command: {
+  readonly type: string;
+  readonly threadId?: string | undefined;
+  readonly messageId?: string | undefined;
+  readonly dispatchMode?: { readonly type: string } | undefined;
+}) =>
+  Effect.gen(function* () {
+    if (!isActiveRunControl(command)) return;
+    const context = yield* PolicyExecutionContext;
+    if (context.kind === "kernel-test") return;
+    if (context.kind !== "session" || !hasOperate(context.scopes))
+      return yield* deny(command.type, "unauthenticated");
+    const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
+    if (Option.isNone(sqlOption)) return yield* deny(command.type, "policy-store-unavailable");
+    const sql = sqlOption.value;
+    const grant = (yield* loadGrant(
+      sql,
+      `grant:message:${command.threadId}:${command.messageId}`,
+    ))[0];
+    if (grant === undefined || grant.revoked_at !== null)
+      return yield* deny(command.type, "grant-missing");
+    if (grant.actor_id !== context.actorId)
+      return yield* deny(command.type, "active-run-ownership");
+    const now = DateTime.formatIso(yield* DateTime.now);
+    if (
+      (grant.expires_at !== null && grant.expires_at <= now) ||
+      (context.expiresAt !== undefined && context.expiresAt <= now)
+    )
+      return yield* deny(command.type, "grant-expired");
+  }).pipe(
+    Effect.mapError((cause) =>
+      isPolicyDenied(cause)
+        ? cause
+        : new Base3PolicyDeniedError({
+            commandType: command.type,
+            reason: "policy-store-unavailable",
+          }),
+    ),
+  );
 
 const admitLease = (input: {
   readonly sql: SqlClient.SqlClient;
@@ -308,6 +431,7 @@ export const confirmProviderTermination = (input: {
   readonly threadId: string;
   readonly runId?: string | undefined;
   readonly messageId?: string | undefined;
+  readonly attemptId?: string | undefined;
 }) =>
   Effect.gen(function* () {
     const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
@@ -321,6 +445,20 @@ export const confirmProviderTermination = (input: {
         WHERE released_at IS NULL
           AND thread_id = ${input.threadId}
           AND run_id = ${input.runId}
+          AND (${input.attemptId ?? null} IS NULL OR EXISTS (
+            SELECT 1 FROM orchestration_v2_projection_runs AS run
+            JOIN orchestration_v2_projection_run_attempts AS current
+              ON current.attempt_id=json_extract(run.payload_json,'$.activeAttemptId')
+            JOIN orchestration_v2_projection_run_attempts AS stopped
+              ON stopped.attempt_id=${input.attemptId ?? null} AND stopped.run_id=run.run_id
+            WHERE run.run_id=${input.runId} AND run.thread_id=${input.threadId}
+              AND (current.attempt_id=stopped.attempt_id OR (
+                run.status IN ('completed','failed','cancelled','interrupted','rolled_back')
+                AND current.provider_turn_id IS NULL
+                AND json_extract(current.payload_json,'$.startedAt') IS NULL
+                AND current.attempt_ordinal=stopped.attempt_ordinal+1
+              ))
+          ))
       `;
       return;
     }
@@ -796,6 +934,17 @@ export const authorizeDispatch = <
       });
     }
     if (command.type === "message.dispatch") {
+      // Stable receipt replay is handled before authorization. A new session
+      // command must not replace the grant of a persisted message, including
+      // while an active control is waiting for native interruption.
+      const existing = yield* sql`SELECT message_id FROM orchestration_v2_projection_messages
+          WHERE message_id=${command.messageId ?? null} LIMIT 1`;
+      if (existing.length > 0)
+        return yield* deny(
+          command.type,
+          "message-identity",
+          "This message already has an execution grant. Replay its original command receipt.",
+        );
       const catalog = yield* providersForBind;
       const modelSelection = yield* bindRoute({
         sql,
@@ -808,15 +957,34 @@ export const authorizeDispatch = <
         modelSelection,
       };
       const taskState = yield* loadTaskState(sql, command.threadId ?? "");
-      yield* reserveGovernedStart({
-        sql,
-        state: taskState,
-        commandType: command.type,
-        commandId: command.commandId,
-        threadId: command.threadId ?? "",
-        messageId: command.messageId ?? null,
-      });
-      if (command.dispatchMode?.type !== "queue_after_active" && commandNeedsCapacity(operation)) {
+      const activeControl = isActiveRunControl(command);
+      if (activeControl) {
+        yield* verifyActiveRunLease({
+          sql,
+          threadId: command.threadId ?? "",
+          runId: command.dispatchMode?.targetRunId ?? "",
+          ...(command.dispatchMode?.targetAttemptId === undefined
+            ? {}
+            : { attemptId: command.dispatchMode.targetAttemptId }),
+          commandType: command.type,
+        });
+        const blocked = taskBlocksStart(taskState);
+        if (blocked !== null) return yield* deny(command.type, "task-contract", blocked);
+      } else {
+        yield* reserveGovernedStart({
+          sql,
+          state: taskState,
+          commandType: command.type,
+          commandId: command.commandId,
+          threadId: command.threadId ?? "",
+          messageId: command.messageId ?? null,
+        });
+      }
+      if (
+        !activeControl &&
+        command.dispatchMode?.type !== "queue_after_active" &&
+        commandNeedsCapacity(operation)
+      ) {
         yield* admitLease({
           sql,
           environmentId: env,
@@ -1045,10 +1213,12 @@ export const revalidateOutboxEffect = (effect: {
   readonly threadId: string;
   readonly commandId?: string | undefined;
   readonly attemptCount?: number | undefined;
+  readonly afterInterrupt?: boolean;
   readonly request: {
     readonly type: string;
     readonly runId?: string | undefined;
     readonly messageId?: string | undefined;
+    readonly replacementAttemptId?: string | undefined;
   };
 }) =>
   Effect.gen(function* () {
@@ -1070,6 +1240,7 @@ export const revalidateOutboxEffect = (effect: {
     if (Option.isNone(sqlOption))
       return yield* deny(effect.request.type, "policy-store-unavailable");
     const sql = sqlOption.value;
+    const env = yield* environmentId;
     const runId = effect.request.runId;
     let messageId = effect.request.messageId;
     let runStatus: string | undefined;
@@ -1107,16 +1278,49 @@ export const revalidateOutboxEffect = (effect: {
         "terminal",
         "Terminal runs are not restarted by the outbox.",
       );
+    if (
+      effect.request.type === "provider-turn.restart" &&
+      (effect.request.replacementAttemptId === undefined || effect.request.messageId === undefined)
+    )
+      return yield* deny(
+        effect.request.type,
+        "binding",
+        "Legacy restart ownership is unconfirmed; no replacement was started.",
+      );
     const grantId = `grant:message:${effect.threadId}:${messageId ?? ""}`;
     const grant = (yield* loadGrant(sql, grantId))[0];
     if (grant === undefined || grant.revoked_at !== null) {
       return yield* deny(effect.request.type, "grant-missing");
     }
+    if (
+      effect.request.type === "provider-turn.restart" ||
+      effect.request.type === "provider-turn.steer"
+    ) {
+      const now = DateTime.formatIso(yield* DateTime.now);
+      if (grant.expires_at !== null && grant.expires_at <= now)
+        return yield* deny(effect.request.type, "grant-expired");
+      if (effect.request.type === "provider-turn.restart") {
+        const owned = yield* sql`
+          SELECT lease.lease_id FROM base3_capacity_leases AS lease
+          JOIN orchestration_v2_projection_runs AS run ON run.run_id=lease.run_id AND run.thread_id=lease.thread_id
+          WHERE lease.thread_id=${effect.threadId} AND lease.run_id=${runId ?? null}
+            AND lease.environment_id=${env} AND lease.status='active' AND lease.released_at IS NULL
+            AND lease.interrupt_requested=0 AND lease.disconnect_unconfirmed=0
+            AND run.status='starting'
+            AND json_extract(run.payload_json,'$.userMessageId')=${messageId ?? null}
+            AND (${effect.request.replacementAttemptId ?? null} IS NULL OR json_extract(run.payload_json,'$.activeAttemptId')=${effect.request.replacementAttemptId ?? null})
+        `;
+        if (owned.length !== 1) return yield* deny(effect.request.type, "active-run-ownership");
+      }
+    }
     const taskState = yield* loadTaskState(sql, effect.threadId, effect.request.type);
     if (
-      effect.request.type === "provider-turn.start" ||
-      effect.request.type === "provider-turn.restart" ||
-      effect.request.type === "provider-runtime.continue"
+      (effect.request.type === "provider-turn.restart"
+        ? effect.afterInterrupt === true
+        : !effect.afterInterrupt) &&
+      (effect.request.type === "provider-turn.start" ||
+        effect.request.type === "provider-turn.restart" ||
+        effect.request.type === "provider-runtime.continue")
     ) {
       yield* reserveProviderHandoff({
         sql,
@@ -1125,7 +1329,8 @@ export const revalidateOutboxEffect = (effect: {
         threadId: effect.threadId,
         messageId: messageId ?? null,
         effectType: effect.request.type,
-        attemptCount: effect.attemptCount ?? 1,
+        attemptCount:
+          effect.request.type === "provider-turn.restart" ? 1 : (effect.attemptCount ?? 1),
       });
     } else {
       const blocked = taskBlocksStart(taskState);
@@ -1134,11 +1339,28 @@ export const revalidateOutboxEffect = (effect: {
         return yield* deny(effect.request.type, "task-contract", blocked);
       }
     }
+    if (effect.request.type === "provider-turn.start") {
+      const existing = yield* sql`SELECT lease_id FROM base3_capacity_leases
+        WHERE environment_id=${env} AND thread_id=${effect.threadId} AND released_at IS NULL AND status='active'
+          AND (run_id=${runId ?? null} OR (run_id IS NULL AND message_id=${messageId ?? null}))`;
+      if (existing.length === 0)
+        yield* sql.withTransaction(
+          admitLease({
+            sql,
+            environmentId: env,
+            threadId: effect.threadId,
+            messageId: messageId ?? null,
+            parentLeaseId: null,
+            workloadClass: "foreground-turn",
+            nonBlocking: false,
+          }),
+        );
+    }
     if (runId !== undefined) {
       yield* sql`
         UPDATE base3_capacity_leases
         SET run_id = ${runId}
-        WHERE thread_id = ${effect.threadId}
+        WHERE environment_id = ${env} AND thread_id = ${effect.threadId}
           AND message_id = ${messageId ?? null}
           AND released_at IS NULL
           AND run_id IS NULL

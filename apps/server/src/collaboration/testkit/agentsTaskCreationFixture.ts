@@ -1,3 +1,4 @@
+import * as ProviderSessions from "../../orchestration-v2/ProviderSessionManager.ts";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
@@ -111,7 +112,9 @@ export const agentsCreationCommand = (
 });
 type Fixture = {
   sql: SqlClient.SqlClient;
+  sessions: ProviderSessions.ProviderSessionManagerV2["Service"];
   worker: EffectWorker.OrchestrationEffectWorkerV2["Service"];
+  governWorker: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>;
   orchestrator: Orchestrator.OrchestratorV2["Service"];
   eventSink: EventSink.EventSinkV2["Service"];
   setProviders: (providers: ReadonlyArray<ServerProvider>) => void;
@@ -161,6 +164,7 @@ export const withAgentsTaskCreationFixture = <E>(
   } = {},
 ) => {
   let providers: ReadonlyArray<ServerProvider> = [agentsCreationProvider];
+  let sessions: ProviderSessions.ProviderSessionManagerV2["Service"] | undefined;
   let providerReadCount = 0;
   let providerStartCount = 0;
   let providerReadHook = (_count: number) => {};
@@ -196,6 +200,10 @@ export const withAgentsTaskCreationFixture = <E>(
       }),
     {
       databaseLayer: database,
+      decorateSessionManager: (service) => {
+        sessions = service;
+        return service;
+      },
       capabilityContextLayer: Layer.mergeAll(registry, environmentLayer),
       runEffectWorker: false,
       ...(options.decorateEventSink ? { decorateEventSink: options.decorateEventSink } : {}),
@@ -233,7 +241,13 @@ export const withAgentsTaskCreationFixture = <E>(
       const actorContext = Effect.provideService(PolicyExecutionContext, agentsCreationActor);
       yield* check({
         sql,
+        sessions: sessions!,
         worker,
+        governWorker: (effect) =>
+          effect.pipe(
+            Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
+            Effect.provide(context),
+          ),
         orchestrator: service,
         eventSink,
         providerStarts: () => providerStartCount,

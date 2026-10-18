@@ -58,6 +58,8 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     providerThreadId: ProviderThreadId,
     providerTurnId: ProviderTurnId,
     interruptedAttemptId: RunAttemptId,
+    replacementAttemptId: Schema.optional(RunAttemptId),
+    messageId: Schema.optional(MessageId),
     runId: RunId,
     sessionTransition: Schema.optional(
       Schema.Union([

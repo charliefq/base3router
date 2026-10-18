@@ -214,6 +214,17 @@ export const layer: Layer.Layer<
         Effect.gen(function* () {
           const loaded = yield* load({ ...input, operation: "restart" });
           if (Option.isNone(loaded.session)) {
+            if (
+              (yield* PolicyExecutionContext).kind !== "kernel-test" &&
+              (loaded.providerTurn.status === "running" ||
+                loaded.providerTurn.terminationConfirmed !== true)
+            )
+              return yield* new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "restart",
+                providerTurnId: input.providerTurnId,
+                cause: "Provider termination is unconfirmed; restart retains its occupied slot.",
+              });
             // No live adapter: nothing can emit a terminal provider-turn update
             // from interrupt. Do not poll for projection terminalization or the
             // restart effect stalls; let detach/start proceed.
@@ -247,6 +258,8 @@ export const layer: Layer.Layer<
             if (
               providerTurn !== undefined &&
               providerTurn.status !== "running" &&
+              ((yield* PolicyExecutionContext).kind === "kernel-test" ||
+                providerTurn.terminationConfirmed === true) &&
               attempt !== undefined &&
               attempt.status !== "running"
             ) {
@@ -362,7 +375,16 @@ export const layer: Layer.Layer<
             return;
           }
           const loaded = yield* load({ ...input, operation: "steer" });
-          if (Option.isNone(loaded.session)) return;
+          if (Option.isNone(loaded.session)) {
+            if ((yield* PolicyExecutionContext).kind !== "kernel-test")
+              return yield* new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "steer",
+                providerTurnId: input.providerTurnId,
+                cause: "Native session is unavailable; steering was not delivered.",
+              });
+            return;
+          }
           const { message, run } = loaded.context;
           if (message === undefined || run === undefined) {
             return yield* new ProviderTurnControlError({

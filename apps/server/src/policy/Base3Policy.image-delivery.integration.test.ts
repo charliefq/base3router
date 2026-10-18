@@ -847,7 +847,13 @@ it.live.each([false, true])(
               "failed",
             );
             assert.notEqual(run?.activeAttemptId, oldAttempt.id);
-            assert.equal(after.attempts.find((a) => a.id === oldAttempt.id)?.status, "superseded");
+            const retired = after.attempts.find((a) => a.id === oldAttempt.id)!;
+            assert.equal(retired.status, "interrupted");
+            assert.isNotNull(retired.completedAt);
+            assert.equal(
+              after.providerTurns.find((t) => t.id === oldTurn.id)?.terminationConfirmed,
+              true,
+            );
             assert.equal(
               after.providerTurns.find((t) => t.id === oldTurn.id)?.status,
               "interrupted",

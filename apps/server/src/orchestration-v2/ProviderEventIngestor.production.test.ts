@@ -10,6 +10,7 @@ import {
   ProviderThreadId,
   ProviderTurnId,
   RunId,
+  RunAttemptId,
   ThreadId,
   type OrchestrationV2AppThread,
 } from "@t3tools/contracts";
@@ -80,6 +81,61 @@ it.live.each([true, false])(
             },
           ],
         });
+        const attemptId = RunAttemptId.make(`production-attempt:${threadId}`);
+        const rootId = NodeId.make(`production-root:${threadId}`);
+        const providerThreadId = ProviderThreadId.make(`production-provider-thread:${threadId}`);
+        const providerTurnId = ProviderTurnId.make(`production-turn:${threadId}`);
+        // A lease release now requires its persisted run/attempt identity, not
+        // just a caller-supplied run ID on an otherwise orphan lease.
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make(`run-event:${threadId}`),
+              type: "run.updated",
+              threadId,
+              runId,
+              occurredAt: now,
+              payload: {
+                id: runId,
+                threadId,
+                ordinal: 1,
+                providerInstanceId: instanceId,
+                modelSelection: thread.modelSelection,
+                providerThreadId,
+                rootNodeId: rootId,
+                activeAttemptId: attemptId,
+                userMessageId: MessageId.make(`message:${threadId}`),
+                status: "running",
+                queuePosition: null,
+                requestedAt: now,
+                startedAt: now,
+                completedAt: null,
+                checkpointId: null,
+                contextHandoffId: null,
+              },
+            },
+            {
+              id: EventId.make(`attempt-event:${threadId}`),
+              type: "run-attempt.created",
+              threadId,
+              runId,
+              occurredAt: now,
+              payload: {
+                id: attemptId,
+                runId,
+                attemptOrdinal: 1,
+                rootNodeId: rootId,
+                providerInstanceId: instanceId,
+                providerThreadId,
+                providerTurnId,
+                reason: "initial",
+                status: "running",
+                startedAt: now,
+                completedAt: null,
+              },
+            },
+          ],
+        });
         const iso = DateTime.formatIso(now);
         // This test isolates production service composition; governed admission is covered separately.
         yield* sql`INSERT INTO base3_capacity_leases (lease_id,environment_id,thread_id,message_id,run_id,workload_class,status,interrupt_requested,disconnect_unconfirmed,created_at) VALUES (${`fixture:${threadId}`},'fixture',${threadId},${MessageId.make(`message:${threadId}`)},${runId},'foreground-turn','active',0,0,${iso})`;
@@ -95,7 +151,7 @@ it.live.each([true, false])(
               id: ProviderTurnId.make(`production-turn:${threadId}`),
               providerThreadId: ProviderThreadId.make(`production-provider-thread:${threadId}`),
               nodeId: NodeId.make(`production-root:${threadId}`),
-              runAttemptId: null,
+              runAttemptId: attemptId,
               nativeTurnRef: null,
               ordinal: 1,
               status: terminationConfirmed ? "completed" : "failed",

@@ -2749,8 +2749,16 @@ export const OrchestrationV2Command = Schema.Union([
     ),
     dispatchMode: Schema.Union([
       Schema.Struct({ type: Schema.Literal("defer_start") }),
-      Schema.Struct({ type: Schema.Literal("steer_active"), targetRunId: RunId }),
-      Schema.Struct({ type: Schema.Literal("restart_active"), targetRunId: RunId }),
+      Schema.Struct({
+        type: Schema.Literal("steer_active"),
+        targetRunId: RunId,
+        targetAttemptId: Schema.optional(RunAttemptId),
+      }),
+      Schema.Struct({
+        type: Schema.Literal("restart_active"),
+        targetRunId: RunId,
+        targetAttemptId: Schema.optional(RunAttemptId),
+      }),
       Schema.Struct({ type: Schema.Literal("queue_after_active") }),
       Schema.Struct({ type: Schema.Literal("start_immediately") }),
     ]),

@@ -29,10 +29,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import { persistTurnOutcomeFromV2ProviderTurn } from "../routerEvaluation/persistTurnOutcome.ts";
-import {
-  confirmProviderTermination,
-  noteUnconfirmedDisconnect,
-} from "../policy/Base3PolicyGate.ts";
+import { noteUnconfirmedDisconnect } from "../policy/Base3PolicyGate.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as IdAllocator from "./IdAllocator.ts";
@@ -389,7 +386,17 @@ export const layer: Layer.Layer<
               yield* makeDomainEvent(input, {
                 type: "provider-turn.updated",
                 ...(input.event.threadId === undefined ? {} : { threadId: input.event.threadId }),
-                payload: input.event.providerTurn,
+                payload: {
+                  ...input.event.providerTurn,
+                  ...(["completed", "failed", "interrupted", "cancelled"].includes(
+                    input.event.providerTurn.status,
+                  )
+                    ? {
+                        terminationConfirmed:
+                          input.event.providerTurn.terminationConfirmed !== false,
+                      }
+                    : {}),
+                },
                 nodeId: input.event.providerTurn.nodeId,
               }),
             ];
@@ -565,19 +572,19 @@ export const layer: Layer.Layer<
                 providerTurn.status !== "cancelled"
               )
                 return;
-              const termination = (
-                providerTurn.terminationConfirmed === false
-                  ? noteUnconfirmedDisconnect
-                  : confirmProviderTermination
-              )({
-                threadId: input.threadId,
-                ...(input.runId === undefined ? {} : { runId: input.runId }),
-              });
-              yield* (
-                Option.isSome(policySql)
-                  ? termination.pipe(Effect.provideService(SqlClient.SqlClient, policySql.value))
-                  : termination
-              ).pipe(Effect.ignore);
+              // Confirmed root termination releases capacity atomically with
+              // projection in EventSink. Unknown disconnects keep it occupied.
+              if (providerTurn.terminationConfirmed === false) {
+                const termination = noteUnconfirmedDisconnect({
+                  threadId: input.threadId,
+                  ...(input.runId === undefined ? {} : { runId: input.runId }),
+                });
+                yield* (
+                  Option.isSome(policySql)
+                    ? termination.pipe(Effect.provideService(SqlClient.SqlClient, policySql.value))
+                    : termination
+                ).pipe(Effect.ignore);
+              }
               const key = `${input.providerInstanceId}:${providerTurn.id}`;
               if (completedTurnAnalytics.has(key)) return;
               completedTurnAnalytics.add(key);

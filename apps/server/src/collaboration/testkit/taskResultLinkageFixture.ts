@@ -2,7 +2,6 @@ import {
   makeOpenRouterAdapter,
   OPENROUTER_DRIVER,
 } from "../../orchestration-v2/Adapters/OpenRouterAdapterV2.ts";
-import { PolicyExecutionContext } from "../../policy/executionContext.ts";
 import * as ProjectionMaintenance from "../../orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStore from "../../orchestration-v2/ProjectionStore.ts";
 import * as EventStore from "../../orchestration-v2/EventStore.ts";
@@ -46,6 +45,8 @@ import { agentsCreationProvider } from "./agentsTaskCreationFixture.ts";
 type ProviderInstanceId = typeof agentsCreationProvider.instanceId;
 interface LinkageAdapterOptions {
   readonly governedWorker?: boolean;
+  readonly startWorker?: boolean;
+  readonly onSteer?: () => Effect.Effect<void>;
   readonly terminalOnly?: boolean;
   readonly fixtureOpenRouterModel?: string;
   readonly adapter?: ProviderAdapterV2Shape;
@@ -275,7 +276,7 @@ function makeAdapter(
               if (options.onStart) yield* options.onStart(input, delivery, emit);
               else yield* Effect.forEach(delivery, emit, { discard: true });
             }),
-          steerTurn: () => Effect.void,
+          steerTurn: () => options.onSteer?.() ?? Effect.void,
           interruptTurn: (input) =>
             Effect.gen(function* () {
               const turn = active.get(input.providerThread.id);
@@ -480,12 +481,7 @@ export const withTaskResultLinkageFixture = <E>(
             const settlements = yield* Queue.unbounded<string>();
             const notified = new Set<string>();
             const govern = <A, E>(effect: Effect.Effect<A, E>) =>
-              options.governedWorker
-                ? effect.pipe(
-                    Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
-                    Effect.provideService(SqlClient.SqlClient, f.sql),
-                  )
-                : effect;
+              options.governedWorker ? f.governWorker(effect) : effect;
             const worker = {
               ...f.worker,
               drain: () => govern(f.worker.drain()),
@@ -508,10 +504,11 @@ export const withTaskResultLinkageFixture = <E>(
                 ),
               ),
             };
-            yield* EffectWorker.runDaemonWithOptions({ concurrency: 1 }).pipe(
-              Effect.provideService(EffectWorker.OrchestrationEffectWorkerV2, worker),
-              Effect.forkScoped,
-            );
+            if (options.startWorker !== false)
+              yield* EffectWorker.runDaemonWithOptions({ concurrency: 1 }).pipe(
+                Effect.provideService(EffectWorker.OrchestrationEffectWorkerV2, worker),
+                Effect.forkScoped,
+              );
             const operations = linkageOperations(
               { ...f, worker },
               settlements,
