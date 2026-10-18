@@ -1,4 +1,5 @@
 import { commitCapabilityStep } from "../collaboration/TaskCapabilityStep.ts";
+import { commitFirstTaskLaunch } from "../collaboration/FirstTaskLaunch.ts";
 import {
   commitApprovedDelegation,
   commitMailboxAuthority,
@@ -233,6 +234,7 @@ export interface EventSinkV2Shape {
     readonly commandType: string;
     readonly approvedDelegation?: ApprovedDelegation;
     readonly capabilityCommand?: Extract<OrchestrationV2Command, { type: "message.dispatch" }>;
+    readonly firstLaunchCommand?: Extract<OrchestrationV2Command, { type: "message.dispatch" }>;
     readonly governedTaskOwner?: string;
     readonly ordinaryRootOwner?: string;
     readonly contractSetActor?: string;
@@ -1440,6 +1442,28 @@ const baseLayer: Layer.Layer<
                 eventCount: input.events.length,
               });
             yield* commitCapabilityStep(sql, input.capabilityCommand, input.events);
+          }
+          if (
+            input.events.some(
+              (e) => e.type === "message.updated" && e.payload.taskFirstLaunch !== undefined,
+            ) &&
+            !input.firstLaunchCommand?.taskFirstLaunch
+          )
+            return yield* new EventSinkWriteError({
+              commandId: input.commandId,
+              eventCount: input.events.length,
+            });
+          if (input.firstLaunchCommand) {
+            if (
+              input.firstLaunchCommand.commandId !== input.commandId ||
+              input.firstLaunchCommand.threadId !== input.threadId ||
+              input.commandType !== "message.dispatch"
+            )
+              return yield* new EventSinkWriteError({
+                commandId: input.commandId,
+                eventCount: input.events.length,
+              });
+            yield* commitFirstTaskLaunch(sql, input.firstLaunchCommand, input.events);
           }
           if (input.approvedDelegation !== undefined) {
             if (

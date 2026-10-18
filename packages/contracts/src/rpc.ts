@@ -1658,6 +1658,14 @@ const WsOrchestrationV2GetAgentsCreationStatusRpc = Rpc.make(
     error: EnvironmentAuthorizationError,
   },
 );
+const WsOrchestrationV2GetTaskFirstLaunchStatusRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.getTaskFirstLaunchStatus,
+  {
+    payload: OrchestrationV2RpcSchemas.getTaskFirstLaunchStatus.input,
+    success: OrchestrationV2RpcSchemas.getTaskFirstLaunchStatus.output,
+    error: EnvironmentAuthorizationError,
+  },
+);
 
 const WsOrchestrationV2GetTaskAutoPreviewRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.getTaskAutoPreview,
@@ -2018,6 +2026,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetTaskReviewRpc,
   WsOrchestrationV2GetTaskAutoPreviewRpc,
   WsOrchestrationV2GetAgentsCreationStatusRpc,
+  WsOrchestrationV2GetTaskFirstLaunchStatusRpc,
   WsOrchestrationV2GetTaskUsageCohortRpc,
   WsOrchestrationV2LaunchThreadRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,

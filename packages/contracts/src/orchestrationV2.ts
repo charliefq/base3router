@@ -1,4 +1,5 @@
 import { TaskCapabilityStep } from "./taskCapabilityStep.ts";
+import { TaskFirstLaunch, TaskFirstLaunchStatus } from "./taskFirstLaunch.ts";
 import { TaskCapabilityPlan, TaskCapabilityEvidence } from "./taskCapabilityPlan.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import * as Effect from "effect/Effect";
@@ -1073,6 +1074,7 @@ export const OrchestrationV2Notification = Schema.Struct({
 export type OrchestrationV2Notification = typeof OrchestrationV2Notification.Type;
 
 export const OrchestrationV2ConversationMessage = Schema.Struct({
+  taskFirstLaunch: Schema.optionalKey(TaskFirstLaunch),
   capabilityStep: Schema.optionalKey(TaskCapabilityStep),
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
@@ -2716,6 +2718,7 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("message.dispatch"),
+    taskFirstLaunch: Schema.optionalKey(TaskFirstLaunch),
     capabilityStep: Schema.optionalKey(TaskCapabilityStep),
     notification: Schema.optional(OrchestrationV2Notification),
     ...OrchestrationV2CreationFields,
@@ -3044,6 +3047,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getThreadProjection: "orchestration.getThreadProjection",
   getTaskUsage: "orchestration.getTaskUsage",
   getTaskReview: "orchestration.getTaskReview",
+  getTaskFirstLaunchStatus: "orchestration.getTaskFirstLaunchStatus",
   getTaskAutoPreview: "orchestration.getTaskAutoPreview",
   getAgentsCreationStatus: "orchestration.getAgentsCreationStatus",
   getTaskUsageCohort: "orchestration.getTaskUsageCohort",
@@ -3413,6 +3417,10 @@ export const OrchestrationV2RpcSchemas = {
     output: OrchestrationV2ThreadProjection,
   },
   getTaskReview: { input: TaskContractReviewInput, output: TaskContractReviewState },
+  getTaskFirstLaunchStatus: {
+    input: Schema.Struct({ command: OrchestrationV2Command }),
+    output: TaskFirstLaunchStatus,
+  },
   getTaskAutoPreview: { input: TaskAutoPreviewInput, output: TaskAutoPreviewState },
   getAgentsCreationStatus: {
     input: Schema.Struct({

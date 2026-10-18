@@ -83,6 +83,7 @@ import {
   readTaskAutoPreview,
   readThreadProjection,
   readAgentsCreationStatus,
+  readTaskFirstLaunchStatus,
   readTaskUsage,
   startThreadTurn,
   stopThreadSession,
@@ -159,6 +160,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     readCreationStatus: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:read-creation-status",
       execute: readAgentsCreationStatus,
+      scheduler,
+      concurrency: { mode: "parallel" },
+    }),
+    readFirstLaunchStatus: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:read-first-launch-status",
+      execute: readTaskFirstLaunchStatus,
       scheduler,
       concurrency: { mode: "parallel" },
     }),

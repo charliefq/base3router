@@ -4,6 +4,8 @@ import {
   withIntentExecutionFixture,
 } from "./testkit/capabilityReviewFixture";
 import { TaskFirstInstructions } from "./TaskFirstInstructions";
+import { withFirstLaunchFixture } from "./testkit/firstLaunchFixture";
+import { firstLaunchStorageKey, readFirstLaunchAttempt } from "./taskFirstLaunchAttempt";
 import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
 import { planTaskCapabilities } from "@t3tools/shared/taskCapabilityPlan";
 import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
@@ -73,6 +75,7 @@ const state = vi.hoisted(() => ({
   recover: vi.fn(),
   navigate: vi.fn(),
   startStep: vi.fn(),
+  firstLaunchRead: vi.fn(),
   reviewRead: vi.fn(),
   reviewDecide: vi.fn(),
   readProjection: vi.fn(),
@@ -97,6 +100,7 @@ vi.mock("../../state/threads", () => ({
   threadEnvironment: {
     create: "create",
     startTurn: "capability-start",
+    readFirstLaunchStatus: "first-launch-status",
     readTaskReview: "review-read",
     decideTaskContract: "review-decide",
     readProjection: "read-projection",
@@ -106,19 +110,35 @@ vi.mock("../../state/threads", () => ({
 }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
-    command === "capability-start"
-      ? state.startStep
-      : command === "auto-preview"
-        ? state.autoPreview
-        : command === "read-creation-status"
-          ? state.readCreationStatus
-          : command === "review-read"
-            ? state.reviewRead
-            : command === "review-decide"
-              ? state.reviewDecide
-              : command === "read-projection"
-                ? state.readProjection
-                : state.create,
+    command === "first-launch-status"
+      ? state.firstLaunchRead
+      : command === "capability-start"
+        ? state.startStep
+        : command === "auto-preview"
+          ? state.autoPreview
+          : command === "read-creation-status"
+            ? state.readCreationStatus
+            : command === "review-read"
+              ? state.reviewRead
+              : command === "review-decide"
+                ? state.reviewDecide
+                : command === "read-projection"
+                  ? state.readProjection
+                  : state.create,
+}));
+vi.mock("../chat/ProviderModelPicker", () => ({
+  ProviderModelPicker: (props: {
+    activeInstanceId: string;
+    model: string;
+    onInstanceModelChange: (i: string, m: string) => void;
+  }) => (
+    <div aria-label="Task model picker">
+      <button onClick={() => props.onInstanceModelChange(props.activeInstanceId, "manual-choice")}>
+        Choose fixture Manual model
+      </button>
+      <span>{props.model}</span>
+    </div>
+  ),
 }));
 vi.mock("../../env", () => ({ isElectron: false }));
 vi.mock("../../lib/utils", () => {
@@ -256,6 +276,13 @@ const bindResult = (command: CollaborationCommand) => {
 };
 const configuredProviders = state.providers;
 beforeEach(() => {
+  const attempts = new Map<string, string>();
+  vi.stubGlobal("sessionStorage", {
+    getItem: (key: string) => attempts.get(key) ?? null,
+    setItem: (key: string, value: string) => attempts.set(key, value),
+    removeItem: (key: string) => attempts.delete(key),
+  });
+  state.firstLaunchRead.mockReset();
   state.providers = [...configuredProviders];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   state.environmentId = "environment-a";
@@ -7043,3 +7070,287 @@ it.each([
   },
   30000,
 );
+
+type GenericFixture = Parameters<Parameters<typeof withFirstLaunchFixture>[0]>[0];
+const wireGenericLaunch = (f: GenericFixture) => {
+  state.providers = f.providers.map((p) => ({
+    ...p,
+    displayName: p.displayName ?? p.driver,
+    models: p.models.map((m) => ({ ...m, isDefault: false })),
+  }));
+  state.reviewRead.mockImplementation(async ({ input }: { input: TaskContractReviewInput }) => ({
+    _tag: "Success",
+    value: await EffectForFixture.runPromise(f.readReview(input)),
+  }));
+  state.readProjection.mockImplementation(async ({ input }: { input: { threadId: ThreadId } }) => ({
+    _tag: "Success",
+    value: await EffectForFixture.runPromise(f.projection(input.threadId)),
+  }));
+  state.firstLaunchRead.mockImplementation(
+    async ({
+      input,
+    }: {
+      input: { command: Extract<OrchestrationV2Command, { type: "message.dispatch" }> };
+    }) => ({
+      _tag: "Success",
+      value: await EffectForFixture.runPromise(f.readStatus(input.command)),
+    }),
+  );
+  state.startStep.mockImplementation(
+    async ({ input }: { input: Parameters<typeof f.start>[0] }) => ({
+      _tag: "Success",
+      value: await EffectForFixture.runPromise(f.start(input)),
+    }),
+  );
+  state.autoPreview.mockImplementation(async ({ input }: { input: TaskAutoPreviewInput }) => ({
+    _tag: "Success",
+    value: await EffectForFixture.runPromise(f.preview(input)),
+  }));
+};
+const genericProps = (f: GenericFixture, onOpen = vi.fn()) => ({
+  task: f.task,
+  environmentId: EnvironmentId.make("environment-a"),
+  stale: false,
+  readVersion: 1,
+  onOpen,
+});
+const prepareGeneric = async (instructions: string, mode: "manual" | "auto") => {
+  await creationClick("Prepare first instructions");
+  await act(async () =>
+    renderer.root
+      .findByProps({ "aria-label": "Initial instructions" })
+      .props.onChange({ target: { value: instructions } }),
+  );
+  await creationClick(mode === "manual" ? "Choose Manual" : "Choose Auto");
+};
+it.each(["manual", "auto"] as const)(
+  "generic %s Tasks launch reaches actual input/output and recovers the same identity after remount",
+  async (mode) => {
+    await withFirstLaunchFixture(async (f) => {
+      wireGenericLaunch(f);
+      const props = genericProps(f);
+      const instructions = "Implement the parser fix with focused tests.";
+      await act(async () => {
+        renderer = create(<TaskFirstInstructions {...props} />);
+      });
+      await prepareGeneric(instructions, "manual");
+      await creationClick("Choose fixture Manual model");
+      if (mode === "auto") {
+        await creationClick("Choose Auto");
+        await creationClick("Choose Manual");
+        expect(
+          renderer.root.findByProps({ "aria-label": "Task model picker" }).findByType("span")
+            .children,
+        ).toContain("manual-choice");
+        await creationClick("Choose Auto");
+        await creationClick("Preview Auto");
+        await act(async () => {
+          await state.autoPreview.mock.results[0]!.value;
+        });
+        expect(
+          (await state.autoPreview.mock.results[0]!.value).value.decision.selected.target.model,
+        ).toBe("bbb-preview");
+      }
+      await creationClick("Review ordinary task launch");
+      expect(text()).toContain(instructions);
+      expect((await EffectForFixture.runPromise(f.inspect())).starts).toHaveLength(0);
+      if (mode === "auto") f.changeAutoCandidate();
+      await creationClick("Start reviewed ordinary task", true);
+      await act(async () => {
+        await state.startStep.mock.results[0]!.value;
+      });
+      await act(async () => {
+        await state.firstLaunchRead.mock.results.at(-1)!.value;
+      });
+      expect(state.startStep).toHaveBeenCalledTimes(1);
+      expect(props.onOpen).toHaveBeenCalledTimes(1);
+      await EffectForFixture.runPromise(f.drain());
+      const before = await EffectForFixture.runPromise(f.inspect());
+      expect(before.starts).toEqual([
+        { instanceId: "codex", model: mode === "auto" ? "aaa-after-review" : "manual-choice" },
+      ]);
+      expect(before.executions[0]!.message.text).toBe(instructions);
+      const key = firstLaunchStorageKey("environment-a", f.task.threadId!);
+      const saved = readFirstLaunchAttempt(key).attempt!;
+      const originalId = saved.command.commandId;
+      expect(saved.command.taskFirstLaunch!.routingMode).toBe(mode);
+      await act(async () => {
+        renderer.unmount();
+        renderer = create(<TaskFirstInstructions {...props} />);
+      });
+      expect(creationButton("Prepare first instructions")!.props.disabled).toBe(true);
+      await creationClick("Read original launch status");
+      await act(async () => {
+        await state.firstLaunchRead.mock.results.at(-1)!.value;
+      });
+      const paragraphs = renderer.root
+        .findAllByType("p")
+        .map((p) => p.children.filter((c) => typeof c === "string").join(""))
+        .join("\n");
+      expect(paragraphs).toContain("run status completed");
+      expect(paragraphs).toContain(`Actual generic answer: ${instructions}`);
+      expect(state.startStep).toHaveBeenCalledTimes(1);
+      expect(readFirstLaunchAttempt(key).attempt!.command.commandId).toBe(originalId);
+      const projection = await EffectForFixture.runPromise(f.projection());
+      expect(projection.runs).toHaveLength(1);
+      expect(projection.messages[0]!.taskFirstLaunch!.commandId).toBe(originalId);
+      expect(projection.messages[0]!.capabilityStep).toBeUndefined();
+    });
+  },
+  30000,
+);
+
+it.each(["lost reply", "late reply after remount", "disconnect", "no receipt"] as const)(
+  "%s keeps original launch identity UNKNOWN without resending",
+  async (outcome) => {
+    await withFirstLaunchFixture(async (f) => {
+      wireGenericLaunch(f);
+      const props = genericProps(f);
+      const reply = deferred<void>();
+      const dispatched = deferred<void>();
+      state.startStep.mockImplementation(
+        async ({ input }: { input: Parameters<typeof f.start>[0] }) => {
+          if (outcome !== "no receipt") await EffectForFixture.runPromise(f.start(input));
+          dispatched.resolve();
+          if (outcome === "lost reply" || outcome === "no receipt")
+            throw new Error("Synthetic lost reply");
+          await reply.promise;
+          return { _tag: "Success", value: undefined };
+        },
+      );
+      await act(async () => {
+        renderer = create(<TaskFirstInstructions {...props} />);
+      });
+      await prepareGeneric("Review this implementation for correctness.", "manual");
+      await creationClick("Review ordinary task launch");
+      await creationClick("Start reviewed ordinary task", true);
+      await act(async () => {
+        await dispatched.promise;
+      });
+      if (outcome === "lost reply" || outcome === "no receipt")
+        await act(async () => {
+          await state.startStep.mock.results[0]!.value.catch(() => {});
+        });
+      const key = firstLaunchStorageKey("environment-a", f.task.threadId!);
+      const original = readFirstLaunchAttempt(key).attempt!.command;
+      if (outcome === "disconnect") {
+        state.sessionIdentity = {};
+        await act(async () => renderer.update(<TaskFirstInstructions {...props} />));
+      }
+      await act(async () => {
+        renderer.unmount();
+        renderer = create(<TaskFirstInstructions {...props} />);
+      });
+      await creationClick("Read original launch status");
+      await act(async () => {
+        await state.firstLaunchRead.mock.results.at(-1)!.value;
+      });
+      if (outcome === "late reply after remount" || outcome === "disconnect")
+        await act(async () => {
+          reply.resolve();
+          await state.startStep.mock.results[0]!.value;
+        });
+      expect(state.startStep).toHaveBeenCalledTimes(1);
+      expect(props.onOpen).not.toHaveBeenCalled();
+      expect(readFirstLaunchAttempt(key).attempt!.command).toEqual(original);
+      expect(creationButton("Prepare first instructions")!.props.disabled).toBe(true);
+      if (outcome === "no receipt") {
+        expect(readFirstLaunchAttempt(key).attempt!.status).toBe("unknown");
+        expect((await EffectForFixture.runPromise(f.inspect())).starts).toHaveLength(0);
+      } else {
+        await EffectForFixture.runPromise(f.drain());
+        expect((await EffectForFixture.runPromise(f.inspect())).starts).toHaveLength(1);
+        await creationClick("Read original launch status");
+        await act(async () => {
+          await state.firstLaunchRead.mock.results.at(-1)!.value;
+        });
+        expect(readFirstLaunchAttempt(key).attempt!.status).toBe("admitted");
+      }
+    });
+  },
+  30000,
+);
+
+it("storage failure blocks first launch before dispatch", async () => {
+  await withFirstLaunchFixture(async (f) => {
+    wireGenericLaunch(f);
+    const props = genericProps(f);
+    await act(async () => {
+      renderer = create(<TaskFirstInstructions {...props} />);
+    });
+    await prepareGeneric("Implement a regression fix.", "manual");
+    await creationClick("Review ordinary task launch");
+    vi.stubGlobal("sessionStorage", {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("Synthetic storage failure");
+      },
+    });
+    await creationClick("Start reviewed ordinary task");
+    expect(state.startStep).not.toHaveBeenCalled();
+    expect((await EffectForFixture.runPromise(f.inspect())).starts).toHaveLength(0);
+    expect(text()).toContain("Nothing was sent");
+  });
+}, 30000);
+
+it("creation confirmation offers review/start for its exact task and does not start during creation", async () => {
+  await withFirstLaunchFixture(async (f) => {
+    wireGenericLaunch(f);
+    state.load.mockImplementation(() => EffectForFixture.runPromise(f.snapshot()));
+    state.create.mockImplementation(async ({ input }: { input: OrchestrationV2Command }) => ({
+      _tag: "Success",
+      value: await EffectForFixture.runPromise(f.create(input)),
+    }));
+    state.readCreationStatus.mockImplementation(
+      async ({ input }: { input: { command: OrchestrationV2Command } }) => ({
+        _tag: "Success",
+        value: await EffectForFixture.runPromise(f.readCreationStatus(input.command)),
+      }),
+    );
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    await creationClick("Create governed task");
+    await fillCreation("Creation then generic launch");
+    for (const label of [
+      "Optional token cap",
+      "Optional reported cost cap (USD)",
+      "Optional UTC deadline",
+    ])
+      await act(async () =>
+        renderer.root
+          .findByProps({ "aria-label": label })
+          .props.onChange({ target: { value: "" } }),
+      );
+    await creationClick("Review new task");
+    await creationClick("Create task", true);
+    await act(async () => {
+      await state.create.mock.results[0]!.value;
+      await state.readProjection.mock.results.at(-1)!.value;
+    });
+    expect((await EffectForFixture.runPromise(f.inspect())).starts).toHaveLength(0);
+    const created = state.create.mock.calls[0]![0].input;
+    await creationClick("Prepare created task for review/start");
+    expect(renderer.root.findByProps({ "aria-label": "Initial instructions" }).props.value).toBe(
+      "Fix parser",
+    );
+    await creationClick("Choose Manual");
+    await creationClick("Review ordinary task launch");
+    await creationClick("Start reviewed ordinary task");
+    await act(async () => {
+      await state.startStep.mock.results[0]!.value;
+      await state.firstLaunchRead.mock.results.at(-1)!.value;
+    });
+    await EffectForFixture.runPromise(f.drain());
+    expect(state.startStep.mock.calls[0]![0].input.threadId).toBe(created.threadId);
+    expect((await EffectForFixture.runPromise(f.inspect())).executions[0]!.threadId).toBe(
+      created.threadId,
+    );
+    expect((await EffectForFixture.runPromise(f.inspect())).executions[0]!.message.text).toBe(
+      "Fix parser",
+    );
+    expect((await EffectForFixture.runPromise(f.projection(created.threadId))).runs).toHaveLength(
+      1,
+    );
+  });
+}, 30000);

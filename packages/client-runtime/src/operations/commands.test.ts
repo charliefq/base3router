@@ -43,6 +43,7 @@ import {
   decideTaskContract,
   readTaskReview,
   readAgentsCreationStatus,
+  readTaskFirstLaunchStatus,
   archiveThread,
   cancelQueuedRun,
   createProject,
@@ -92,6 +93,13 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly advertiseServerResolvedCommandContext?: boolean;
 }) {
   const client = {
+    [ORCHESTRATION_V2_WS_METHODS.getTaskFirstLaunchStatus]: (inputStatus: unknown) =>
+      Effect.gen(function* () {
+        input.statusRequests?.push(inputStatus);
+        if (input.statusStarted) yield* Deferred.succeed(input.statusStarted, undefined);
+        if (input.statusGate) yield* Deferred.await(input.statusGate);
+        return { status: "unknown", reason: "Original receipt absent; no resend." };
+      }),
     [ORCHESTRATION_V2_WS_METHODS.getAgentsCreationStatus]: (inputStatus: unknown) =>
       Effect.gen(function* () {
         input.statusRequests?.push(inputStatus);
@@ -1327,4 +1335,127 @@ it.effect("discards a prior authenticated transport's status after its session i
       expect(commands).toHaveLength(0);
     }),
   ),
+);
+
+it.effect(
+  "ordinary first launch preserves exact reviewed Manual/Auto identity and uses only read-only recovery RPC",
+  () =>
+    Effect.gen(function* () {
+      for (const routingMode of ["manual", "auto"] as const) {
+        const commands: OrchestrationV2Command[] = [];
+        const statusRequests: unknown[] = [];
+        const projectionRequests: ThreadId[] = [];
+        const supervisor = yield* makeSupervisor({
+          commands,
+          projects: [],
+          statusRequests,
+          projectionRequests,
+          advertiseServerResolvedCommandContext: true,
+        });
+        const marker: import("@t3tools/contracts").TaskFirstLaunch = {
+          commandId: CommandId.make(`ordinary-${routingMode}`),
+          messageId: MessageId.make(`ordinary-${routingMode}`),
+          threadId: v2ThreadId,
+          text: "Exact ordinary instructions",
+          routingMode,
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "explicit-choice",
+          },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          reference: {
+            environmentId: "environment-1",
+            taskId: "task",
+            projectId: "project",
+            threadUpdatedAt: "2026-10-18T00:00:00Z",
+            threadSequence: 1,
+          },
+          contract: {
+            revision: 1,
+            goal: "Fix",
+            redirect: "Ask",
+            acceptance: "Test",
+            brake: { maxProviderStarts: 1, stopConditions: "Stop" },
+          },
+        };
+        yield* startThreadTurn({
+          commandId: marker.commandId,
+          threadId: marker.threadId,
+          message: {
+            messageId: marker.messageId,
+            role: "user",
+            text: marker.text,
+            attachments: [],
+          },
+          modelSelection: marker.modelSelection,
+          runtimeMode: marker.runtimeMode,
+          interactionMode: marker.interactionMode,
+          routingMode,
+          dispatchMode: "start",
+          taskFirstLaunch: marker,
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+        expect(commands).toHaveLength(1);
+        expect(projectionRequests).toEqual([]);
+        expect(commands[0]).toMatchObject({
+          type: "message.dispatch",
+          commandId: marker.commandId,
+          messageId: marker.messageId,
+          text: marker.text,
+          routingMode,
+          taskFirstLaunch: marker,
+          dispatchMode: { type: "start_immediately" },
+        });
+        expect(commands[0]).not.toHaveProperty("capabilityStep");
+        const command = commands[0]!;
+        if (command.type !== "message.dispatch") throw new Error("Missing dispatch");
+        expect(
+          yield* readTaskFirstLaunchStatus({ command }).pipe(
+            Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          ),
+        ).toEqual({ status: "unknown", reason: "Original receipt absent; no resend." });
+        expect(statusRequests).toEqual([{ command }]);
+        expect(commands).toHaveLength(1);
+      }
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+);
+
+it.effect(
+  "first launch status discards a late response from a replaced authenticated transport",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const commands: OrchestrationV2Command[] = [];
+        const statusGate = yield* Deferred.make<void>();
+        const statusStarted = yield* Deferred.make<void>();
+        const supervisor = yield* makeSupervisor({
+          commands,
+          projects: [],
+          statusGate,
+          statusStarted,
+        });
+        const command: Extract<OrchestrationV2Command, { type: "message.dispatch" }> = {
+          type: "message.dispatch",
+          commandId: CommandId.make("recover-original"),
+          threadId: v2ThreadId,
+          messageId: MessageId.make("recover-original"),
+          text: "Original",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        };
+        const read = yield* readTaskFirstLaunchStatus({ command }).pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.forkChild,
+        );
+        yield* Deferred.await(statusStarted);
+        const previous = yield* SubscriptionRef.get(supervisor.session);
+        if (Option.isNone(previous)) throw new Error("Missing session");
+        yield* SubscriptionRef.set(supervisor.session, Option.some({ ...previous.value }));
+        yield* Deferred.succeed(statusGate, undefined);
+        expect((yield* Fiber.join(read)).status).toBe("unavailable");
+        expect(commands).toEqual([]);
+      }),
+    ),
 );

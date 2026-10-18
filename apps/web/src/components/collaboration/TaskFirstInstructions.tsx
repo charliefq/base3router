@@ -1,5 +1,6 @@
 import { SelectionBasisReadout } from "./SelectionBasisReadout";
 import { TaskCapabilityStepControls } from "./TaskCapabilityStepControls";
+import { useTaskFirstLaunch } from "./useTaskFirstLaunch";
 import {
   TaskAutoPreviewInput,
   type TaskAutoPreviewState,
@@ -9,6 +10,7 @@ import {
   type CollaborationTask,
   type EnvironmentId,
   type OrchestrationV2ThreadProjection,
+  type OrchestrationV2AppThread,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import * as Schema from "effect/Schema";
@@ -93,6 +95,7 @@ export function TaskFirstInstructions(props: {
   readonly stale: boolean;
   readonly readVersion: number;
   readonly onOpen: () => void;
+  readonly prepareLabel?: string;
 }) {
   const previewAuto = useAtomCommand(threadEnvironment.readAutoPreview, { reportFailure: false });
   const [preview, setPreview] = useState<Extract<
@@ -112,6 +115,13 @@ export function TaskFirstInstructions(props: {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [executionBusy, setExecutionBusy] = useState(false);
+  const [launchThread, setLaunchThread] = useState<OrchestrationV2AppThread | null>(null);
+  const launch = useTaskFirstLaunch({
+    ...props,
+    facts: review,
+    thread: launchThread,
+    text: prompt,
+  });
   const owner = useRef<object | null>(null);
   const epoch = useRef(0);
   const mounted = useRef(true);
@@ -186,7 +196,7 @@ export function TaskFirstInstructions(props: {
       !eligible(p.task, p.environmentId, after.value, projection.value)
     )
       return null;
-    return after.value;
+    return { facts: after.value, thread: projection.value.thread };
   };
   const prepare = async () => {
     if (!available || owner.current) return;
@@ -196,7 +206,8 @@ export function TaskFirstInstructions(props: {
     setNotice(null);
     const generation = epoch.current;
     try {
-      const facts = await read();
+      const fresh = await read();
+      const facts = fresh?.facts;
       if (!current(generation)) return;
       if (!facts) {
         setNotice(
@@ -206,6 +217,7 @@ export function TaskFirstInstructions(props: {
       }
       reviewRef.current = facts;
       setReview(facts);
+      setLaunchThread(fresh!.thread);
       promptRef.current = facts.contract.goal;
       textEpoch.current++;
       previewOwner.current = null;
@@ -295,7 +307,8 @@ export function TaskFirstInstructions(props: {
     const generation = epoch.current;
     const proposed = prompt;
     try {
-      const facts = await read();
+      const fresh = await read();
+      const facts = fresh?.facts;
       if (!current(generation) || reviewRef.current !== observed) return;
       if (!facts || !sameReview(facts, observed)) {
         reviewRef.current = null;
@@ -342,12 +355,13 @@ export function TaskFirstInstructions(props: {
         size="sm"
         variant="outline"
         type="button"
-        disabled={!available || busy}
+        disabled={!available || busy || launch.busy || launch.hasOriginal}
         onClick={() => void prepare()}
       >
-        Prepare first instructions
+        {props.prepareLabel ?? "Prepare first instructions"}
       </Button>
       {notice ? <p role="status">{notice}</p> : null}
+      {launch.recovery}
       <AlertDialog
         open={review !== null}
         onOpenChange={(open) => {
@@ -368,9 +382,9 @@ export function TaskFirstInstructions(props: {
             <AlertDialogTitle>Review first instructions</AlertDialogTitle>
             <AlertDialogDescription>
               Write instructions once. For a saved PR summary or open/draft question, review the
-              suggested read and model below, then explicitly confirm execution. You can also
-              prepare a draft and choose Manual/Auto in the conversation. Reviewing starts no work
-              and accepts no task.
+              suggested read and model below, then explicitly confirm execution. You can also choose
+              ordinary Manual/Auto, review and start directly here, or prepare a conversation draft.
+              Reviewing starts no work and accepts no task.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {review ? (
@@ -412,7 +426,7 @@ export function TaskFirstInstructions(props: {
               <Textarea
                 aria-label="Initial instructions"
                 value={prompt}
-                disabled={busy || executionBusy}
+                disabled={busy || executionBusy || launch.busy}
                 onChange={(event) => {
                   promptRef.current = event.target.value;
                   textEpoch.current++;
@@ -422,6 +436,7 @@ export function TaskFirstInstructions(props: {
                   setPrompt(event.target.value);
                 }}
               />
+              {launch.controls}
               <TaskCapabilityStepControls
                 task={props.task}
                 environmentId={props.environmentId}

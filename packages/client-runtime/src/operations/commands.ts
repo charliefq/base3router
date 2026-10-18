@@ -177,6 +177,7 @@ interface StartThreadBootstrap {
 }
 
 export interface StartThreadTurnInput extends ThreadCommandInput {
+  readonly taskFirstLaunch?: import("@t3tools/contracts").TaskFirstLaunch;
   readonly capabilityStep?: import("@t3tools/contracts").TaskCapabilityStep;
   readonly manualContinuationOfRunId?: RunId;
   readonly message: {
@@ -297,6 +298,27 @@ export const readAgentsCreationStatus = Effect.fn("EnvironmentCommands.readAgent
       originalSession.value !== currentSession.value
     )
       return { status: "unavailable" as const };
+    return result;
+  },
+);
+
+export const readTaskFirstLaunchStatus = Effect.fn("EnvironmentCommands.readTaskFirstLaunchStatus")(
+  function* (input: {
+    readonly command: Extract<OrchestrationV2Command, { type: "message.dispatch" }>;
+  }) {
+    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+    const originalSession = yield* SubscriptionRef.get(supervisor.session);
+    const result = yield* request(ORCHESTRATION_V2_WS_METHODS.getTaskFirstLaunchStatus, input);
+    const currentSession = yield* SubscriptionRef.get(supervisor.session);
+    if (
+      Option.isNone(originalSession) ||
+      Option.isNone(currentSession) ||
+      originalSession.value !== currentSession.value
+    )
+      return {
+        status: "unavailable" as const,
+        reason: "Authenticated session changed while reading original launch status.",
+      };
     return result;
   },
 );
@@ -757,6 +779,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       routingMode: "manual",
       dispatchMode: { type: "queue_after_active" },
       capabilityStep: input.capabilityStep,
+      ...(input.taskFirstLaunch ? { taskFirstLaunch: input.taskFirstLaunch } : {}),
     });
   }
   const bootstrap = input.bootstrap?.createThread;
@@ -821,6 +844,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       createdBy: "user",
       creationSource: input.creationSource ?? "web",
       threadId: input.threadId,
+      ...(input.taskFirstLaunch ? { taskFirstLaunch: input.taskFirstLaunch } : {}),
       messageId: input.message.messageId,
       ...(input.manualContinuationOfRunId === undefined
         ? {}
@@ -886,6 +910,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     createdBy: "user",
     creationSource: input.creationSource ?? "web",
     threadId: input.threadId,
+    ...(input.taskFirstLaunch ? { taskFirstLaunch: input.taskFirstLaunch } : {}),
     messageId: input.message.messageId,
     text: input.message.text,
     ...(context ? { context } : {}),

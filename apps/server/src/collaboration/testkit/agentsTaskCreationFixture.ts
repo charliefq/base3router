@@ -147,6 +147,9 @@ type Fixture = {
   readReview: (
     input: TaskContractReviewInput,
   ) => ReturnType<Orchestrator.OrchestratorV2["Service"]["getTaskReview"]>;
+  readFirstLaunchStatus: (
+    command: OrchestrationV2Command,
+  ) => ReturnType<Orchestrator.OrchestratorV2["Service"]["getTaskFirstLaunchStatus"]>;
   openCanonical: () => ReturnType<CollaborationThreads.CollaborationThreads["Service"]["open"]>;
   noExecution: () => Effect.Effect<
     { runs: number; grants: number; outbox: number; messages: number },
@@ -305,6 +308,8 @@ export const withAgentsTaskCreationFixture = <E>(
           }).pipe(actorContext, Effect.provide(context)),
         readReview: (input) =>
           service.getTaskReview(input).pipe(actorContext, Effect.provide(context)),
+        readFirstLaunchStatus: (command) =>
+          service.getTaskFirstLaunchStatus({ command }).pipe(actorContext, Effect.provide(context)),
         openCanonical: () =>
           canonical
             .open(agentsCreationActor.actorId, { projectId: "project-a", providerId: "codex" })

@@ -380,6 +380,7 @@ function linkageOperations(
         | "dispatchMode"
         | "sourcePlanRef"
         | "capabilityStep"
+        | "taskFirstLaunch"
         | "text"
       >
     > = {},

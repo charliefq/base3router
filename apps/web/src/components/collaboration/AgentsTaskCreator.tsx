@@ -1,5 +1,6 @@
 import { planTaskCapabilities } from "@t3tools/shared/taskCapabilityPlan";
 import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
+import { TaskFirstInstructions } from "./TaskFirstInstructions";
 import {
   CommandId,
   ProjectId,
@@ -10,6 +11,7 @@ import {
   type EnvironmentId,
   type ServerProvider,
   type CollaborationSnapshot,
+  type CollaborationTask,
   OrchestrationV2Command,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -107,6 +109,7 @@ export function AgentsTaskCreator(props: {
     return saved ? { ...saved, status: "uncertain" } : null;
   });
   const confirmedIdentity = useRef<CommandId | null>(null);
+  const [createdTask, setCreatedTask] = useState<CollaborationTask | null>(null);
   const attemptRef = useRef(attempt);
   const [editing, setEditing] = useState<{
     providerId: string;
@@ -327,6 +330,7 @@ export function AgentsTaskCreator(props: {
     )
       return false;
     const confirmed: AgentsCreationAttempt = { command, status: "confirmed" };
+    setCreatedTask(task);
     writeAgentsCreationAttempt(confirmed);
     attemptRef.current = confirmed;
     confirmedIdentity.current = command.commandId;
@@ -566,18 +570,35 @@ export function AgentsTaskCreator(props: {
         </>
       ) : null}
       {attempt?.status === "confirmed" && displaysAttempt ? (
-        <Button
-          type="button"
-          onClick={() => {
-            if (matchesContext(attempt.command))
-              props.onOpen(
-                attempt.command.taskCreationReview!.environmentId,
-                attempt.command.threadId,
-              );
-          }}
-        >
-          Open created conversation
-        </Button>
+        <>
+          {createdTask && createdTask.threadId === attempt.command.threadId ? (
+            <TaskFirstInstructions
+              task={createdTask}
+              environmentId={attempt.command.taskCreationReview!.environmentId}
+              stale={false}
+              readVersion={createdTask.review?.reference.threadSequence ?? 0}
+              prepareLabel="Prepare created task for review/start"
+              onOpen={() =>
+                props.onOpen(
+                  attempt.command.taskCreationReview!.environmentId,
+                  attempt.command.threadId,
+                )
+              }
+            />
+          ) : null}
+          <Button
+            type="button"
+            onClick={() => {
+              if (matchesContext(attempt.command))
+                props.onOpen(
+                  attempt.command.taskCreationReview!.environmentId,
+                  attempt.command.threadId,
+                );
+            }}
+          >
+            Open created conversation
+          </Button>
+        </>
       ) : null}
       {pending ? <p role="status">Task creation response pending…</p> : null}
       {editing ? (

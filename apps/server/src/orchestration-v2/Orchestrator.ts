@@ -4,6 +4,11 @@ import {
   validateCapabilityDispatch,
 } from "../collaboration/TaskCapabilityStep.ts";
 import {
+  validateFirstTaskLaunch,
+  readFirstTaskLaunchStatus,
+} from "../collaboration/FirstTaskLaunch.ts";
+import type { TaskFirstLaunchStatus } from "@t3tools/contracts";
+import {
   verifyDelegationReplay,
   verifyMailboxReplay,
   type ApprovedDelegation,
@@ -309,6 +314,9 @@ export interface OrchestratorV2Shape {
     readonly command: OrchestrationV2Command;
   }) => Effect.Effect<{ readonly status: "committed" | "rejected" | "unknown" | "unavailable" }>;
   readonly getTaskAutoPreview: (input: TaskAutoPreviewInput) => Effect.Effect<TaskAutoPreviewState>;
+  readonly getTaskFirstLaunchStatus: (input: {
+    readonly command: OrchestrationV2Command;
+  }) => Effect.Effect<TaskFirstLaunchStatus>;
   readonly getTaskReview: (
     input: TaskContractReviewInput,
   ) => Effect.Effect<TaskContractReviewState, OrchestratorV2Error>;
@@ -4835,6 +4843,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.senderThreadId === undefined
             ? {}
             : { senderThreadId: command.senderThreadId }),
+          ...(command.taskFirstLaunch === undefined
+            ? {}
+            : { taskFirstLaunch: command.taskFirstLaunch }),
           ...(command.capabilityStep === undefined
             ? {}
             : { capabilityStep: command.capabilityStep }),
@@ -5179,6 +5190,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.senderThreadId === undefined
             ? {}
             : { senderThreadId: command.senderThreadId }),
+          ...(command.taskFirstLaunch === undefined
+            ? {}
+            : { taskFirstLaunch: command.taskFirstLaunch }),
           ...(command.capabilityStep === undefined
             ? {}
             : { capabilityStep: command.capabilityStep }),
@@ -5874,6 +5888,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ? {}
           : { scheduledTaskId: command.scheduledTaskId }),
         ...(command.senderThreadId === undefined ? {} : { senderThreadId: command.senderThreadId }),
+        ...(command.taskFirstLaunch === undefined
+          ? {}
+          : { taskFirstLaunch: command.taskFirstLaunch }),
         ...(command.capabilityStep === undefined ? {} : { capabilityStep: command.capabilityStep }),
         id: command.messageId,
         threadId: command.threadId,
@@ -9370,6 +9387,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       readonly effects: ReadonlyArray<PendingOrchestrationEffectV2>;
       readonly approvedDelegation?: ApprovedDelegation;
       readonly capabilityCommand?: Extract<OrchestrationV2Command, { type: "message.dispatch" }>;
+      readonly firstLaunchCommand?: Extract<OrchestrationV2Command, { type: "message.dispatch" }>;
       readonly governedTaskOwner?: string;
       readonly ordinaryRootOwner?: string;
       readonly contractSetActor?: string;
@@ -9413,6 +9431,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     if (command.type === "message.dispatch") {
       const database = yield* taskReviewSqlAtCall;
+      if (command.taskFirstLaunch) {
+        if (Option.isNone(database))
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "First-launch store unavailable.",
+          });
+        yield* validateFirstTaskLaunch(database.value, command).pipe(mapDispatchError(command));
+      }
       if (Option.isSome(database))
         yield* withCapabilityRegistration(validateCapabilityDispatch(database.value, command)).pipe(
           mapDispatchError(command),
@@ -9715,6 +9742,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(contractSetActor === undefined ? {} : { contractSetActor }),
       ...(command.type === "thread.create" ? { creationCommand: command } : {}),
       ...(command.type === "message.dispatch" ? { capabilityCommand: command } : {}),
+      ...(command.type === "message.dispatch" && command.taskFirstLaunch
+        ? { firstLaunchCommand: command }
+        : {}),
       ...(command.type === "thread.task-contract.set" &&
       (command.expectedRevision !== undefined || command.reviewTask !== undefined)
         ? { reviewedSet: command }
@@ -9798,6 +9828,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       if (command.type === "message.dispatch") {
         const database = yield* taskReviewSqlAtCall;
+        if (command.taskFirstLaunch) {
+          const proof = Option.isSome(database)
+            ? yield* readFirstTaskLaunchStatus(database.value, command)
+            : null;
+          if (proof?.status !== "admitted")
+            return yield* new OrchestratorDispatchError({
+              commandId: command.commandId,
+              commandType: command.type,
+              cause: "Original first-launch identity cannot be replayed.",
+            });
+        }
         if (Option.isSome(database))
           yield* withCapabilityRegistration(
             validateCapabilityDispatch(database.value, command, true),
@@ -10055,6 +10096,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(plan.capabilityCommand === undefined
           ? {}
           : { capabilityCommand: plan.capabilityCommand }),
+        ...(plan.firstLaunchCommand === undefined
+          ? {}
+          : { firstLaunchCommand: plan.firstLaunchCommand }),
         ...(plan.taskContractDecision === undefined
           ? {}
           : { taskContractDecision: plan.taskContractDecision }),
@@ -10275,6 +10319,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             : Effect.succeed({ status: "unavailable" as const }),
         ),
       ),
+    getTaskFirstLaunchStatus: ({ command }) =>
+      taskReviewSqlAtCall.pipe(
+        Effect.flatMap((database) =>
+          Option.isSome(database)
+            ? readFirstTaskLaunchStatus(database.value, command)
+            : Effect.succeed({
+                status: "unavailable" as const,
+                reason: "First-launch store unavailable.",
+              }),
+        ),
+      ),
     getTaskAutoPreview: (input) =>
       taskReviewSqlAtCall.pipe(
         Effect.flatMap((database) =>
@@ -10455,6 +10510,8 @@ const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
     getMessageCount: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
     getThreadRecords: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
     getAgentsCreationStatus: () => Effect.succeed({ status: "unavailable" as const }),
+    getTaskFirstLaunchStatus: () =>
+      Effect.succeed({ status: "unavailable" as const, reason: "Unavailable" }),
     getTaskAutoPreview: () =>
       Effect.succeed({
         status: "unavailable" as const,
