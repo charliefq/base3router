@@ -13,6 +13,7 @@ import {
 } from "@t3tools/shared/threadPullRequests";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Tool from "effect/unstable/ai/Tool";
 const PullRequestIdentity = {
   host: Schema.String,
   repository: Schema.String,
@@ -20,7 +21,7 @@ const PullRequestIdentity = {
   url: Schema.String,
 };
 /** The actual input schema is shared by the native tool and server-owned registration. */
-export const ListThreadPullRequestsParameters = Schema.Struct({});
+export const ListThreadPullRequestsParameters = Tool.EmptyParams;
 
 export class PullRequestThreadNotFoundError extends Schema.TaggedError<PullRequestThreadNotFoundError>()(
   "PullRequestThreadNotFoundError",
