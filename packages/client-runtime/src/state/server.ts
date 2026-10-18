@@ -1254,6 +1254,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,
     }),
+    readScheduledTasks: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:scheduled-task:read",
+      tag: WS_METHODS.scheduledTasksList,
+    }),
     upsertScheduledTask: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:scheduled-task:upsert",
       tag: WS_METHODS.scheduledTasksUpsert,

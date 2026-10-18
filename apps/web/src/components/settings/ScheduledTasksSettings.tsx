@@ -11,7 +11,15 @@ import {
   PlusIcon,
   Trash2Icon,
 } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type {
   EnvironmentId,
   ModelSelection,
@@ -24,6 +32,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import {
+  CommandId,
   MIN_SCHEDULED_TASK_INTERVAL_MS,
   ProviderInstanceId,
   resolveEnvironmentMachineKind,
@@ -32,6 +41,15 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+
+import { randomUUID } from "../../lib/utils";
+import {
+  readScheduledTaskCreationAttempt,
+  retainScheduledTaskCreationAttempt,
+  clearScheduledTaskCreationAttempt,
+  matchesScheduledTaskCreation,
+  type ScheduledTaskCreationAttempt,
+} from "./scheduledTaskCreationAttempt";
 
 import { formatRelativeTime } from "../../timestampFormat";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
@@ -212,9 +230,128 @@ export function ScheduledTasksSettings(target: {
   const [editor, setEditor] = useState<{
     environmentId: EnvironmentId;
     task: ScheduledTask | null;
+    token: string;
   } | null>(null);
+  const [creation, setCreation] = useState(readScheduledTaskCreationAttempt);
+  const [recovering, setRecovering] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [creationNotice, setCreationNotice] = useState<string | null>(null);
+  const readTasks = useAtomCommand(serverEnvironment.readScheduledTasks, { reportFailure: false });
+  const recoveryEnvironment = useEnvironment(creation.attempt?.environmentId ?? null);
+  const mounted = useRef(false);
+  const recoveryOwner = useRef<object | null>(null);
+  const inFlight = useRef<ScheduledTaskCreationAttempt | null>(null);
+  const editorOwner = useRef<string | null>(null);
+  const currentRecoveryEnvironment = useRef(recoveryEnvironment);
+  const recoveryPhase = recoveryEnvironment?.connection.phase;
+  const previousRecoveryPhase = useRef(recoveryPhase);
+  useLayoutEffect(() => {
+    currentRecoveryEnvironment.current = recoveryEnvironment;
+  }, [recoveryEnvironment]);
+  useLayoutEffect(() => {
+    if (previousRecoveryPhase.current !== recoveryPhase && recoveryOwner.current) {
+      recoveryOwner.current = null;
+      setRecovering(false);
+    }
+    previousRecoveryPhase.current = recoveryPhase;
+  }, [recoveryPhase]);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      recoveryOwner.current = null;
+    };
+  }, []);
+  const closeEditor = (token: string) => {
+    if (mounted.current && editorOwner.current === token) {
+      editorOwner.current = null;
+      setEditor(null);
+    }
+  };
+  const beginCreation = (environmentId: EnvironmentId, input: ScheduledTaskUpsertInput) => {
+    const retained = readScheduledTaskCreationAttempt();
+    if (retained.error || retained.attempt)
+      throw new Error(retained.error ?? "Recover the original scheduled task first.");
+    const attempt = retainScheduledTaskCreationAttempt({
+      environmentId,
+      input: { ...input, commandId: CommandId.make(randomUUID()) },
+    });
+    inFlight.current = attempt;
+    setCreating(true);
+    setCreation({ attempt, error: null });
+    setCreationNotice(null);
+    return attempt;
+  };
+  const settleCreation = (attempt: ScheduledTaskCreationAttempt, saved?: ScheduledTask) => {
+    if (inFlight.current === attempt) inFlight.current = null;
+    if (!mounted.current) return false;
+    setCreating(false);
+    try {
+      if (saved && matchesScheduledTaskCreation(attempt, saved)) {
+        clearScheduledTaskCreationAttempt(attempt);
+        setCreation({ attempt: null, error: null });
+        return true;
+      }
+    } catch {
+      /* Retain the original identity if recovery storage cannot be updated. */
+    }
+    setCreationNotice(
+      "Scheduled task creation outcome is uncertain. Recover the original identity before creating another task. No retry will be sent.",
+    );
+    return false;
+  };
+  const recoverCreation = async () => {
+    const saved = readScheduledTaskCreationAttempt();
+    const attempt = saved.attempt;
+    if (
+      saved.error ||
+      !attempt ||
+      inFlight.current ||
+      recoveryOwner.current ||
+      currentRecoveryEnvironment.current?.connection.phase !== "connected" ||
+      currentRecoveryEnvironment.current.environmentId !== attempt.environmentId
+    )
+      return;
+    const owner = {};
+    recoveryOwner.current = owner;
+    setRecovering(true);
+    try {
+      const result = await readTasks({ environmentId: attempt.environmentId, input: {} });
+      if (!mounted.current || recoveryOwner.current !== owner) return;
+      if (result._tag === "Failure") {
+        setCreationNotice(
+          "Could not read the original environment. Creation outcome is uncertain; no retry was sent.",
+        );
+        return;
+      }
+      const task = result.value.tasks.find(
+        (entry) => entry.id === `scheduled-task:${attempt.input.commandId}`,
+      );
+      if (!task || !matchesScheduledTaskCreation(attempt, task)) {
+        setCreationNotice(
+          task
+            ? "The original scheduled task exists with later changes. It was not overwritten. Creation remains unresolved."
+            : "The original scheduled task was not found. It may have been deleted or not committed. Creation remains unresolved; it will not be recreated.",
+        );
+        return;
+      }
+      clearScheduledTaskCreationAttempt(attempt);
+      setCreation({ attempt: null, error: null });
+      setCreationNotice("Scheduled task creation recovered. No schedule was changed.");
+    } catch {
+      if (mounted.current && recoveryOwner.current === owner)
+        setCreationNotice("Creation outcome is uncertain. Recovery failed; no retry was sent.");
+    } finally {
+      if (mounted.current && recoveryOwner.current === owner) {
+        recoveryOwner.current = null;
+        setRecovering(false);
+      }
+    }
+  };
   const openForEdit = useCallback((environmentId: EnvironmentId, task: ScheduledTask) => {
-    setEditor({ environmentId, task });
+    const token = randomUUID();
+    editorOwner.current = token;
+    setEditor({ environmentId, task, token });
   }, []);
   const defaultEnvironment = environment ?? connectedEnvironments[0];
   return (
@@ -226,17 +363,46 @@ export function ScheduledTasksSettings(target: {
           <Button
             size="xs"
             variant="ghost-muted"
-            disabled={!defaultEnvironment}
-            onClick={() =>
-              defaultEnvironment &&
-              setEditor({ environmentId: defaultEnvironment.environmentId, task: null })
-            }
+            disabled={!defaultEnvironment || creation.attempt !== null || creation.error !== null}
+            onClick={() => {
+              const saved = readScheduledTaskCreationAttempt();
+              if (!defaultEnvironment || saved.attempt || saved.error) return;
+              const token = randomUUID();
+              editorOwner.current = token;
+              setEditor({ environmentId: defaultEnvironment.environmentId, task: null, token });
+            }}
           >
             <PlusIcon className="size-3" />
             New task
           </Button>
         }
       >
+        {creation.error || creation.attempt || creationNotice ? (
+          <div role="status" className="space-y-2">
+            <p>
+              {creation.error ??
+                creationNotice ??
+                "Scheduled task creation outcome is uncertain. Recover the original identity before creating another task."}
+            </p>
+            {creation.attempt ? (
+              <>
+                <p>
+                  {creation.attempt.input.title} · {creation.attempt.environmentId}
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={
+                    recovering || creating || recoveryEnvironment?.connection.phase !== "connected"
+                  }
+                  onClick={() => void recoverCreation()}
+                >
+                  Recover scheduled task
+                </Button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
         {scope.kind === "unavailable" ? (
           <SettingsSection title="Unavailable selection">
             <SettingsRow title={scope.message} />
@@ -272,10 +438,12 @@ export function ScheduledTasksSettings(target: {
       </SettingsSection>
       {editor ? (
         <ScheduledTaskEditorDialog
-          key={`${editor.environmentId}:${editor.task?.id ?? "new"}`}
+          key={editor.token}
           initialEnvironmentId={editor.environmentId}
           task={editor.task}
-          onClose={() => setEditor(null)}
+          onClose={() => closeEditor(editor.token)}
+          beginCreation={beginCreation}
+          settleCreation={settleCreation}
         />
       ) : null}
     </SettingsPageContainer>
@@ -494,7 +662,17 @@ function ScheduledTaskEditorDialog({
   initialEnvironmentId,
   task,
   onClose,
+  beginCreation,
+  settleCreation,
 }: {
+  readonly beginCreation: (
+    environmentId: EnvironmentId,
+    input: ScheduledTaskUpsertInput,
+  ) => ScheduledTaskCreationAttempt;
+  readonly settleCreation: (
+    attempt: ScheduledTaskCreationAttempt,
+    saved?: ScheduledTask,
+  ) => boolean;
   readonly initialEnvironmentId: EnvironmentId;
   readonly task: ScheduledTask | null;
   readonly onClose: () => void;
@@ -534,7 +712,19 @@ function ScheduledTaskEditorDialog({
     task ? taskToDraft(task) : { ...EMPTY_DRAFT, projectId: projects[0]?.id ?? "" },
   );
   const [saving, setSaving] = useState(false);
+  const [creationUncertain, setCreationUncertain] = useState(false);
   const submissionPending = useRef(false);
+  const editorActive = useRef(false);
+  const currentDraft = useRef({ draft, environmentId });
+  useLayoutEffect(() => {
+    currentDraft.current = { draft, environmentId };
+  }, [draft, environmentId]);
+  useLayoutEffect(() => {
+    editorActive.current = true;
+    return () => {
+      editorActive.current = false;
+    };
+  }, []);
   const editingTaskMissing =
     draft.editingId !== null &&
     tasksQuery.data !== null &&
@@ -568,6 +758,9 @@ function ScheduledTaskEditorDialog({
 
   const submit = async () => {
     if (
+      !editorActive.current ||
+      currentDraft.current.draft !== draft ||
+      currentDraft.current.environmentId !== environmentId ||
       submissionPending.current ||
       saving ||
       editingTaskMissing ||
@@ -632,8 +825,34 @@ function ScheduledTaskEditorDialog({
     // Lock before React renders, and keep successful creates locked until the form closes.
     submissionPending.current = true;
     setSaving(true);
-    const result = await upsertTask({ environmentId, input });
+    let attempt: ScheduledTaskCreationAttempt | null = null;
+    try {
+      if (!draft.editingId) attempt = beginCreation(environmentId, input);
+    } catch (error) {
+      submissionPending.current = false;
+      setSaving(false);
+      reportFailure("Could not retain scheduled task identity", error);
+      return;
+    }
+    let result;
+    try {
+      result = await upsertTask(attempt ?? { environmentId, input });
+    } catch (error) {
+      if (attempt) {
+        settleCreation(attempt);
+        setCreationUncertain(true);
+      } else submissionPending.current = false;
+      setSaving(false);
+      reportFailure("Could not save scheduled task", error);
+      return;
+    }
     setSaving(false);
+    if (attempt) {
+      if (settleCreation(attempt, result._tag === "Success" ? result.value.task : undefined))
+        onClose();
+      else setCreationUncertain(true);
+      return;
+    }
     if (result._tag === "Failure") {
       submissionPending.current = false;
       if (!isAtomCommandInterrupted(result)) {
@@ -669,6 +888,7 @@ function ScheduledTaskEditorDialog({
                 value={environmentId}
                 disabled={task !== null || saving}
                 onValueChange={(id) => {
+                  if (submissionPending.current) return;
                   const next = connectedEnvironments.find((entry) => entry.environmentId === id);
                   if (!next) return;
                   setEnvironmentId(next.environmentId);
@@ -938,7 +1158,9 @@ function ScheduledTaskEditorDialog({
           </DialogClose>
           <Button
             size="sm"
-            disabled={saving || editingTaskMissing || !connected || !tasksQuery.data}
+            disabled={
+              saving || creationUncertain || editingTaskMissing || !connected || !tasksQuery.data
+            }
             onClick={() => void submit()}
           >
             {draft.editingId ? "Save task" : "Create task"}
