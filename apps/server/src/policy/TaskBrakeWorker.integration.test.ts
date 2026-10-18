@@ -225,9 +225,12 @@ it.effect("does not release an occupied lease when the adapter session is missin
       yield* TestClock.adjust("10 seconds");
       yield* Queue.take(runtime.settled);
       expect(yield* Ref.get(fixture.calls)).toEqual([]);
-      expect(yield* sql`SELECT status FROM orchestration_v2_effect_outbox`).toEqual([
-        { status: "succeeded" },
-      ]);
+      const effects = yield* sql<{
+        status: string;
+        last_error: string;
+      }>`SELECT status,last_error FROM orchestration_v2_effect_outbox`;
+      expect(effects[0]?.status).toBe("pending");
+      expect(effects[0]?.last_error).toContain("Native termination is unconfirmed");
       expect(
         yield* sql`SELECT released_at, disconnect_unconfirmed FROM base3_capacity_leases`,
       ).toEqual([{ released_at: null, disconnect_unconfirmed: 1 }]);

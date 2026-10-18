@@ -150,13 +150,12 @@ export const layer: Layer.Layer<
         }
         const session = yield* sessions.get(input.providerSessionId);
         if (Option.isNone(session)) {
-          // Interrupt/restart against a already-released session must not fail
-          // the durable effect (and retry 5x). The turn may still look running
-          // in projection until recovery/finalization; there is no live adapter
-          // to interrupt.
+          // Keep the recorded target available to the caller. A missing
+          // runtime is not native termination proof; strict controls retain
+          // uncertainty and the occupied lease.
           if (input.operation === "interrupt" || input.operation === "restart") {
             yield* Effect.logWarning(
-              "Provider interrupt/restart found no live session; treating as already stopped",
+              "Provider interrupt/restart found no live session; termination is unconfirmed",
               {
                 threadId: input.threadId,
                 operation: input.operation,

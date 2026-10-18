@@ -1,3 +1,5 @@
+import * as Schema from "effect/Schema";
+import { OrchestrationEffectRequestV2 } from "../orchestration-v2/EffectOutbox.ts";
 import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -28,6 +30,8 @@ import {
   agentsCreationProvider,
 } from "./testkit/agentsTaskCreationFixture.ts";
 import { withTaskResultLinkageFixture } from "./testkit/taskResultLinkageFixture.ts";
+
+const decodeEffect = Schema.decodeSync(Schema.fromJsonString(OrchestrationEffectRequestV2));
 
 const skill = {
   name: "parser-tests",
@@ -1175,10 +1179,9 @@ it.live(
           const effects = yield* f.sql<{
             payload_json: string;
           }>`SELECT payload_json FROM orchestration_v2_effect_outbox WHERE command_id='cancel-session-restart' AND effect_type='provider-turn.interrupt'`;
-          const target = JSON.parse(effects[0]!.payload_json) as {
-            providerSessionId: string;
-            replacementProviderSessionId: string;
-          };
+          const target = decodeEffect(effects[0]!.payload_json);
+          assert.equal(target.type, "provider-turn.interrupt");
+          if (target.type !== "provider-turn.interrupt") return;
           assert.equal(target.providerSessionId, oldThread.providerSessionId);
           assert.equal(target.replacementProviderSessionId, newThread.providerSessionId);
           assert.equal((yield* occupied(f)).length, 1);
