@@ -353,6 +353,35 @@ export function ScheduledTasksSettings(target: {
     editorOwner.current = token;
     setEditor({ environmentId, task, token });
   }, []);
+  const creationRecovery =
+    creation.error || creation.attempt || creationNotice ? (
+      <div role="status" className="space-y-2">
+        <p>
+          {creation.error ??
+            (creating
+              ? "Saving scheduled task…"
+              : (creationNotice ??
+                "Scheduled task creation outcome is uncertain. Recover the original identity before creating another task."))}
+        </p>
+        {creation.attempt ? (
+          <>
+            <p>
+              {creation.attempt.input.title} · {creation.attempt.environmentId}
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={
+                recovering || creating || recoveryEnvironment?.connection.phase !== "connected"
+              }
+              onClick={() => void recoverCreation()}
+            >
+              Recover scheduled task
+            </Button>
+          </>
+        ) : null}
+      </div>
+    ) : null;
   const defaultEnvironment = environment ?? connectedEnvironments[0];
   return (
     <SettingsPageContainer>
@@ -377,32 +406,7 @@ export function ScheduledTasksSettings(target: {
           </Button>
         }
       >
-        {creation.error || creation.attempt || creationNotice ? (
-          <div role="status" className="space-y-2">
-            <p>
-              {creation.error ??
-                creationNotice ??
-                "Scheduled task creation outcome is uncertain. Recover the original identity before creating another task."}
-            </p>
-            {creation.attempt ? (
-              <>
-                <p>
-                  {creation.attempt.input.title} · {creation.attempt.environmentId}
-                </p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={
-                    recovering || creating || recoveryEnvironment?.connection.phase !== "connected"
-                  }
-                  onClick={() => void recoverCreation()}
-                >
-                  Recover scheduled task
-                </Button>
-              </>
-            ) : null}
-          </div>
-        ) : null}
+        {editor ? null : creationRecovery}
         {scope.kind === "unavailable" ? (
           <SettingsSection title="Unavailable selection">
             <SettingsRow title={scope.message} />
@@ -444,6 +448,7 @@ export function ScheduledTasksSettings(target: {
           onClose={() => closeEditor(editor.token)}
           beginCreation={beginCreation}
           settleCreation={settleCreation}
+          creationRecovery={creationRecovery}
         />
       ) : null}
     </SettingsPageContainer>
@@ -664,7 +669,9 @@ function ScheduledTaskEditorDialog({
   onClose,
   beginCreation,
   settleCreation,
+  creationRecovery,
 }: {
+  readonly creationRecovery: ReactNode;
   readonly beginCreation: (
     environmentId: EnvironmentId,
     input: ScheduledTaskUpsertInput,
@@ -879,6 +886,13 @@ function ScheduledTaskEditorDialog({
         </DialogHeader>
 
         <DialogPanel>
+          {creationRecovery}
+          {creationRecovery ? (
+            <p className="text-sm text-muted-foreground">
+              Closing this dialog does not cancel creation. An unresolved task remains available for
+              recovery.
+            </p>
+          ) : null}
           <fieldset disabled={saving} className="space-y-5">
             {!connected ? (
               <p className="text-sm text-destructive">Reconnect this environment before saving.</p>
@@ -1154,7 +1168,7 @@ function ScheduledTaskEditorDialog({
 
         <DialogFooter>
           <DialogClose render={<Button variant="outline" size="sm" disabled={saving} />}>
-            Cancel
+            {creationRecovery ? "Close" : "Cancel"}
           </DialogClose>
           <Button
             size="sm"
