@@ -55,3 +55,35 @@ export async function withCapabilityReviewFixture(
     ),
   );
 }
+
+type IntentFixture = {
+  task: CollaborationTask;
+  readReview: (input: TaskContractReviewInput) => Promise<TaskContractReviewState>;
+  projection: () => Promise<import("@t3tools/contracts").OrchestrationV2ThreadProjection>;
+  start: (input: {
+    commandId: string;
+    threadId: string;
+    message: { messageId: string; text: string };
+    modelSelection: import("@t3tools/contracts").ModelSelection;
+    capabilityStep: import("@t3tools/contracts").TaskCapabilityStep;
+  }) => Promise<OrchestrationV2DispatchCommandResult>;
+  drain: () => Promise<void>;
+  inspect: () => Promise<{
+    reads: number;
+    starts: ReadonlyArray<import("@t3tools/contracts").ModelSelection>;
+    projection: import("@t3tools/contracts").OrchestrationV2ThreadProjection;
+  }>;
+};
+export async function withIntentExecutionFixture(check: (f: IntentFixture) => Promise<void>) {
+  const module = (await import(
+    /* @vite-ignore */ new URL(
+      "../../../../../server/src/collaboration/testkit/mountedIntentExecutionFixture.ts",
+      import.meta.url,
+    ).href
+  )) as {
+    withMountedIntentExecutionFixture: (
+      check: (f: IntentFixture) => Promise<void>,
+    ) => Promise<void>;
+  };
+  await module.withMountedIntentExecutionFixture(check);
+}

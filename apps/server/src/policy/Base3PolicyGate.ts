@@ -24,6 +24,7 @@ import {
   TaskContractReviewState,
   TaskContractReviewReference,
   TaskAutoPreviewInput,
+  type TaskCapabilityStep,
   type TaskAutoPreviewState,
   type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
@@ -50,6 +51,7 @@ import * as RouterEvaluation from "../routerEvaluation/RouterEvaluationService.t
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { readTaskReview } from "../collaboration/store.ts";
+import { bindReviewedCapabilityRoute } from "../collaboration/ReviewedCapabilityRoute.ts";
 import type { ProjectionStoreV2Error } from "../orchestration-v2/ProjectionStore.ts";
 import {
   authorizeMailboxDispatch,
@@ -88,6 +90,7 @@ export interface DispatchPolicyCommand {
   readonly messageId?: string;
   readonly text?: string;
   readonly modelSelection?: ModelSelection;
+  readonly capabilityStep?: TaskCapabilityStep;
   readonly routingMode?: "auto" | "manual";
   readonly modelRouteConstraints?: ModelRouterConstraints;
   readonly scheduledTaskId?: string;
@@ -635,6 +638,22 @@ const bindRoute = (input: {
         input.command.type,
         "binding",
         "Execution is missing thread or message identity.",
+      );
+    }
+    if (input.command.capabilityStep?.reviewedIntent) {
+      return yield* bindReviewedCapabilityRoute(input.sql, {
+        ...input.command,
+        capabilityStep: input.command.capabilityStep,
+      }).pipe(
+        Effect.mapError(
+          () =>
+            new Base3PolicyDeniedError({
+              reason: "reviewed-route",
+              commandType: input.command.type,
+              detail:
+                "The reviewed route is stale or unavailable. Review again; no fallback was sent.",
+            }),
+        ),
       );
     }
     const routingMode = input.command.routingMode ?? "manual";

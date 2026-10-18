@@ -1,4 +1,5 @@
 import { SelectionBasisReadout } from "./SelectionBasisReadout";
+import { TaskCapabilityStepControls } from "./TaskCapabilityStepControls";
 import {
   TaskAutoPreviewInput,
   type TaskAutoPreviewState,
@@ -110,6 +111,7 @@ export function TaskFirstInstructions(props: {
   const [prompt, setPrompt] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [executionBusy, setExecutionBusy] = useState(false);
   const owner = useRef<object | null>(null);
   const epoch = useRef(0);
   const mounted = useRef(true);
@@ -365,9 +367,9 @@ export function TaskFirstInstructions(props: {
           <AlertDialogHeader>
             <AlertDialogTitle>Review first instructions</AlertDialogTitle>
             <AlertDialogDescription>
-              Prepare a local draft for this existing conversation. Task facts may change. No
-              acceptance, routing or work is started. In the conversation, edit the draft, choose
-              existing Manual/Auto and press Send separately.
+              Write instructions once. For a saved PR summary, review the suggested read and model
+              below, then explicitly confirm execution. You can also prepare a draft and choose
+              Manual/Auto in the conversation. Reviewing starts no work and accepts no task.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {review ? (
@@ -409,7 +411,7 @@ export function TaskFirstInstructions(props: {
               <Textarea
                 aria-label="Initial instructions"
                 value={prompt}
-                disabled={busy}
+                disabled={busy || executionBusy}
                 onChange={(event) => {
                   promptRef.current = event.target.value;
                   textEpoch.current++;
@@ -418,6 +420,15 @@ export function TaskFirstInstructions(props: {
                   setPreviewBusy(false);
                   setPrompt(event.target.value);
                 }}
+              />
+              <TaskCapabilityStepControls
+                task={props.task}
+                environmentId={props.environmentId}
+                stale={props.stale}
+                readVersion={props.readVersion}
+                instructions={prompt}
+                onBusyChange={setExecutionBusy}
+                onOpen={props.onOpen}
               />
               <Button
                 type="button"

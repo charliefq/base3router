@@ -1638,7 +1638,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       yield* writeSystemEvents(
         [
-          ...(selectionChanged
+          ...(selectionChanged && !queuedMessage.capabilityStep?.reviewedIntent
             ? [
                 {
                   type:
@@ -4960,8 +4960,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       const now = yield* DateTime.now;
       if (
-        !modelSelectionsEqual(projection.thread.modelSelection, modelSelection) ||
-        projection.thread.providerInstanceId !== modelSelection.instanceId
+        !command.capabilityStep?.reviewedIntent &&
+        (!modelSelectionsEqual(projection.thread.modelSelection, modelSelection) ||
+          projection.thread.providerInstanceId !== modelSelection.instanceId)
       ) {
         yield* emit(
           events,
@@ -10307,14 +10308,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                         status: "unavailable" as const,
                         reason: "Server-owned capability registration unavailable.",
                       };
-                    const capabilityStep = yield* prepareCapabilityStep(
+                    return yield* prepareCapabilityStep(
                       database.value,
                       input,
                       facts,
                       runId,
                       idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
-                    ).pipe(Effect.provideService(SavedPrRead, capabilityRegistration.value));
-                    return { ...facts, capabilityStep };
+                    ).pipe(
+                      Effect.provideService(SavedPrRead, capabilityRegistration.value),
+                      Effect.match({
+                        onSuccess: (capabilityStep) => ({ ...facts, capabilityStep }),
+                        onFailure: (error) => ({
+                          status: "unavailable" as const,
+                          reason:
+                            error._tag === "CapabilityStepDenied"
+                              ? error.reason
+                              : "No current eligible route could be reviewed. Check available models or open the conversation for Manual chat.",
+                        }),
+                      }),
+                    );
                   }),
                 ),
                 Effect.mapError(

@@ -8,6 +8,8 @@ import { ActionGateService } from "../actionGate/ActionGateService.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { ConcurrencyBudgetService } from "../concurrencyBudget/ConcurrencyBudgetService.ts";
+import { RouterEvaluationService } from "../routerEvaluation/RouterEvaluationService.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { revalidateDelegatedMessage } from "../policy/DelegatedMailboxAuthority.ts";
 import {
   revalidateImageRoute,
@@ -135,6 +137,8 @@ export const layer: Layer.Layer<
     const capabilityProvider = yield* Effect.serviceOption(ProviderRegistry);
     const capabilityEnvironment = yield* Effect.serviceOption(ServerEnvironment);
     const capabilityBudget = yield* Effect.serviceOption(ConcurrencyBudgetService);
+    const capabilityRouter = yield* Effect.serviceOption(RouterEvaluationService);
+    const capabilitySettings = yield* Effect.serviceOption(ServerSettingsService);
     const withCapabilityServices = <A, E, R>(effect: Effect.Effect<A, E, R>) => {
       let result = effect;
       if (Option.isSome(capabilityOperation))
@@ -143,6 +147,14 @@ export const layer: Layer.Layer<
         result = result.pipe(Effect.provideService(ActionGateService, capabilityGate.value));
       if (Option.isSome(capabilityProvider))
         result = result.pipe(Effect.provideService(ProviderRegistry, capabilityProvider.value));
+      if (Option.isSome(capabilityRouter))
+        result = result.pipe(
+          Effect.provideService(RouterEvaluationService, capabilityRouter.value),
+        );
+      if (Option.isSome(capabilitySettings))
+        result = result.pipe(
+          Effect.provideService(ServerSettingsService, capabilitySettings.value),
+        );
       if (Option.isSome(capabilityEnvironment))
         result = result.pipe(Effect.provideService(ServerEnvironment, capabilityEnvironment.value));
       if (Option.isSome(capabilityBudget))

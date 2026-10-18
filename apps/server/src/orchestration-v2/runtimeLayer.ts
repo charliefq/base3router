@@ -6,6 +6,8 @@ import * as Option from "effect/Option";
 import * as CapabilitySql from "effect/unstable/sql/SqlClient";
 import * as CapabilityProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as CapabilityEnvironment from "../environment/ServerEnvironment.ts";
+import { RouterEvaluationService } from "../routerEvaluation/RouterEvaluationService.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as TaskBrakeWorker from "../policy/TaskBrakeWorker.ts";
@@ -89,6 +91,26 @@ const storesLayer = Layer.mergeAll(
 
 const savedReadProvided = savedPrReadLayer.pipe(Layer.provide(projectionStoreLayer));
 const capabilityRuntimeServices = Layer.mergeAll(
+  Layer.unwrap(
+    Effect.serviceOption(RouterEvaluationService).pipe(
+      Effect.map(
+        Option.match({
+          onNone: () => Layer.empty,
+          onSome: (value) => Layer.succeed(RouterEvaluationService, value),
+        }),
+      ),
+    ),
+  ),
+  Layer.unwrap(
+    Effect.serviceOption(ServerSettingsService).pipe(
+      Effect.map(
+        Option.match({
+          onNone: () => Layer.empty,
+          onSome: (value) => Layer.succeed(ServerSettingsService, value),
+        }),
+      ),
+    ),
+  ),
   savedReadProvided,
   CapabilityActionGate.layer,
   Layer.effect(CapabilitySql.SqlClient, CapabilitySql.SqlClient),

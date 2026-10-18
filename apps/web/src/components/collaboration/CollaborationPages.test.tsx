@@ -1,5 +1,9 @@
 import { TaskCapabilityStepControls } from "./TaskCapabilityStepControls";
-import { withCapabilityReviewFixture } from "./testkit/capabilityReviewFixture";
+import {
+  withCapabilityReviewFixture,
+  withIntentExecutionFixture,
+} from "./testkit/capabilityReviewFixture";
+import { TaskFirstInstructions } from "./TaskFirstInstructions";
 import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
 import { planTaskCapabilities } from "@t3tools/shared/taskCapabilityPlan";
 import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
@@ -6819,5 +6823,116 @@ it("mounts real server-owned task review, admits only after explicit confirmatio
     await creationClick("Read step status");
     expect(prose()).toContain("Operation: admitted");
     expect(prose()).toContain("No proven result");
+  });
+}, 30_000);
+
+it("one mounted instruction draft suggests, reviews, confirms and reaches exactly the reviewed model with the saved PR result", async () => {
+  await withIntentExecutionFixture(async (f) => {
+    state.reviewRead.mockImplementation(async ({ input }: { input: TaskContractReviewInput }) => ({
+      _tag: "Success",
+      value: await f.readReview(input),
+    }));
+    state.readProjection.mockImplementation(async () => ({
+      _tag: "Success",
+      value: await f.projection(),
+    }));
+    state.startStep.mockImplementation(
+      async ({ input }: { input: Parameters<typeof f.start>[0] }) => ({
+        _tag: "Success",
+        value: await f.start(input),
+      }),
+    );
+    const onOpen = vi.fn();
+    await act(async () => {
+      renderer = create(
+        <TaskFirstInstructions
+          task={f.task}
+          environmentId={EnvironmentId.make("environment-a")}
+          stale={false}
+          readVersion={1}
+          onOpen={onOpen}
+        />,
+      );
+    });
+    await creationClick("Prepare first instructions", true);
+    const instructions = "Summarize the saved pull requests linked to this task.";
+    await act(async () =>
+      renderer.root
+        .findByProps({ "aria-label": "Initial instructions" })
+        .props.onChange({ target: { value: instructions } }),
+    );
+    expect(
+      renderer.root.findAllByProps({ "aria-label": "Saved PR answer instructions" }),
+    ).toHaveLength(0);
+    expect(creationButton("Suggest and review saved PR answer")).toBeDefined();
+    await creationClick("Suggest and review saved PR answer");
+    await act(async () => {
+      await state.reviewRead.mock.results.at(-1)!.value;
+    });
+    expect(text()).toContain("aaa-reviewed");
+    expect(text()).toContain("Suggested by the existing Auto router");
+    const before = await f.inspect();
+    expect(before.reads).toBe(0);
+    expect(before.starts).toHaveLength(0);
+    expect(before.projection.runs).toHaveLength(0);
+    expect(state.autoPreview).not.toHaveBeenCalled();
+    // Editing invalidates the proposal; the same draft feeds the next real review.
+    await act(async () =>
+      renderer.root
+        .findByProps({ "aria-label": "Initial instructions" })
+        .props.onChange({ target: { value: "Fix parser" } }),
+    );
+    expect(creationButton("Run reviewed saved PR step")).toBeUndefined();
+    await creationClick("Suggest and review saved PR answer");
+    await act(async () => {
+      await state.reviewRead.mock.results.at(-1)!.value;
+    });
+    expect(text()).toContain("not a supported saved PR summary");
+    expect(creationButton("Run reviewed saved PR step")).toBeUndefined();
+    await act(async () =>
+      renderer.root
+        .findByProps({ "aria-label": "Initial instructions" })
+        .props.onChange({ target: { value: instructions } }),
+    );
+    await creationClick("Suggest and review saved PR answer");
+    await act(async () => {
+      await state.reviewRead.mock.results.at(-1)!.value;
+    });
+    const confirm = creationButton("Run reviewed saved PR step")!;
+    await act(async () => {
+      confirm.props.onClick();
+      confirm.props.onClick();
+    });
+    await act(async () => {
+      await state.startStep.mock.results[0]!.value;
+    });
+    expect(state.startStep).toHaveBeenCalledTimes(1);
+    expect(state.startStep.mock.calls[0]![0].input.message.text).toBe(instructions);
+    expect(text()).toContain("Admission is not operation or model completion");
+    await f.drain();
+    const after = await f.inspect();
+    expect(after.reads).toBe(1);
+    expect(after.starts).toEqual([{ instanceId: "codex", model: "aaa-reviewed" }]);
+    expect(after.projection.thread.modelSelection.model).toBe("fake-model");
+    expect(after.projection.runs[0]!.status).toBe("completed");
+    expect(
+      after.projection.turnItems.some(
+        (i) =>
+          i.type === "assistant_message" && i.text.includes("Reviewed model answer: saved PR #42"),
+      ),
+    ).toBe(true);
+    await creationClick("Read step status");
+    await act(async () => {
+      await state.reviewRead.mock.results.at(-1)!.value;
+    });
+    expect(
+      renderer.root
+        .findAllByType("p")
+        .map((p) => p.children.filter((c) => typeof c === "string").join(""))
+        .join("\n"),
+    ).toContain("Operation: succeeded");
+    expect(text()).toContain("does not mean the model completed");
+    await creationClick("Open conversation and results");
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 }, 30_000);

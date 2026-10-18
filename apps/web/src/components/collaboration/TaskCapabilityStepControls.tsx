@@ -15,6 +15,7 @@ import { usePreparedConnection } from "../../state/session";
 import { randomUUID } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
+import { SelectionBasisReadout } from "./SelectionBasisReadout";
 
 /** Explicit server-owned operation, separate from advisory recommendations and draft instructions. */
 export function TaskCapabilityStepControls(props: {
@@ -22,11 +23,17 @@ export function TaskCapabilityStepControls(props: {
   readonly environmentId: EnvironmentId;
   readonly stale: boolean;
   readonly readVersion: number;
+  readonly instructions?: string;
+  readonly onBusyChange?: (busy: boolean) => void;
+  readonly onOpen?: () => void;
 }) {
   const read = useAtomCommand(threadEnvironment.readTaskReview, { reportFailure: false });
   const start = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const session = Option.getOrNull(usePreparedConnection(props.environmentId));
-  const [prompt, setPrompt] = useState("Summarize the saved pull requests linked to this task.");
+  const [manualPrompt, setPrompt] = useState(
+    "Summarize the saved pull requests linked to this task.",
+  );
+  const prompt = props.instructions ?? manualPrompt;
   const [review, setReview] = useState<TaskCapabilityStep | null>(null);
   const [state, setState] = useState<TaskCapabilityStepState | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -36,19 +43,22 @@ export function TaskCapabilityStepControls(props: {
   const contract =
     props.task.contractReadout?.status === "available" ? props.task.contractReadout : null;
   const key = `${props.environmentId}:${props.task.id}:${props.task.threadId}:${props.task.projectId}:${props.readVersion}:${props.stale}:${contract?.contract.revision}:${contract?.phase}:${contract?.acceptedRevision}:${prompt}`;
+  const onBusyChange = props.onBusyChange;
   useLayoutEffect(() => {
     epoch.current++;
     pending.current = false;
     // oxlint-disable-next-line react/set-state-in-effect -- Retiring a task or authenticated connection clears its pending request UI.
     setBusy(false);
+    onBusyChange?.(false);
     setReview(null);
     setState(null);
     setNotice(null);
     return () => {
       epoch.current++;
+      onBusyChange?.(false);
     };
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Connection identity retires in-flight review and admission callbacks.
-  }, [key, session]);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Task and connection identity retire asynchronous callbacks.
+  }, [key, session, onBusyChange]);
   const canRead = !props.stale && session !== null && props.task.threadId && contract !== null;
   const eligible = canRead && contract?.phase === "active" && contract.acceptedRevision === null;
   const lookup = async (prepare: boolean) => {
@@ -56,6 +66,7 @@ export function TaskCapabilityStepControls(props: {
     const generation = epoch.current;
     pending.current = true;
     setBusy(true);
+    props.onBusyChange?.(true);
     setNotice(null);
     try {
       const result = await read({
@@ -67,13 +78,26 @@ export function TaskCapabilityStepControls(props: {
           threadId: props.task.threadId!,
           revision: contract.contract.revision,
           ...(prepare
-            ? { capabilityStep: { commandId: randomUUID(), messageId: randomUUID(), text: prompt } }
+            ? {
+                capabilityStep: {
+                  commandId: randomUUID(),
+                  messageId: randomUUID(),
+                  text: prompt,
+                  ...(props.instructions === undefined
+                    ? {}
+                    : { suggestFromInstructions: true as const }),
+                },
+              }
             : {}),
         },
       });
       if (generation !== epoch.current) return;
       if (result._tag !== "Success" || result.value.status !== "available") {
-        setNotice("Step review unavailable. Refresh current task facts.");
+        setNotice(
+          result._tag === "Success" && result.value.status === "unavailable"
+            ? result.value.reason
+            : "Step review unavailable. Refresh current task facts.",
+        );
         setReview(null);
         return;
       }
@@ -111,6 +135,7 @@ export function TaskCapabilityStepControls(props: {
       if (generation === epoch.current) {
         pending.current = false;
         setBusy(false);
+        props.onBusyChange?.(false);
       }
     }
   };
@@ -119,6 +144,7 @@ export function TaskCapabilityStepControls(props: {
     const generation = epoch.current;
     pending.current = true;
     setBusy(true);
+    props.onBusyChange?.(true);
     setNotice(null);
     setReview(null);
     try {
@@ -154,6 +180,7 @@ export function TaskCapabilityStepControls(props: {
       if (generation === epoch.current) {
         pending.current = false;
         setBusy(false);
+        props.onBusyChange?.(false);
       }
     }
   };
@@ -168,12 +195,14 @@ export function TaskCapabilityStepControls(props: {
         by this server-owned step. Provider-native capabilities remain outside its guarantee; no
         native capability isolation is provided.
       </p>
-      <Textarea
-        aria-label="Saved PR answer instructions"
-        value={prompt}
-        disabled={busy || !eligible}
-        onChange={(event) => setPrompt(event.target.value)}
-      />
+      {props.instructions === undefined ? (
+        <Textarea
+          aria-label="Saved PR answer instructions"
+          value={prompt}
+          disabled={busy || !eligible}
+          onChange={(event) => setPrompt(event.target.value)}
+        />
+      ) : null}
       <div className="flex gap-2">
         <Button
           size="sm"
@@ -181,7 +210,9 @@ export function TaskCapabilityStepControls(props: {
           disabled={!eligible || busy || !prompt.trim()}
           onClick={() => void lookup(true)}
         >
-          Review saved PR read
+          {props.instructions === undefined
+            ? "Review saved PR read"
+            : "Suggest and review saved PR answer"}
         </Button>
         <Button
           size="sm"
@@ -201,6 +232,22 @@ export function TaskCapabilityStepControls(props: {
             bytes.
           </p>
           <p>
+            Instructions: {review.reviewedIntent?.text ?? prompt}. Schema: {review.schemaDigest}.
+          </p>
+          {review.reviewedIntent ? (
+            <>
+              <p>
+                Suggested by the existing Auto router using local rules; this is not an
+                optimal-model guarantee. Confirmed route: {review.reviewedIntent.routingBasisDigest}
+                . The thread’s Manual model setting is preserved.
+              </p>
+              <p>{review.reviewedIntent.route.modelRoute?.explanation}</p>
+              <SelectionBasisReadout
+                basis={review.reviewedIntent.route.modelRoute?.selectionBasis}
+              />
+            </>
+          ) : null}
+          <p>
             Run {review.runId}; attempt {review.attemptId}; expires {review.expiresAt}. This
             proposal grants no execution until admitted.
           </p>
@@ -216,6 +263,10 @@ export function TaskCapabilityStepControls(props: {
             Operation: {state.status}. Source: {state.source}. {state.detail}
           </p>
           <p>
+            Operation success does not mean the model completed or the task was accepted. Read the
+            task result or conversation for the model outcome.
+          </p>
+          <p>
             Observed: {state.observedAt ?? "No proven result"}. Digest:{" "}
             {state.resultDigest ?? "Unavailable"}.
           </p>
@@ -223,6 +274,11 @@ export function TaskCapabilityStepControls(props: {
             <pre className="whitespace-pre-wrap wrap-anywhere">{state.resultJson}</pre>
           ) : null}
         </div>
+      ) : null}
+      {props.onOpen ? (
+        <Button size="sm" variant="outline" onClick={props.onOpen} disabled={busy}>
+          Open conversation and results
+        </Button>
       ) : null}
     </section>
   );

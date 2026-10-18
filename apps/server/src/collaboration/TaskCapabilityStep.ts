@@ -45,6 +45,11 @@ import {
 } from "../mcp/toolkits/pullRequests/read.ts";
 import { withAllowedSavedPrRead } from "../mcp/McpActionAuthorization.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import {
+  calculateReviewedCapabilityRoute,
+  supportsSavedPrSummary,
+  validateReviewedCapabilityRoute,
+} from "./ReviewedCapabilityRoute.ts";
 
 export class CapabilityStepDenied extends Schema.TaggedError<CapabilityStepDenied>()(
   "CapabilityStepDenied",
@@ -175,8 +180,10 @@ const current = (sql: SqlClient.SqlClient, review: TaskCapabilityStep) =>
       thread.interactionMode !== review.interactionMode ||
       thread.archivedAt !== null ||
       thread.deletedAt !== null ||
-      argumentHash(thread.modelSelection) !== argumentHash(review.modelSelection) ||
-      thread.providerInstanceId !== review.modelSelection.instanceId ||
+      argumentHash(thread.modelSelection) !==
+        argumentHash(review.reviewedIntent?.configuredModelSelection ?? review.modelSelection) ||
+      thread.providerInstanceId !==
+        (review.reviewedIntent?.configuredModelSelection ?? review.modelSelection).instanceId ||
       !provider ||
       !provider.enabled ||
       !provider.installed ||
@@ -204,6 +211,7 @@ const current = (sql: SqlClient.SqlClient, review: TaskCapabilityStep) =>
     )
       return yield* deny("Owned task linkage changed.");
     yield* validateMailboxTaskBudget(sql, state);
+    yield* validateReviewedCapabilityRoute(sql, review);
     return thread;
   });
 
@@ -219,6 +227,10 @@ export const prepareCapabilityStep = (
     const request = input.capabilityStep;
     if (!request || facts.phase !== "active" || facts.acceptedRevision !== null)
       return yield* deny("Task is not active.");
+    if (request.suggestFromInstructions && !supportsSavedPrSummary(request.text))
+      return yield* deny(
+        "These instructions are not a supported saved PR summary. Specify a saved/thread-linked PR summary, or open the conversation for Manual/Auto chat.",
+      );
     const operationOption = yield* Effect.serviceOption(SavedPrRead);
     if (Option.isNone(operationOption)) return yield* deny("Server-owned read unavailable.");
     const operation = operationOption.value;
@@ -244,6 +256,14 @@ export const prepareCapabilityStep = (
         ),
       ),
     );
+    const suggested = request.suggestFromInstructions
+      ? yield* calculateReviewedCapabilityRoute(sql, {
+          environmentId: input.environmentId,
+          threadId: input.threadId,
+          messageId: request.messageId,
+          text: request.text,
+        })
+      : undefined;
     const fields = {
       version: "server-owned-pr-read.v1" as const,
       reviewId: request.commandId,
@@ -260,7 +280,17 @@ export const prepareCapabilityStep = (
       contractDigest: argumentHash(facts.contract),
       threadUpdatedAt: facts.reference.threadUpdatedAt,
       threadSequence: facts.reference.threadSequence,
-      modelSelection: thread.modelSelection,
+      modelSelection: suggested?.modelSelection ?? thread.modelSelection,
+      ...(suggested
+        ? {
+            reviewedIntent: {
+              text: request.text,
+              configuredModelSelection: thread.modelSelection,
+              route: suggested.route,
+              routingBasisDigest: suggested.routingBasisDigest,
+            },
+          }
+        : {}),
       toolId: "t3-pull-requests/list_thread_pull_requests" as const,
       schemaDigest: operation.schemaDigest,
       argumentsJson: "{}" as const,
@@ -283,6 +313,9 @@ export const prepareCapabilityStep = (
         review.promptDigest !== proposed.promptDigest ||
         review.messageId !== proposed.messageId ||
         review.threadId !== proposed.threadId ||
+        review.reviewedIntent?.routingBasisDigest !== proposed.reviewedIntent?.routingBasisDigest ||
+        argumentHash(review.reviewedIntent?.configuredModelSelection) !==
+          argumentHash(proposed.reviewedIntent?.configuredModelSelection) ||
         prior.status !== "reviewed"
       )
         return yield* deny("Review identity already used.");
@@ -415,6 +448,7 @@ export const readCapabilityStepState = (sql: SqlClient.SqlClient, threadId: stri
 const validateExecution = (sql: SqlClient.SqlClient, review: TaskCapabilityStep) =>
   Effect.gen(function* () {
     const thread = yield* current(sql, review);
+    yield* validateReviewedCapabilityRoute(sql, review, true);
     const row = (yield* readRow(sql, review.reviewId))[0];
     const grants = yield* sql<{
       scopes_json: string;

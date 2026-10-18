@@ -212,7 +212,12 @@ executed model identities.
 To start a governed task, open **Tasks**, choose its project and a ready provider,
 then select **Create governed task**. Review the goal, acceptance criteria and
 brakes before creating it. Creation records the contract without starting work.
-Open the new conversation to send instructions separately. Return to **Tasks**
+Use **Prepare first instructions** to write the task’s first message. For a request
+such as “Summarize the saved pull requests linked to this task,” review the suggested
+read and model, then explicitly confirm execution. This reads saved PR state without
+refreshing GitHub and keeps your saved Manual model choice. Other instructions can
+be opened as a draft in the conversation for normal Manual/Auto chat. A successful
+read does not mean the model finished or the task was accepted. Return to **Tasks**
 and refresh to read the recorded execution status and result. If no provider is
 ready, existing tasks remain readable and **Set up a provider** opens the
 configuration page.

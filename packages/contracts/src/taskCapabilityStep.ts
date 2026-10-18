@@ -2,6 +2,7 @@ import { RuntimeMode, ProviderInteractionMode } from "./providerPolicy.ts";
 import * as Schema from "effect/Schema";
 import { IsoDateTime, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { DispatcherTaskRouteBinding } from "./dispatcher.ts";
 
 /** A server-prepared proposal; only the matching authenticated command can admit it. */
 export const TaskCapabilityStep = Schema.Struct({
@@ -21,6 +22,15 @@ export const TaskCapabilityStep = Schema.Struct({
   threadUpdatedAt: IsoDateTime,
   threadSequence: Schema.Int,
   modelSelection: ModelSelection,
+  /** Absent on the compatible explicit Manual path. Authority remains server persisted. */
+  reviewedIntent: Schema.optional(
+    Schema.Struct({
+      text: TrimmedNonEmptyString,
+      configuredModelSelection: ModelSelection,
+      route: DispatcherTaskRouteBinding,
+      routingBasisDigest: TrimmedNonEmptyString,
+    }),
+  ),
   toolId: Schema.Literal("t3-pull-requests/list_thread_pull_requests"),
   schemaDigest: TrimmedNonEmptyString,
   argumentsJson: Schema.Literal("{}"),
@@ -39,6 +49,7 @@ export const TaskCapabilityStepRequest = Schema.Struct({
   commandId: TrimmedNonEmptyString,
   messageId: TrimmedNonEmptyString,
   text: TrimmedNonEmptyString,
+  suggestFromInstructions: Schema.optional(Schema.Literal(true)),
 });
 export const TaskCapabilityStepState = Schema.Struct({
   review: TaskCapabilityStep,
