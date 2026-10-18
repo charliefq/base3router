@@ -1,3 +1,8 @@
+import {
+  verifyDelegationReplay,
+  verifyMailboxReplay,
+  type ApprovedDelegation,
+} from "../policy/DelegatedMailboxAuthority.ts";
 import { readTaskCapabilityEvidence } from "../collaboration/taskCapabilityPlan.ts";
 import {
   latestExecutedRun,
@@ -85,7 +90,10 @@ import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
 import { ContextHandoffServiceV2 } from "./ContextHandoffService.ts";
 import { notificationTurnItem } from "./Notification.ts";
 import { isRestartNoteSource } from "./RestartBackgroundNote.ts";
-import { isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
+import {
+  isUndeliveredMailboxSteer,
+  delegatedCompletionText as delegatedCompletionWakeDetail,
+} from "./NotificationMailbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { OrchestrationEffectRequestV2, type PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
@@ -465,13 +473,6 @@ function hasLiveRun(projection: Pick<OrchestrationV2ThreadProjection, "runs">): 
   return projection.runs.some(
     (run) => run.status === "preparing" || run.status === "starting" || run.status === "running",
   );
-}
-
-function delegatedCompletionWakeDetail(taskIds: ReadonlyArray<string>): string {
-  const taskList = taskIds.join(", ");
-  return taskIds.length === 1
-    ? `Delegated task ${taskList} reached a terminal state. Use task_status with taskId ${taskList} to read the result.`
-    : `Delegated tasks ${taskList} reached terminal states. Use task_status with each taskId to read the results.`;
 }
 
 function isTerminalDelegatedTaskStatus(status: OrchestrationV2Subagent["status"]): boolean {
@@ -4229,7 +4230,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             modelSelection: command.modelSelection ?? projection.thread.modelSelection,
           }).pipe(mapDispatchError(command))
         : undefined;
-      if (startState.governance === "required" && !isActiveRunControl(command)) {
+      if (
+        startState.governance === "required" &&
+        !isActiveRunControl(command) &&
+        command.delegatedCompletion === undefined
+      ) {
         const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
         if (Option.isNone(sqlOption)) {
           return yield* new OrchestratorDispatchError({
@@ -4517,6 +4522,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         );
         if (
           active !== undefined &&
+          active.id === delegatedCompletion.parentRunId &&
           activeTurn !== undefined &&
           providerThread?.providerSessionId != null &&
           (activeMessage === undefined || !isNativeMaintenanceCommand(activeMessage))
@@ -4531,6 +4537,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             dispatchMode = { type: "steer_active", targetRunId: active.id };
           }
         }
+      }
+      if (
+        delegatedCompletion !== undefined &&
+        dispatchMode.type !== "steer_active" &&
+        startState.governance === "required"
+      ) {
+        const sqlOption = yield* taskReviewSqlAtCall;
+        if (Option.isNone(sqlOption))
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Mailbox start admission unavailable.",
+          });
+        yield* reserveGovernedStart({
+          sql: sqlOption.value,
+          state: startState,
+          commandType: command.type,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          messageId: command.messageId,
+        }).pipe(mapDispatchError(command));
       }
       const dispatchText =
         delegatedCompletion === undefined
@@ -9323,6 +9350,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     {
       readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
       readonly effects: ReadonlyArray<PendingOrchestrationEffectV2>;
+      readonly approvedDelegation?: ApprovedDelegation;
       readonly governedTaskOwner?: string;
       readonly ordinaryRootOwner?: string;
       readonly contractSetActor?: string;
@@ -9647,6 +9675,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     return {
       events: yield* Ref.get(events),
       effects: yield* Ref.get(effects),
+      ...(authorizedCommand !== undefined && "approvedDelegation" in authorizedCommand
+        ? { approvedDelegation: authorizedCommand.approvedDelegation }
+        : {}),
       ...(governedTaskOwner === undefined ? {} : { governedTaskOwner }),
       ...(ordinaryRootOwner === undefined ? {} : { ordinaryRootOwner }),
       ...(contractSetActor === undefined ? {} : { contractSetActor }),
@@ -9708,6 +9739,29 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           commandType: command.type,
           detail: receipt.error ?? "Previously rejected.",
         });
+      }
+      if (
+        command.type === "delegated_task.request" &&
+        (yield* PolicyExecutionContext).kind !== "kernel-test"
+      ) {
+        const sqlOption = yield* taskReviewSqlAtCall;
+        if (Option.isNone(sqlOption))
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Delegation replay policy store unavailable.",
+          });
+        yield* verifyDelegationReplay(sqlOption.value, command).pipe(mapDispatchError(command));
+      }
+      if (command.type === "message.dispatch" && command.delegatedCompletion !== undefined) {
+        const sqlOption = yield* taskReviewSqlAtCall;
+        if (Option.isNone(sqlOption))
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Mailbox receipt policy store unavailable.",
+          });
+        yield* verifyMailboxReplay(sqlOption.value, command).pipe(mapDispatchError(command));
       }
       // A receipt only proves this exact command was handled for its own
       // thread. Replaying it for a command aimed at another thread would
@@ -9940,6 +9994,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         acceptedAt,
         events: plan.events,
         effects: plan.effects,
+        ...(plan.approvedDelegation === undefined
+          ? {}
+          : { approvedDelegation: plan.approvedDelegation }),
         ...(plan.governedTaskOwner === undefined
           ? {}
           : { governedTaskOwner: plan.governedTaskOwner }),

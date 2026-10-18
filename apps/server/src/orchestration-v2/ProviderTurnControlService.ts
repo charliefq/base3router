@@ -1,3 +1,8 @@
+import {
+  claimMailboxSteer,
+  acceptMailboxSteer,
+  mailboxSteerAlreadyAccepted,
+} from "../policy/DelegatedMailboxAuthority.ts";
 import { revalidateImageRoute, settleImageDeliveryDenial } from "../policy/Base3PolicyGate.ts";
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -321,6 +326,25 @@ export const layer: Layer.Layer<
             )
               return;
           }
+          if (ownership !== undefined && (yield* PolicyExecutionContext).kind !== "kernel-test") {
+            const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+            if (Option.isNone(sql))
+              return yield* new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "steer",
+                providerTurnId: input.providerTurnId,
+                cause: "Mailbox delivery store unavailable.",
+              });
+            if (
+              yield* mailboxSteerAlreadyAccepted(sql.value, {
+                threadId: input.threadId,
+                messageId: input.messageId,
+                sessionId: input.providerSessionId,
+                turnId: input.providerTurnId,
+              })
+            )
+              return;
+          }
           const settleDenial = () =>
             Effect.gen(function* () {
               const { message, run, providerThread, providerTurn } = context;
@@ -433,6 +457,27 @@ export const layer: Layer.Layer<
               return;
             }
           }
+          const mailboxSql =
+            ownership !== undefined && (yield* PolicyExecutionContext).kind !== "kernel-test"
+              ? yield* Effect.serviceOption(SqlClient.SqlClient)
+              : Option.none();
+          if (ownership !== undefined && (yield* PolicyExecutionContext).kind !== "kernel-test") {
+            if (Option.isNone(mailboxSql) || run.activeAttemptId === null)
+              return yield* new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "steer",
+                providerTurnId: input.providerTurnId,
+                cause: "Mailbox authority unavailable.",
+              });
+            yield* claimMailboxSteer(mailboxSql.value, {
+              threadId: input.threadId,
+              messageId: message.id,
+              runId: run.id,
+              attemptId: run.activeAttemptId,
+              sessionId: input.providerSessionId,
+              turnId: input.providerTurnId,
+            });
+          }
           yield* loaded.session.value
             .steerTurn({
               threadId: input.threadId,
@@ -467,12 +512,14 @@ export const layer: Layer.Layer<
                     threadId: input.threadId,
                     operation: "steer",
                     providerTurnId: input.providerTurnId,
-                    turnCompleted: current.providerTurn?.status === "completed",
+                    turnCompleted:
+                      ownership === undefined && current.providerTurn?.status === "completed",
                     cause,
                   });
                 }),
               ),
             );
+          if (Option.isSome(mailboxSql)) yield* acceptMailboxSteer(mailboxSql.value, message.id);
         }).pipe(
           Effect.mapError((cause) =>
             isProviderTurnControlError(cause)

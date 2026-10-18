@@ -40,14 +40,19 @@ import type {
   ProviderAdapterV2Shape,
   ProviderAdapterV2Event,
   ProviderAdapterV2TurnInput,
+  ProviderAdapterV2SteerInput,
+  ProviderAdapterV2Error,
 } from "../../orchestration-v2/ProviderAdapter.ts";
 import { agentsCreationProvider } from "./agentsTaskCreationFixture.ts";
 type ProviderInstanceId = typeof agentsCreationProvider.instanceId;
 interface LinkageAdapterOptions {
+  readonly supportsActiveSteering?: boolean;
   readonly governedWorker?: boolean;
   readonly startWorker?: boolean;
   readonly restartSessionOnSelectionChange?: boolean;
-  readonly onSteer?: () => Effect.Effect<void>;
+  readonly onSteer?: (
+    input: ProviderAdapterV2SteerInput,
+  ) => Effect.Effect<void, ProviderAdapterV2Error>;
   readonly terminalOnly?: boolean;
   readonly fixtureOpenRouterModel?: string;
   readonly adapter?: ProviderAdapterV2Shape;
@@ -67,7 +72,6 @@ interface LinkageAdapterOptions {
     emit: (event: ProviderAdapterV2Event) => Effect.Effect<void>,
   ) => Effect.Effect<void>;
 }
-const capabilities = CodexProviderCapabilitiesV2;
 function makeAdapter(
   started: Ref.Ref<ReadonlyArray<ModelSelection>>,
   instanceId: ProviderInstanceId,
@@ -76,6 +80,14 @@ function makeAdapter(
   opened: Ref.Ref<number>,
   executions: Ref.Ref<ReadonlyArray<ProviderAdapterV2TurnInput>>,
 ): ProviderAdapterV2Shape {
+  const capabilities = {
+    ...CodexProviderCapabilitiesV2,
+    turns: {
+      ...CodexProviderCapabilitiesV2.turns,
+      supportsActiveSteering:
+        options.supportsActiveSteering ?? CodexProviderCapabilitiesV2.turns.supportsActiveSteering,
+    },
+  };
   const driver = options.driver ?? ProviderDriverKind.make("codex");
   return {
     instanceId: instanceId,
@@ -282,7 +294,7 @@ function makeAdapter(
               if (options.onStart) yield* options.onStart(input, delivery, emit);
               else yield* Effect.forEach(delivery, emit, { discard: true });
             }),
-          steerTurn: () => options.onSteer?.() ?? Effect.void,
+          steerTurn: (input) => options.onSteer?.(input) ?? Effect.void,
           interruptTurn: (input) =>
             Effect.gen(function* () {
               const turn = active.get(input.providerThread.id);
@@ -442,7 +454,7 @@ export const withTaskResultLinkageFixture = <E>(
   options: LinkageAdapterOptions &
     Pick<
       NonNullable<Parameters<typeof withAgentsTaskCreationFixture>[1]>,
-      "dbPath" | "decorateEventSink"
+      "dbPath" | "decorateEventSink" | "runContinuationWorker"
     > = {},
 ) =>
   Effect.scoped(
@@ -533,6 +545,7 @@ export const withTaskResultLinkageFixture = <E>(
           }),
         {
           dbPath,
+          runContinuationWorker: options.runContinuationWorker ?? false,
           adapterRegistryLayer: ProviderAdapterRegistry.makeLayer([adapter]),
           ...(options.decorateEventSink === undefined
             ? {}

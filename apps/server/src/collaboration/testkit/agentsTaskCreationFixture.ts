@@ -1,3 +1,4 @@
+import * as ActionGate from "../../actionGate/ActionGateService.ts";
 import * as ProviderSessions from "../../orchestration-v2/ProviderSessionManager.ts";
 import {
   AuthOrchestrationOperateScope,
@@ -112,6 +113,7 @@ export const agentsCreationCommand = (
 });
 type Fixture = {
   sql: SqlClient.SqlClient;
+  actionGate: ActionGate.ActionGateService["Service"];
   sessions: ProviderSessions.ProviderSessionManagerV2["Service"];
   worker: EffectWorker.OrchestrationEffectWorkerV2["Service"];
   governWorker: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>;
@@ -153,6 +155,7 @@ type Fixture = {
 export const withAgentsTaskCreationFixture = <E>(
   check: (fixture: Fixture) => Effect.Effect<void, E, Scope.Scope>,
   options: {
+    readonly runContinuationWorker?: boolean;
     readonly dbPath?: string;
     readonly adapterRegistryLayer?: Layer.Layer<ProviderAdapterRegistry.ProviderAdapterRegistryV2>;
     readonly decorateEventSink?: (
@@ -206,6 +209,7 @@ export const withAgentsTaskCreationFixture = <E>(
       },
       capabilityContextLayer: Layer.mergeAll(registry, environmentLayer),
       runEffectWorker: false,
+      runContinuationWorker: options.runContinuationWorker ?? false,
       ...(options.decorateEventSink ? { decorateEventSink: options.decorateEventSink } : {}),
       ...(options.decorateCommandReceipts
         ? { decorateCommandReceipts: options.decorateCommandReceipts }
@@ -214,6 +218,7 @@ export const withAgentsTaskCreationFixture = <E>(
   );
   const dependencies = Layer.mergeAll(
     database,
+    ActionGate.layer.pipe(Layer.provide(database)),
     orchestrator,
     registry,
     environmentLayer,
@@ -229,6 +234,7 @@ export const withAgentsTaskCreationFixture = <E>(
   return Effect.scoped(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
+      const actionGate = yield* ActionGate.ActionGateService;
       const service = yield* Orchestrator.OrchestratorV2;
       const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
       const evaluation = yield* RouterEvaluation.RouterEvaluationService;
@@ -241,6 +247,7 @@ export const withAgentsTaskCreationFixture = <E>(
       const actorContext = Effect.provideService(PolicyExecutionContext, agentsCreationActor);
       yield* check({
         sql,
+        actionGate,
         sessions: sessions!,
         worker,
         governWorker: (effect) =>

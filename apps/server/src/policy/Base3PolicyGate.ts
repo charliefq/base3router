@@ -2,7 +2,8 @@ import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
 // Argument hashes are canonical JSON. A schema codec would change the bytes
 // a grant is compared against after a queue delay.
 // @effect-diagnostics preferSchemaOverJson:off
-import * as NodeCrypto from "node:crypto";
+import { argumentHash, messageArguments } from "./grantArguments.ts";
+export { argumentHash } from "./grantArguments.ts";
 import {
   type AuthEnvironmentScope,
   type ChatAttachment,
@@ -50,6 +51,12 @@ import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { readTaskReview } from "../collaboration/store.ts";
 import type { ProjectionStoreV2Error } from "../orchestration-v2/ProjectionStore.ts";
+import {
+  authorizeMailboxDispatch,
+  validateMailboxAuthority,
+  revalidateDelegatedMessage,
+  type ApprovedDelegation,
+} from "./DelegatedMailboxAuthority.ts";
 import { PolicyExecutionContext } from "./executionContext.ts";
 import { Base3PolicyDeniedError } from "./Base3PolicyDeniedError.ts";
 import { classifyCommand, commandNeedsCapacity, type OperationClass } from "./operationPolicy.ts";
@@ -76,6 +83,7 @@ export interface DispatchPolicyCommand {
   readonly commandId: string;
   readonly threadId?: string;
   readonly parentThreadId?: string;
+  readonly parentRunId?: string;
   readonly runId?: string;
   readonly messageId?: string;
   readonly text?: string;
@@ -101,39 +109,11 @@ export interface DispatchPolicyCommand {
 const deny = (commandType: string, reason: string, detail?: string) =>
   Effect.fail(new Base3PolicyDeniedError({ reason, commandType, ...(detail ? { detail } : {}) }));
 
-export function argumentHash(value: unknown): string {
-  return NodeCrypto.createHash("sha256").update(canonicalJson(value)).digest("hex");
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) =>
-      left < right ? -1 : left > right ? 1 : 0,
-    );
-    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
-}
-
 const decodeModelSelection = Schema.decodeEffect(Schema.fromJsonString(ModelSelection));
 const decodeGrantScopes = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(Schema.String)),
 );
 const isPolicyDenied = Schema.is(Base3PolicyDeniedError);
-
-const messageArguments = (command: DispatchPolicyCommand) => ({
-  text: command.text ?? "",
-  model: command.modelSelection?.model ?? null,
-  instanceId: command.modelSelection?.instanceId ?? null,
-  attachmentIds: (command.attachments ?? []).map((attachment) => attachment.id ?? ""),
-  ...(command.modelSelection?.options === undefined
-    ? {}
-    : { options: command.modelSelection.options }),
-  ...(command.modelRouteConstraints === undefined
-    ? {}
-    : { modelRouteConstraints: command.modelRouteConstraints }),
-});
 
 const isContinuation = (command: DispatchPolicyCommand): boolean =>
   command.usageLimitContinuationOfRunId !== undefined ||
@@ -214,11 +194,24 @@ export const verifyActiveRunLease = (input: {
   Effect.gen(function* () {
     const context = yield* PolicyExecutionContext;
     if (context.kind === "kernel-test") return;
-    if (context.kind !== "session" || !hasOperate(context.scopes))
+    if (context.kind !== "session" && context.kind !== "delegated-completion")
       return yield* deny(input.commandType, "unauthenticated");
+    if (context.kind === "session" && !hasOperate(context.scopes))
+      return yield* deny(input.commandType, "missing-operate-scope");
+    const mailbox =
+      context.kind === "delegated-completion"
+        ? yield* validateMailboxAuthority(input.sql, context)
+        : undefined;
+    if (
+      mailbox !== undefined &&
+      (context.kind !== "delegated-completion" ||
+        context.threadId !== input.threadId ||
+        context.parentRunId !== input.runId)
+    )
+      return yield* deny(input.commandType, "active-run-ownership");
     const env = yield* environmentId;
     const now = DateTime.formatIso(yield* DateTime.now);
-    if (context.expiresAt !== undefined && context.expiresAt <= now)
+    if (context.kind === "session" && context.expiresAt !== undefined && context.expiresAt <= now)
       return yield* deny(input.commandType, "grant-expired");
     const rows = yield* input.sql<{ attempt_id: string; message_id: string }>`
     SELECT attempt.attempt_id, json_extract(run.payload_json,'$.userMessageId') AS message_id
@@ -251,7 +244,7 @@ export const verifyActiveRunLease = (input: {
     ))[0];
     if (grant === undefined || grant.revoked_at !== null)
       return yield* deny(input.commandType, "grant-missing");
-    if (grant.actor_id !== context.actorId)
+    if (grant.actor_id !== (context.kind === "session" ? context.actorId : mailbox?.owner.actor_id))
       return yield* deny(input.commandType, "active-run-ownership");
     if (grant.expires_at !== null && grant.expires_at <= now)
       return yield* deny(input.commandType, "grant-expired");
@@ -460,6 +453,18 @@ export const confirmProviderTermination = (input: {
               ))
           ))
       `;
+      // The child admission belongs to this original delegated input. Release
+      // it only when the same termination proof released its foreground slot.
+      yield* sql.value`UPDATE base3_capacity_leases SET released_at=${now},status='released'
+        WHERE lease_id IN (
+          SELECT authority.source_lease_id FROM base3_delegated_child_authorities AS authority
+          JOIN orchestration_v2_projection_runs AS run ON run.thread_id=authority.child_thread_id
+          JOIN base3_execution_grants AS grant ON grant.grant_id='grant:message:' || run.thread_id || ':' || json_extract(run.payload_json,'$.userMessageId')
+          JOIN base3_capacity_leases AS child ON child.thread_id=run.thread_id AND child.run_id=run.run_id
+          WHERE run.thread_id=${input.threadId} AND run.run_id=${input.runId}
+            AND grant.operation='delegated-child' AND child.workload_class='foreground-turn'
+            AND child.status='released' AND child.released_at IS NOT NULL
+        ) AND released_at IS NULL AND workload_class='child-agent'`;
       return;
     }
     yield* sql.value`
@@ -758,6 +763,42 @@ const bindRoute = (input: {
     );
   });
 
+/** Child capacity is acquired inside the same transaction as its persisted authority. */
+export const admitDelegationCommit = (
+  sql: SqlClient.SqlClient,
+  command: Pick<
+    DispatchPolicyCommand,
+    "type" | "commandId" | "parentThreadId" | "parentRunId" | "threadId"
+  >,
+) =>
+  Effect.gen(function* () {
+    const context = yield* PolicyExecutionContext;
+    if (
+      command.type !== "delegated_task.request" ||
+      context.kind !== "session" ||
+      !hasOperate(context.scopes)
+    )
+      return yield* deny(command.type, "unauthenticated");
+    const threadId = command.parentThreadId ?? command.threadId;
+    if (threadId === undefined) return yield* deny(command.type, "binding");
+    if (command.parentRunId !== undefined)
+      yield* verifyActiveRunLease({
+        sql,
+        threadId,
+        runId: command.parentRunId,
+        commandType: command.type,
+      });
+    yield* admitLease({
+      sql,
+      environmentId: yield* environmentId,
+      threadId,
+      messageId: command.commandId,
+      parentLeaseId: null,
+      workloadClass: "child-agent",
+      nonBlocking: true,
+    });
+  });
+
 const continuationGrantId = (command: DispatchPolicyCommand): string | null => {
   if (command.scheduledTaskId !== undefined) return `grant:schedule:${command.scheduledTaskId}`;
   if (command.usageLimitContinuationOfRunId !== undefined) {
@@ -768,9 +809,6 @@ const continuationGrantId = (command: DispatchPolicyCommand): string | null => {
   }
   if (command.restartContinuationOfRunId !== undefined) {
     return `grant:restart:${command.restartContinuationOfRunId}`;
-  }
-  if (command.delegatedCompletion !== undefined && command.threadId !== undefined) {
-    return `grant:delegated:${command.threadId}`;
   }
   return null;
 };
@@ -804,6 +842,27 @@ export const authorizeDispatch = <
     if (context.kind === "absent") {
       if (operation.kind === "auth-only") return;
       return yield* deny(command.type, "unauthenticated");
+    }
+    if (context.kind === "delegated-completion" || command.delegatedCompletion !== undefined) {
+      const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
+      if (Option.isNone(sqlOption)) return yield* deny(command.type, "policy-store-unavailable");
+      if (command.type !== "message.dispatch") return yield* deny(command.type, "ungoverned");
+      return yield* authorizeMailboxDispatch(
+        sqlOption.value,
+        command as Extract<
+          import("@t3tools/contracts").OrchestrationV2Command,
+          { type: "message.dispatch" }
+        >,
+      ).pipe(
+        Effect.mapError((cause) =>
+          isPolicyDenied(cause)
+            ? cause
+            : new Base3PolicyDeniedError({
+                commandType: command.type,
+                reason: "policy-store-unavailable",
+              }),
+        ),
+      );
     }
     if (context.kind === "server-continuation") {
       if (operation.kind === "auth-only") return;
@@ -861,6 +920,13 @@ export const authorizeDispatch = <
     if (operation.kind === "delegation") {
       const threadId = command.parentThreadId ?? command.threadId;
       if (threadId === undefined) return yield* deny(command.type, "binding");
+      if (command.parentRunId !== undefined)
+        yield* verifyActiveRunLease({
+          sql,
+          threadId,
+          runId: command.parentRunId,
+          commandType: command.type,
+        });
       const parentState = yield* loadTaskState(sql, threadId);
       yield* reserveGovernedStart({
         sql,
@@ -885,36 +951,25 @@ export const authorizeDispatch = <
         environmentId: env,
         threadId,
       });
-      yield* admitLease({
-        sql,
-        environmentId: env,
-        threadId,
-        messageId: command.commandId,
-        parentLeaseId: null,
-        workloadClass: "child-agent",
-        nonBlocking: true,
-      });
-      yield* insertGrant({
-        sql,
-        grantId: `grant:delegated:${threadId}`,
-        threadId,
-        messageId: command.messageId ?? command.commandId,
-        runId: null,
-        operation: "delegation",
-        actorId: context.actorId,
-        scopes: context.scopes,
-        expiresAt: null,
-        hash: argumentHash({
-          task: command.task ?? "",
-          model: command.modelSelection ?? null,
-          ...contractGrantFields(
-            parentState.governance === "required" ? parentState.contract : null,
-          ),
-        }),
-        approvalId,
-      });
       yield* recordAttempt(sql, command, "delegation");
-      return;
+      return {
+        ...input,
+        approvedDelegation: {
+          command: input as Extract<
+            import("@t3tools/contracts").OrchestrationV2Command,
+            { type: "delegated_task.request" }
+          >,
+          actorId: context.actorId,
+          scopes: context.scopes,
+          expiresAt: context.expiresAt ?? null,
+          approvalId,
+          contractHash: argumentHash(
+            contractGrantFields(
+              parentState.governance === "required" ? parentState.contract : null,
+            ),
+          ),
+        } satisfies ApprovedDelegation,
+      };
     }
     if (
       command.type !== "message.dispatch" &&
@@ -1316,6 +1371,21 @@ export const revalidateOutboxEffect = (effect: {
         if (owned.length !== 1) return yield* deny(effect.request.type, "active-run-ownership");
       }
     }
+    yield* revalidateDelegatedMessage(
+      sql,
+      effect.threadId,
+      messageId ?? "",
+      effect.request.type === "provider-turn.start" && runId !== undefined ? { runId } : undefined,
+    ).pipe(
+      Effect.mapError((cause) =>
+        isPolicyDenied(cause)
+          ? cause
+          : new Base3PolicyDeniedError({
+              commandType: effect.request.type,
+              reason: "policy-store-unavailable",
+            }),
+      ),
+    );
     const taskState = yield* loadTaskState(sql, effect.threadId, effect.request.type);
     if (
       (effect.request.type === "provider-turn.restart"

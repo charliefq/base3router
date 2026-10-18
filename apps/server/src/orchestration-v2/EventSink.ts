@@ -1,4 +1,9 @@
 import {
+  commitApprovedDelegation,
+  commitMailboxAuthority,
+  type ApprovedDelegation,
+} from "../policy/DelegatedMailboxAuthority.ts";
+import {
   CommandId,
   EventId,
   OrchestrationV2RunJson,
@@ -55,7 +60,11 @@ import {
   nextTaskContractThread,
   revokeTaskContractGrants,
 } from "../policy/TaskContract.ts";
-import { verifyActiveRunLease, confirmProviderTermination } from "../policy/Base3PolicyGate.ts";
+import {
+  verifyActiveRunLease,
+  confirmProviderTermination,
+  admitDelegationCommit,
+} from "../policy/Base3PolicyGate.ts";
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import {
   enrollGovernedTask,
@@ -221,6 +230,7 @@ export interface EventSinkV2Shape {
     readonly commandId: CommandId;
     readonly threadId: ThreadId;
     readonly commandType: string;
+    readonly approvedDelegation?: ApprovedDelegation;
     readonly governedTaskOwner?: string;
     readonly ordinaryRootOwner?: string;
     readonly contractSetActor?: string;
@@ -1395,6 +1405,41 @@ const baseLayer: Layer.Layer<
               cancelledEffectIds: [],
               ...(taskEnrollment === undefined ? {} : { taskEnrollment }),
             };
+          }
+
+          if (
+            input.commandType === "delegated_task.request" &&
+            (yield* PolicyExecutionContext).kind !== "kernel-test" &&
+            input.approvedDelegation === undefined
+          )
+            return yield* new EventSinkWriteError({
+              commandId: input.commandId,
+              eventCount: input.events.length,
+            });
+          if (input.approvedDelegation !== undefined) {
+            if (
+              input.commandType !== "delegated_task.request" ||
+              input.commandId !== input.approvedDelegation.command.commandId ||
+              input.threadId !== input.approvedDelegation.command.parentThreadId
+            )
+              return yield* new EventSinkWriteError({
+                commandId: input.commandId,
+                eventCount: input.events.length,
+              });
+            yield* admitDelegationCommit(sql, input.approvedDelegation.command);
+            yield* commitApprovedDelegation(sql, input.approvedDelegation, input.events);
+          }
+          if (
+            input.commandType === "message.dispatch" &&
+            (yield* PolicyExecutionContext).kind !== "kernel-test"
+          ) {
+            for (const event of input.events) {
+              if (
+                event.type === "message.updated" &&
+                event.payload.delegatedCompletion !== undefined
+              )
+                yield* commitMailboxAuthority(sql, event.payload);
+            }
           }
 
           // Native completion does not take the command lock. Validate the old

@@ -1,3 +1,4 @@
+import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import { CommandId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -302,42 +303,59 @@ export const executorLayer: Layer.Layer<
                         if (message === undefined || run === undefined) return yield* error;
                         // Reuse the message identity and a stable command receipt so an outbox
                         // retry cannot append a duplicate message or start a second follow-up.
-                        yield* threads.dispatch({
-                          type: "message.dispatch",
-                          commandId: CommandId.make(`command:steer-follow-up:${effect.id}`),
-                          threadId: effect.threadId,
-                          messageId: message.id,
-                          text: message.text,
-                          ...(message.context ? { context: message.context } : {}),
-                          attachments: message.attachments,
-                          // A user's follow-up starts on the thread's saved selection,
-                          // which already holds the steer's choice. A delegated
-                          // completion stays pinned to the run it reports to.
-                          modelSelection:
-                            message.delegatedCompletion === undefined
-                              ? projection.thread.modelSelection
-                              : run.modelSelection,
-                          dispatchMode: {
-                            type:
+                        const fallbackContext = yield* PolicyExecutionContext;
+                        yield* threads
+                          .dispatch({
+                            type: "message.dispatch",
+                            commandId: CommandId.make(`command:steer-follow-up:${effect.id}`),
+                            threadId: effect.threadId,
+                            messageId: message.id,
+                            text: message.text,
+                            ...(message.context ? { context: message.context } : {}),
+                            attachments: message.attachments,
+                            // A user's follow-up starts on the thread's saved selection,
+                            // which already holds the steer's choice. A delegated
+                            // completion stays pinned to the run it reports to.
+                            modelSelection:
                               message.delegatedCompletion === undefined
-                                ? "start_immediately"
-                                : "queue_after_active",
-                          },
-                          createdBy: message.createdBy,
-                          creationSource: message.creationSource,
-                          ...(message.delegatedCompletion === undefined
-                            ? {}
-                            : { delegatedCompletion: message.delegatedCompletion }),
-                          ...(message.notification === undefined
-                            ? {}
-                            : { notification: message.notification }),
-                          ...(message.scheduledTaskId === undefined
-                            ? {}
-                            : { scheduledTaskId: message.scheduledTaskId }),
-                          ...(message.senderThreadId === undefined
-                            ? {}
-                            : { senderThreadId: message.senderThreadId }),
-                        });
+                                ? projection.thread.modelSelection
+                                : run.modelSelection,
+                            dispatchMode: {
+                              type:
+                                message.delegatedCompletion === undefined
+                                  ? "start_immediately"
+                                  : "queue_after_active",
+                            },
+                            createdBy: message.createdBy,
+                            creationSource: message.creationSource,
+                            ...(message.delegatedCompletion === undefined
+                              ? {}
+                              : { delegatedCompletion: message.delegatedCompletion }),
+                            ...(message.notification === undefined
+                              ? {}
+                              : { notification: message.notification }),
+                            ...(message.scheduledTaskId === undefined
+                              ? {}
+                              : { scheduledTaskId: message.scheduledTaskId }),
+                            ...(message.senderThreadId === undefined
+                              ? {}
+                              : { senderThreadId: message.senderThreadId }),
+                          })
+                          .pipe(
+                            Effect.provideService(
+                              PolicyExecutionContext,
+                              message.delegatedCompletion === undefined ||
+                                fallbackContext.kind === "kernel-test"
+                                ? fallbackContext
+                                : {
+                                    kind: "delegated-completion",
+                                    threadId: effect.threadId,
+                                    parentRunId: message.delegatedCompletion.parentRunId,
+                                    generation: message.delegatedCompletion.generation,
+                                    messageId: message.id,
+                                  },
+                            ),
+                          );
                       }),
                     ),
                     Effect.mapError(

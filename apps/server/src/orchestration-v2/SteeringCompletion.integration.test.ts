@@ -68,7 +68,7 @@ it.effect.each(
       ({ mailbox, timing }) =>
         mailbox || (timing !== "without native steering" && timing !== "settled only"),
     ),
-)("delivers $label when completion wins $timing", ({ mailbox, timing }) =>
+)("handles $label when completion wins $timing", ({ mailbox, timing }) =>
   Effect.scoped(
     Effect.gen(function* () {
       const cwd = yield* checkpointWorkspace(`steering-completion-${timing.replaceAll(" ", "-")}`);
@@ -369,6 +369,19 @@ it.effect.each(
             const acknowledged = yield* orchestrator.getThreadProjection(threadId);
             assert.equal(acknowledged.subagents[0]?.completionDelivery?.state, "acknowledged");
           }
+          return;
+        }
+        if (mailbox && timing === "during delivery") {
+          // Once native steering was called, a later completed-turn read
+          // cannot prove the notification was rejected before acceptance.
+          assert.equal(steerCalls, 1);
+          assert.equal(started.length, 1);
+          const uncertain = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(uncertain.messages.filter((message) => message.id === messageId).length, 1);
+          assert.equal(uncertain.runs[0]?.delegatedCompletion?.delivery?.messageId, messageId);
+          assert.notEqual(uncertain.subagents[0]?.completionDelivery?.state, "delivered");
+          yield* worker.drain();
+          assert.equal(started.length, 1);
           return;
         }
         assert.equal(started.length, 2);

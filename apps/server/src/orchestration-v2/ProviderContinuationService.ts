@@ -1,4 +1,5 @@
 import { CommandId, type OrchestrationV2ThreadProjection } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -6,16 +7,10 @@ import * as Ref from "effect/Ref";
 import * as IdAllocator from "./IdAllocator.ts";
 import * as ProviderContinuationRequests from "./ProviderContinuationRequests.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
-import { isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
+import { PolicyExecutionContext } from "../policy/executionContext.ts";
+import { delegatedCompletionText, isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
 
 const CONTINUATION_MESSAGE_TEXT = "Background task completed.";
-
-function delegatedCompletionText(taskIds: ReadonlyArray<string>): string {
-  const taskList = taskIds.join(", ");
-  return taskIds.length === 1
-    ? `Delegated task ${taskList} reached a terminal state. Use task_status with taskId ${taskList} to read the result.`
-    : `Delegated tasks ${taskList} reached terminal states. Use task_status with each taskId to read the results.`;
-}
 
 function currentDelegatedCompletionDelivery(
   projection: Pick<OrchestrationV2ThreadProjection, "messages" | "runs" | "providerTurns">,
@@ -126,22 +121,32 @@ export const workerLive = Layer.effectDiscard(
             fixtureName: "delegated-completion",
             commandName: "dispatch",
           });
-          yield* threads.dispatch({
-            type: "message.dispatch",
-            commandId,
-            threadId: request.threadId,
-            messageId: delivery.messageId,
-            text: delegatedCompletionText(delivery.taskIds),
-            attachments: [],
-            dispatchMode: { type: "queue_after_active" },
-            createdBy: "agent",
-            creationSource: "server",
-            delegatedCompletion: {
-              parentRunId: request.delegatedCompletion.parentRunId,
-              generation: delivery.generation,
-              taskIds: delivery.taskIds,
-            },
-          });
+          yield* threads
+            .dispatch({
+              type: "message.dispatch",
+              commandId,
+              threadId: request.threadId,
+              messageId: delivery.messageId,
+              text: delegatedCompletionText(delivery.taskIds),
+              attachments: [],
+              dispatchMode: { type: "queue_after_active" },
+              createdBy: "agent",
+              creationSource: "server",
+              delegatedCompletion: {
+                parentRunId: request.delegatedCompletion.parentRunId,
+                generation: delivery.generation,
+                taskIds: delivery.taskIds,
+              },
+            })
+            .pipe(
+              Effect.provideService(PolicyExecutionContext, {
+                kind: "delegated-completion",
+                threadId: request.threadId,
+                parentRunId: request.delegatedCompletion.parentRunId,
+                generation: delivery.generation,
+                messageId: delivery.messageId,
+              }),
+            );
           yield* clearRetryAttempt(retryKey);
           return;
         }
@@ -188,7 +193,7 @@ export const workerLive = Layer.effectDiscard(
               yield* Effect.logWarning("orchestration-v2.provider-continuation.dispatch-failed", {
                 threadId: request.threadId,
                 providerThreadId: request.providerThreadId,
-                cause,
+                cause: Cause.pretty(cause),
               });
               if (request.delegatedCompletion !== undefined) {
                 const completion = request.delegatedCompletion;

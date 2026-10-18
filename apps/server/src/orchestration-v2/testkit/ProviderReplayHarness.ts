@@ -494,7 +494,13 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     options.runContinuationWorker === true
       ? ProviderContinuationService.workerLive.pipe(
           Layer.provide(
-            Layer.mergeAll(continuationRequestsLayer, threadManagementProvided, IdAllocator.layer),
+            Layer.mergeAll(
+              continuationRequestsLayer,
+              threadManagementProvided,
+              IdAllocator.layer,
+              databaseLayer,
+              options.capabilityContextLayer ?? Layer.empty,
+            ),
           ),
         )
       : Layer.empty;

@@ -292,7 +292,34 @@ const scheduledTaskProvided = scheduledTaskServiceLayer.pipe(
 );
 const providerContinuationWorkerProvided = providerContinuationWorkerLive.pipe(
   Layer.provide(
-    Layer.mergeAll(providerContinuationRequestsLayer, threadManagementProvided, idAllocatorLayer),
+    Layer.mergeAll(
+      providerContinuationRequestsLayer,
+      threadManagementProvided,
+      idAllocatorLayer,
+      Layer.effect(CapabilitySql.SqlClient, CapabilitySql.SqlClient),
+      Layer.unwrap(
+        Effect.serviceOption(CapabilityProviderRegistry.ProviderRegistry).pipe(
+          Effect.map(
+            Option.match({
+              onNone: () => Layer.empty,
+              onSome: (registry) =>
+                Layer.succeed(CapabilityProviderRegistry.ProviderRegistry, registry),
+            }),
+          ),
+        ),
+      ),
+      Layer.unwrap(
+        Effect.serviceOption(CapabilityEnvironment.ServerEnvironment).pipe(
+          Effect.map(
+            Option.match({
+              onNone: () => Layer.empty,
+              onSome: (environment) =>
+                Layer.succeed(CapabilityEnvironment.ServerEnvironment, environment),
+            }),
+          ),
+        ),
+      ),
+    ),
   ),
 );
 const threadTitleRegenerationProvided = threadTitleRegenerationServiceLayer.pipe(

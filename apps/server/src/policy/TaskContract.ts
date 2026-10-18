@@ -734,6 +734,7 @@ const classifyPilotDenial = (input: {
   readonly sql: SqlClient.SqlClient;
   readonly rootThreadId: string;
   readonly contract: TaskContract;
+  readonly occupiedContinuation?: boolean;
 }) =>
   Effect.gen(function* () {
     const now = yield* Effect.map(DateTime.now, DateTime.formatIso);
@@ -817,10 +818,23 @@ const classifyPilotDenial = (input: {
     `;
     const admissions = countRows(admissionRows);
     const settled = countRows(settledRows);
-    if (admissions !== settled) {
+    if (!input.occupiedContinuation && admissions !== settled) {
       return `An unsettled reservation already holds this task tree. A concurrent start was not given another reservation. ${PINNED_LEASE}`;
     }
     return null;
+  });
+
+/** Mailbox input keeps an occupied slot, but cannot outlive its other brakes. */
+export const validateMailboxTaskBudget = (sql: SqlClient.SqlClient, state: PersistedTaskState) =>
+  Effect.gen(function* () {
+    if (state.governance !== "required" || state.contract === null) return;
+    const detail = yield* classifyPilotDenial({
+      sql,
+      rootThreadId: state.rootThreadId,
+      contract: state.contract,
+      occupiedContinuation: true,
+    });
+    if (detail !== null) return yield* deny("delegated-completion", detail);
   });
 
 /**

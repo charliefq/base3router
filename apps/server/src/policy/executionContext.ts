@@ -15,7 +15,14 @@ export type PolicyExecutionContext =
       readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
       readonly expiresAt?: string;
     }
-  | { readonly kind: "server-continuation" };
+  | { readonly kind: "server-continuation" }
+  | {
+      readonly kind: "delegated-completion";
+      readonly threadId: string;
+      readonly parentRunId: string;
+      readonly generation: number;
+      readonly messageId: string;
+    };
 
 const kernelTest = {
   kind: "kernel-test" as const,

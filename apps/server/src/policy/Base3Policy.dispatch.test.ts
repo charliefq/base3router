@@ -1,3 +1,4 @@
+import { admitDelegationCommit } from "./Base3PolicyGate.ts";
 import {
   ActionApprovalId,
   ModelRouterDecision,
@@ -640,7 +641,12 @@ it.effect("child admission rejects without waiting and leaves the parent lease o
           },
           now,
         );
-        return yield* dispatch(command).pipe(Effect.exit);
+        return yield* Effect.gen(function* () {
+          yield* dispatch(command);
+          yield* admitDelegationCommit(sql, command).pipe(
+            Effect.provideService(PolicyExecutionContext, session),
+          );
+        }).pipe(Effect.exit);
       });
     for (const index of [1, 2, 3]) {
       const admitted = yield* admit(`child ${index}`, `child-${index}`);

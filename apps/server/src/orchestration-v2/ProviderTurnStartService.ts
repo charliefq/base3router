@@ -1,3 +1,4 @@
+import { revalidateDelegatedMessage } from "../policy/DelegatedMailboxAuthority.ts";
 import {
   revalidateImageRoute,
   settleImageDeliveryDenial,
@@ -1194,6 +1195,19 @@ export const layer: Layer.Layer<
                   return entry ? [entry] : [];
                 })
             : undefined;
+          if ((yield* PolicyExecutionContext).kind !== "kernel-test") {
+            const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+            if (Option.isNone(sql))
+              return yield* new Base3PolicyDeniedError({
+                commandType: "provider-turn.start",
+                reason: "policy-store-unavailable",
+              });
+            yield* revalidateDelegatedMessage(sql.value, input.threadId, message.id, {
+              runId: run.id,
+              target: turnInput.modelSelection,
+              providerInstanceId: turnInput.providerThread.providerInstanceId,
+            });
+          }
           yield* deliver({
             ...turnInput,
             ...(conversationHistory === undefined ? {} : { conversationHistory }),
