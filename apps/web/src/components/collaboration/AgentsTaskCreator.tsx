@@ -106,6 +106,7 @@ export function AgentsTaskCreator(props: {
   const attemptRef = useRef(attempt);
   const [editing, setEditing] = useState<{
     providerId: string;
+    driver: ServerProvider["driver"];
     token: string;
     context: string;
   } | null>(null);
@@ -126,7 +127,27 @@ export function AgentsTaskCreator(props: {
   const mounted = useRef(true);
   const latest = useRef(props);
   const epoch = useRef(0);
+  const selectedProviderId =
+    editing?.providerId ?? props.request?.providerId ?? attempt?.command.modelSelection.instanceId;
+  const selectedProvider = props.providers.find(
+    (provider) => provider.instanceId === selectedProviderId,
+  );
+  const draftContext = JSON.stringify([
+    props.environmentId,
+    props.project?.id,
+    selectedProviderId,
+    selectedProvider?.driver ?? editing?.driver,
+  ]);
+  const reviewContext = JSON.stringify([
+    draftContext,
+    selectedProvider && providerExecutable(selectedProvider),
+    selectedProvider?.models.map((model) => [model.slug, model.isDefault]),
+  ]);
+  // Recovery keeps its original strict epoch. Only unsent text and confirmation
+  // distinguish selected-provider changes from unrelated catalog churn.
   const context = `${props.environmentId}:${props.project?.id}:${props.providers.map((p) => `${p.instanceId}:${p.driver}:${providerExecutable(p)}:${p.models.map((m) => `${m.slug}:${m.isDefault}`).join(",")}`).join(";")}`;
+  const currentDraftContext = useRef(draftContext);
+  const currentReviewContext = useRef(reviewContext);
   const currentContext = useRef(context);
   useLayoutEffect(() => {
     latest.current = props;
@@ -148,6 +169,9 @@ export function AgentsTaskCreator(props: {
   }, []);
   useLayoutEffect(() => {
     if (currentContext.current !== context || currentSessionContext.current !== sessionContext) {
+      const retainDraft =
+        currentDraftContext.current === draftContext &&
+        currentSessionContext.current === sessionContext;
       currentSessionContext.current = sessionContext;
       currentContext.current = context;
       epoch.current += 1;
@@ -160,12 +184,40 @@ export function AgentsTaskCreator(props: {
         latest.current.onLock(unresolved.command.commandId);
       }
       setRecovering(false);
-      if (editingOwner.current) latest.current.onRelease(editingOwner.current);
-      editingOwner.current = null;
-      setEditing(null);
-      closeReview();
+      if (retainDraft && editingOwner.current) {
+        setEditing((previous) => (previous ? { ...previous, context: reviewContext } : null));
+      } else {
+        if (editingOwner.current) latest.current.onRelease(editingOwner.current);
+        editingOwner.current = null;
+        setEditing(null);
+        setDraft(blank);
+        draftThreadIdentity.current = null;
+      }
+      if (!retainDraft) closeReview();
     }
-  }, [context, sessionContext, closeReview]);
+    currentDraftContext.current = draftContext;
+  }, [
+    context,
+    draftContext,
+    reviewContext,
+    sessionContext,
+    closeReview,
+    currentContext,
+    currentDraftContext,
+    currentSessionContext,
+    editingOwner,
+  ]);
+  useLayoutEffect(() => {
+    if (currentReviewContext.current !== reviewContext) {
+      currentReviewContext.current = reviewContext;
+      closeReview();
+      setEditing((previous) =>
+        previous && editingOwner.current === previous.token
+          ? { ...previous, context: reviewContext }
+          : previous,
+      );
+    }
+  }, [reviewContext, closeReview, currentReviewContext, editingOwner]);
   const requestToken = props.request?.token;
   useLayoutEffect(() => {
     const currentProps = latest.current;
@@ -214,10 +266,11 @@ export function AgentsTaskCreator(props: {
     draftThreadIdentity.current = newThreadId();
     setEditing({
       providerId: provider.instanceId,
+      driver: provider.driver,
       token: currentProps.request.token,
-      context: currentContext.current,
+      context: currentReviewContext.current,
     });
-  }, [requestToken, closeReview]);
+  }, [requestToken, closeReview, currentReviewContext, editingOwner]);
   const matchesContext = (command: Create) =>
     latest.current.environmentId === command.taskCreationReview?.environmentId &&
     latest.current.project?.id === command.projectId;
@@ -307,7 +360,7 @@ export function AgentsTaskCreator(props: {
       mutationOwner.current ||
       !editing ||
       editingOwner.current !== editing.token ||
-      editing.context !== currentContext.current ||
+      editing.context !== currentReviewContext.current ||
       !matchesContext(command)
     )
       return;
@@ -410,7 +463,7 @@ export function AgentsTaskCreator(props: {
     if (
       !editing ||
       editingOwner.current !== editing.token ||
-      editing.context !== currentContext.current ||
+      editing.context !== currentReviewContext.current ||
       !proposed ||
       !props.environmentId ||
       !props.project ||
@@ -557,7 +610,16 @@ export function AgentsTaskCreator(props: {
               </label>
             );
           })}
-          <Button type="button" disabled={!parseDraft(draft) || review !== null} onClick={preview}>
+          <Button
+            type="button"
+            disabled={
+              !parseDraft(draft) ||
+              review !== null ||
+              !selectedProvider ||
+              !providerExecutable(selectedProvider)
+            }
+            onClick={preview}
+          >
             Review new task
           </Button>
           <Button type="button" variant="outline" onClick={cancel}>

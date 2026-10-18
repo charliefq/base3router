@@ -6311,3 +6311,272 @@ it("Manual target cap mounted Tasks refresh and remount show persisted explanati
     ),
   );
 });
+
+const retainedTaskFields = {
+  "Task title": "Keep this unsent task",
+  Goal: "Fix parser",
+  Redirect: "Ask before expanding scope",
+  Acceptance: "Parser regression passes",
+  "Provider start limit": "2",
+  "Stop conditions": "Scope changed",
+  "Optional token cap": "900",
+  "Optional reported cost cap (USD)": "0.1",
+  "Optional UTC deadline": "2026-10-14T00:00:00Z",
+};
+const assertRetainedTaskText = () => {
+  for (const [label, value] of Object.entries(retainedTaskFields)) {
+    const input = renderer.root.findAllByProps({ "aria-label": label })[0];
+    expect(input, `Unsent ${label} remains mounted`).toBeDefined();
+    expect(input!.props.value).toBe(value);
+  }
+};
+it.each(
+  (["Agents", "Tasks"] as const).flatMap((page) =>
+    (["readiness", "model-add", "model-remove", "model-order", "provider-order"] as const).flatMap(
+      (change) => (["draft", "review"] as const).map((phase) => ({ page, change, phase })),
+    ),
+  ),
+)(
+  "retains unsent $page task $phase text across unrelated $change",
+  async ({ page, change, phase }) => {
+    const storage = creationStorage();
+    const other = {
+      ...configuredProviders[0]!,
+      instanceId: "other-provider",
+      enabled: false,
+      models: [
+        { slug: "other-one", name: "Other one", isDefault: true },
+        { slug: "other-two", name: "Other two", isDefault: false },
+      ],
+    };
+    state.providers = [configuredProviders[0]!, other];
+    const view = () => (page === "Agents" ? <AgentsPage /> : <TasksPage />);
+    await act(async () => {
+      renderer = create(view());
+    });
+    await creationClick(page === "Agents" ? "New task" : "Create governed task");
+    await fillCreation(retainedTaskFields["Task title"]);
+    if (phase === "review") await creationClick("Review new task");
+    const changed =
+      change === "readiness"
+        ? { ...other, enabled: true }
+        : change === "model-add"
+          ? {
+              ...other,
+              models: [
+                ...other.models,
+                { slug: "other-three", name: "Other three", isDefault: false },
+              ],
+            }
+          : change === "model-remove"
+            ? { ...other, models: other.models.slice(0, 1) }
+            : { ...other, models: other.models.toReversed() };
+    state.providers =
+      change === "provider-order" ? state.providers.toReversed() : [state.providers[0]!, changed];
+    await act(async () => renderer.update(view()));
+    assertRetainedTaskText();
+    expect(creationButton("Cancel new task")).toBeDefined();
+    if (phase === "review") expect(creationButton("Create task")).toBeDefined();
+    expect(storage.size).toBe(0);
+    expect(state.create).not.toHaveBeenCalled();
+    expect(state.bind).not.toHaveBeenCalled();
+    expect(state.recover).not.toHaveBeenCalled();
+    expect(state.readCreationStatus).not.toHaveBeenCalled();
+  },
+);
+
+it.each(
+  (["Agents", "Tasks"] as const).flatMap((page) =>
+    (["unavailable", "model", "removed", "default"] as const).map((change) => ({ page, change })),
+  ),
+)(
+  "retains unsent $page text but retires selected-provider $change confirmation",
+  async ({ page, change }) => {
+    const storage = creationStorage();
+    const view = () => (page === "Agents" ? <AgentsPage /> : <TasksPage />);
+    await act(async () => {
+      renderer = create(view());
+    });
+    await creationClick(page === "Agents" ? "New task" : "Create governed task");
+    await fillCreation(retainedTaskFields["Task title"]);
+    await creationClick("Review new task");
+    const oldConfirm = creationButton("Create task")!.props.onClick;
+    state.providers =
+      change === "removed"
+        ? []
+        : [
+            {
+              ...configuredProviders[0]!,
+              ...(change === "unavailable"
+                ? { enabled: false }
+                : {
+                    models:
+                      change === "default"
+                        ? [
+                            { ...configuredProviders[0]!.models[0]!, isDefault: false },
+                            { slug: "new-model", name: "New", isDefault: true },
+                          ]
+                        : [{ slug: "new-model", name: "New", isDefault: true }],
+                  }),
+            },
+          ];
+    await act(async () => renderer.update(view()));
+    assertRetainedTaskText();
+    expect(creationButton("Create task")).toBeUndefined();
+    await act(async () => oldConfirm());
+    expect(state.create).not.toHaveBeenCalled();
+    if (change === "unavailable" || change === "removed")
+      expect(creationButton("Review new task")!.props.disabled).toBe(true);
+    state.providers = [
+      { ...configuredProviders[0]!, models: [{ slug: "new-model", name: "New", isDefault: true }] },
+    ];
+    await act(async () => renderer.update(view()));
+    assertRetainedTaskText();
+    await creationClick("Review new task");
+    expect(text()).toContain("new-model");
+    await act(async () => oldConfirm());
+    expect(state.create).not.toHaveBeenCalled();
+    expect(storage.size).toBe(0);
+    await creationClick("Back to task draft");
+    await creationClick("Cancel new task");
+    await creationClick(page === "Agents" ? "New task" : "Create governed task");
+    expect(renderer.root.findByProps({ "aria-label": "Task title" }).props.value).toBe("");
+  },
+);
+
+it.each(
+  (["Agents", "Tasks"] as const).flatMap((page) =>
+    (["environment", "project", "session", "driver"] as const).map((scope) => ({ page, scope })),
+  ),
+)(
+  "isolates unsent $page text and saved confirmation across $scope changes",
+  async ({ page, scope }) => {
+    creationStorage();
+    const view = () => (page === "Agents" ? <AgentsPage /> : <TasksPage />);
+    await act(async () => {
+      renderer = create(view());
+    });
+    await creationClick(page === "Agents" ? "New task" : "Create governed task");
+    await fillCreation(retainedTaskFields["Task title"]);
+    await creationClick("Review new task");
+    const oldConfirm = creationButton("Create task")!.props.onClick;
+    if (scope === "environment") state.environmentId = "environment-b";
+    else if (scope === "project")
+      state.projects = [{ id: "project-b", title: "B", environmentId: "environment-a" }];
+    else if (scope === "session") state.sessionIdentity = {};
+    else state.providers = [{ ...configuredProviders[0]!, driver: "claudeAgent" }];
+    await act(async () => renderer.update(view()));
+    expect(creationButton("Create task")).toBeUndefined();
+    await act(async () => oldConfirm());
+    expect(state.create).not.toHaveBeenCalled();
+    state.environmentId = "environment-a";
+    state.projects = [{ id: "project-a", title: "A", environmentId: "environment-a" }];
+    state.providers = [...configuredProviders];
+    await act(async () => renderer.update(view()));
+    await creationClick(page === "Agents" ? "New task" : "Create governed task");
+    for (const label of Object.keys(retainedTaskFields))
+      expect(renderer.root.findByProps({ "aria-label": label }).props.value).toBe("");
+  },
+);
+it.each(["Agents", "Tasks"] as const)(
+  "keeps the original pending $0 creation identity after unrelated churn without retry",
+  async (page) => {
+    const storage = creationStorage();
+    const reply = deferred<{ _tag: "Failure" }>();
+    state.create.mockReturnValueOnce(reply.promise);
+    state.readCreationStatus.mockResolvedValue({ _tag: "Success", value: { status: "rejected" } });
+    const view = () => (page === "Agents" ? <AgentsPage /> : <TasksPage />);
+    await act(async () => {
+      renderer = create(view());
+    });
+    await creationClick(page === "Agents" ? "New task" : "Create governed task");
+    await fillCreation();
+    await creationClick("Review new task");
+    await creationClick("Create task", true);
+    const command = state.create.mock.calls[0]![0].input;
+    state.providers = [
+      ...state.providers,
+      { ...configuredProviders[0]!, instanceId: "unrelated", enabled: false },
+    ];
+    await act(async () => renderer.update(view()));
+    expect(state.create).toHaveBeenCalledTimes(1);
+    expect(
+      (decodeCreationStorage([...storage.values()][0]!) as { command: unknown }).command,
+    ).toEqual(command);
+    expect(
+      creationButton(page === "Agents" ? "New task" : "Create governed task")!.props.disabled,
+    ).toBe(true);
+    await act(async () => reply.resolve({ _tag: "Failure" }));
+    expect(state.create).toHaveBeenCalledTimes(1);
+    expect(state.readCreationStatus).not.toHaveBeenCalled();
+    await creationClick("Recover task creation");
+    expect(state.readCreationStatus).toHaveBeenCalledTimes(1);
+    expect(state.readCreationStatus.mock.calls[0]![0].input.command).toEqual(command);
+    expect(state.create).toHaveBeenCalledTimes(1);
+  },
+);
+
+it.each(["Agents", "Tasks"] as const)(
+  "confirms the retained $0 draft once after unrelated churn with no execution",
+  async (page) => {
+    creationStorage();
+    const fixture = await loadAgentsCreationFixture();
+    await EffectForFixture.runPromise(
+      fixture.withAgentsTaskCreationFixture((f) =>
+        EffectForFixture.promise(async () => {
+          state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+          state.create.mockImplementation(async ({ input }: { input: OrchestrationV2Command }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(f.dispatch(input)),
+          }));
+          state.readProjection.mockImplementation(
+            async ({ input }: { input: { threadId: string } }) => ({
+              _tag: "Success",
+              value: await EffectForFixture.runPromise(
+                f.orchestrator.getThreadProjection(input.threadId),
+              ),
+            }),
+          );
+          const view = () => (page === "Agents" ? <AgentsPage /> : <TasksPage />);
+          await act(async () => {
+            renderer = create(view());
+          });
+          await creationClick(page === "Agents" ? "New task" : "Create governed task");
+          await fillCreation(retainedTaskFields["Task title"]);
+          await creationClick("Review new task");
+          state.providers = [
+            { ...configuredProviders[0]!, instanceId: "other-provider", enabled: false },
+            ...state.providers,
+          ];
+          await act(async () => renderer.update(view()));
+          assertRetainedTaskText();
+          expect(state.create).not.toHaveBeenCalled();
+          expect(await EffectForFixture.runPromise(f.noExecution())).toEqual({
+            runs: 0,
+            grants: 0,
+            outbox: 0,
+            messages: 0,
+          });
+          await creationClick("Create task", true);
+          expect(state.create).toHaveBeenCalledTimes(1);
+          expect(text()).toContain("durably recorded");
+          const command = state.create.mock.calls[0]![0].input;
+          const snapshot = await EffectForFixture.runPromise(f.readSnapshot());
+          expect(snapshot.tasks.filter((task) => task.threadId === command.threadId)).toHaveLength(
+            1,
+          );
+          expect(command.title).toBe(retainedTaskFields["Task title"]);
+          expect(command.taskContract.goal).toBe(retainedTaskFields.Goal);
+          expect(f.providerStarts()).toBe(0);
+          expect(await EffectForFixture.runPromise(f.noExecution())).toEqual({
+            runs: 0,
+            grants: 0,
+            outbox: 0,
+            messages: 0,
+          });
+        }),
+      ),
+    );
+  },
+  60_000,
+);
