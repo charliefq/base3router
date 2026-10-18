@@ -87,6 +87,7 @@ import { DISCONNECTED_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
 import { listContinuationForEnter, listIndentForTab } from "../../composer-list-continuation";
 import {
   deriveComposerSendState,
+  governedFanoutSendBlockReason,
   getAntigravitySendBlockReason,
   getAutoTurnSendBlockReason,
   readFileAsDataUrl,
@@ -2193,8 +2194,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const turnProviderSendBlockReason = usesAutoTurnRouting
     ? autoTurnSendBlockReason
     : providerSendBlockReason;
+  const [taskContractDraft, setTaskContractDraft] = useState(EMPTY_TASK_CONTRACT_DRAFT);
+  const taskContractDraftRef = useRef(taskContractDraft);
+  taskContractDraftRef.current = taskContractDraft;
+  const showTaskContractFormRef = useRef(showTaskContractForm);
+  showTaskContractFormRef.current = showTaskContractForm || routeKind === "draft";
+  const governedFanoutBlockReason = governedFanoutSendBlockReason({
+    governed: (showTaskContractForm || routeKind === "draft") && taskContractDraft.enabled,
+    multipleModelSelections: routeKind === "draft" ? multipleModelSelections : null,
+  });
   const sendDisabledReason =
     externalSendDisabledReason ??
+    governedFanoutBlockReason ??
     (multipleModelSelections?.length === 0 ? "Select at least one model." : null) ??
     (activePendingProgress
       ? attachmentBlockReason
@@ -2395,11 +2406,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const hasMultilinePrompt = prompt.includes("\n") || hasWrappedPrompt;
   const [isStashMenuOpen, setIsStashMenuOpen] = useState(false);
   const [isTasksDrawerOpen, setIsTasksDrawerOpen] = useState(false);
-  const [taskContractDraft, setTaskContractDraft] = useState(EMPTY_TASK_CONTRACT_DRAFT);
-  const taskContractDraftRef = useRef(taskContractDraft);
-  taskContractDraftRef.current = taskContractDraft;
-  const showTaskContractFormRef = useRef(showTaskContractForm);
-  showTaskContractFormRef.current = showTaskContractForm || routeKind === "draft";
   useEffect(() => {
     setTaskContractDraft(EMPTY_TASK_CONTRACT_DRAFT);
   }, [draftId, routeKind, activeThreadId]);
@@ -6487,7 +6493,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             return { taskContractError: null, taskContract: null };
           }
           const drafted = taskContractFromDraft(taskContractDraftRef.current);
-          return { taskContractError: drafted.error, taskContract: drafted.contract };
+          return {
+            taskContractError:
+              drafted.error ??
+              governedFanoutSendBlockReason({
+                governed: drafted.contract !== null,
+                multipleModelSelections: routeKind === "draft" ? multipleModelSelections : null,
+              }),
+            taskContract: drafted.contract,
+          };
         })(),
       }),
       setMultipleModelSelections,
@@ -6626,7 +6640,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       {...threadContextDropTargetProps()}
     >
       {showTaskContractForm || routeKind === "draft" ? (
-        <TaskContractForm draft={taskContractDraft} onChange={setTaskContractDraft} />
+        <>
+          <TaskContractForm draft={taskContractDraft} onChange={setTaskContractDraft} />
+          {governedFanoutBlockReason ? (
+            <p role="alert" className="text-xs text-destructive">
+              {governedFanoutBlockReason}
+            </p>
+          ) : null}
+        </>
       ) : null}
       {composerControlsCollapsed && restingControlsHost
         ? createPortal(

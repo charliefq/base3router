@@ -8067,6 +8067,24 @@ export default function ChatView(props: ChatViewProps) {
     },
   ) => {
     e?.preventDefault();
+    const sendDispatch = captureComposerSendDispatch(
+      composerDraftTarget,
+      environmentId,
+      composerRef.current,
+      { startTurn: startThreadTurn, editQueuedRun: editQueuedRunCommand },
+    );
+    if (sendDispatch?.status === "blocked") {
+      if (activeThread) setThreadError(activeThread.id, sendDispatch.blockReason);
+      else
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "Message not sent",
+            description: sendDispatch.blockReason,
+          }),
+        );
+      return;
+    }
     // Typed out in full rather than picked from the menu. Attachments or contexts
     // mean the user is sending a prompt, so those go through as usual.
     if (
@@ -8141,12 +8159,6 @@ export default function ChatView(props: ChatViewProps) {
       onAdvanceActivePendingUserInput();
       return;
     }
-    const sendDispatch = captureComposerSendDispatch(
-      composerDraftTarget,
-      environmentId,
-      composerRef.current,
-      { startTurn: startThreadTurn, editQueuedRun: editQueuedRunCommand },
-    );
     if (!sendDispatch?.context.providerAvailable) {
       notifyDirectAnnotationAttached();
       return;

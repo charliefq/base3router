@@ -16,6 +16,9 @@ import {
 } from "@t3tools/client-runtime/operations";
 import {
   CommandId,
+  ChatAttachmentId,
+  ProjectId,
+  type OrchestrationV2ThreadLaunchInput,
   MessageId,
   RunId,
   ORCHESTRATION_V2_WS_METHODS,
@@ -33,9 +36,10 @@ import {
 } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { startAttachmentUpload } from "../../lib/attachmentUploadQueue";
 import type { AttachmentUploadState } from "../../lib/attachmentUploadState";
 import { makeThreadFixture } from "../../test-fixtures";
-import { useComposerDraftStore } from "../../composerDraftStore";
+import { composerTargetKey, useComposerDraftStore } from "../../composerDraftStore";
 import { ChatComposer, type ChatComposerHandle, type ChatComposerProps } from "./ChatComposer";
 vi.mock("../../state/environments", () => ({ usePrimaryEnvironmentId: () => "env-a" }));
 vi.mock("../../state/entities", () => ({ useThreadShells: () => [], readThreadShell: () => null }));
@@ -406,6 +410,7 @@ effectIt.effect(
       yield* Effect.promise(() => act(async () => toggle().props.onClick()));
       const targetA = scopeThreadRef(envA, ThreadId.make("a"));
       const dispatchA = captureComposerSendDispatch(targetA, envA, handle.current, operations)!;
+      if (dispatchA.status !== "ready") throw new Error(dispatchA.blockReason);
       // Input fixtures omit routing. The production seam owns mode/environment binding.
       const input = (id: string, thread: string, dispatchMode: "auto" | "queue" = "auto") => ({
         commandId: CommandId.make(id),
@@ -433,6 +438,7 @@ effectIt.effect(
       ).toBeUndefined();
       const targetB = scopeThreadRef(envB, ThreadId.make("b"));
       const dispatchB = captureComposerSendDispatch(targetB, envB, handle.current, operations)!;
+      if (dispatchB.status !== "ready") throw new Error(dispatchB.blockReason);
       yield* Effect.promise(() => act(async () => toggle().props.onClick()));
       yield* Effect.promise(() =>
         act(async () => useComposerDraftStore.getState().setRoutingMode(targetA, "manual")),
@@ -939,3 +945,276 @@ effectIt.effect.each([false, true])(
       ),
     ),
 );
+
+const governedFields = {
+  goal: "Keep the stated brake",
+  redirect: "Ask before changing scope",
+  acceptance: "Owner reviews the result",
+  brake: { maxProviderStarts: 1, stopConditions: "Stop after one start" },
+};
+async function fillGovernedContract() {
+  const field = (key: string) =>
+    renderer.root
+      .findAllByType("input")
+      .find((node) => node.props[`data-task-contract-${key}`] !== undefined)!;
+  await act(async () => field("toggle").props.onChange({ target: { checked: true } }));
+  for (const [key, value] of [
+    ["goal", governedFields.goal],
+    ["redirect", governedFields.redirect],
+    ["acceptance", governedFields.acceptance],
+    ["max-starts", "1"],
+    ["stop", governedFields.brake.stopConditions],
+  ])
+    await act(async () => field(key!).props.onChange({ target: { value } }));
+}
+
+it.each((["manual", "auto"] as const).flatMap((mode) => [1, 2].map((count) => ({ mode, count }))))(
+  "blocks governed fan-out in $mode with $count retained targets for click, keyboard and direct repeated sends",
+  async ({ mode, count }) => {
+    const props = {
+      ...propsFor(),
+      routeKind: "draft" as const,
+      isLocalDraftThread: true,
+      isServerThread: false,
+      supportsMultipleModels: true,
+    };
+    const second = { ...provider, instanceId: ProviderInstanceId.make("codex-second") };
+    const selections = [
+      { instanceId: provider.instanceId, model: "fake" },
+      { instanceId: second.instanceId, model: "fake" },
+    ].slice(0, count);
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(props.composerDraftTarget, "Do not lose this text");
+    store.addImage(props.composerDraftTarget, {
+      type: "image",
+      id: ChatAttachmentId.make("retained-image"),
+      name: "fixture.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+      previewUrl: "blob:retained-image",
+      file: new File(["png"], "fixture.png", { type: "image/png" }),
+    });
+    vi.mocked(startAttachmentUpload).mockClear();
+    store.setRoutingMode(props.composerDraftTarget, mode);
+    const onSend = vi.fn();
+    const startTurn = vi.fn(),
+      editQueuedRun = vi.fn();
+    await act(async () => {
+      renderer = create(
+        <ChatComposer
+          {...props}
+          multipleModelSelections={selections}
+          providerStatuses={[provider, second]}
+          onSend={onSend}
+        />,
+      );
+    });
+    await fillGovernedContract();
+    const snapshot = useComposerDraftStore.getState().getComposerDraft(props.composerDraftTarget);
+    const opened = handle.current!.getSendContext();
+    expect(opened.taskContract).toEqual(governedFields);
+    expect(opened.images).toHaveLength(1);
+    expect(primarySend().props.disabled).toBe(true);
+    expect(opened.taskContractError).toContain("Select one model");
+    expect(JSON.stringify(renderer.toJSON())).toContain("Select one model");
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await act(async () => {
+        primarySend().props.onClick({ preventDefault: noop, metaKey: false, ctrlKey: false });
+        pressEnter();
+      });
+      // ChatView's production preflight also protects direct handler invocations,
+      // even when a caller ignores the disabled button or supplies no UI error.
+      const dispatch = captureComposerSendDispatch(
+        props.composerDraftTarget,
+        props.environmentId,
+        {
+          getSendContext: () => ({ ...handle.current!.getSendContext(), taskContractError: null }),
+        },
+        { startTurn, editQueuedRun },
+      )!;
+      expect(dispatch.status).toBe("blocked");
+      expect("startTurn" in dispatch).toBe(false);
+      expect("editQueuedRun" in dispatch).toBe(false);
+    }
+    expect(onSend).not.toHaveBeenCalled();
+    expect(startAttachmentUpload).not.toHaveBeenCalled();
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(editQueuedRun).not.toHaveBeenCalled();
+    expect(useComposerDraftStore.getState().getComposerDraft(props.composerDraftTarget)).toBe(
+      snapshot,
+    );
+    expect(handle.current!.getSendContext().taskContract).toEqual(governedFields);
+    expect(handle.current!.getSendContext().multipleModelSelections).toEqual(
+      opened.multipleModelSelections,
+    );
+    expect(handle.current!.getSendContext().prompt).toBe("Do not lose this text");
+    // Removing the second selection returns to the existing single-model path.
+    await act(async () =>
+      renderer.update(
+        <ChatComposer
+          {...props}
+          multipleModelSelections={null}
+          providerStatuses={[provider, second]}
+          onSend={onSend}
+        />,
+      ),
+    );
+    expect(primarySend().props.disabled).toBe(false);
+    expect(handle.current!.getSendContext().taskContract).toEqual(governedFields);
+    expect(handle.current!.getSendContext().taskContractError).toBeNull();
+  },
+);
+
+effectIt.effect.each([true, false])(
+  "production bootstrap retains a single governed contract or distinct ordinary comparison targets: governed=%s",
+  (governed) =>
+    Effect.gen(function* () {
+      const props = {
+        ...propsFor(),
+        routeKind: "draft" as const,
+        isLocalDraftThread: true,
+        isServerThread: false,
+        supportsMultipleModels: true,
+      };
+      const second = { ...provider, instanceId: ProviderInstanceId.make("codex-second") };
+      const selections = [
+        { instanceId: provider.instanceId, model: "fake" },
+        { instanceId: second.instanceId, model: "fake" },
+      ];
+      const requests: OrchestrationV2ThreadLaunchInput[] = [];
+      const session = yield* SubscriptionRef.make(
+        Option.some({
+          client: {
+            [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input: OrchestrationV2ThreadLaunchInput) =>
+              Effect.sync(() => {
+                requests.push(input);
+                return {};
+              }),
+          },
+          initialConfig: Effect.succeed({
+            environment: { capabilities: { serverResolvedCommandContext: true } },
+          }),
+        } as never),
+      );
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target: { environmentId: props.environmentId, label: "Fake" },
+        session,
+      } as never);
+      yield* Effect.promise(() =>
+        act(async () => {
+          renderer = create(
+            <ChatComposer
+              {...props}
+              multipleModelSelections={governed ? null : selections}
+              providerStatuses={[provider, second]}
+            />,
+          );
+        }),
+      );
+      if (governed) yield* Effect.promise(fillGovernedContract);
+      const dispatch = captureComposerSendDispatch(
+        props.composerDraftTarget,
+        props.environmentId,
+        handle.current,
+        {
+          startTurn: ({ input }: { environmentId: EnvironmentId; input: StartThreadTurnInput }) =>
+            startThreadTurn(input).pipe(
+              Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+            ),
+          editQueuedRun: vi.fn(),
+        },
+      )!;
+      if (dispatch.status !== "ready") throw new Error(dispatch.blockReason);
+      const targets = governed
+        ? [dispatch.context.selectedModelSelection]
+        : dispatch.context.multipleModelSelections!;
+      for (const [index, selection] of targets.entries()) {
+        yield* dispatch.startTurn({
+          environmentId: props.environmentId,
+          input: {
+            commandId: CommandId.make(`bootstrap-${index}`),
+            threadId: ThreadId.make(`bootstrap-${index}`),
+            message: {
+              messageId: MessageId.make(`message-${index}`),
+              role: "user",
+              text: "Keep the draft",
+              attachments: [],
+            },
+            modelSelection: selection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: ProjectId.make("git-project"),
+                title: "Draft",
+                modelSelection: selection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "main",
+                worktreePath: null,
+                createdAt: "2026-10-18T00:00:00Z",
+                ...(dispatch.context.taskContract
+                  ? {
+                      taskGovernance: "required" as const,
+                      taskContract: dispatch.context.taskContract,
+                    }
+                  : {}),
+              },
+              prepareWorktree: {
+                projectCwd: "/fake-git-project",
+                baseBranch: "main",
+                requireWorktree: true,
+              },
+            },
+          },
+        });
+      }
+      expect(requests.map((request) => request.modelSelection)).toEqual(targets);
+      expect(new Set(requests.map((request) => request.threadId)).size).toBe(targets.length);
+      for (const request of requests) {
+        expect(request.routingMode).toBe("manual");
+        expect(request.workspaceStrategy.type).toBe("worktree");
+        expect(request.taskGovernance).toBe(governed ? "required" : undefined);
+        expect(request.taskContract).toEqual(governed ? governedFields : undefined);
+      }
+    }).pipe(
+      Effect.provide(
+        Layer.succeed(
+          Crypto.Crypto,
+          Crypto.make({
+            randomBytes: (size) => new Uint8Array(size),
+            digest: (_algorithm, data) => Effect.succeed(data),
+          }),
+        ),
+      ),
+    ),
+);
+
+it("direct production preflight rejects a governed comparison even without a composer error", () => {
+  const props = propsFor();
+  const startTurn = vi.fn(),
+    editQueuedRun = vi.fn();
+  const blocked = captureComposerSendDispatch(
+    props.composerDraftTarget,
+    props.environmentId,
+    {
+      getSendContext: () => ({
+        composerDraftTargetKey: composerTargetKey(props.composerDraftTarget),
+        composerEnvironmentId: props.environmentId,
+        routingMode: "auto" as const,
+        taskContract: governedFields,
+        taskContractError: null,
+        multipleModelSelections: [
+          { instanceId: provider.instanceId, model: "fake" },
+          { instanceId: ProviderInstanceId.make("codex-second"), model: "fake" },
+        ],
+      }),
+    },
+    { startTurn, editQueuedRun },
+  )!;
+  expect(blocked.status).toBe("blocked");
+  expect("startTurn" in blocked).toBe(false);
+  expect("editQueuedRun" in blocked).toBe(false);
+  expect(startTurn).not.toHaveBeenCalled();
+  expect(editQueuedRun).not.toHaveBeenCalled();
+});

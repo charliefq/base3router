@@ -1415,12 +1415,24 @@ export function readComposerSendContextForTarget<
     : undefined;
 }
 
+/** Independent comparison roots cannot share a governed task's start budget. */
+export function governedFanoutSendBlockReason(input: {
+  readonly governed: boolean;
+  readonly multipleModelSelections: ReadonlyArray<ModelSelection> | null | undefined;
+}): string | null {
+  return input.governed && input.multipleModelSelections != null
+    ? "Select one model for a governed task. Multiple-model comparisons cannot share this task's start limit."
+    : null;
+}
+
 /** Bind outgoing requests once, before uploads or other asynchronous composer work. */
 export function captureComposerSendDispatch<
   C extends {
     composerDraftTargetKey: string;
     composerEnvironmentId: EnvironmentId;
     routingMode: "auto" | "manual";
+    taskContract?: unknown;
+    multipleModelSelections?: ReadonlyArray<ModelSelection> | null;
   },
   StartResult,
   EditResult,
@@ -1441,8 +1453,15 @@ export function captureComposerSendDispatch<
 ) {
   const context = readComposerSendContextForTarget(target, environmentId, composer);
   if (!context) return undefined;
+  const blockReason = governedFanoutSendBlockReason({
+    governed: context.taskContract != null,
+    multipleModelSelections: context.multipleModelSelections,
+  });
+  // A blocked capture exposes no dispatch operations, including to direct callers.
+  if (blockReason !== null) return { status: "blocked" as const, context, blockReason };
   const routingMode = context.routingMode;
   return {
+    status: "ready" as const,
     context,
     startTurn: (request: {
       environmentId: EnvironmentId;

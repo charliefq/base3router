@@ -44,7 +44,12 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import { ActionGateService, layer as actionGateLayer } from "../actionGate/ActionGateService.ts";
-import { argumentHash, Base3PolicyDeniedError } from "../policy/Base3PolicyGate.ts";
+import {
+  argumentHash,
+  authorizeDispatch,
+  confirmProviderTermination,
+  Base3PolicyDeniedError,
+} from "../policy/Base3PolicyGate.ts";
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
 
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
@@ -2457,5 +2462,98 @@ it.effect.each([false, true])(
         assert.equal((yield* restarted.list()).tasks[0]?.lastOccurrence?.status, "succeeded");
       }).pipe(Effect.provide(restartLayer));
     }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect(
+  "single governed launch preserves its exact contract and refuses another start at max one",
+  () => {
+    const harness = makeHarness({
+      providers: [
+        {
+          instanceId: modelSelection.instanceId,
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+          installed: true,
+          status: "ready",
+          version: null,
+          auth: { status: "authenticated" },
+          checkedAt: "2026-10-18T00:00:00Z",
+          models: [
+            { slug: modelSelection.model, name: "Fake model", isCustom: false, capabilities: null },
+          ],
+          slashCommands: [],
+          skills: [],
+        },
+      ],
+    });
+    return Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const sql = yield* SqlClient.SqlClient;
+      const contract = {
+        goal: "Keep the stated brake",
+        redirect: "Ask before changing scope",
+        acceptance: "Owner reviews the result",
+        brake: { maxProviderStarts: 1, stopConditions: "Stop after one start" },
+      };
+      const input = {
+        ...launchInput({
+          command: "governed-single",
+          thread: "governed-single",
+          message: "One governed start",
+          workspace: { type: "worktree", baseRef: "main", branch: "governed-fixture" },
+        }),
+        taskGovernance: "required" as const,
+        taskContract: contract,
+      };
+      const createdAt = DateTime.formatIso(yield* DateTime.now);
+      yield* sql`INSERT INTO projection_projects (project_id,title,workspace_root,scripts_json,created_at,updated_at)
+      VALUES (${projectId}, 'Governed fixture', '/repo', '[]', ${createdAt}, ${createdAt})`;
+      const launched = yield* launches.launch(input);
+      const persisted = (yield* threads.getThreadProjection(launched.threadId)).thread;
+      assert.equal(persisted.taskGovernance, "required");
+      assert.deepEqual(persisted.taskContract, { revision: 1, ...contract });
+      const admitted = yield* sql`SELECT * FROM task_contract_admissions`;
+      assert.lengthOf(admitted, 1);
+      const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+      const settled = yield* tracker.stream(launched.threadId).pipe(
+        Stream.filter((snapshot) => snapshot !== null && snapshot.phase !== "running"),
+        Stream.runHead,
+      );
+      assert.equal(Option.getOrThrow(settled)?.phase, "done");
+      const firstEffects = yield* outbox.listByCommandId(CommandId.make("governed-single:release"));
+      assert.isTrue(firstEffects.some((effect) => effect.request.type === "provider-turn.start"));
+      // Release capacity so the second attempt exercises the persisted start brake,
+      // rather than failing because the first disposable run still owns a lease.
+      yield* confirmProviderTermination({
+        threadId: launched.threadId,
+        messageId: input.initialMessage!.messageId,
+      });
+      const denied = yield* authorizeDispatch({
+        type: "message.dispatch",
+        commandId: "governed-second",
+        threadId: launched.threadId,
+        messageId: "governed-second",
+        text: "Another start",
+        attachments: [],
+        modelSelection,
+        routingMode: "manual",
+        dispatchMode: { type: "start_immediately" },
+      }).pipe(Effect.flip);
+      assert.equal(denied.reason, "task-contract");
+      assert.include(denied.message, "Brake exhausted");
+      assert.deepEqual(yield* sql`SELECT * FROM task_contract_admissions`, admitted);
+      assert.deepEqual(yield* outbox.listByCommandId(CommandId.make("governed-second")), []);
+    }).pipe(
+      Effect.provide(harness.layer),
+      Effect.provideService(PolicyExecutionContext, {
+        kind: "session",
+        actorId: "governed-owner",
+        sessionId: "governed-session",
+        scopes: [AuthOrchestrationOperateScope],
+      }),
+    );
   },
 );
