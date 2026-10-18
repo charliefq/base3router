@@ -108,6 +108,12 @@ function taskError(message: string, input?: { taskId?: ScheduledTaskId; cause?: 
   });
 }
 
+const definitionConflict = (taskId: ScheduledTaskId) =>
+  taskError(
+    "Schedule changed in another client. Your edits were kept. Close and reopen the editor to review the latest task before saving.",
+    { taskId },
+  );
+
 function iso(value: DateTime.DateTime): string {
   return DateTime.formatIso(DateTime.toUtc(value));
 }
@@ -135,6 +141,30 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
+// Compare only persisted definition columns. Keep the order identical in the
+// read token and SQLite predicate; scheduler claims update timing/status only.
+const definitionColumns = [
+  "task_id",
+  "title",
+  "prompt",
+  "enabled",
+  "schedule_json",
+  "project_id",
+  "thread_id",
+  "workspace_strategy_json",
+  "model_selection_json",
+  "runtime_mode",
+  "interaction_mode",
+  "created_by",
+  "creation_source",
+  "created_at",
+] as const satisfies ReadonlyArray<keyof ScheduledTaskRow>;
+const encodeDefinitionToken = Schema.encodeEffect(
+  Schema.fromJsonString(Schema.Array(Schema.NullOr(Schema.Union([Schema.String, Schema.Number])))),
+);
+const isScheduledTaskError = Schema.is(ScheduledTaskError);
+const definitionTokenSql = `json_array(${definitionColumns.join(", ")})`;
+
 const decodeRow = (row: ScheduledTaskRow) =>
   Effect.gen(function* () {
     const schedule = yield* decodeScheduleJson(row.schedule_json);
@@ -144,6 +174,7 @@ const decodeRow = (row: ScheduledTaskRow) =>
       // The stored id decodes through the task schema so a corrupt value fails
       // as a typed parse error, not a `ScheduledTaskId.make` defect.
       id: row.task_id,
+      definitionToken: yield* encodeDefinitionToken(definitionColumns.map((column) => row[column])),
       title: row.title,
       prompt: row.prompt,
       enabled: row.enabled === 1,
@@ -316,7 +347,12 @@ export const layer = Layer.effect(
     // concurrent settings save must not overwrite an in-flight increment.
     // Check existence in the write itself so an edit cannot undo a deletion
     // that landed after upsert loaded the previous task.
-    const saveTask = (task: ScheduledTask, requireExisting: boolean) =>
+    const saveTask = (
+      task: ScheduledTask,
+      requireExisting: boolean,
+      expectedDefinitionToken: string | undefined,
+      preserveTiming: boolean,
+    ) =>
       sql<{ task_id: string }>`
         INSERT INTO scheduled_tasks (
           task_id,
@@ -361,7 +397,7 @@ export const layer = Layer.effect(
           ${task.lastRunStatus},
           ${task.lastRunError},
           ${task.runCount}
-        WHERE ${requireExisting ? 0 : 1} = 1
+        WHERE ${requireExisting || expectedDefinitionToken !== undefined ? 0 : 1} = 1
            OR EXISTS (SELECT 1 FROM scheduled_tasks WHERE task_id = ${task.id})
         ON CONFLICT (task_id)
         DO UPDATE SET
@@ -377,7 +413,9 @@ export const layer = Layer.effect(
           interaction_mode = excluded.interaction_mode,
           creation_source = excluded.creation_source,
           updated_at = excluded.updated_at,
-          next_run_at = excluded.next_run_at
+          next_run_at = CASE WHEN ${preserveTiming ? 1 : 0} = 1 THEN scheduled_tasks.next_run_at ELSE excluded.next_run_at END
+        WHERE ${expectedDefinitionToken ?? null} IS NULL
+           OR ${sql.literal(definitionTokenSql)} = ${expectedDefinitionToken ?? null}
         RETURNING task_id
       `.pipe(
         Effect.mapError((cause) =>
@@ -386,7 +424,11 @@ export const layer = Layer.effect(
         Effect.flatMap((rows) =>
           rows.length > 0
             ? Effect.void
-            : taskError("Schedule task not found.", { taskId: task.id }),
+            : Effect.gen(function* () {
+                if ((yield* findTask(task.id)) === null)
+                  return yield* taskError("Schedule task not found.", { taskId: task.id });
+                return yield* definitionConflict(task.id);
+              }),
         ),
       );
 
@@ -779,6 +821,16 @@ export const layer = Layer.effect(
         // keep their run history, and so real load failures propagate instead
         // of silently resetting an existing row.
         const existingTask = yield* findTask(id);
+        if (
+          existingTask === null &&
+          (input.requireExisting || input.expectedDefinitionToken !== undefined)
+        )
+          return yield* taskError("Schedule task not found.", { taskId: id });
+        if (
+          input.expectedDefinitionToken !== undefined &&
+          input.expectedDefinitionToken !== existingTask?.definitionToken
+        )
+          return yield* definitionConflict(id);
         // Keep the existing next_run_at when the schedule itself is untouched:
         // editing a title or prompt must not postpone (or resurrect) a due
         // run — only schedule/enabled changes restart the clock.
@@ -811,21 +863,46 @@ export const layer = Layer.effect(
           lastRunError: existingTask?.lastRunError ?? null,
           runCount: existingTask?.runCount ?? 0,
         };
-        yield* authorizeScheduleUpsert({
-          taskId: id,
-          threadId: task.threadId,
-          prompt: task.prompt,
-          modelSelection: task.modelSelection,
-          createdBy: task.createdBy,
-          creationSource: task.creationSource,
-        }).pipe(
-          Effect.mapError((cause) =>
-            taskError("Schedule task was not authorized.", { taskId: id, cause }),
-          ),
-        );
-        yield* saveTask(task, input.requireExisting === true);
+        const saved = yield* sql
+          .withTransaction(
+            Effect.gen(function* () {
+              // Preserve pending ASK requests on an authorization denial, as before.
+              // A successful authorization and the guarded save commit together;
+              // a conflict rolls back grant replacement (and approval consumption).
+              const authorization = yield* Effect.result(
+                authorizeScheduleUpsert({
+                  taskId: id,
+                  threadId: task.threadId,
+                  prompt: task.prompt,
+                  modelSelection: task.modelSelection,
+                  createdBy: task.createdBy,
+                  creationSource: task.creationSource,
+                }).pipe(
+                  Effect.mapError((cause) =>
+                    taskError("Schedule task was not authorized.", { taskId: id, cause }),
+                  ),
+                ),
+              );
+              if (Result.isFailure(authorization)) return authorization;
+              yield* saveTask(
+                task,
+                input.requireExisting === true,
+                input.expectedDefinitionToken ?? existingTask?.definitionToken,
+                scheduleUnchanged,
+              );
+              return Result.succeed(yield* loadTask(id));
+            }),
+          )
+          .pipe(
+            Effect.mapError((cause) =>
+              isScheduledTaskError(cause)
+                ? cause
+                : taskError("Could not save schedule task.", { taskId: id, cause }),
+            ),
+          );
+        if (Result.isFailure(saved)) return yield* saved.failure;
         yield* notifyChanged;
-        return { task };
+        return { task: saved.success };
       });
 
     const setEnabled: ScheduledTaskService["Service"]["setEnabled"] = (input) =>
@@ -852,9 +929,7 @@ export const layer = Layer.effect(
           return yield* taskError("Schedule task not found.", { taskId: input.id });
         }
         yield* notifyChanged;
-        return {
-          task: { ...existing, enabled: input.enabled, nextRunAt: next, updatedAt: iso(now) },
-        };
+        return { task: yield* loadTask(input.id) };
       });
 
     const deleteTask: ScheduledTaskService["Service"]["delete"] = (input) =>

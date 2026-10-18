@@ -718,6 +718,7 @@ function ScheduledTaskEditorDialog({
   const [draft, setDraft] = useState<DraftState>(() =>
     task ? taskToDraft(task) : { ...EMPTY_DRAFT, projectId: projects[0]?.id ?? "" },
   );
+  const [expectedDefinitionToken] = useState(() => task?.definitionToken);
   const [saving, setSaving] = useState(false);
   const [creationUncertain, setCreationUncertain] = useState(false);
   const submissionPending = useRef(false);
@@ -816,7 +817,13 @@ function ScheduledTaskEditorDialog({
               startFromOrigin: draft.startFromOrigin,
             };
     const input: ScheduledTaskUpsertInput = {
-      ...(draft.editingId ? { id: draft.editingId as ScheduledTaskId, requireExisting: true } : {}),
+      ...(draft.editingId
+        ? {
+            id: draft.editingId as ScheduledTaskId,
+            requireExisting: true,
+            ...(expectedDefinitionToken !== undefined ? { expectedDefinitionToken } : {}),
+          }
+        : {}),
       title: draft.title.trim(),
       prompt: draft.prompt.trim(),
       enabled: draft.enabled,

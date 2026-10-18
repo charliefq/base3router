@@ -119,6 +119,8 @@ export type ScheduledTaskOccurrence = typeof ScheduledTaskOccurrence.Type;
 
 export const ScheduledTask = Schema.Struct({
   id: ScheduledTaskId,
+  /** Opaque definition snapshot; run progress and timing are excluded. */
+  definitionToken: Schema.optional(Schema.String),
   title: TrimmedNonEmptyString,
   prompt: TrimmedNonEmptyString,
   enabled: Schema.Boolean,
@@ -155,6 +157,8 @@ export const ScheduledTaskUpsertInput = Schema.Struct({
   requireExisting: Schema.optional(Schema.Boolean).annotate({
     description: "Reject the save if the task no longer exists, for edits from a client form.",
   }),
+  /** Compare the definition read when editing; omit for legacy unconditional upserts. */
+  expectedDefinitionToken: Schema.optional(Schema.String),
   commandId: Schema.optional(CommandId),
   title: TrimmedNonEmptyString,
   prompt: TrimmedNonEmptyString,

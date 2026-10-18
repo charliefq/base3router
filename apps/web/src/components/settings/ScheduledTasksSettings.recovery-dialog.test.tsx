@@ -4,13 +4,23 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import * as Cause from "effect/Cause";
-import { ProjectId, type ScheduledTask, type ScheduledTaskUpsertInput } from "@t3tools/contracts";
+import {
+  ProjectId,
+  ProviderInstanceId,
+  type ScheduledTask,
+  type ScheduledTaskUpsertInput,
+} from "@t3tools/contracts";
 // Load the server-owned fixture through a typed integration boundary. The web
 // composite project must not import the server's entire source graph.
 interface ScheduleFixture {
   upsert(input: ScheduledTaskUpsertInput): Promise<{ task: ScheduledTask }>;
   list(): Promise<{ tasks: readonly ScheduledTask[] }>;
   delete(input: { id: ScheduledTask["id"] }): Promise<unknown>;
+  setEnabled(input: {
+    id: ScheduledTask["id"];
+    enabled: boolean;
+  }): Promise<{ task: ScheduledTask }>;
+  advance(ms: number): Promise<number>;
   dispose(): Promise<void>;
 }
 const fixtureModule: { createFixture(): ScheduleFixture } = await import(
@@ -113,7 +123,7 @@ vi.mock("../ui/menu", () => ({
   Menu: "menu",
   MenuTrigger: "div",
   MenuPopup: "div",
-  MenuItem: "menuitem",
+  MenuItem: "button",
   MenuSeparator: "hr",
 }));
 vi.mock("../ui/select", () => ({
@@ -317,3 +327,72 @@ it("closing an uncertain real dialog preserves creation and exposes recovery on 
   expect(state.upsert).toHaveBeenCalledTimes(1);
   expect((await fixture.list()).tasks).toHaveLength(1);
 });
+
+it.each([false, true])(
+  "rejects a paused stale editor and retains its draft with live refresh=%s",
+  async (refresh) => {
+    const { task: opened } = await fixture.upsert({
+      title: "Enabled task",
+      prompt: "Original prompt",
+      enabled: true,
+      schedule: { type: "interval", everyMs: 60_000 },
+      projectId: ProjectId.make("project"),
+      workspaceStrategy: { type: "root" },
+      modelSelection: {
+        ...state.settings.defaultModelSelection,
+        instanceId: ProviderInstanceId.make("codex"),
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      creationSource: "web",
+    });
+    state.tasks = [opened];
+    await act(async () => root.render(<ScheduledTasksSettings />));
+    const edit = findButton("Edit");
+    await act(async () => edit.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog).not.toBeNull();
+    await fixture.setEnabled({ id: opened.id, enabled: false });
+    if (refresh) state.tasks = [...(await fixture.list()).tasks];
+    // Changing the page's selected environment cannot retarget an already-open edit.
+    state.environmentId = "env-b";
+    await act(async () => root.render(<ScheduledTasksSettings />));
+    await act(async () => enterText("scheduled-task-title", "My retained title"));
+    state.upsert.mockImplementation(
+      async ({
+        environmentId,
+        input,
+      }: {
+        environmentId: string;
+        input: ScheduledTaskUpsertInput;
+      }) => {
+        expect(environmentId).toBe("env-a");
+        try {
+          return { _tag: "Success", value: await fixture.upsert(input) };
+        } catch (error) {
+          return { _tag: "Failure", cause: Cause.fail(error) };
+        }
+      },
+    );
+    await keyboardActivate(findButton("Save task", dialog));
+    await act(async () => {
+      await state.upsert.mock.results[0]!.value;
+    });
+    expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+    expect((document.getElementById("scheduled-task-title") as HTMLInputElement).value).toBe(
+      "My retained title",
+    );
+    expect(state.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ description: expect.stringContaining("reopen") }),
+    );
+    expect(state.upsert.mock.calls[0]![0].input.expectedDefinitionToken).toBe(
+      opened.definitionToken,
+    );
+    const current = (await fixture.list()).tasks[0]!;
+    expect(current.enabled).toBe(false);
+    expect(current.nextRunAt).toBeNull();
+    expect(current.title).toBe(opened.title);
+    expect(await fixture.advance(180_000)).toBe(0);
+    expect((await fixture.list()).tasks[0]!.runCount).toBe(0);
+  },
+);

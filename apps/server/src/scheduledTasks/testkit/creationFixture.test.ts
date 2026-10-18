@@ -49,3 +49,27 @@ it.each(["edit", "delete"] as const)(
     }
   },
 );
+
+it("the disposable scheduler dispatches enabled work after fake time advances", async () => {
+  const fixture = createFixture();
+  try {
+    await fixture.upsert(
+      decodeInput({
+        title: "Scheduler control",
+        prompt: "Fake work only",
+        enabled: true,
+        schedule: { type: "interval", everyMs: 60_000 },
+        projectId: "project-control",
+        workspaceStrategy: { type: "root" },
+        modelSelection: { instanceId: "codex", model: "fake" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      }),
+    );
+    expect(await fixture.advance(59_999)).toBe(0);
+    expect(await fixture.advance(1)).toBe(1);
+    expect((await fixture.list()).tasks[0]?.runCount).toBe(1);
+  } finally {
+    await fixture.dispose();
+  }
+});
