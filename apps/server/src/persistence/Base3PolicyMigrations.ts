@@ -36,17 +36,6 @@ const ledgerTables = Effect.gen(function* () {
 
 const integrationTables = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  yield* sql`CREATE TABLE IF NOT EXISTS base3_delegated_child_authorities (
-    task_id TEXT PRIMARY KEY, child_thread_id TEXT NOT NULL UNIQUE,
-    parent_thread_id TEXT NOT NULL, parent_run_id TEXT NOT NULL,
-    source_command_id TEXT NOT NULL UNIQUE, source_lease_id TEXT NOT NULL UNIQUE
-  )`;
-  yield* sql`CREATE TABLE IF NOT EXISTS base3_delegated_mailbox_deliveries (
-    message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, parent_run_id TEXT NOT NULL,
-    generation INTEGER NOT NULL, attempt_id TEXT NOT NULL, session_id TEXT NOT NULL,
-    turn_id TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('unknown','accepted'))
-  )`;
-
   yield* sql`
     CREATE TABLE IF NOT EXISTS base3_capacity_leases (
       lease_id TEXT PRIMARY KEY,
@@ -270,6 +259,20 @@ const imageDeliveryDenials = Effect.gen(function* () {
   `;
 });
 
+const delegatedMailboxAuthorityTables = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE TABLE IF NOT EXISTS base3_delegated_child_authorities (
+    task_id TEXT PRIMARY KEY, child_thread_id TEXT NOT NULL UNIQUE,
+    parent_thread_id TEXT NOT NULL, parent_run_id TEXT NOT NULL,
+    source_command_id TEXT NOT NULL UNIQUE, source_lease_id TEXT NOT NULL UNIQUE
+  )`;
+  yield* sql`CREATE TABLE IF NOT EXISTS base3_delegated_mailbox_deliveries (
+    message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, parent_run_id TEXT NOT NULL,
+    generation INTEGER NOT NULL, attempt_id TEXT NOT NULL, session_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('unknown','accepted'))
+  )`;
+});
+
 const steps: ReadonlyArray<
   readonly [string, string, Effect.Effect<void, SqlError, SqlClient.SqlClient>]
 > = [
@@ -293,6 +296,7 @@ const steps: ReadonlyArray<
   ["b3-071", "PilotBrakeColumns", pilotBrakeColumns],
   ["b3-072", "FrozenTreeBounds", frozenTreeBounds],
   ["b3-073", "ImageDeliveryDenials", imageDeliveryDenials],
+  ["b3-074", "DelegatedMailboxAuthority", delegatedMailboxAuthorityTables],
 ];
 
 export const runBase3PolicyMigrations = Effect.gen(function* () {

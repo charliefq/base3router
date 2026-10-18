@@ -3,6 +3,7 @@ import {
   ActionApprovalId,
   CommandId,
   MessageId,
+  NodeId,
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -211,6 +212,7 @@ const captureState = (f: Fixture, name: string, trace?: unknown) =>
       messages: f.sql`SELECT * FROM orchestration_v2_projection_messages ORDER BY message_id`,
       effects: f.sql`SELECT * FROM orchestration_v2_effect_outbox ORDER BY effect_id`,
       receipts: f.sql`SELECT * FROM orchestration_command_receipts ORDER BY command_id`,
+      approvals: f.sql`SELECT * FROM action_gate_approvals ORDER BY approval_id`,
     });
     yield* fs.makeDirectory(directory, { recursive: true });
     yield* fs.writeFileString(
@@ -428,6 +430,140 @@ const awaitCreation = (key: string) => ({
   },
 });
 
+const rejectedDelegationStages = (mode: "plan" | "commit", checkCapacity: boolean) => {
+  let beforeCommit: Effect.Effect<void> = Effect.void;
+  return withTaskResultLinkageFixture(
+    (f) =>
+      Effect.gen(function* () {
+        const base = awaitCreation("stage-parent");
+        const creation = {
+          ...base,
+          taskContract: {
+            ...base.taskContract,
+            brake: { ...base.taskContract.brake, maxProviderStarts: 2 },
+          },
+        };
+        yield* f.dispatch(creation);
+        const running = yield* f.orchestrator.streamDomainEvents.pipe(
+          Stream.filter(
+            (e) =>
+              e.type === "run.updated" &&
+              e.threadId === creation.threadId &&
+              e.payload.status === "running",
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
+        yield* f.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("stage-start"),
+          threadId: creation.threadId,
+          messageId: MessageId.make("stage-start"),
+          text: "Start local stage fixture",
+          attachments: [],
+          modelSelection: creation.modelSelection,
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* f.worker.runOnce;
+        yield* Fiber.join(running);
+        const projection = yield* f.orchestrator.getThreadProjection(creation.threadId);
+        const parent = projection.runs[0]!;
+        const command: Delegation = {
+          type: "delegated_task.request",
+          commandId: CommandId.make("stage-rejected"),
+          parentThreadId: parent.threadId,
+          parentRunId: parent.id,
+          parentNodeId: mode === "plan" ? NodeId.make("missing-node") : parent.rootNodeId!,
+          task: "Approved rejected stage fixture",
+          modelSelection: creation.modelSelection,
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          completionWake: "always",
+          createdBy: "agent",
+          creationSource: "server",
+        };
+        const approval = yield* f.actionGate.authorizeTool({
+          toolName: "delegate_task",
+          args: {
+            task: command.task,
+            model: command.modelSelection,
+            ...contractGrantFields(projection.thread.taskContract ?? null),
+          },
+          environmentId: creation.taskCreationReview!.environmentId,
+          threadId: parent.threadId,
+        });
+        yield* f.actionGate.respond(
+          { approvalId: approval.approvalId!, decision: "grant" },
+          DateTime.formatIso(yield* DateTime.now),
+        );
+        if (mode === "commit")
+          beforeCommit =
+            f.sql`UPDATE base3_capacity_leases SET interrupt_requested=1 WHERE run_id=${parent.id}`.pipe(
+              Effect.asVoid,
+              Effect.orDie,
+            );
+        assert.isTrue(Exit.isFailure(yield* f.dispatch(command).pipe(Effect.exit)));
+        const stage = () =>
+          Effect.all({
+            approval: f.sql<{
+              status: string;
+            }>`SELECT status FROM action_gate_approvals WHERE approval_id=${approval.approvalId!}`,
+            reserved: f.sql<{
+              command_id: string;
+            }>`SELECT command_id FROM task_contract_admissions WHERE root_thread_id=${parent.threadId} ORDER BY command_id`,
+          });
+        const rejected = yield* stage();
+        // Approval consumption and conservative start reservation preceded planning
+        // in the accepted base too. They are intentionally not described as atomic.
+        assert.deepEqual(rejected.approval, [{ status: "consumed" }]);
+        assert.deepEqual(rejected.reserved, [
+          { command_id: "stage-rejected" },
+          { command_id: "stage-start" },
+        ]);
+        assert.isTrue(Exit.isFailure(yield* f.dispatch(command).pipe(Effect.exit)));
+        assert.deepEqual(yield* stage(), rejected);
+        assert.equal((yield* Ref.get(f.executions)).length, 1);
+        if (checkCapacity) {
+          assert.deepEqual(
+            yield* f.sql`SELECT lease_id FROM base3_capacity_leases WHERE workload_class='child-agent' AND released_at IS NULL`,
+            [],
+          );
+          assert.deepEqual(yield* f.sql`SELECT task_id FROM base3_delegated_child_authorities`, []);
+          assert.deepEqual(
+            yield* f.sql`SELECT grant_id FROM base3_execution_grants WHERE operation IN ('delegation','delegated-child','delegated-completion')`,
+            [],
+          );
+          yield* captureState(f, `rejected-${mode}-stages`, rejected);
+        }
+      }),
+    {
+      governedWorker: true,
+      startWorker: false,
+      runningFirst: true,
+      onStart: (_input, events, emit) => emit(events[0]!),
+      decorateEventSink: (service) => ({
+        ...service,
+        commitCommand: (input) =>
+          input.commandId === "stage-rejected"
+            ? Effect.andThen(beforeCommit, service.commitCommand(input))
+            : service.commitCommand(input),
+      }),
+    },
+  );
+};
+
+it.live.each(["plan", "commit"] as const)(
+  "rejected approved delegation %s preserves earlier-stage truth without leaking capacity or grants",
+  (mode) => rejectedDelegationStages(mode, true),
+);
+it.live(
+  "frozen rejected planning retains pre-existing consumed approval and one reservation without replay revival",
+  () => rejectedDelegationStages("plan", false),
+);
+
 it.live("a rejected approved child plan leaves no capacity or authority behind", () =>
   controlledMailbox(({ f, parent, delegation }) =>
     Effect.gen(function* () {
@@ -435,7 +571,7 @@ it.live("a rejected approved child plan leaves no capacity or authority behind",
       const bad = {
         ...delegation,
         commandId: CommandId.make("invalid-child-plan"),
-        parentNodeId: "missing-node" as typeof delegation.parentNodeId,
+        parentNodeId: NodeId.make("missing-node"),
         task: "Unplannable approved child",
       };
       const approval = yield* f.actionGate.authorizeTool({

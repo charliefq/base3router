@@ -1,0 +1,1364 @@
+{
+  "base": "5e33876338a4d32e18846c8416fb975ed3e05727",
+  "schema": [
+    {
+      "type": "table",
+      "name": "effect_sql_migrations",
+      "sql": "CREATE TABLE \"effect_sql_migrations\" (\n  migration_id integer PRIMARY KEY NOT NULL,\n  created_at datetime NOT NULL DEFAULT current_timestamp,\n  name VARCHAR(255) NOT NULL\n)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_events",
+      "sql": "CREATE TABLE orchestration_events (\n      sequence INTEGER PRIMARY KEY AUTOINCREMENT,\n      event_id TEXT NOT NULL UNIQUE,\n      aggregate_kind TEXT NOT NULL,\n      stream_id TEXT NOT NULL,\n      stream_version INTEGER NOT NULL,\n      event_type TEXT NOT NULL,\n      occurred_at TEXT NOT NULL,\n      command_id TEXT,\n      causation_event_id TEXT,\n      correlation_id TEXT,\n      actor_kind TEXT NOT NULL,\n      payload_json TEXT NOT NULL,\n      metadata_json TEXT NOT NULL\n    , application_event_version INTEGER NOT NULL DEFAULT 1)"
+    },
+    {
+      "type": "index",
+      "name": "idx_orch_events_stream_version",
+      "sql": "CREATE UNIQUE INDEX idx_orch_events_stream_version\n    ON orchestration_events(aggregate_kind, stream_id, stream_version)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_orch_events_stream_sequence",
+      "sql": "CREATE INDEX idx_orch_events_stream_sequence\n    ON orchestration_events(aggregate_kind, stream_id, sequence)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_orch_events_command_id",
+      "sql": "CREATE INDEX idx_orch_events_command_id\n    ON orchestration_events(command_id)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_orch_events_correlation_id",
+      "sql": "CREATE INDEX idx_orch_events_correlation_id\n    ON orchestration_events(correlation_id)\n  "
+    },
+    {
+      "type": "table",
+      "name": "orchestration_command_receipts",
+      "sql": "CREATE TABLE orchestration_command_receipts (\n      command_id TEXT PRIMARY KEY,\n      aggregate_kind TEXT NOT NULL,\n      aggregate_id TEXT NOT NULL,\n      accepted_at TEXT NOT NULL,\n      result_sequence INTEGER NOT NULL,\n      status TEXT NOT NULL,\n      error TEXT\n    , command_type TEXT NOT NULL DEFAULT 'legacy')"
+    },
+    {
+      "type": "index",
+      "name": "idx_orch_command_receipts_aggregate",
+      "sql": "CREATE INDEX idx_orch_command_receipts_aggregate\n    ON orchestration_command_receipts(aggregate_kind, aggregate_id)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_orch_command_receipts_sequence",
+      "sql": "CREATE INDEX idx_orch_command_receipts_sequence\n    ON orchestration_command_receipts(result_sequence)\n  "
+    },
+    {
+      "type": "table",
+      "name": "checkpoint_diff_blobs",
+      "sql": "CREATE TABLE checkpoint_diff_blobs (\n      thread_id TEXT NOT NULL,\n      from_turn_count INTEGER NOT NULL,\n      to_turn_count INTEGER NOT NULL,\n      diff TEXT NOT NULL,\n      created_at TEXT NOT NULL,\n      UNIQUE (thread_id, from_turn_count, to_turn_count)\n    )"
+    },
+    {
+      "type": "index",
+      "name": "idx_checkpoint_diff_blobs_thread_to_turn",
+      "sql": "CREATE INDEX idx_checkpoint_diff_blobs_thread_to_turn\n    ON checkpoint_diff_blobs(thread_id, to_turn_count)\n  "
+    },
+    {
+      "type": "table",
+      "name": "provider_session_runtime",
+      "sql": "CREATE TABLE provider_session_runtime (\n      thread_id TEXT PRIMARY KEY,\n      provider_name TEXT NOT NULL,\n      adapter_key TEXT NOT NULL,\n      runtime_mode TEXT NOT NULL DEFAULT 'full-access',\n      status TEXT NOT NULL,\n      last_seen_at TEXT NOT NULL,\n      resume_cursor_json TEXT,\n      runtime_payload_json TEXT\n    , provider_instance_id TEXT)"
+    },
+    {
+      "type": "index",
+      "name": "idx_provider_session_runtime_status",
+      "sql": "CREATE INDEX idx_provider_session_runtime_status\n    ON provider_session_runtime(status)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_provider_session_runtime_provider",
+      "sql": "CREATE INDEX idx_provider_session_runtime_provider\n    ON provider_session_runtime(provider_name)\n  "
+    },
+    {
+      "type": "table",
+      "name": "projection_projects",
+      "sql": "CREATE TABLE projection_projects (\n      project_id TEXT PRIMARY KEY,\n      title TEXT NOT NULL,\n      workspace_root TEXT NOT NULL,\n      scripts_json TEXT NOT NULL,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL,\n      deleted_at TEXT\n    , default_model_selection_json TEXT, default_thread_env_mode TEXT, favicon_path TEXT, auto_pull INTEGER NOT NULL DEFAULT 0, project_icon_json TEXT)"
+    },
+    {
+      "type": "table",
+      "name": "projection_threads",
+      "sql": "CREATE TABLE projection_threads (\n      thread_id TEXT PRIMARY KEY,\n      project_id TEXT NOT NULL,\n      title TEXT NOT NULL,\n      branch TEXT,\n      worktree_path TEXT,\n      latest_turn_id TEXT,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL,\n      deleted_at TEXT\n    , runtime_mode TEXT NOT NULL DEFAULT 'full-access', interaction_mode TEXT NOT NULL DEFAULT 'default', model_selection_json TEXT, archived_at TEXT, latest_user_message_at TEXT, pending_approval_count INTEGER NOT NULL DEFAULT 0, pending_user_input_count INTEGER NOT NULL DEFAULT 0, has_actionable_proposed_plan INTEGER NOT NULL DEFAULT 0, settled_override TEXT, settled_at TEXT, snoozed_until TEXT, snoozed_at TEXT, title_regeneration_request_id TEXT, title_regeneration_started_at TEXT, pinned_at TEXT, pin_order_key TEXT, linked_pull_request_json TEXT, unsettled_at TEXT, branch_pull_request_json TEXT, active_order_key TEXT, title_state_json TEXT, auto_settle_disabled_at TEXT)"
+    },
+    {
+      "type": "table",
+      "name": "projection_thread_messages",
+      "sql": "CREATE TABLE projection_thread_messages (\n      message_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      turn_id TEXT,\n      role TEXT NOT NULL,\n      text TEXT NOT NULL,\n      is_streaming INTEGER NOT NULL,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL\n    , attachments_json TEXT, context_json TEXT)"
+    },
+    {
+      "type": "table",
+      "name": "projection_thread_activities",
+      "sql": "CREATE TABLE projection_thread_activities (\n      activity_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      turn_id TEXT,\n      tone TEXT NOT NULL,\n      kind TEXT NOT NULL,\n      summary TEXT NOT NULL,\n      payload_json TEXT NOT NULL,\n      created_at TEXT NOT NULL\n    , sequence INTEGER)"
+    },
+    {
+      "type": "table",
+      "name": "projection_thread_sessions",
+      "sql": "CREATE TABLE projection_thread_sessions (\n      thread_id TEXT PRIMARY KEY,\n      status TEXT NOT NULL,\n      provider_name TEXT,\n      provider_session_id TEXT,\n      provider_thread_id TEXT,\n      active_turn_id TEXT,\n      last_error TEXT,\n      updated_at TEXT NOT NULL\n    , runtime_mode TEXT NOT NULL DEFAULT 'full-access', provider_instance_id TEXT)"
+    },
+    {
+      "type": "table",
+      "name": "projection_turns",
+      "sql": "CREATE TABLE projection_turns (\n      row_id INTEGER PRIMARY KEY AUTOINCREMENT,\n      thread_id TEXT NOT NULL,\n      turn_id TEXT,\n      pending_message_id TEXT,\n      assistant_message_id TEXT,\n      state TEXT NOT NULL,\n      requested_at TEXT NOT NULL,\n      started_at TEXT,\n      completed_at TEXT,\n      checkpoint_turn_count INTEGER,\n      checkpoint_ref TEXT,\n      checkpoint_status TEXT,\n      checkpoint_files_json TEXT NOT NULL, source_proposed_plan_thread_id TEXT, source_proposed_plan_id TEXT,\n      UNIQUE (thread_id, turn_id),\n      UNIQUE (thread_id, checkpoint_turn_count)\n    )"
+    },
+    {
+      "type": "table",
+      "name": "projection_pending_approvals",
+      "sql": "CREATE TABLE projection_pending_approvals (\n      request_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      turn_id TEXT,\n      status TEXT NOT NULL,\n      decision TEXT,\n      created_at TEXT NOT NULL,\n      resolved_at TEXT\n    )"
+    },
+    {
+      "type": "table",
+      "name": "projection_state",
+      "sql": "CREATE TABLE projection_state (\n      projector TEXT PRIMARY KEY,\n      last_applied_sequence INTEGER NOT NULL,\n      updated_at TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_projects_updated_at",
+      "sql": "CREATE INDEX idx_projection_projects_updated_at\n    ON projection_projects(updated_at)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_thread_activities_thread_created",
+      "sql": "CREATE INDEX idx_projection_thread_activities_thread_created\n    ON projection_thread_activities(thread_id, created_at)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_thread_sessions_provider_session",
+      "sql": "CREATE INDEX idx_projection_thread_sessions_provider_session\n    ON projection_thread_sessions(provider_session_id)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_turns_thread_checkpoint_completed",
+      "sql": "CREATE INDEX idx_projection_turns_thread_checkpoint_completed\n    ON projection_turns(thread_id, checkpoint_turn_count, completed_at)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_pending_approvals_thread_status",
+      "sql": "CREATE INDEX idx_projection_pending_approvals_thread_status\n    ON projection_pending_approvals(thread_id, status)\n  "
+    },
+    {
+      "type": "table",
+      "name": "projection_thread_proposed_plans",
+      "sql": "CREATE TABLE projection_thread_proposed_plans (\n      plan_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      turn_id TEXT,\n      plan_markdown TEXT NOT NULL,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL\n    , implemented_at TEXT, implementation_thread_id TEXT)"
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_thread_proposed_plans_thread_created",
+      "sql": "CREATE INDEX idx_projection_thread_proposed_plans_thread_created\n    ON projection_thread_proposed_plans(thread_id, created_at)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_threads_project_archived_at",
+      "sql": "CREATE INDEX idx_projection_threads_project_archived_at\n    ON projection_threads(project_id, archived_at)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_projects_workspace_root_deleted_at",
+      "sql": "CREATE INDEX idx_projection_projects_workspace_root_deleted_at\n    ON projection_projects(workspace_root, deleted_at)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_threads_project_deleted_created",
+      "sql": "CREATE INDEX idx_projection_threads_project_deleted_created\n    ON projection_threads(project_id, deleted_at, created_at)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_provider_session_runtime_instance",
+      "sql": "CREATE INDEX idx_provider_session_runtime_instance\n    ON provider_session_runtime(provider_instance_id)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_thread_sessions_instance",
+      "sql": "CREATE INDEX idx_projection_thread_sessions_instance\n    ON projection_thread_sessions(provider_instance_id)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_thread_activities_thread_sequence_created_id",
+      "sql": "CREATE INDEX idx_projection_thread_activities_thread_sequence_created_id\n    ON projection_thread_activities(thread_id, sequence, created_at, activity_id)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_thread_messages_thread_created_id",
+      "sql": "CREATE INDEX idx_projection_thread_messages_thread_created_id\n    ON projection_thread_messages(thread_id, created_at, message_id)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_threads_shell_active",
+      "sql": "CREATE INDEX idx_projection_threads_shell_active\n    ON projection_threads(deleted_at, archived_at, project_id, created_at, thread_id)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_threads_shell_archived",
+      "sql": "CREATE INDEX idx_projection_threads_shell_archived\n    ON projection_threads(deleted_at, archived_at, project_id, thread_id)\n  "
+    },
+    {
+      "type": "table",
+      "name": "auth_pairing_links",
+      "sql": "CREATE TABLE auth_pairing_links (\n      id TEXT PRIMARY KEY,\n      credential TEXT NOT NULL UNIQUE,\n      method TEXT NOT NULL,\n      scopes TEXT NOT NULL,\n      subject TEXT NOT NULL,\n      label TEXT,\n      created_at TEXT NOT NULL,\n      expires_at TEXT NOT NULL,\n      consumed_at TEXT,\n      revoked_at TEXT\n    , proof_key_thumbprint TEXT)"
+    },
+    {
+      "type": "index",
+      "name": "idx_auth_pairing_links_active",
+      "sql": "CREATE INDEX idx_auth_pairing_links_active\n    ON auth_pairing_links(revoked_at, consumed_at, expires_at)\n  "
+    },
+    {
+      "type": "table",
+      "name": "auth_sessions",
+      "sql": "CREATE TABLE auth_sessions (\n      session_id TEXT PRIMARY KEY,\n      subject TEXT NOT NULL,\n      scopes TEXT NOT NULL,\n      method TEXT NOT NULL,\n      client_label TEXT,\n      client_ip_address TEXT,\n      client_user_agent TEXT,\n      client_device_type TEXT NOT NULL DEFAULT 'unknown',\n      client_os TEXT,\n      client_browser TEXT,\n      issued_at TEXT NOT NULL,\n      expires_at TEXT NOT NULL,\n      last_connected_at TEXT,\n      revoked_at TEXT\n    , client_surface TEXT, client_app_version TEXT)"
+    },
+    {
+      "type": "index",
+      "name": "idx_auth_sessions_active",
+      "sql": "CREATE INDEX idx_auth_sessions_active\n    ON auth_sessions(revoked_at, expires_at, issued_at)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_turns_thread_keyset",
+      "sql": "CREATE INDEX idx_projection_turns_thread_keyset\n    ON projection_turns(thread_id, requested_at, turn_id)\n  "
+    },
+    {
+      "type": "table",
+      "name": "projection_thread_pull_requests",
+      "sql": "CREATE TABLE projection_thread_pull_requests (\n      thread_id TEXT NOT NULL,\n      host TEXT NOT NULL,\n      repository TEXT NOT NULL,\n      number INTEGER NOT NULL,\n      url TEXT NOT NULL,\n      source TEXT NOT NULL,\n      linked_at TEXT NOT NULL,\n      snapshot_json TEXT,\n      stack_json TEXT,\n      PRIMARY KEY (thread_id, host, repository, number)\n    )"
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_thread_pull_requests_pr",
+      "sql": "CREATE INDEX idx_projection_thread_pull_requests_pr\n    ON projection_thread_pull_requests(host, repository, number)\n  "
+    },
+    {
+      "type": "table",
+      "name": "pull_request_files_viewed",
+      "sql": "CREATE TABLE pull_request_files_viewed (\n      provider TEXT NOT NULL,\n      host TEXT NOT NULL,\n      repository TEXT NOT NULL,\n      number INTEGER NOT NULL,\n      viewer TEXT NOT NULL,\n      path TEXT NOT NULL,\n      revision TEXT,\n      viewed_at TEXT NOT NULL,\n      PRIMARY KEY (provider, host, repository, number, viewer, path)\n    ) WITHOUT ROWID\n  "
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_events",
+      "sql": "CREATE TABLE orchestration_v2_events (\n      sequence INTEGER PRIMARY KEY AUTOINCREMENT,\n      event_id TEXT NOT NULL UNIQUE,\n      command_id TEXT,\n      thread_id TEXT NOT NULL,\n      run_id TEXT,\n      node_id TEXT,\n      provider TEXT,\n      raw_event_id TEXT,\n      event_type TEXT NOT NULL,\n      occurred_at TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    , driver TEXT, provider_instance_id TEXT)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_events_command_idx",
+      "sql": "CREATE INDEX orchestration_v2_events_command_idx ON orchestration_v2_events(command_id, sequence)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_events_thread_sequence_idx",
+      "sql": "CREATE INDEX orchestration_v2_events_thread_sequence_idx ON orchestration_v2_events(thread_id, sequence)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_events_thread_type_sequence_idx",
+      "sql": "CREATE INDEX orchestration_v2_events_thread_type_sequence_idx ON orchestration_v2_events(thread_id, event_type, sequence)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_events_run_sequence_idx",
+      "sql": "CREATE INDEX orchestration_v2_events_run_sequence_idx ON orchestration_v2_events(run_id, sequence)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_events_node_sequence_idx",
+      "sql": "CREATE INDEX orchestration_v2_events_node_sequence_idx ON orchestration_v2_events(node_id, sequence)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_events_raw_event_idx",
+      "sql": "CREATE INDEX orchestration_v2_events_raw_event_idx ON orchestration_v2_events(raw_event_id)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_command_receipts",
+      "sql": "CREATE TABLE orchestration_v2_command_receipts (\n      command_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      command_type TEXT NOT NULL,\n      accepted_at TEXT NOT NULL,\n      result_sequence INTEGER NOT NULL,\n      status TEXT NOT NULL,\n      error TEXT\n    )"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_command_receipts_thread_sequence_idx",
+      "sql": "CREATE INDEX orchestration_v2_command_receipts_thread_sequence_idx ON orchestration_v2_command_receipts(thread_id, result_sequence)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_threads",
+      "sql": "CREATE TABLE orchestration_v2_projection_threads (\n      thread_id TEXT PRIMARY KEY,\n      project_id TEXT NOT NULL,\n      title TEXT NOT NULL,\n      default_provider TEXT NOT NULL,\n      runtime_mode TEXT NOT NULL,\n      interaction_mode TEXT NOT NULL,\n      active_provider_thread_id TEXT,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL,\n      archived_at TEXT,\n      deleted_at TEXT,\n      payload_json TEXT NOT NULL\n    , provider_instance_id TEXT)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_threads_project_updated_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_threads_project_updated_idx ON orchestration_v2_projection_threads(project_id, updated_at)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_runs",
+      "sql": "CREATE TABLE orchestration_v2_projection_runs (\n      run_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      ordinal INTEGER NOT NULL,\n      provider TEXT NOT NULL,\n      provider_thread_id TEXT,\n      status TEXT NOT NULL,\n      requested_at TEXT NOT NULL,\n      completed_at TEXT,\n      payload_json TEXT NOT NULL\n    , provider_instance_id TEXT)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_runs_thread_ordinal_idx",
+      "sql": "CREATE UNIQUE INDEX orchestration_v2_projection_runs_thread_ordinal_idx ON orchestration_v2_projection_runs(thread_id, ordinal)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_runs_provider_thread_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_runs_provider_thread_idx ON orchestration_v2_projection_runs(provider_thread_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_runs_thread_status_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_runs_thread_status_idx ON orchestration_v2_projection_runs(thread_id, status)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_run_attempts",
+      "sql": "CREATE TABLE orchestration_v2_projection_run_attempts (\n      attempt_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      run_id TEXT NOT NULL,\n      attempt_ordinal INTEGER NOT NULL,\n      root_node_id TEXT NOT NULL,\n      provider TEXT NOT NULL,\n      provider_thread_id TEXT NOT NULL,\n      provider_turn_id TEXT,\n      status TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    , provider_instance_id TEXT)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_run_attempts_run_ordinal_idx",
+      "sql": "CREATE UNIQUE INDEX orchestration_v2_projection_run_attempts_run_ordinal_idx ON orchestration_v2_projection_run_attempts(run_id, attempt_ordinal)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_run_attempts_thread_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_run_attempts_thread_idx ON orchestration_v2_projection_run_attempts(thread_id, run_id)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_nodes",
+      "sql": "CREATE TABLE orchestration_v2_projection_nodes (\n      node_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      run_id TEXT,\n      parent_node_id TEXT,\n      root_node_id TEXT NOT NULL,\n      kind TEXT NOT NULL,\n      status TEXT NOT NULL,\n      provider_thread_id TEXT,\n      provider_turn_id TEXT,\n      runtime_request_id TEXT,\n      checkpoint_scope_id TEXT,\n      started_at TEXT,\n      completed_at TEXT,\n      payload_json TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_nodes_thread_run_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_nodes_thread_run_idx ON orchestration_v2_projection_nodes(thread_id, run_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_nodes_parent_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_nodes_parent_idx ON orchestration_v2_projection_nodes(parent_node_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_nodes_provider_turn_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_nodes_provider_turn_idx ON orchestration_v2_projection_nodes(provider_turn_id)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_provider_sessions",
+      "sql": "CREATE TABLE orchestration_v2_projection_provider_sessions (\n      provider_session_id TEXT PRIMARY KEY,\n      thread_id TEXT,\n      provider TEXT NOT NULL,\n      status TEXT NOT NULL,\n      model TEXT,\n      updated_at TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    , driver TEXT, provider_instance_id TEXT)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_provider_sessions_thread_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_provider_sessions_thread_idx ON orchestration_v2_projection_provider_sessions(thread_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_provider_sessions_provider_status_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_provider_sessions_provider_status_idx ON orchestration_v2_projection_provider_sessions(provider, status)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_provider_threads",
+      "sql": "CREATE TABLE orchestration_v2_projection_provider_threads (\n      provider_thread_id TEXT PRIMARY KEY,\n      thread_id TEXT,\n      owner_node_id TEXT,\n      provider TEXT NOT NULL,\n      provider_session_id TEXT,\n      status TEXT NOT NULL,\n      first_run_ordinal INTEGER,\n      last_run_ordinal INTEGER,\n      updated_at TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    , driver TEXT, provider_instance_id TEXT)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_provider_threads_thread_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_provider_threads_thread_idx ON orchestration_v2_projection_provider_threads(thread_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_provider_threads_session_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_provider_threads_session_idx ON orchestration_v2_projection_provider_threads(provider_session_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_provider_threads_owner_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_provider_threads_owner_idx ON orchestration_v2_projection_provider_threads(owner_node_id)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_provider_turns",
+      "sql": "CREATE TABLE orchestration_v2_projection_provider_turns (\n      provider_turn_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      provider_thread_id TEXT NOT NULL,\n      node_id TEXT NOT NULL,\n      run_attempt_id TEXT,\n      ordinal INTEGER NOT NULL,\n      status TEXT NOT NULL,\n      started_at TEXT,\n      completed_at TEXT,\n      payload_json TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_provider_turns_thread_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_provider_turns_thread_idx ON orchestration_v2_projection_provider_turns(thread_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_provider_turns_thread_ordinal_idx",
+      "sql": "CREATE UNIQUE INDEX orchestration_v2_projection_provider_turns_thread_ordinal_idx ON orchestration_v2_projection_provider_turns(provider_thread_id, ordinal)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_runtime_requests",
+      "sql": "CREATE TABLE orchestration_v2_projection_runtime_requests (\n      runtime_request_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      node_id TEXT NOT NULL,\n      provider_turn_id TEXT,\n      kind TEXT NOT NULL,\n      status TEXT NOT NULL,\n      created_at TEXT NOT NULL,\n      resolved_at TEXT,\n      payload_json TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_runtime_requests_thread_status_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_runtime_requests_thread_status_idx ON orchestration_v2_projection_runtime_requests(thread_id, status)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_runtime_requests_provider_turn_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_runtime_requests_provider_turn_idx ON orchestration_v2_projection_runtime_requests(provider_turn_id)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_messages",
+      "sql": "CREATE TABLE orchestration_v2_projection_messages (\n      message_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      run_id TEXT,\n      node_id TEXT,\n      role TEXT NOT NULL,\n      streaming INTEGER NOT NULL,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_messages_thread_created_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_messages_thread_created_idx ON orchestration_v2_projection_messages(thread_id, created_at, message_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_messages_run_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_messages_run_idx ON orchestration_v2_projection_messages(run_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_messages_node_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_messages_node_idx ON orchestration_v2_projection_messages(node_id)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_plans",
+      "sql": "CREATE TABLE orchestration_v2_projection_plans (\n      plan_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      run_id TEXT,\n      node_id TEXT NOT NULL,\n      kind TEXT NOT NULL,\n      status TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_plans_thread_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_plans_thread_idx ON orchestration_v2_projection_plans(thread_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_plans_run_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_plans_run_idx ON orchestration_v2_projection_plans(run_id)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_turn_items",
+      "sql": "CREATE TABLE orchestration_v2_projection_turn_items (\n      turn_item_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      run_id TEXT,\n      node_id TEXT,\n      provider_thread_id TEXT,\n      provider_turn_id TEXT,\n      parent_item_id TEXT,\n      ordinal INTEGER NOT NULL,\n      type TEXT NOT NULL,\n      status TEXT NOT NULL,\n      updated_at TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_turn_items_thread_ordinal_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_turn_items_thread_ordinal_idx ON orchestration_v2_projection_turn_items(thread_id, ordinal, turn_item_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_turn_items_run_ordinal_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_turn_items_run_ordinal_idx ON orchestration_v2_projection_turn_items(run_id, ordinal)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_turn_items_node_ordinal_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_turn_items_node_ordinal_idx ON orchestration_v2_projection_turn_items(node_id, ordinal)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_turn_items_provider_turn_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_turn_items_provider_turn_idx ON orchestration_v2_projection_turn_items(provider_turn_id)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_checkpoint_scopes",
+      "sql": "CREATE TABLE orchestration_v2_projection_checkpoint_scopes (\n      scope_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      run_id TEXT,\n      node_id TEXT NOT NULL,\n      parent_scope_id TEXT,\n      provider_thread_id TEXT,\n      kind TEXT NOT NULL,\n      ordinal_within_parent INTEGER NOT NULL,\n      advances_app_run_count INTEGER NOT NULL,\n      created_at TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_checkpoint_scopes_thread_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_checkpoint_scopes_thread_idx ON orchestration_v2_projection_checkpoint_scopes(thread_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_checkpoint_scopes_parent_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_checkpoint_scopes_parent_idx ON orchestration_v2_projection_checkpoint_scopes(parent_scope_id)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_checkpoints",
+      "sql": "CREATE TABLE orchestration_v2_projection_checkpoints (\n      checkpoint_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      scope_id TEXT NOT NULL,\n      run_id TEXT,\n      node_id TEXT NOT NULL,\n      parent_checkpoint_id TEXT,\n      ordinal_within_scope INTEGER NOT NULL,\n      app_run_ordinal INTEGER,\n      status TEXT NOT NULL,\n      captured_at TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_checkpoints_scope_ordinal_idx",
+      "sql": "CREATE UNIQUE INDEX orchestration_v2_projection_checkpoints_scope_ordinal_idx ON orchestration_v2_projection_checkpoints(scope_id, ordinal_within_scope)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_checkpoints_thread_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_checkpoints_thread_idx ON orchestration_v2_projection_checkpoints(thread_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_checkpoints_parent_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_checkpoints_parent_idx ON orchestration_v2_projection_checkpoints(parent_checkpoint_id)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_context_handoffs",
+      "sql": "CREATE TABLE orchestration_v2_projection_context_handoffs (\n      context_handoff_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      target_run_id TEXT NOT NULL,\n      to_provider_thread_id TEXT NOT NULL,\n      strategy TEXT NOT NULL,\n      status TEXT NOT NULL,\n      updated_at TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_context_handoffs_thread_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_context_handoffs_thread_idx ON orchestration_v2_projection_context_handoffs(thread_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_context_handoffs_target_run_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_context_handoffs_target_run_idx ON orchestration_v2_projection_context_handoffs(target_run_id)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_context_transfers",
+      "sql": "CREATE TABLE orchestration_v2_projection_context_transfers (\n      context_transfer_id TEXT PRIMARY KEY,\n      source_thread_id TEXT NOT NULL,\n      target_thread_id TEXT NOT NULL,\n      target_run_id TEXT,\n      type TEXT NOT NULL,\n      status TEXT NOT NULL,\n      source_provider TEXT,\n      target_provider TEXT,\n      updated_at TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    , source_provider_instance_id TEXT, target_provider_instance_id TEXT)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_context_transfers_source_thread_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_context_transfers_source_thread_idx ON orchestration_v2_projection_context_transfers(source_thread_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_context_transfers_target_thread_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_context_transfers_target_thread_idx ON orchestration_v2_projection_context_transfers(target_thread_id, status)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_context_transfers_target_run_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_context_transfers_target_run_idx ON orchestration_v2_projection_context_transfers(target_run_id)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_subagents",
+      "sql": "CREATE TABLE orchestration_v2_projection_subagents (\n      subagent_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      run_id TEXT,\n      parent_node_id TEXT NOT NULL,\n      provider TEXT NOT NULL,\n      provider_thread_id TEXT,\n      child_thread_id TEXT,\n      origin TEXT NOT NULL,\n      status TEXT NOT NULL,\n      started_at TEXT,\n      completed_at TEXT,\n      updated_at TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    , driver TEXT, provider_instance_id TEXT)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_subagents_thread_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_subagents_thread_idx ON orchestration_v2_projection_subagents(thread_id, started_at, subagent_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_subagents_parent_node_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_subagents_parent_node_idx ON orchestration_v2_projection_subagents(parent_node_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_subagents_provider_thread_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_subagents_provider_thread_idx ON orchestration_v2_projection_subagents(provider_thread_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_subagents_child_thread_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_subagents_child_thread_idx ON orchestration_v2_projection_subagents(child_thread_id)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_events_instance_sequence_idx",
+      "sql": "CREATE INDEX orchestration_v2_events_instance_sequence_idx ON orchestration_v2_events(provider_instance_id, sequence)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_provider_sessions_instance_status_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_provider_sessions_instance_status_idx ON orchestration_v2_projection_provider_sessions(provider_instance_id, status)"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_provider_threads_instance_status_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_provider_threads_instance_status_idx ON orchestration_v2_projection_provider_threads(provider_instance_id, status)"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_turn_item_positions",
+      "sql": "CREATE TABLE orchestration_v2_turn_item_positions (\n      thread_id TEXT NOT NULL,\n      turn_item_id TEXT NOT NULL,\n      ordinal INTEGER NOT NULL,\n      PRIMARY KEY (thread_id, turn_item_id),\n      UNIQUE (thread_id, ordinal)\n    )"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_metadata",
+      "sql": "CREATE TABLE orchestration_v2_projection_metadata (\n      projection_name TEXT PRIMARY KEY,\n      schema_version INTEGER NOT NULL,\n      last_sequence INTEGER NOT NULL,\n      updated_at TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_projection_provider_session_bindings",
+      "sql": "CREATE TABLE orchestration_v2_projection_provider_session_bindings (\n      provider_session_id TEXT NOT NULL,\n      thread_id TEXT NOT NULL,\n      PRIMARY KEY (provider_session_id, thread_id)\n    )"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_provider_session_bindings_thread_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_provider_session_bindings_thread_idx\n    ON orchestration_v2_projection_provider_session_bindings(thread_id)\n  "
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_thread_launch_workflows",
+      "sql": "CREATE TABLE orchestration_v2_thread_launch_workflows (\n      command_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      project_id TEXT NOT NULL,\n      status TEXT NOT NULL,\n      title TEXT NOT NULL,\n      worktree_path TEXT,\n      branch TEXT,\n      setup_committed INTEGER NOT NULL DEFAULT 0,\n      thread_committed INTEGER NOT NULL DEFAULT 0,\n      message_committed INTEGER NOT NULL DEFAULT 0,\n      last_error TEXT,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "idx_orchestration_events_application_sequence",
+      "sql": "CREATE INDEX idx_orchestration_events_application_sequence\n    ON orchestration_events(application_event_version, sequence)\n  "
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_effect_outbox",
+      "sql": "CREATE TABLE \"orchestration_v2_effect_outbox\" (\n      effect_id TEXT PRIMARY KEY,\n      command_id TEXT NOT NULL,\n      thread_id TEXT NOT NULL,\n      effect_type TEXT NOT NULL,\n      payload_json TEXT NOT NULL,\n      status TEXT NOT NULL CHECK (\n        status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')\n      ),\n      attempt_count INTEGER NOT NULL DEFAULT 0,\n      available_at TEXT NOT NULL,\n      lease_owner TEXT,\n      lease_expires_at TEXT,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL,\n      completed_at TEXT,\n      last_error TEXT\n    )"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_effect_outbox_claim_idx",
+      "sql": "CREATE INDEX orchestration_v2_effect_outbox_claim_idx\n    ON orchestration_v2_effect_outbox(status, available_at, lease_expires_at, created_at)\n  "
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_effect_outbox_command_idx",
+      "sql": "CREATE INDEX orchestration_v2_effect_outbox_command_idx\n    ON orchestration_v2_effect_outbox(command_id, effect_id)\n  "
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_effect_outbox_thread_status_idx",
+      "sql": "CREATE INDEX orchestration_v2_effect_outbox_thread_status_idx\n    ON orchestration_v2_effect_outbox(thread_id, status, effect_type)\n  "
+    },
+    {
+      "type": "table",
+      "name": "scheduled_tasks",
+      "sql": "CREATE TABLE scheduled_tasks (\n      task_id TEXT PRIMARY KEY,\n      title TEXT NOT NULL,\n      prompt TEXT NOT NULL,\n      enabled INTEGER NOT NULL,\n      schedule_json TEXT NOT NULL,\n      project_id TEXT NOT NULL,\n      thread_id TEXT,\n      workspace_strategy_json TEXT NOT NULL,\n      model_selection_json TEXT NOT NULL,\n      runtime_mode TEXT NOT NULL,\n      interaction_mode TEXT NOT NULL,\n      created_by TEXT NOT NULL,\n      creation_source TEXT NOT NULL,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL,\n      next_run_at TEXT,\n      last_run_at TEXT,\n      last_run_status TEXT NOT NULL,\n      last_run_error TEXT,\n      run_count INTEGER NOT NULL\n    , last_occurrence_json TEXT)"
+    },
+    {
+      "type": "index",
+      "name": "idx_scheduled_tasks_due",
+      "sql": "CREATE INDEX idx_scheduled_tasks_due\n    ON scheduled_tasks(enabled, next_run_at)\n    WHERE enabled = 1 AND next_run_at IS NOT NULL\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_scheduled_tasks_project",
+      "sql": "CREATE INDEX idx_scheduled_tasks_project\n    ON scheduled_tasks(project_id, updated_at)\n  "
+    },
+    {
+      "type": "table",
+      "name": "orchestration_v2_legacy_imports",
+      "sql": "CREATE TABLE orchestration_v2_legacy_imports (\n      thread_id TEXT PRIMARY KEY,\n      source_updated_at TEXT NOT NULL,\n      shell_imported_at TEXT NOT NULL,\n      transcript_imported_at TEXT,\n      imported_message_count INTEGER NOT NULL DEFAULT 0,\n      last_error TEXT\n    )"
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_legacy_imports_pending_transcript_idx",
+      "sql": "CREATE INDEX orchestration_v2_legacy_imports_pending_transcript_idx\n    ON orchestration_v2_legacy_imports(transcript_imported_at, shell_imported_at, thread_id)\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_orchestration_events_application_high_water",
+      "sql": "CREATE INDEX idx_orchestration_events_application_high_water\n    ON orchestration_events(sequence)\n    WHERE aggregate_kind = 'project'\n      OR (application_event_version = 2 AND aggregate_kind = 'thread')\n  "
+    },
+    {
+      "type": "index",
+      "name": "idx_orchestration_events_agent_stream_sequence",
+      "sql": "CREATE INDEX idx_orchestration_events_agent_stream_sequence\n    ON orchestration_events(stream_id, sequence)\n    WHERE application_event_version = 2 AND aggregate_kind = 'thread'\n  "
+    },
+    {
+      "type": "index",
+      "name": "orchestration_events_v2_created_threads_idx",
+      "sql": "CREATE INDEX orchestration_events_v2_created_threads_idx\n    ON orchestration_events(stream_id)\n    WHERE application_event_version = 2\n      AND aggregate_kind = 'thread'\n      AND event_type = 'thread.created'\n  "
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_runs_recovery_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_runs_recovery_idx\n    ON orchestration_v2_projection_runs(status, thread_id)\n    WHERE status IN ('queued', 'preparing', 'starting', 'running', 'waiting')\n  "
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_requests_recovery_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_requests_recovery_idx\n    ON orchestration_v2_projection_runtime_requests(thread_id)\n    WHERE status = 'pending'\n  "
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_turn_items_recovery_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_turn_items_recovery_idx\n    ON orchestration_v2_projection_turn_items(thread_id)\n    WHERE type IN ('command_execution', 'dynamic_tool', 'subagent')\n      AND status IN ('pending', 'running', 'waiting')\n  "
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_turn_items_thread_run_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_turn_items_thread_run_idx\n    ON orchestration_v2_projection_turn_items(thread_id, run_id)\n  "
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_turn_items_shell_pending_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_turn_items_shell_pending_idx\n    ON orchestration_v2_projection_turn_items(thread_id, run_id)\n    WHERE type IN ('command_execution', 'dynamic_tool', 'subagent')\n      AND status NOT IN ('completed', 'interrupted', 'failed', 'cancelled')\n  "
+    },
+    {
+      "type": "index",
+      "name": "orchestration_v2_projection_messages_latest_user_idx",
+      "sql": "CREATE INDEX orchestration_v2_projection_messages_latest_user_idx\n    ON orchestration_v2_projection_messages(thread_id, updated_at DESC, message_id DESC)\n    WHERE role = 'user'\n  "
+    },
+    {
+      "type": "table",
+      "name": "agents_task_creation_rejections",
+      "sql": "CREATE TABLE agents_task_creation_rejections (\n    command_id TEXT PRIMARY KEY REFERENCES orchestration_command_receipts(command_id),\n    actor_id TEXT NOT NULL,\n    environment_id TEXT NOT NULL,\n    command_json TEXT NOT NULL,\n    rejected_at TEXT NOT NULL,\n    result_sequence INTEGER NOT NULL\n  )"
+    },
+    {
+      "type": "table",
+      "name": "base3_policy_migrations",
+      "sql": "CREATE TABLE base3_policy_migrations (\n      migration_id TEXT PRIMARY KEY,\n      name TEXT NOT NULL,\n      applied_at TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "table",
+      "name": "projection_dispatcher_task_routes",
+      "sql": "CREATE TABLE projection_dispatcher_task_routes (\n      thread_id TEXT NOT NULL,\n      message_id TEXT NOT NULL,\n      binding_json TEXT NOT NULL,\n      created_at TEXT NOT NULL,\n      PRIMARY KEY (thread_id, message_id)\n    )"
+    },
+    {
+      "type": "table",
+      "name": "projection_task_handoffs",
+      "sql": "CREATE TABLE projection_task_handoffs (\n      handoff_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      source_turn_id TEXT NOT NULL,\n      destination_message_id TEXT NOT NULL,\n      destination_turn_id TEXT,\n      target_json TEXT NOT NULL,\n      status TEXT NOT NULL,\n      failure_reason TEXT,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL,\n      UNIQUE (thread_id, source_turn_id),\n      UNIQUE (thread_id, destination_message_id)\n    )"
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_task_handoffs_thread_created",
+      "sql": "CREATE INDEX idx_projection_task_handoffs_thread_created\n    ON projection_task_handoffs(thread_id, created_at DESC, handoff_id DESC)\n  "
+    },
+    {
+      "type": "table",
+      "name": "projection_workflow_cursors",
+      "sql": "CREATE TABLE projection_workflow_cursors (\n      project_id TEXT PRIMARY KEY,\n      last_sequence INTEGER NOT NULL\n    )"
+    },
+    {
+      "type": "table",
+      "name": "projection_agent_profile_versions",
+      "sql": "CREATE TABLE projection_agent_profile_versions (\n      project_id TEXT NOT NULL,\n      profile_id TEXT NOT NULL,\n      version INTEGER NOT NULL,\n      profile_json TEXT NOT NULL,\n      PRIMARY KEY (project_id, profile_id, version)\n    )"
+    },
+    {
+      "type": "table",
+      "name": "projection_workflow_template_versions",
+      "sql": "CREATE TABLE projection_workflow_template_versions (\n      project_id TEXT NOT NULL,\n      template_id TEXT NOT NULL,\n      version INTEGER NOT NULL,\n      template_json TEXT NOT NULL,\n      PRIMARY KEY (project_id, template_id, version)\n    )"
+    },
+    {
+      "type": "table",
+      "name": "projection_workflow_runs",
+      "sql": "CREATE TABLE projection_workflow_runs (\n      run_id TEXT PRIMARY KEY,\n      project_id TEXT NOT NULL,\n      run_json TEXT NOT NULL,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "idx_projection_workflow_runs_project_updated",
+      "sql": "CREATE INDEX idx_projection_workflow_runs_project_updated\n    ON projection_workflow_runs(project_id, updated_at DESC)\n  "
+    },
+    {
+      "type": "table",
+      "name": "projection_workflow_stage_attempts",
+      "sql": "CREATE TABLE projection_workflow_stage_attempts (\n      run_id TEXT NOT NULL,\n      stage_id TEXT NOT NULL,\n      attempt INTEGER NOT NULL,\n      attempt_json TEXT NOT NULL,\n      PRIMARY KEY (run_id, stage_id, attempt)\n    )"
+    },
+    {
+      "type": "table",
+      "name": "projection_workflow_artifacts",
+      "sql": "CREATE TABLE projection_workflow_artifacts (\n      artifact_id TEXT PRIMARY KEY,\n      run_id TEXT NOT NULL,\n      stage_id TEXT NOT NULL,\n      attempt INTEGER NOT NULL,\n      artifact_json TEXT NOT NULL,\n      UNIQUE (run_id, stage_id, attempt)\n    )"
+    },
+    {
+      "type": "table",
+      "name": "projection_workflow_decisions",
+      "sql": "CREATE TABLE projection_workflow_decisions (\n      decision_id TEXT PRIMARY KEY,\n      run_id TEXT NOT NULL,\n      stage_id TEXT NOT NULL,\n      attempt INTEGER NOT NULL,\n      decision_json TEXT NOT NULL,\n      UNIQUE (run_id, stage_id, attempt)\n    )"
+    },
+    {
+      "type": "table",
+      "name": "cursor_cloud_operations",
+      "sql": "CREATE TABLE \"cursor_cloud_operations\" (\n      operation_key TEXT PRIMARY KEY,\n      kind TEXT NOT NULL CHECK (kind IN ('create', 'follow-up', 'cancel')),\n      state TEXT NOT NULL CHECK (state IN ('pending', 'completed', 'indeterminate', 'rejected')),\n      command_id TEXT NOT NULL,\n      environment_id TEXT NOT NULL,\n      project_id TEXT NOT NULL,\n      run_id TEXT NOT NULL,\n      stage_id TEXT NOT NULL,\n      attempt INTEGER NOT NULL,\n      dispatch_id TEXT,\n      cursor_agent_id TEXT NOT NULL,\n      previous_run_id TEXT,\n      request_fingerprint TEXT NOT NULL,\n      claimed_at TEXT NOT NULL,\n      binding_json TEXT,\n      error_json TEXT,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "table",
+      "name": "router_turn_observations",
+      "sql": "CREATE TABLE router_turn_observations (\n      observation_id TEXT PRIMARY KEY,\n      environment_id TEXT NOT NULL,\n      recorded_at TEXT NOT NULL,\n      schema_version TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    , thread_id TEXT, message_id TEXT)"
+    },
+    {
+      "type": "index",
+      "name": "router_turn_observations_env_recorded",
+      "sql": "CREATE INDEX router_turn_observations_env_recorded\n    ON router_turn_observations (environment_id, recorded_at, observation_id)\n  "
+    },
+    {
+      "type": "table",
+      "name": "router_policies",
+      "sql": "CREATE TABLE router_policies (\n      policy_id TEXT PRIMARY KEY,\n      environment_id TEXT NOT NULL,\n      state TEXT NOT NULL,\n      created_at TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "router_policies_env_state",
+      "sql": "CREATE INDEX router_policies_env_state\n    ON router_policies (environment_id, state)\n  "
+    },
+    {
+      "type": "index",
+      "name": "router_turn_observations_env_thread",
+      "sql": "CREATE INDEX router_turn_observations_env_thread\n    ON router_turn_observations (environment_id, thread_id, recorded_at)\n  "
+    },
+    {
+      "type": "table",
+      "name": "router_observation_events",
+      "sql": "CREATE TABLE router_observation_events (\n      event_id TEXT PRIMARY KEY,\n      environment_id TEXT NOT NULL,\n      observation_id TEXT,\n      event_type TEXT NOT NULL,\n      recorded_at TEXT NOT NULL,\n      idempotency_key TEXT NOT NULL,\n      sequence INTEGER NOT NULL,\n      schema_version TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "router_observation_events_env_idempotency",
+      "sql": "CREATE UNIQUE INDEX router_observation_events_env_idempotency\n    ON router_observation_events (environment_id, idempotency_key)\n  "
+    },
+    {
+      "type": "index",
+      "name": "router_observation_events_env_sequence",
+      "sql": "CREATE INDEX router_observation_events_env_sequence\n    ON router_observation_events (environment_id, sequence, event_id)\n  "
+    },
+    {
+      "type": "table",
+      "name": "action_gate_approvals",
+      "sql": "CREATE TABLE action_gate_approvals (\n      approval_id TEXT PRIMARY KEY,\n      environment_id TEXT NOT NULL,\n      fingerprint TEXT NOT NULL,\n      status TEXT NOT NULL,\n      idempotency_key TEXT,\n      created_at TEXT NOT NULL,\n      expires_at TEXT NOT NULL,\n      consumed_at TEXT,\n      payload_json TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "table",
+      "name": "action_gate_audit",
+      "sql": "CREATE TABLE action_gate_audit (\n      event_id TEXT PRIMARY KEY,\n      environment_id TEXT NOT NULL,\n      plan_id TEXT NOT NULL,\n      recorded_at TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "action_gate_audit_env_recorded",
+      "sql": "CREATE INDEX action_gate_audit_env_recorded\n    ON action_gate_audit (environment_id, recorded_at, event_id)\n  "
+    },
+    {
+      "type": "index",
+      "name": "action_gate_approvals_env_idempotency",
+      "sql": "CREATE UNIQUE INDEX action_gate_approvals_env_idempotency\n    ON action_gate_approvals (environment_id, idempotency_key)\n    WHERE idempotency_key IS NOT NULL\n  "
+    },
+    {
+      "type": "index",
+      "name": "action_gate_approvals_live_fingerprint",
+      "sql": "CREATE UNIQUE INDEX action_gate_approvals_live_fingerprint\n    ON action_gate_approvals (environment_id, fingerprint)\n    WHERE status IN ('pending', 'granted')\n  "
+    },
+    {
+      "type": "table",
+      "name": "dream_memories",
+      "sql": "CREATE TABLE dream_memories (\n      memory_id TEXT PRIMARY KEY,\n      environment_id TEXT NOT NULL,\n      actor_id TEXT NOT NULL,\n      project_id TEXT,\n      thread_id TEXT,\n      scope_kind TEXT NOT NULL,\n      status TEXT NOT NULL,\n      source_fingerprint TEXT NOT NULL,\n      content_present INTEGER NOT NULL,\n      payload_json TEXT NOT NULL,\n      created_at TEXT NOT NULL,\n      updated_at TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "dream_memories_env_scope",
+      "sql": "CREATE INDEX dream_memories_env_scope\n    ON dream_memories (environment_id, scope_kind, status, updated_at)\n  "
+    },
+    {
+      "type": "index",
+      "name": "dream_memories_source",
+      "sql": "CREATE INDEX dream_memories_source\n    ON dream_memories (source_fingerprint)\n  "
+    },
+    {
+      "type": "table",
+      "name": "dream_deleted_sources",
+      "sql": "CREATE TABLE dream_deleted_sources (\n      source_fingerprint TEXT PRIMARY KEY,\n      environment_id TEXT NOT NULL,\n      deleted_at TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "table",
+      "name": "dream_jobs",
+      "sql": "CREATE TABLE dream_jobs (\n      job_id TEXT PRIMARY KEY,\n      environment_id TEXT NOT NULL,\n      status TEXT NOT NULL,\n      payload_json TEXT NOT NULL,\n      created_at TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "table",
+      "name": "dream_memory_audit",
+      "sql": "CREATE TABLE dream_memory_audit (\n      event_id TEXT PRIMARY KEY,\n      environment_id TEXT NOT NULL,\n      recorded_at TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "dream_memory_audit_env_recorded",
+      "sql": "CREATE INDEX dream_memory_audit_env_recorded\n    ON dream_memory_audit (environment_id, recorded_at, event_id)\n  "
+    },
+    {
+      "type": "table",
+      "name": "concurrency_budget_audit",
+      "sql": "CREATE TABLE concurrency_budget_audit (\n      event_id TEXT PRIMARY KEY,\n      environment_id TEXT NOT NULL,\n      recorded_at TEXT NOT NULL,\n      payload_json TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "index",
+      "name": "concurrency_budget_audit_env_recorded",
+      "sql": "CREATE INDEX concurrency_budget_audit_env_recorded\n    ON concurrency_budget_audit (environment_id, recorded_at, event_id)\n  "
+    },
+    {
+      "type": "table",
+      "name": "base3_capacity_leases",
+      "sql": "CREATE TABLE base3_capacity_leases (\n      lease_id TEXT PRIMARY KEY,\n      environment_id TEXT NOT NULL,\n      thread_id TEXT NOT NULL,\n      message_id TEXT,\n      run_id TEXT,\n      parent_lease_id TEXT,\n      workload_class TEXT NOT NULL,\n      status TEXT NOT NULL,\n      interrupt_requested INTEGER NOT NULL DEFAULT 0,\n      disconnect_unconfirmed INTEGER NOT NULL DEFAULT 0,\n      created_at TEXT NOT NULL,\n      released_at TEXT,\n      release_reason TEXT\n    )"
+    },
+    {
+      "type": "index",
+      "name": "base3_capacity_leases_run",
+      "sql": "CREATE UNIQUE INDEX base3_capacity_leases_run\n    ON base3_capacity_leases (run_id)\n    WHERE run_id IS NOT NULL\n  "
+    },
+    {
+      "type": "table",
+      "name": "base3_execution_grants",
+      "sql": "CREATE TABLE base3_execution_grants (\n      grant_id TEXT PRIMARY KEY,\n      thread_id TEXT NOT NULL,\n      message_id TEXT NOT NULL,\n      run_id TEXT,\n      operation TEXT NOT NULL,\n      actor_id TEXT NOT NULL,\n      scopes_json TEXT NOT NULL,\n      expires_at TEXT,\n      argument_hash TEXT NOT NULL,\n      approval_id TEXT,\n      revoked_at TEXT,\n      created_at TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "table",
+      "name": "base3_execution_attempts",
+      "sql": "CREATE TABLE base3_execution_attempts (\n      attempt_id TEXT PRIMARY KEY,\n      operation TEXT NOT NULL,\n      thread_id TEXT,\n      message_id TEXT,\n      started_at TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "table",
+      "name": "base3_import_batches",
+      "sql": "CREATE TABLE base3_import_batches (\n      batch_id TEXT PRIMARY KEY,\n      source_fingerprint TEXT NOT NULL UNIQUE,\n      status TEXT NOT NULL,\n      started_at TEXT NOT NULL,\n      finished_at TEXT\n    )"
+    },
+    {
+      "type": "table",
+      "name": "base3_import_map",
+      "sql": "CREATE TABLE base3_import_map (\n      source_table TEXT NOT NULL,\n      source_id TEXT NOT NULL,\n      target_id TEXT NOT NULL,\n      PRIMARY KEY (source_table, source_id)\n    )"
+    },
+    {
+      "type": "table",
+      "name": "base3_import_holds",
+      "sql": "CREATE TABLE base3_import_holds (\n      source_table TEXT NOT NULL,\n      source_id TEXT NOT NULL,\n      reason TEXT NOT NULL,\n      PRIMARY KEY (source_table, source_id)\n    )"
+    },
+    {
+      "type": "table",
+      "name": "base3_workflow_commands",
+      "sql": "CREATE TABLE base3_workflow_commands (\n      command_id TEXT PRIMARY KEY,\n      project_id TEXT NOT NULL,\n      mutation_json TEXT NOT NULL,\n      recorded_at TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "table",
+      "name": "task_contract_admissions",
+      "sql": "CREATE TABLE task_contract_admissions (\n      root_thread_id TEXT NOT NULL,\n      command_id TEXT NOT NULL,\n      thread_id TEXT NOT NULL,\n      contract_revision INTEGER NOT NULL,\n      created_at TEXT NOT NULL, message_id TEXT,\n      PRIMARY KEY (root_thread_id, command_id)\n    )"
+    },
+    {
+      "type": "table",
+      "name": "task_contract_members",
+      "sql": "CREATE TABLE task_contract_members (\n      thread_id TEXT PRIMARY KEY,\n      root_thread_id TEXT NOT NULL,\n      revision INTEGER NOT NULL\n    , parent_thread_id TEXT)"
+    },
+    {
+      "type": "table",
+      "name": "task_usage_attempts",
+      "sql": "CREATE TABLE task_usage_attempts (\n      environment_id TEXT NOT NULL,\n      provider_turn_id TEXT NOT NULL,\n      root_thread_id TEXT NOT NULL,\n      thread_id TEXT NOT NULL,\n      run_id TEXT,\n      message_id TEXT,\n      contract_revision INTEGER,\n      provider_instance_id TEXT,\n      status TEXT NOT NULL,\n      attempt_role TEXT NOT NULL,\n      usage_status TEXT NOT NULL,\n      basis TEXT NOT NULL,\n      input_tokens INTEGER,\n      cached_input_tokens INTEGER,\n      cache_creation_tokens INTEGER,\n      output_tokens INTEGER,\n      reasoning_tokens INTEGER,\n      reported_cost_usd REAL,\n      source_event_id TEXT,\n      updated_at TEXT NOT NULL, price_verified INTEGER NOT NULL DEFAULT 0, price_label TEXT,\n      PRIMARY KEY (environment_id, provider_turn_id)\n    )"
+    },
+    {
+      "type": "table",
+      "name": "task_usage_events",
+      "sql": "CREATE TABLE task_usage_events (\n      environment_id TEXT NOT NULL,\n      event_id TEXT NOT NULL,\n      provider_turn_id TEXT NOT NULL,\n      PRIMARY KEY (environment_id, event_id)\n    )"
+    },
+    {
+      "type": "trigger",
+      "name": "task_usage_attempts_record_event",
+      "sql": "CREATE TRIGGER task_usage_attempts_record_event\n    AFTER INSERT ON task_usage_attempts\n    WHEN NEW.source_event_id IS NOT NULL\n    BEGIN\n      INSERT INTO task_usage_events (environment_id, event_id, provider_turn_id)\n      VALUES (NEW.environment_id, NEW.source_event_id, NEW.provider_turn_id);\n    END"
+    },
+    {
+      "type": "trigger",
+      "name": "task_usage_attempts_record_event_update",
+      "sql": "CREATE TRIGGER task_usage_attempts_record_event_update\n    AFTER UPDATE ON task_usage_attempts\n    WHEN NEW.source_event_id IS NOT NULL\n      AND NEW.source_event_id IS NOT OLD.source_event_id\n    BEGIN\n      INSERT INTO task_usage_events (environment_id, event_id, provider_turn_id)\n      VALUES (NEW.environment_id, NEW.source_event_id, NEW.provider_turn_id);\n    END"
+    },
+    {
+      "type": "table",
+      "name": "collaboration_commands",
+      "sql": "CREATE TABLE collaboration_commands (\n      command_id TEXT PRIMARY KEY,\n      sequence INTEGER NOT NULL UNIQUE,\n      payload_json TEXT NOT NULL,\n      created_at TEXT NOT NULL\n    )"
+    },
+    {
+      "type": "table",
+      "name": "task_contract_deadlines",
+      "sql": "CREATE TABLE task_contract_deadlines (\n      root_thread_id TEXT PRIMARY KEY,\n      deadline_at TEXT NOT NULL,\n      frozen_at TEXT NOT NULL\n    , max_tokens INTEGER, max_cost_usd REAL)"
+    },
+    {
+      "type": "table",
+      "name": "base3_image_delivery_denials",
+      "sql": "CREATE TABLE base3_image_delivery_denials (\n      thread_id TEXT NOT NULL,\n      message_id TEXT NOT NULL,\n      denied_at TEXT NOT NULL,\n      settled_at TEXT,\n      PRIMARY KEY (thread_id, message_id)\n    )"
+    }
+  ],
+  "policyLedger": [
+    {
+      "migration_id": "b3-054",
+      "name": "ProjectionDispatcherTaskRoutes",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-055",
+      "name": "ProjectionTaskHandoffs",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-056",
+      "name": "ProjectionWorkflowOs",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-057",
+      "name": "CursorCloudOperations",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-058",
+      "name": "CursorCloudOperationScope",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-059",
+      "name": "CursorCloudOperationRejected",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-060",
+      "name": "RouterEvaluationObservations",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-061",
+      "name": "RouterObservationEvents",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-062",
+      "name": "ActionGateApprovals",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-063",
+      "name": "ActionGateApprovalUniqueness",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-064",
+      "name": "DreamMemory",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-065",
+      "name": "ConcurrencyBudgetAudit",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-066",
+      "name": "PolicyIntegrationTables",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-067",
+      "name": "TaskContractAdmissions",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-068",
+      "name": "TaskContractAdmissionMessage",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-069",
+      "name": "TaskUsageAttempts",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-070",
+      "name": "CollaborationCommands",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-071",
+      "name": "PilotBrakeColumns",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-072",
+      "name": "FrozenTreeBounds",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "migration_id": "b3-073",
+      "name": "ImageDeliveryDenials",
+      "applied_at": "1970-01-01T00:00:00.000Z"
+    }
+  ],
+  "coreLedger": [
+    {
+      "migration_id": 1,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "OrchestrationEvents"
+    },
+    {
+      "migration_id": 2,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "OrchestrationCommandReceipts"
+    },
+    {
+      "migration_id": 3,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "CheckpointDiffBlobs"
+    },
+    {
+      "migration_id": 4,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProviderSessionRuntime"
+    },
+    {
+      "migration_id": 5,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "Projections"
+    },
+    {
+      "migration_id": 6,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadSessionRuntimeModeColumns"
+    },
+    {
+      "migration_id": 7,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadMessageAttachments"
+    },
+    {
+      "migration_id": 8,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadActivitySequence"
+    },
+    {
+      "migration_id": 9,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProviderSessionRuntimeMode"
+    },
+    {
+      "migration_id": 10,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadsRuntimeMode"
+    },
+    {
+      "migration_id": 11,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "OrchestrationThreadCreatedRuntimeMode"
+    },
+    {
+      "migration_id": 12,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadsInteractionMode"
+    },
+    {
+      "migration_id": 13,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadProposedPlans"
+    },
+    {
+      "migration_id": 14,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadProposedPlanImplementation"
+    },
+    {
+      "migration_id": 15,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionTurnsSourceProposedPlan"
+    },
+    {
+      "migration_id": 16,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "CanonicalizeModelSelections"
+    },
+    {
+      "migration_id": 17,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadsArchivedAt"
+    },
+    {
+      "migration_id": 18,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadsArchivedAtIndex"
+    },
+    {
+      "migration_id": 19,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionSnapshotLookupIndexes"
+    },
+    {
+      "migration_id": 20,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "AuthAccessManagement"
+    },
+    {
+      "migration_id": 21,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "AuthSessionClientMetadata"
+    },
+    {
+      "migration_id": 22,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "AuthSessionLastConnectedAt"
+    },
+    {
+      "migration_id": 23,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadShellSummary"
+    },
+    {
+      "migration_id": 24,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "BackfillProjectionThreadShellSummary"
+    },
+    {
+      "migration_id": 25,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "CleanupInvalidProjectionPendingApprovals"
+    },
+    {
+      "migration_id": 26,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "CanonicalizeModelSelectionOptions"
+    },
+    {
+      "migration_id": 27,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProviderSessionRuntimeInstanceId"
+    },
+    {
+      "migration_id": 28,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadSessionInstanceId"
+    },
+    {
+      "migration_id": 29,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadDetailOrderingIndexes"
+    },
+    {
+      "migration_id": 30,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadShellArchiveIndexes"
+    },
+    {
+      "migration_id": 31,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "AuthAuthorizationScopes"
+    },
+    {
+      "migration_id": 32,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "AuthPairingProofKeyThumbprint"
+    },
+    {
+      "migration_id": 33,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadsSettled"
+    },
+    {
+      "migration_id": 34,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadsSnoozed"
+    },
+    {
+      "migration_id": 35,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadTitleRegeneration"
+    },
+    {
+      "migration_id": 36,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadsPinned"
+    },
+    {
+      "migration_id": 37,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionTurnsKeysetIndex"
+    },
+    {
+      "migration_id": 38,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadsPinOrderKey"
+    },
+    {
+      "migration_id": 39,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionProjectsDefaultThreadEnvMode"
+    },
+    {
+      "migration_id": 40,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionProjectFaviconPath"
+    },
+    {
+      "migration_id": 41,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "AuthSessionClientConnection"
+    },
+    {
+      "migration_id": 42,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadLinkedPullRequest"
+    },
+    {
+      "migration_id": 43,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadsUnsettledAt"
+    },
+    {
+      "migration_id": 44,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ClearAutomaticProjectModelDefaults"
+    },
+    {
+      "migration_id": 45,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionProjectsAutoPull"
+    },
+    {
+      "migration_id": 46,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "RepairAutomaticSettlementTimestamps"
+    },
+    {
+      "migration_id": 47,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionProjectIcon"
+    },
+    {
+      "migration_id": 48,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadBranchPullRequest"
+    },
+    {
+      "migration_id": 49,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadsActiveOrderKey"
+    },
+    {
+      "migration_id": 50,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadPullRequests"
+    },
+    {
+      "migration_id": 51,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadMessageContext"
+    },
+    {
+      "migration_id": 52,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadTitleState"
+    },
+    {
+      "migration_id": 53,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "PullRequestFilesViewed"
+    },
+    {
+      "migration_id": 54,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ProjectionThreadsAutoSettleDisabledAt"
+    },
+    {
+      "migration_id": 55,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "OrchestrationV2"
+    },
+    {
+      "migration_id": 56,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "RemoveRedundantProjectionIndexes"
+    },
+    {
+      "migration_id": 57,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "AgentsTaskCreationRejections"
+    },
+    {
+      "migration_id": 58,
+      "created_at": "2026-10-18 09:35:08",
+      "name": "ScheduledTaskOccurrence"
+    }
+  ],
+  "sourceSha256": {
+    "apps/server/src/persistence/Migrations.ts": "7dbdbfb5e2f0a533fdd8ea2c5f832371802385babd9989aafa908644834da041",
+    "apps/server/src/persistence/Base3PolicyMigrations.ts": "187e1ea8f2571e86995e15a71bb3c26a0d35184d06b9e1c201e67176c2e8b3b6"
+  },
+  "description": "Schema and ledger only, generated by the accepted-base core and Base3 migration runners; no user data or new authority."
+}
