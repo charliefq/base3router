@@ -6709,4 +6709,21 @@ it("labels persisted capability validation at dispatch and never presents stale 
   );
   expect(text()).not.toContain("Recommended");
   expect(text()).toContain("invalidated");
+  await act(async () =>
+    renderer.update(
+      <TaskCapabilityReadout
+        historical
+        evidence={{
+          mode: "review-only",
+          observation: "provider-start",
+          status: "stale",
+          reason: "Fresh start observation",
+          reviewed: plan,
+        }}
+      />,
+    ),
+  );
+  expect(renderer.root.findByProps({ role: "status" }).children.join("")).toContain(
+    "Before provider start: stale",
+  );
 });

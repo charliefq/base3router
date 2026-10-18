@@ -120,7 +120,7 @@ type Fixture = {
   setEnvironment: (environment: string) => void;
   dispatch: (
     command: OrchestrationV2Command,
-    actor?: typeof agentsCreationActor,
+    actor?: import("../../policy/executionContext.ts").PolicyExecutionContext,
   ) => ReturnType<Orchestrator.OrchestratorV2["Service"]["dispatch"]>;
   reject: (
     command: Extract<OrchestrationV2Command, { type: "thread.create" }>,
@@ -196,6 +196,7 @@ export const withAgentsTaskCreationFixture = <E>(
       }),
     {
       databaseLayer: database,
+      capabilityContextLayer: Layer.mergeAll(registry, environmentLayer),
       runEffectWorker: false,
       ...(options.decorateEventSink ? { decorateEventSink: options.decorateEventSink } : {}),
       ...(options.decorateCommandReceipts

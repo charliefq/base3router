@@ -1,6 +1,7 @@
 import {
   TaskCapabilityPlan,
   type TaskCapabilityEvidence,
+  type TaskCapabilityPlan as CapabilityPlan,
   type OrchestrationV2AppThread,
 } from "@t3tools/contracts";
 import { planTaskCapabilities } from "@t3tools/shared/taskCapabilityPlan";
@@ -19,13 +20,20 @@ export const readTaskCapabilityEvidence = Effect.fn("collaboration.readTaskCapab
       OrchestrationV2AppThread,
       "agentsTaskCreation" | "taskContract" | "projectId" | "modelSelection"
     >,
+    reviewedOverride?: CapabilityPlan,
   ) {
-    const reviewed = thread.agentsTaskCreation?.review.capabilityPlan;
+    const reviewed = reviewedOverride ?? thread.agentsTaskCreation?.review.capabilityPlan;
     if (!reviewed) return undefined;
     const evidence = (
       status: TaskCapabilityEvidence["status"],
       reason: string,
-    ): TaskCapabilityEvidence => ({ mode: "review-only", status, reason, reviewed });
+    ): TaskCapabilityEvidence => ({
+      mode: "review-only",
+      observation: "dispatch",
+      status,
+      reason,
+      reviewed,
+    });
     if (reviewed.workspace === null)
       return evidence(
         "unknown",

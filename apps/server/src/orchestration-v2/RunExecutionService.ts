@@ -1,3 +1,8 @@
+import { readTaskCapabilityEvidence } from "../collaboration/taskCapabilityPlan.ts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as ProjectionStore from "./ProjectionStore.ts";
+import * as Option from "effect/Option";
+import type { TaskCapabilityEvidence } from "@t3tools/contracts";
 import { imageDeliveryDenialStatus, settleImageDeliveryDenial } from "../policy/Base3PolicyGate.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
@@ -688,6 +693,7 @@ export const layer: Layer.Layer<
     const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const finalizationObserver = yield* RunFinalizationService.RunFinalizationObserver;
+    const capabilityContext = yield* Effect.context();
 
     const writeFinalRunEvents = (input: {
       readonly run: OrchestrationV2Run;
@@ -795,8 +801,37 @@ export const layer: Layer.Layer<
         // over a newer acknowledgement, successor, or Stop barrier.
         const { delegatedCompletion: _delegatedCompletion, ...runWithoutDelegatedCompletion } =
           input.run;
+        let latestCapabilityEvidence = input.run.capabilityEvidence;
+        if (latestCapabilityEvidence) {
+          const projections = yield* Effect.serviceOption(ProjectionStore.ProjectionStoreV2).pipe(
+            Effect.provide(capabilityContext),
+          );
+          if (Option.isSome(projections)) {
+            latestCapabilityEvidence = yield* projections.value
+              .getRuntimeRecoveryProjection(input.run.threadId)
+              .pipe(
+                Effect.map(
+                  (current) =>
+                    current.runs.find(
+                      (run) => run.id === input.run.id && run.activeAttemptId === input.attempt.id,
+                    )?.capabilityEvidence ?? latestCapabilityEvidence,
+                ),
+                Effect.orElseSucceed(() =>
+                  latestCapabilityEvidence
+                    ? {
+                        ...latestCapabilityEvidence,
+                        status: "unknown" as const,
+                        reason:
+                          "Latest advisory observation unavailable; recommendations invalidated.",
+                      }
+                    : undefined,
+                ),
+              );
+          }
+        }
         const finalizedRun: OrchestrationV2Run = {
           ...runWithoutDelegatedCompletion,
+          ...(latestCapabilityEvidence ? { capabilityEvidence: latestCapabilityEvidence } : {}),
           status: persistedStatus,
           completedAt: terminal.status === "completed" ? null : completedAt,
         };
@@ -953,8 +988,98 @@ export const layer: Layer.Layer<
       });
 
     return RunExecutionServiceV2.of({
-      startRootRun: (input) =>
+      startRootRun: (initialInput) =>
         Effect.gen(function* () {
+          let input = initialInput;
+          const reviewed =
+            input.run.capabilityEvidence?.reviewed ??
+            input.appThread.agentsTaskCreation?.review.capabilityPlan;
+          if (reviewed) {
+            const sql = yield* Effect.serviceOption(SqlClient.SqlClient).pipe(
+              Effect.provide(capabilityContext),
+            );
+            const projections = yield* Effect.serviceOption(ProjectionStore.ProjectionStoreV2).pipe(
+              Effect.provide(capabilityContext),
+            );
+            const unknown: TaskCapabilityEvidence = {
+              mode: "review-only",
+              status: "unknown",
+              reason:
+                "Provider-start inventory could not be observed. Advisory recommendations are invalidated; existing execution authority is unchanged.",
+              reviewed,
+            };
+            const observed =
+              Option.isSome(sql) && Option.isSome(projections)
+                ? yield* projections.value.getThread(input.run.threadId).pipe(
+                    Effect.flatMap((thread) =>
+                      readTaskCapabilityEvidence(
+                        sql.value,
+                        { ...thread, modelSelection: input.modelSelection },
+                        reviewed,
+                      ),
+                    ),
+                    Effect.orElseSucceed(() => unknown),
+                    Effect.provide(capabilityContext),
+                  )
+                : unknown;
+            const now = yield* DateTime.now;
+            const capabilityEvidence: TaskCapabilityEvidence = {
+              ...(observed ?? unknown),
+              observation: "provider-start",
+              observedAt: DateTime.formatIso(now),
+            };
+            const run: OrchestrationV2Run = {
+              ...input.run,
+              capabilityDispatchEvidence:
+                input.run.capabilityDispatchEvidence ?? input.run.capabilityEvidence ?? unknown,
+              capabilityEvidence,
+            };
+            const attempt: OrchestrationV2RunAttempt = { ...input.attempt, capabilityEvidence };
+            const events: OrchestrationV2DomainEvent[] = [];
+            for (const event of [
+              { type: "run.updated", payload: run },
+              { type: "run-attempt.updated", payload: attempt },
+            ] as const) {
+              events.push({
+                ...event,
+                id: yield* idAllocator.allocate.event({ threadId: run.threadId }).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new RunExecutionStartError({
+                        commandId: input.commandId,
+                        runId: run.id,
+                        cause,
+                      }),
+                  ),
+                ),
+                threadId: run.threadId,
+                runId: run.id,
+                nodeId: input.rootNode.id,
+                providerInstanceId: run.providerInstanceId,
+                occurredAt: now,
+              });
+            }
+            const written = yield* eventSink
+              .writeIfRunCurrent({
+                threadId: run.threadId,
+                runId: run.id,
+                activeAttemptId: attempt.id,
+                expectedStatus: "running",
+                events,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new RunExecutionStartError({
+                      commandId: input.commandId,
+                      runId: run.id,
+                      cause,
+                    }),
+                ),
+              );
+            if (!written.committed) return;
+            input = { ...input, run, attempt };
+          }
           const rootExecution = {
             rootNodeId: input.rootNode.id,
             providerThreadId: input.providerThread.id,

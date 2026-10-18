@@ -3485,6 +3485,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly senderThreadId?: OrchestrationV2ConversationMessage["senderThreadId"];
     readonly delegatedCompletion?: OrchestrationV2ConversationMessage["delegatedCompletion"];
     readonly forceRestart: boolean;
+    readonly capabilityEvidence?: import("@t3tools/contracts").TaskCapabilityEvidence | undefined;
   }) =>
     Effect.gen(function* () {
       const targetRun = input.projection.runs.find(
@@ -3577,6 +3578,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
       const session = sessionOption.value;
       const now = yield* DateTime.now;
+      const capabilitySql = yield* taskReviewSqlAtCall;
+      const capabilityEvidence =
+        input.capabilityEvidence ??
+        (Option.isSome(capabilitySql)
+          ? yield* readTaskCapabilityEvidence(capabilitySql.value, {
+              ...input.projection.thread,
+              modelSelection: input.modelSelection,
+            }).pipe(mapDispatchError(input.command))
+          : undefined);
       const emitEvent = emit(input.events, input.command);
       const selectionChanged = !modelSelectionsEqual(
         targetRun.modelSelection,
@@ -3715,6 +3725,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
 
       if (steeringPolicy === "active_steering") {
+        if (capabilityEvidence !== undefined) {
+          yield* emitEvent({
+            type: "run.updated",
+            threadId: input.command.threadId,
+            runId: targetRun.id,
+            providerInstanceId: targetRun.providerInstanceId,
+            occurredAt: now,
+            payload: { ...targetRun, capabilityEvidence },
+          });
+        }
         // The steer's selection becomes the saved next-turn choice, even when it
         // matches the running run again. A delegated completion carries the
         // run's selection, not a user choice, so it never replaces the saved one.
@@ -3999,6 +4019,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       const restartedRun: OrchestrationV2Run = {
         ...targetRun,
+        ...(capabilityEvidence === undefined ? {} : { capabilityEvidence }),
         providerInstanceId: input.modelSelection.instanceId,
         modelSelection: input.modelSelection,
         providerThreadId: restartProviderThread.id,
@@ -4577,6 +4598,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ? {}
             : { senderThreadId: command.senderThreadId }),
           forceRestart: dispatchMode.type === "restart_active",
+          capabilityEvidence,
         });
         return;
       }

@@ -21,7 +21,18 @@ export function TaskCapabilityReadout({
       </p>
       {evidence ? (
         <p role="status">
-          {historical ? "At dispatch" : "Review now"}: {evidence.status}: {evidence.reason}
+          {historical
+            ? evidence.observation === "provider-start"
+              ? "Before provider start"
+              : "At dispatch"
+            : "Review now"}
+          : {evidence.status}: {evidence.reason}
+        </p>
+      ) : null}
+      {evidence?.observedAt ? (
+        <p>
+          Cached inventory observed at {evidence.observedAt}; this is not a permission or
+          capability-usage attestation.
         </p>
       ) : null}
       <p>

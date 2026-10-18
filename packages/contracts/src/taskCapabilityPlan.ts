@@ -30,6 +30,8 @@ export type TaskCapabilityPlan = typeof TaskCapabilityPlan.Type;
 
 /** Advisory evidence only: never an instruction reference or permission grant. */
 export const TaskCapabilityEvidence = Schema.Struct({
+  observation: Schema.optionalKey(Schema.Literals(["dispatch", "provider-start"])),
+  observedAt: Schema.optionalKey(Text),
   mode: Schema.Literal("review-only"),
   status: Schema.Literals(["current", "stale", "unknown"]),
   reason: Text,

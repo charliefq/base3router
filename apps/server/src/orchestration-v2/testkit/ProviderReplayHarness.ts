@@ -1,3 +1,5 @@
+import type { ProviderRegistry as CapabilityRegistry } from "../../provider/Services/ProviderRegistry.ts";
+import type { ServerEnvironment as CapabilityEnvironment } from "../../environment/ServerEnvironment.ts";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -249,6 +251,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   scenario: Pick<OrchestratorV2ProviderReplayScenario, "name" | "runtimePolicyOverride">,
   registryLayer: Layer.Layer<ProviderAdapterRegistry.ProviderAdapterRegistryV2, Error>,
   options: {
+    readonly capabilityContextLayer?: Layer.Layer<CapabilityRegistry | CapabilityEnvironment>;
     readonly databaseLayer?: Layer.Layer<
       SqlClient.SqlClient,
       MigrationError | PlatformError.PlatformError | SqlError
@@ -394,6 +397,9 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   const runExecutionServiceProvided = RunExecutionService.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        storesLayer,
+        databaseLayer,
+        options.capabilityContextLayer ?? Layer.empty,
         checkpointServiceProvided,
         eventSinkProvided,
         IdAllocator.layer,

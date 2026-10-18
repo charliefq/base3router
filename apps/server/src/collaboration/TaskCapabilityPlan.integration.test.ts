@@ -116,6 +116,7 @@ it.live.each(["current", "disabled", "removed", "unknown workspace", "edited con
           assert.equal(
             result.capabilityEvidence?.status,
             change === "current" ? "current" : "stale",
+            result.capabilityEvidence?.reason,
           );
           assert.isTrue(
             samePlan(result.capabilityEvidence!.reviewed, c.taskCreationReview.capabilityPlan),

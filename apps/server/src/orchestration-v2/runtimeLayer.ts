@@ -1,3 +1,8 @@
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as CapabilitySql from "effect/unstable/sql/SqlClient";
+import * as CapabilityProviderRegistry from "../provider/Services/ProviderRegistry.ts";
+import * as CapabilityEnvironment from "../environment/ServerEnvironment.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as TaskBrakeWorker from "../policy/TaskBrakeWorker.ts";
@@ -133,6 +138,30 @@ const providerAuthServiceProvided = ProviderAuthServiceLive.pipe(
 const runExecutionServiceProvided = runExecutionServiceLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      projectionStoreLayer,
+      Layer.effect(CapabilitySql.SqlClient, CapabilitySql.SqlClient),
+      Layer.unwrap(
+        Effect.serviceOption(CapabilityProviderRegistry.ProviderRegistry).pipe(
+          Effect.map(
+            Option.match({
+              onNone: () => Layer.empty,
+              onSome: (registry) =>
+                Layer.succeed(CapabilityProviderRegistry.ProviderRegistry, registry),
+            }),
+          ),
+        ),
+      ),
+      Layer.unwrap(
+        Effect.serviceOption(CapabilityEnvironment.ServerEnvironment).pipe(
+          Effect.map(
+            Option.match({
+              onNone: () => Layer.empty,
+              onSome: (environment) =>
+                Layer.succeed(CapabilityEnvironment.ServerEnvironment, environment),
+            }),
+          ),
+        ),
+      ),
       checkpointServiceProvided,
       eventSinkProvided,
       idAllocatorLayer,

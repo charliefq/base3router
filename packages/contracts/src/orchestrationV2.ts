@@ -549,6 +549,7 @@ export type OrchestrationV2RunBackgroundWorkCancelled =
   typeof OrchestrationV2RunBackgroundWorkCancelled.Type;
 
 export const OrchestrationV2Run = Schema.Struct({
+  capabilityDispatchEvidence: Schema.optionalKey(TaskCapabilityEvidence),
   capabilityEvidence: Schema.optionalKey(TaskCapabilityEvidence),
   id: RunId,
   threadId: ThreadId,
@@ -588,6 +589,7 @@ export const OrchestrationV2Run = Schema.Struct({
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
 
 export const OrchestrationV2RunAttempt = Schema.Struct({
+  capabilityEvidence: Schema.optionalKey(TaskCapabilityEvidence),
   id: RunAttemptId,
   // Provider-thread rows can be reused after recovery; retain the native input destination.
   nativeThreadId: Schema.optional(Schema.String),
