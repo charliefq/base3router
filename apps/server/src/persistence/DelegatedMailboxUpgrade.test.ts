@@ -6,7 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { runBase3PolicyMigrations } from "./Base3PolicyMigrations.ts";
 import { confirmProviderTermination } from "../policy/Base3PolicyGate.ts";
-import acceptedBase from "./testkit/fixtures/beforeDelegatedMailbox.json";
+import acceptedBase from "./testkit/fixtures/beforeDelegatedMailbox.json" with { type: "json" };
 
 it.effect(
   "upgrades a saved accepted-base database through a new ledger entry without backfilling authority",
