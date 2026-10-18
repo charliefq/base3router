@@ -37,11 +37,12 @@ import {
   taskBlocksStart,
   validateMailboxTaskBudget,
 } from "../policy/TaskContract.ts";
-import { readThreadPullRequests } from "../mcp/toolkits/pullRequests/handlers.ts";
+
 import {
-  PullRequestsToolkit,
+  readThreadPullRequests,
+  ListThreadPullRequestsParameters,
   ListThreadPullRequestsResult,
-} from "../mcp/toolkits/pullRequests/tools.ts";
+} from "../mcp/toolkits/pullRequests/read.ts";
 import { withAllowedSavedPrRead } from "../mcp/McpActionAuthorization.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 
@@ -83,7 +84,7 @@ export class SavedPrRead extends Context.Service<
 >()("t3/collaboration/TaskCapabilityStep/SavedPrRead") {}
 const schemaDigest = () =>
   argumentHash({
-    input: Tool.getJsonSchema(PullRequestsToolkit.tools.list_thread_pull_requests),
+    input: Tool.getJsonSchemaFromSchema(ListThreadPullRequestsParameters),
     output: Schema.toJsonSchemaDocument(ListThreadPullRequestsResult),
   });
 export const savedPrReadLayer = Layer.effect(

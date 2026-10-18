@@ -1,3 +1,5 @@
+import { readThreadPullRequests } from "./read.ts";
+export { listThreadPullRequests } from "./read.ts";
 import {
   threadPullRequestsOf,
   threadPullRequestKeysEqual,
@@ -9,15 +11,9 @@ import {
   type OrchestrationV2ThreadShell,
   type SourceControlProviderKind,
   type ThreadId,
-  type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import { changeRequestUrlFor, parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
-import {
-  normalizeThreadPullRequestKey,
-  resolveThreadPullRequestChains,
-  threadPullRequestKeyOf,
-  visibleThreadPullRequests,
-} from "@t3tools/shared/threadPullRequests";
+import { normalizeThreadPullRequestKey } from "@t3tools/shared/threadPullRequests";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -28,7 +24,6 @@ import * as ProjectService from "../../../project/ProjectService.ts";
 import { withAllowedMcpTool } from "../../McpActionAuthorization.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import {
-  type ListThreadPullRequestsResult,
   PullRequestLinkFailedError,
   PullRequestUrlInvalidError,
   PullRequestTargetIncompleteError,
@@ -38,7 +33,6 @@ import {
   type PullRequestTargetInput,
   PullRequestThreadNotFoundError,
   PullRequestsToolkit,
-  type ThreadPullRequestEntry,
 } from "./tools.ts";
 
 interface ResolvedTarget {
@@ -101,65 +95,6 @@ const resolveTarget = Effect.fn("PullRequestsToolkit.resolveTarget")(function* (
     ...normalizeThreadPullRequestKey({ host, repository, number: input.number, url }),
     url,
   } satisfies ResolvedTarget;
-});
-
-function entryOf(
-  link: ThreadPullRequestLink,
-  chains: ReturnType<typeof resolveThreadPullRequestChains>,
-): ThreadPullRequestEntry {
-  const key = threadPullRequestKeyOf(link);
-  let stack: ThreadPullRequestEntry["stack"] = null;
-  for (const chain of chains) {
-    if (chain.layers.length < 2) continue;
-    const index = chain.layers.findIndex((layer) => threadPullRequestKeyOf(layer) === key);
-    if (index !== -1) {
-      stack = { kind: chain.kind, position: index + 1, size: chain.layers.length };
-      break;
-    }
-  }
-  return {
-    host: normalizeThreadPullRequestKey(link).host,
-    repository: link.repository,
-    number: link.number,
-    url: link.url,
-    source: link.source,
-    state: link.snapshot?.state ?? null,
-    title: link.snapshot?.title ?? null,
-    headBranch: link.snapshot?.headBranch ?? null,
-    baseBranch: link.snapshot?.baseBranch ?? null,
-    isDraft: link.snapshot?.isDraft ?? null,
-    stack,
-  };
-}
-
-/** What the tools report from a thread shell; exported so the shape is testable without a layer. */
-export function listThreadPullRequests(
-  thread: Pick<OrchestrationV2ThreadShell, "pullRequests">,
-): ListThreadPullRequestsResult {
-  const chains = resolveThreadPullRequestChains(thread.pullRequests ?? []);
-  return {
-    pullRequests: visibleThreadPullRequests(thread.pullRequests ?? []).map((link) =>
-      entryOf(link, chains),
-    ),
-    chains: chains.map((chain) => ({
-      kind: chain.kind,
-      numbers: chain.layers.map((layer) => layer.number),
-    })),
-  };
-}
-
-/** The shared persisted-state operation. Both entry points supply their real thread repository. */
-export const readThreadPullRequests = Effect.fn("PullRequests.readThreadPullRequests")(function* <
-  E,
->(
-  read: (threadId: ThreadId) => Effect.Effect<OrchestrationV2ThreadShell | null, E>,
-  threadId: ThreadId,
-) {
-  const thread = yield* read(threadId).pipe(
-    Effect.mapError((cause) => new PullRequestListFailedError({ cause })),
-  );
-  if (thread === null) return yield* new PullRequestThreadNotFoundError({ threadId });
-  return listThreadPullRequests(thread);
 });
 
 const make = Effect.gen(function* () {
