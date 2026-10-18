@@ -1,3 +1,4 @@
+import { TaskCapabilityStep } from "./taskCapabilityStep.ts";
 import { TaskCapabilityPlan, TaskCapabilityEvidence } from "./taskCapabilityPlan.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import * as Effect from "effect/Effect";
@@ -1072,6 +1073,7 @@ export const OrchestrationV2Notification = Schema.Struct({
 export type OrchestrationV2Notification = typeof OrchestrationV2Notification.Type;
 
 export const OrchestrationV2ConversationMessage = Schema.Struct({
+  capabilityStep: Schema.optionalKey(TaskCapabilityStep),
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
   scheduledTaskId: Schema.optional(ScheduledTaskId),
@@ -2714,6 +2716,7 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("message.dispatch"),
+    capabilityStep: Schema.optionalKey(TaskCapabilityStep),
     notification: Schema.optional(OrchestrationV2Notification),
     ...OrchestrationV2CreationFields,
     scheduledTaskId: Schema.optional(ScheduledTaskId),

@@ -1,4 +1,9 @@
 import {
+  SavedPrRead,
+  prepareCapabilityStep,
+  validateCapabilityDispatch,
+} from "../collaboration/TaskCapabilityStep.ts";
+import {
   verifyDelegationReplay,
   verifyMailboxReplay,
   type ApprovedDelegation,
@@ -713,6 +718,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const idAllocator = yield* IdAllocatorV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const projectionStore = yield* ProjectionStoreV2;
+  const capabilityRegistration = yield* Effect.serviceOption(SavedPrRead);
+  const withCapabilityRegistration = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Option.isSome(capabilityRegistration)
+      ? effect.pipe(Effect.provideService(SavedPrRead, capabilityRegistration.value))
+      : effect;
   const taskReviewSql = yield* Effect.serviceOption(SqlClient.SqlClient);
   const taskReviewSqlAtCall = Effect.serviceOption(SqlClient.SqlClient).pipe(
     Effect.map((current) => (Option.isSome(taskReviewSql) ? taskReviewSql : current)),
@@ -4825,6 +4835,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.senderThreadId === undefined
             ? {}
             : { senderThreadId: command.senderThreadId }),
+          ...(command.capabilityStep === undefined
+            ? {}
+            : { capabilityStep: command.capabilityStep }),
           id: command.messageId,
           threadId: command.threadId,
           runId,
@@ -5165,6 +5178,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.senderThreadId === undefined
             ? {}
             : { senderThreadId: command.senderThreadId }),
+          ...(command.capabilityStep === undefined
+            ? {}
+            : { capabilityStep: command.capabilityStep }),
           id: command.messageId,
           threadId: command.threadId,
           runId,
@@ -5857,6 +5873,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ? {}
           : { scheduledTaskId: command.scheduledTaskId }),
         ...(command.senderThreadId === undefined ? {} : { senderThreadId: command.senderThreadId }),
+        ...(command.capabilityStep === undefined ? {} : { capabilityStep: command.capabilityStep }),
         id: command.messageId,
         threadId: command.threadId,
         runId,
@@ -9351,6 +9368,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
       readonly effects: ReadonlyArray<PendingOrchestrationEffectV2>;
       readonly approvedDelegation?: ApprovedDelegation;
+      readonly capabilityCommand?: Extract<OrchestrationV2Command, { type: "message.dispatch" }>;
       readonly governedTaskOwner?: string;
       readonly ordinaryRootOwner?: string;
       readonly contractSetActor?: string;
@@ -9391,6 +9409,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             "Implement this plan in its governed task. A new thread cannot share the task's start limit. Create and review a separate task for separate work.",
         });
       }
+    }
+    if (command.type === "message.dispatch") {
+      const database = yield* taskReviewSqlAtCall;
+      if (Option.isSome(database))
+        yield* withCapabilityRegistration(validateCapabilityDispatch(database.value, command)).pipe(
+          mapDispatchError(command),
+        );
+      else if (command.capabilityStep)
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Capability persistence unavailable.",
+        });
     }
     // Plan runs and provider effects from the server-bound target, not the client preference.
     const authorizedCommand = yield* authorizeDispatch(command).pipe(mapDispatchError(command));
@@ -9682,6 +9713,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(ordinaryRootOwner === undefined ? {} : { ordinaryRootOwner }),
       ...(contractSetActor === undefined ? {} : { contractSetActor }),
       ...(command.type === "thread.create" ? { creationCommand: command } : {}),
+      ...(command.type === "message.dispatch" ? { capabilityCommand: command } : {}),
       ...(command.type === "thread.task-contract.set" &&
       (command.expectedRevision !== undefined || command.reviewTask !== undefined)
         ? { reviewedSet: command }
@@ -9762,6 +9794,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             cause: "Mailbox receipt policy store unavailable.",
           });
         yield* verifyMailboxReplay(sqlOption.value, command).pipe(mapDispatchError(command));
+      }
+      if (command.type === "message.dispatch") {
+        const database = yield* taskReviewSqlAtCall;
+        if (Option.isSome(database))
+          yield* withCapabilityRegistration(
+            validateCapabilityDispatch(database.value, command, true),
+          ).pipe(mapDispatchError(command));
+        else if (command.capabilityStep)
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Capability replay store unavailable.",
+          });
       }
       // A receipt only proves this exact command was handled for its own
       // thread. Replaying it for a command aimed at another thread would
@@ -9986,8 +10031,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return { sequence: resultSequence, storedEvents: [] } satisfies OrchestratorV2DispatchResult;
     }
     const acceptedAt = plan.events.at(-1)?.occurredAt ?? (yield* DateTime.now);
-    const committed = yield* eventSink
-      .commitCommand({
+    const committed = yield* withCapabilityRegistration(
+      eventSink.commitCommand({
         commandId: command.commandId,
         threadId: commandThreadId(command),
         commandType: command.type,
@@ -10006,23 +10051,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(plan.contractSetActor === undefined ? {} : { contractSetActor: plan.contractSetActor }),
         ...(plan.reviewedSet === undefined ? {} : { reviewedSet: plan.reviewedSet }),
         ...(plan.creationCommand === undefined ? {} : { creationCommand: plan.creationCommand }),
+        ...(plan.capabilityCommand === undefined
+          ? {}
+          : { capabilityCommand: plan.capabilityCommand }),
         ...(plan.taskContractDecision === undefined
           ? {}
           : { taskContractDecision: plan.taskContractDecision }),
         ...(plan.cancelUnsettledEffects === undefined
           ? {}
           : { cancelUnsettledEffects: plan.cancelUnsettledEffects }),
-      })
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new OrchestratorDispatchError({
-              commandId: command.commandId,
-              commandType: command.type,
-              cause,
-            }),
-        ),
-      );
+      }),
+    ).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause,
+          }),
+      ),
+    );
 
     if (committed.receipt.status === "rejected") {
       return yield* new OrchestratorCommandPreviouslyRejectedError({
@@ -10244,6 +10292,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         Effect.flatMap((database) =>
           Option.isSome(database)
             ? readTaskReview(database.value, input).pipe(
+                Effect.flatMap((facts) =>
+                  Effect.gen(function* () {
+                    if (!input.capabilityStep || facts.status !== "available") return facts;
+                    const projection = yield* projectionStore.getThreadProjection(
+                      ThreadId.make(input.threadId),
+                    );
+                    const runId = idAllocator.derive.run({
+                      threadId: ThreadId.make(input.threadId),
+                      ordinal: nextRunOrdinal(projection),
+                    });
+                    if (Option.isNone(capabilityRegistration))
+                      return {
+                        status: "unavailable" as const,
+                        reason: "Server-owned capability registration unavailable.",
+                      };
+                    const capabilityStep = yield* prepareCapabilityStep(
+                      database.value,
+                      input,
+                      facts,
+                      runId,
+                      idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
+                    ).pipe(Effect.provideService(SavedPrRead, capabilityRegistration.value));
+                    return { ...facts, capabilityStep };
+                  }),
+                ),
                 Effect.mapError(
                   (cause) =>
                     new OrchestratorProjectionError({

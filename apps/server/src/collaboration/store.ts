@@ -1,3 +1,4 @@
+import { readCapabilityStepState } from "./TaskCapabilityStep.ts";
 import { readTaskCapabilityEvidence } from "./taskCapabilityPlan.ts";
 import { RouterObservationEventV0 } from "@t3tools/contracts";
 import { verifiedSingleStartV2 } from "../routerEvaluation/persistTurnOutcome.ts";
@@ -1396,10 +1397,12 @@ export const readTaskReview = Effect.fn("collaboration.readTaskReview")(function
       item.threadId === input.threadId,
   );
   if (!task) return no("task-link-unavailable");
-  const facts = yield* reviewFacts(sql, commands, task, context.actorId, input.environmentId);
+  let facts = yield* reviewFacts(sql, commands, task, context.actorId, input.environmentId);
   if (facts.status === "available" && facts.contract.revision !== input.revision)
     return no("stale-revision");
   if (facts.status === "available") {
+    const capabilityStepState = yield* readCapabilityStepState(sql, input.threadId);
+    facts = { ...facts, ...(capabilityStepState === undefined ? {} : { capabilityStepState }) };
     const rows = yield* sql<{
       payload_json: string;
     }>`SELECT payload_json FROM orchestration_v2_projection_threads WHERE thread_id=${input.threadId}`;

@@ -148,6 +148,20 @@ export function listThreadPullRequests(
   };
 }
 
+/** The shared persisted-state operation. Both entry points supply their real thread repository. */
+export const readThreadPullRequests = Effect.fn("PullRequests.readThreadPullRequests")(function* <
+  E,
+>(
+  read: (threadId: ThreadId) => Effect.Effect<OrchestrationV2ThreadShell | null, E>,
+  threadId: ThreadId,
+) {
+  const thread = yield* read(threadId).pipe(
+    Effect.mapError((cause) => new PullRequestListFailedError({ cause })),
+  );
+  if (thread === null) return yield* new PullRequestThreadNotFoundError({ threadId });
+  return listThreadPullRequests(thread);
+});
+
 const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
 
@@ -273,7 +287,9 @@ const make = Effect.gen(function* () {
       withAllowedMcpTool(
         "list_thread_pull_requests",
         {},
-        requireThread(PullRequestListFailedError).pipe(Effect.map(listThreadPullRequests)),
+        McpInvocationContext.requireMcpCapability("pull-requests").pipe(
+          Effect.flatMap((scope) => readThreadPullRequests(engine.getThreadShell, scope.threadId)),
+        ),
       ),
   });
 });

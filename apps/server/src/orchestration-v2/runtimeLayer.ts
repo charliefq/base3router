@@ -1,3 +1,6 @@
+import { savedPrReadLayer } from "../collaboration/TaskCapabilityStep.ts";
+import * as CapabilityActionGate from "../actionGate/ActionGateService.ts";
+import { ConcurrencyBudgetService as CapabilityConcurrency } from "../concurrencyBudget/ConcurrencyBudgetService.ts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as CapabilitySql from "effect/unstable/sql/SqlClient";
@@ -82,6 +85,43 @@ const storesLayer = Layer.mergeAll(
   commandReceiptStoreProvided,
   effectOutboxLayer,
   turnItemPositionStoreLayer,
+);
+
+const savedReadProvided = savedPrReadLayer.pipe(Layer.provide(projectionStoreLayer));
+const capabilityRuntimeServices = Layer.mergeAll(
+  savedReadProvided,
+  CapabilityActionGate.layer,
+  Layer.effect(CapabilitySql.SqlClient, CapabilitySql.SqlClient),
+  Layer.unwrap(
+    Effect.serviceOption(CapabilityProviderRegistry.ProviderRegistry).pipe(
+      Effect.map(
+        Option.match({
+          onNone: () => Layer.empty,
+          onSome: (value) => Layer.succeed(CapabilityProviderRegistry.ProviderRegistry, value),
+        }),
+      ),
+    ),
+  ),
+  Layer.unwrap(
+    Effect.serviceOption(CapabilityEnvironment.ServerEnvironment).pipe(
+      Effect.map(
+        Option.match({
+          onNone: () => Layer.empty,
+          onSome: (value) => Layer.succeed(CapabilityEnvironment.ServerEnvironment, value),
+        }),
+      ),
+    ),
+  ),
+  Layer.unwrap(
+    Effect.serviceOption(CapabilityConcurrency).pipe(
+      Effect.map(
+        Option.match({
+          onNone: () => Layer.empty,
+          onSome: (value) => Layer.succeed(CapabilityConcurrency, value),
+        }),
+      ),
+    ),
+  ),
 );
 
 export const OrchestrationV2EventSinkLayerLive = eventSinkLayer.pipe(Layer.provide(storesLayer));
@@ -173,6 +213,7 @@ const runExecutionServiceProvided = runExecutionServiceLayer.pipe(
 const providerTurnStartServiceProvided = providerTurnStartServiceLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      capabilityRuntimeServices,
       contextHandoffServiceProvided,
       eventSinkProvided,
       idAllocatorLayer,
@@ -228,6 +269,7 @@ const runFinalizationServiceProvided = runFinalizationServiceLayer.pipe(
 const orchestratorProvided = orchestratorLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      savedReadProvided,
       checkpointServiceProvided,
       commandPolicyLayer,
       storesLayer,

@@ -1,3 +1,13 @@
+import { argumentHash } from "../policy/grantArguments.ts";
+import {
+  executeCapabilityStep,
+  capabilityContext,
+  SavedPrRead,
+} from "../collaboration/TaskCapabilityStep.ts";
+import { ActionGateService } from "../actionGate/ActionGateService.ts";
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
+import { ConcurrencyBudgetService } from "../concurrencyBudget/ConcurrencyBudgetService.ts";
 import { revalidateDelegatedMessage } from "../policy/DelegatedMailboxAuthority.ts";
 import {
   revalidateImageRoute,
@@ -119,6 +129,28 @@ export const layer: Layer.Layer<
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
+    const capabilitySql = yield* Effect.serviceOption(SqlClient.SqlClient);
+    const capabilityOperation = yield* Effect.serviceOption(SavedPrRead);
+    const capabilityGate = yield* Effect.serviceOption(ActionGateService);
+    const capabilityProvider = yield* Effect.serviceOption(ProviderRegistry);
+    const capabilityEnvironment = yield* Effect.serviceOption(ServerEnvironment);
+    const capabilityBudget = yield* Effect.serviceOption(ConcurrencyBudgetService);
+    const withCapabilityServices = <A, E, R>(effect: Effect.Effect<A, E, R>) => {
+      let result = effect;
+      if (Option.isSome(capabilityOperation))
+        result = result.pipe(Effect.provideService(SavedPrRead, capabilityOperation.value));
+      if (Option.isSome(capabilityGate))
+        result = result.pipe(Effect.provideService(ActionGateService, capabilityGate.value));
+      if (Option.isSome(capabilityProvider))
+        result = result.pipe(Effect.provideService(ProviderRegistry, capabilityProvider.value));
+      if (Option.isSome(capabilityEnvironment))
+        result = result.pipe(Effect.provideService(ServerEnvironment, capabilityEnvironment.value));
+      if (Option.isSome(capabilityBudget))
+        result = result.pipe(
+          Effect.provideService(ConcurrencyBudgetService, capabilityBudget.value),
+        );
+      return result;
+    };
 
     // These callbacks outlive startup while a run drains background work. Build
     // them outside start's scope so they cannot retain its full thread history.
@@ -577,6 +609,61 @@ export const layer: Layer.Layer<
       const existingSessionProjection = projection.providerSessions.find(
         (candidate) => candidate.id === providerSessionId,
       );
+      let savedCapabilityContext = "";
+      if (message.capabilityStep) {
+        if (Option.isNone(capabilitySql))
+          return yield* new ProviderTurnStartError({
+            runId,
+            cause: "Capability persistence unavailable.",
+          });
+        const capability = yield* Effect.result(
+          message.capabilityStep.threadId !== input.threadId ||
+            message.capabilityStep.runId !== run.id ||
+            message.capabilityStep.attemptId !== attempt.id ||
+            message.capabilityStep.messageId !== message.id ||
+            argumentHash(message.capabilityStep.modelSelection) !==
+              argumentHash(run.modelSelection) ||
+            resolvedRuntimePolicy.cwd !== message.capabilityStep.workspace ||
+            resolvedRuntimePolicy.runtimeMode !== message.capabilityStep.runtimeMode ||
+            resolvedRuntimePolicy.interactionMode !== message.capabilityStep.interactionMode
+            ? Effect.fail(
+                new Base3PolicyDeniedError({
+                  commandType: "provider-turn.start",
+                  reason: "capability-runtime-mismatch",
+                  detail: "Provider workspace/runtime differs from capability review.",
+                }),
+              )
+            : withCapabilityServices(
+                executeCapabilityStep(capabilitySql.value, message.capabilityStep).pipe(
+                  Effect.andThen(capabilityContext(capabilitySql.value, message.capabilityStep)),
+                ),
+              ),
+        );
+        if (capability._tag === "Failure") {
+          // Do not rewrite UNKNOWN or a proven read result when later delivery is blocked.
+          yield* capabilitySql.value`UPDATE base3_capability_steps SET status='failed',detail='Capability blocked before operation; no native model was started.' WHERE review_id=${message.capabilityStep.reviewId} AND status='admitted'`.pipe(
+            Effect.mapError((cause) => new ProviderTurnStartError({ runId, cause })),
+          );
+          yield* settleRunBeforeStart({
+            signal: "capability-step-blocked",
+            status: "failed",
+            now: yield* DateTime.now,
+            providerInstanceId: run.providerInstanceId,
+            itemProviderThreadId: providerThread.id,
+            item: {
+              type: "error",
+              title: "Server-owned capability step blocked",
+              failure: makeProviderFailure({
+                message:
+                  "The reviewed capability step was blocked or its outcome is uncertain. No native model was started; inspect the persisted step result before new work.",
+                class: "provider_error",
+              }),
+            },
+          });
+          return;
+        }
+        savedCapabilityContext = capability.success;
+      }
       const sessionResult = yield* Effect.result(
         providerSessions.open({
           threadId: projection.thread.id,
@@ -998,10 +1085,11 @@ export const layer: Layer.Layer<
       const routableSubagents = projection.subagents.filter((subagent) =>
         RunExecutionService.canRouteRelatedSubagent(subagent.status),
       );
-      const userText = projectComposerContextForProvider({
-        text: message.text,
-        records: message.context?.records ?? [],
-      });
+      const userText =
+        projectComposerContextForProvider({
+          text: message.text,
+          records: message.context?.records ?? [],
+        }) + savedCapabilityContext;
       // Delivered once: this run's provider turn marks the work as told. A
       // restart continuation is prompted by its own text or resumes natively.
       const noteContinuation = isRestartNoteContinuation(
@@ -1208,6 +1296,43 @@ export const layer: Layer.Layer<
               providerInstanceId: turnInput.providerThread.providerInstanceId,
             });
           }
+          if (
+            message.capabilityStep &&
+            (turnInput.runId !== message.capabilityStep.runId ||
+              turnInput.attemptId !== message.capabilityStep.attemptId ||
+              turnInput.threadId !== message.capabilityStep.threadId ||
+              turnInput.message.messageId !== message.capabilityStep.messageId ||
+              turnInput.runtimePolicy.cwd !== message.capabilityStep.workspace ||
+              turnInput.runtimePolicy.runtimeMode !== message.capabilityStep.runtimeMode ||
+              turnInput.runtimePolicy.interactionMode !== message.capabilityStep.interactionMode ||
+              turnInput.providerThread.providerInstanceId !==
+                message.capabilityStep.modelSelection.instanceId ||
+              argumentHash(turnInput.modelSelection) !==
+                argumentHash(message.capabilityStep.modelSelection))
+          )
+            return yield* new ProviderTurnStartError({
+              runId,
+              cause: "Actual provider input differs from the reviewed capability target.",
+            });
+          const savedContext = message.capabilityStep
+            ? Option.isSome(capabilitySql)
+              ? yield* withCapabilityServices(
+                  capabilityContext(capabilitySql.value, message.capabilityStep),
+                )
+              : yield* new ProviderTurnStartError({
+                  runId,
+                  cause: "Capability persistence unavailable.",
+                })
+            : "";
+          if (
+            message.capabilityStep &&
+            (savedContext !== savedCapabilityContext ||
+              !turnInput.message.text.includes(savedContext))
+          )
+            return yield* new ProviderTurnStartError({
+              runId,
+              cause: "Persisted capability context changed before native delivery.",
+            });
           yield* deliver({
             ...turnInput,
             ...(conversationHistory === undefined ? {} : { conversationHistory }),

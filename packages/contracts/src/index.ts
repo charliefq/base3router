@@ -78,3 +78,5 @@ export * from "./skillRouter.ts";
 export * from "./workflow.ts";
 
 export * from "./taskCapabilityPlan.ts";
+
+export * from "./taskCapabilityStep.ts";

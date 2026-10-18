@@ -1,3 +1,5 @@
+import { TaskCapabilityStepControls } from "./TaskCapabilityStepControls";
+import { withCapabilityReviewFixture } from "./testkit/capabilityReviewFixture";
 import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
 import { planTaskCapabilities } from "@t3tools/shared/taskCapabilityPlan";
 import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
@@ -14,6 +16,7 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import {
   EnvironmentId,
   ThreadId,
+  MessageId,
   CommandId,
   ProviderInstanceId,
   HYBRID_TASK_ROUTER_POLICY_VERSION,
@@ -65,6 +68,7 @@ const state = vi.hoisted(() => ({
   bind: vi.fn(),
   recover: vi.fn(),
   navigate: vi.fn(),
+  startStep: vi.fn(),
   reviewRead: vi.fn(),
   reviewDecide: vi.fn(),
   readProjection: vi.fn(),
@@ -88,6 +92,7 @@ vi.mock("../../state/entities", () => ({ useProjects: () => state.projects }));
 vi.mock("../../state/threads", () => ({
   threadEnvironment: {
     create: "create",
+    startTurn: "capability-start",
     readTaskReview: "review-read",
     decideTaskContract: "review-decide",
     readProjection: "read-projection",
@@ -97,17 +102,19 @@ vi.mock("../../state/threads", () => ({
 }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
-    command === "auto-preview"
-      ? state.autoPreview
-      : command === "read-creation-status"
-        ? state.readCreationStatus
-        : command === "review-read"
-          ? state.reviewRead
-          : command === "review-decide"
-            ? state.reviewDecide
-            : command === "read-projection"
-              ? state.readProjection
-              : state.create,
+    command === "capability-start"
+      ? state.startStep
+      : command === "auto-preview"
+        ? state.autoPreview
+        : command === "read-creation-status"
+          ? state.readCreationStatus
+          : command === "review-read"
+            ? state.reviewRead
+            : command === "review-decide"
+              ? state.reviewDecide
+              : command === "read-projection"
+                ? state.readProjection
+                : state.create,
 }));
 vi.mock("../../env", () => ({ isElectron: false }));
 vi.mock("../../lib/utils", () => {
@@ -268,6 +275,7 @@ beforeEach(() => {
     }),
   );
   state.navigate.mockReset();
+  state.startStep.mockReset();
   state.reviewRead.mockReset();
   state.reviewDecide.mockReset();
   state.readProjection.mockReset();
@@ -6727,3 +6735,89 @@ it("labels persisted capability validation at dispatch and never presents stale 
     "Before provider start: stale",
   );
 });
+
+it("mounts real server-owned task review, admits only after explicit confirmation and invalidates changed prompt or connection", async () => {
+  await withCapabilityReviewFixture(async (f) => {
+    const prose = () =>
+      renderer.root
+        .findAllByType("p")
+        .map((p) => p.children.filter((c) => typeof c === "string").join(""))
+        .join("\n");
+    const props = {
+      task: f.task,
+      environmentId: EnvironmentId.make("environment-a"),
+      stale: false,
+      readVersion: 1,
+    };
+    state.reviewRead.mockImplementation(async ({ input }: { input: TaskContractReviewInput }) => ({
+      _tag: "Success",
+      value: await EffectForFixture.runPromise(f.readReview(input)),
+    }));
+    state.startStep.mockImplementation(
+      async ({
+        input,
+      }: {
+        input: {
+          commandId: string;
+          threadId: string;
+          message: { messageId: string; text: string };
+          modelSelection: import("@t3tools/contracts").ModelSelection;
+          capabilityStep: import("@t3tools/contracts").TaskCapabilityStep;
+        };
+      }) => ({
+        _tag: "Success",
+        value: await EffectForFixture.runPromise(
+          f.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(input.commandId),
+            threadId: ThreadId.make(input.threadId),
+            messageId: MessageId.make(input.message.messageId),
+            text: input.message.text,
+            attachments: [],
+            modelSelection: input.modelSelection,
+            routingMode: "manual",
+            dispatchMode: { type: "queue_after_active" },
+            capabilityStep: input.capabilityStep,
+            createdBy: "user",
+            creationSource: "web",
+          }),
+        ),
+      }),
+    );
+    await act(async () => {
+      renderer = create(<TaskCapabilityStepControls {...props} />);
+    });
+    expect(prose()).toContain("Native");
+    expect(creationButton("Run reviewed saved PR step")).toBeUndefined();
+    await creationClick("Review saved PR read");
+    expect(prose()).toContain("t3-pull-requests/list_thread_pull_requests");
+    expect(prose()).toContain("maximum 1 call");
+    expect(await EffectForFixture.runPromise(f.noExecution())).toEqual({
+      runs: 0,
+      grants: 0,
+      outbox: 0,
+      messages: 0,
+    });
+    await act(async () =>
+      renderer.root
+        .findByProps({ "aria-label": "Saved PR answer instructions" })
+        .props.onChange({ target: { value: "Different saved PR question" } }),
+    );
+    expect(creationButton("Run reviewed saved PR step")).toBeUndefined();
+    await creationClick("Review saved PR read");
+    state.sessionIdentity = {};
+    await act(async () => renderer.update(<TaskCapabilityStepControls {...props} />));
+    expect(creationButton("Run reviewed saved PR step")).toBeUndefined();
+    await creationClick("Review saved PR read");
+    await creationClick("Run reviewed saved PR step");
+    expect(state.startStep).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await state.startStep.mock.results[0]!.value;
+    });
+    expect(prose()).toContain("Admission is not operation or model completion");
+    expect((await EffectForFixture.runPromise(f.noExecution())).runs).toBe(1);
+    await creationClick("Read step status");
+    expect(prose()).toContain("Operation: admitted");
+    expect(prose()).toContain("No proven result");
+  });
+}, 30_000);

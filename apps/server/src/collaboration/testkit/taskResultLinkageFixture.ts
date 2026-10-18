@@ -375,7 +375,7 @@ function linkageOperations(
     routing: Partial<
       Pick<
         Extract<OrchestrationV2Command, { type: "message.dispatch" }>,
-        "routingMode" | "modelSelection" | "dispatchMode" | "sourcePlanRef"
+        "routingMode" | "modelSelection" | "dispatchMode" | "sourcePlanRef" | "capabilityStep"
       >
     > = {},
     afterDispatch: () => Effect.Effect<void> = () => Effect.void,
@@ -454,7 +454,11 @@ export const withTaskResultLinkageFixture = <E>(
   options: LinkageAdapterOptions &
     Pick<
       NonNullable<Parameters<typeof withAgentsTaskCreationFixture>[1]>,
-      "dbPath" | "decorateEventSink" | "runContinuationWorker"
+      | "dbPath"
+      | "decorateEventSink"
+      | "runContinuationWorker"
+      | "decorateSavedPrRead"
+      | "useProjectRuntimePolicy"
     > = {},
 ) =>
   Effect.scoped(
@@ -545,6 +549,10 @@ export const withTaskResultLinkageFixture = <E>(
           }),
         {
           dbPath,
+          useProjectRuntimePolicy: options.useProjectRuntimePolicy ?? false,
+          ...(options.decorateSavedPrRead
+            ? { decorateSavedPrRead: options.decorateSavedPrRead }
+            : {}),
           runContinuationWorker: options.runContinuationWorker ?? false,
           adapterRegistryLayer: ProviderAdapterRegistry.makeLayer([adapter]),
           ...(options.decorateEventSink === undefined

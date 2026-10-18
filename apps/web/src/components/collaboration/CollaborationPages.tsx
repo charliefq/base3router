@@ -1,3 +1,4 @@
+import { TaskCapabilityStepControls } from "./TaskCapabilityStepControls";
 import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
 import { SelectionBasisReadout } from "./SelectionBasisReadout";
 import { TaskResultFeedback } from "./TaskResultFeedback";
@@ -1600,6 +1601,14 @@ export function TasksPage() {
                               stale={error !== null || refreshing}
                               invalidateReads={invalidateReads}
                               refresh={async () => await refresh()}
+                            />
+                          ) : null}
+                          {environmentId ? (
+                            <TaskCapabilityStepControls
+                              task={task}
+                              environmentId={environmentId}
+                              stale={error !== null || refreshing}
+                              readVersion={readVersion}
                             />
                           ) : null}
                           <dl className="space-y-1 text-xs text-muted-foreground">

@@ -1006,6 +1006,83 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
+  it.effect(
+    "forwards an explicitly reviewed server-owned step as its exact queued command without active-run steering",
+    () =>
+      Effect.gen(function* () {
+        const commands: OrchestrationV2Command[] = [];
+        const projectionRequests: ThreadId[] = [];
+        const supervisor = yield* makeSupervisor({
+          commands,
+          projects: [],
+          projectionRequests,
+          advertiseServerResolvedCommandContext: true,
+        });
+        const modelSelection = {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "fake-model",
+        };
+        const capabilityStep: import("@t3tools/contracts").TaskCapabilityStep = {
+          version: "server-owned-pr-read.v1",
+          reviewId: "reviewed-step",
+          actorId: "owner",
+          environmentId: "environment-a",
+          projectId: "project-a",
+          projectWorkspace: "/fixture",
+          workspace: "/fixture",
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          threadId: v2ThreadId,
+          taskId: "task",
+          revision: 1,
+          contractDigest: "contract",
+          threadUpdatedAt: "2026-10-18T00:00:00Z",
+          threadSequence: 1,
+          modelSelection,
+          toolId: "t3-pull-requests/list_thread_pull_requests",
+          schemaDigest: "schema",
+          argumentsJson: "{}",
+          commandId: "reviewed-step",
+          messageId: "reviewed-message",
+          promptDigest: "prompt",
+          runId: "run",
+          attemptId: "attempt",
+          maxCalls: 1,
+          maxResultBytes: 32768,
+          expiresAt: "2030-01-01T00:00:00Z",
+          fingerprint: "fingerprint",
+        };
+        yield* startThreadTurn({
+          commandId: CommandId.make(capabilityStep.commandId),
+          threadId: v2ThreadId,
+          message: {
+            messageId: MessageId.make(capabilityStep.messageId),
+            role: "user",
+            text: "Summarize saved PRs",
+            attachments: [],
+          },
+          modelSelection,
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          dispatchMode: "queue",
+          routingMode: "manual",
+          capabilityStep,
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+        expect(projectionRequests).toEqual([]);
+        expect(commands).toHaveLength(1);
+        expect(commands[0]).toMatchObject({
+          type: "message.dispatch",
+          commandId: capabilityStep.commandId,
+          messageId: capabilityStep.messageId,
+          modelSelection,
+          capabilityStep,
+          routingMode: "manual",
+          dispatchMode: { type: "queue_after_active" },
+        });
+        expect(commands[0]).not.toHaveProperty("deliveryIntent");
+      }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
   it.effect("interrupts a known run without fetching the full projection", () =>
     Effect.gen(function* () {
       const commands: OrchestrationV2Command[] = [];

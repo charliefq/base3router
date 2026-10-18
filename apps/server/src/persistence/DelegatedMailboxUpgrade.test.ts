@@ -69,7 +69,10 @@ it.effect(
                 migration_id: string;
                 name: string;
               }>`SELECT migration_id,name FROM base3_policy_migrations WHERE migration_id>'b3-073'`,
-              [{ migration_id: "b3-074", name: "DelegatedMailboxAuthority" }],
+              [
+                { migration_id: "b3-074", name: "DelegatedMailboxAuthority" },
+                { migration_id: "b3-075", name: "GovernedCapabilityStep" },
+              ],
             );
             assert.equal((yield* sql`SELECT * FROM base3_delegated_child_authorities`).length, 0);
             assert.equal((yield* sql`SELECT * FROM base3_delegated_mailbox_deliveries`).length, 0);

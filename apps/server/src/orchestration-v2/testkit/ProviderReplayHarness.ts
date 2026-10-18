@@ -1,3 +1,6 @@
+import { ProviderInstanceRegistry } from "../../provider/Services/ProviderInstanceRegistry.ts";
+import { savedPrReadLayer, SavedPrRead } from "../../collaboration/TaskCapabilityStep.ts";
+import * as CapabilityActionGate from "../../actionGate/ActionGateService.ts";
 import type { ProviderRegistry as CapabilityRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import type { ServerEnvironment as CapabilityEnvironment } from "../../environment/ServerEnvironment.ts";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
@@ -251,6 +254,8 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   scenario: Pick<OrchestratorV2ProviderReplayScenario, "name" | "runtimePolicyOverride">,
   registryLayer: Layer.Layer<ProviderAdapterRegistry.ProviderAdapterRegistryV2, Error>,
   options: {
+    readonly useProjectRuntimePolicy?: boolean;
+    readonly decorateSavedPrRead?: (service: SavedPrRead["Service"]) => SavedPrRead["Service"];
     readonly capabilityContextLayer?: Layer.Layer<CapabilityRegistry | CapabilityEnvironment>;
     readonly databaseLayer?: Layer.Layer<
       SqlClient.SqlClient,
@@ -288,13 +293,23 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     ServerConfig.ServerConfig,
     makeReplayServerConfig(scenario.name).pipe(Effect.orDie),
   ).pipe(Layer.provide(NodeServices.layer));
+  const databaseLayer = options.databaseLayer ?? SqlitePersistenceMemory;
+  const baseRuntimeLayer = options.useProjectRuntimePolicy
+    ? RuntimePolicy.layerFromProjectStore.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            ProjectStore.layer.pipe(Layer.provide(databaseLayer)),
+            Layer.mock(ProviderInstanceRegistry)({ getInstance: () => Effect.succeed(undefined) }),
+          ),
+        ),
+      )
+    : RuntimePolicy.layer;
   const runtimeLayer =
     scenario.runtimePolicyOverride === undefined
-      ? RuntimePolicy.layer
+      ? baseRuntimeLayer
       : RuntimePolicy.layerWithOverride(scenario.runtimePolicyOverride).pipe(
-          Layer.provide(RuntimePolicy.layer),
+          Layer.provide(baseRuntimeLayer),
         );
-  const databaseLayer = options.databaseLayer ?? SqlitePersistenceMemory;
   // One queue shared by the adapters, the orchestrator, and the worker, like
   // runtimeLayer.ts; layer memoization keeps it a single instance.
   const continuationRequestsLayer =
@@ -333,6 +348,13 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         ).pipe(Layer.provide(EffectOutbox.layer)),
     TurnItemPositionStore.layer,
   ).pipe(Layer.provide(databaseLayer));
+  const savedReadProvided = (
+    options.decorateSavedPrRead === undefined
+      ? savedPrReadLayer
+      : Layer.effect(SavedPrRead, Effect.map(SavedPrRead, options.decorateSavedPrRead)).pipe(
+          Layer.provide(savedPrReadLayer),
+        )
+  ).pipe(Layer.provide(storesLayer));
   const eventSinkProvided = sinkLayer.pipe(
     Layer.provide(Layer.mergeAll(storesLayer, databaseLayer)),
   );
@@ -411,6 +433,10 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   const providerTurnStartServiceProvided = ProviderTurnStartService.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        savedReadProvided,
+        databaseLayer,
+        CapabilityActionGate.layer.pipe(Layer.provide(databaseLayer)),
+        options.capabilityContextLayer ?? Layer.empty,
         contextHandoffServiceProvided,
         eventSinkProvided,
         IdAllocator.layer,
@@ -466,6 +492,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   const orchestratorProvided = Orchestrator.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        savedReadProvided,
         checkpointServiceProvided,
         CommandPolicy.layer,
         contextHandoffServiceProvided,
@@ -523,6 +550,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     Layer.provide(Layer.merge(storesLayer, effectExecutorProvided)),
   );
   const replayRuntime = Layer.mergeAll(
+    savedReadProvided,
     orchestratorProvided,
     effectWorkerProvided,
     eventSinkProvided,

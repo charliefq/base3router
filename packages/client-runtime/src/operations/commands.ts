@@ -177,6 +177,7 @@ interface StartThreadBootstrap {
 }
 
 export interface StartThreadTurnInput extends ThreadCommandInput {
+  readonly capabilityStep?: import("@t3tools/contracts").TaskCapabilityStep;
   readonly manualContinuationOfRunId?: RunId;
   readonly message: {
     readonly messageId: MessageId;
@@ -741,6 +742,23 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     input.message.attachments,
     attachments,
   );
+  if (input.capabilityStep !== undefined) {
+    return yield* dispatch({
+      type: "message.dispatch",
+      commandId,
+      createdBy: "user",
+      creationSource: input.creationSource ?? "web",
+      threadId: input.threadId,
+      messageId: input.message.messageId,
+      text: input.message.text,
+      attachments,
+      ...(context ? { context } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      routingMode: "manual",
+      dispatchMode: { type: "queue_after_active" },
+      capabilityStep: input.capabilityStep,
+    });
+  }
   const bootstrap = input.bootstrap?.createThread;
   const prepareWorktree = input.bootstrap?.prepareWorktree;
   if (bootstrap !== undefined || prepareWorktree !== undefined) {

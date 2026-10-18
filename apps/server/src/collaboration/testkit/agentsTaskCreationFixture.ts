@@ -1,3 +1,4 @@
+import type { SavedPrRead } from "../TaskCapabilityStep.ts";
 import * as ActionGate from "../../actionGate/ActionGateService.ts";
 import * as ProviderSessions from "../../orchestration-v2/ProviderSessionManager.ts";
 import {
@@ -155,6 +156,8 @@ type Fixture = {
 export const withAgentsTaskCreationFixture = <E>(
   check: (fixture: Fixture) => Effect.Effect<void, E, Scope.Scope>,
   options: {
+    readonly useProjectRuntimePolicy?: boolean;
+    readonly decorateSavedPrRead?: (service: SavedPrRead["Service"]) => SavedPrRead["Service"];
     readonly runContinuationWorker?: boolean;
     readonly dbPath?: string;
     readonly adapterRegistryLayer?: Layer.Layer<ProviderAdapterRegistry.ProviderAdapterRegistryV2>;
@@ -203,6 +206,8 @@ export const withAgentsTaskCreationFixture = <E>(
       }),
     {
       databaseLayer: database,
+      useProjectRuntimePolicy: options.useProjectRuntimePolicy ?? false,
+      ...(options.decorateSavedPrRead ? { decorateSavedPrRead: options.decorateSavedPrRead } : {}),
       decorateSessionManager: (service) => {
         sessions = service;
         return service;

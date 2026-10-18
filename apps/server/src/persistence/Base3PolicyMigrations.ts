@@ -273,6 +273,17 @@ const delegatedMailboxAuthorityTables = Effect.gen(function* () {
   )`;
 });
 
+const capabilityStepTables = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE TABLE base3_capability_steps (
+    review_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, message_id TEXT NOT NULL UNIQUE,
+    command_id TEXT NOT NULL UNIQUE, run_id TEXT NOT NULL, attempt_id TEXT NOT NULL,
+    actor_id TEXT NOT NULL, review_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('reviewed','admitted','unknown','succeeded','failed')),
+    detail TEXT, observed_at TEXT, result_json TEXT, result_digest TEXT
+  )`;
+});
+
 const steps: ReadonlyArray<
   readonly [string, string, Effect.Effect<void, SqlError, SqlClient.SqlClient>]
 > = [
@@ -297,6 +308,7 @@ const steps: ReadonlyArray<
   ["b3-072", "FrozenTreeBounds", frozenTreeBounds],
   ["b3-073", "ImageDeliveryDenials", imageDeliveryDenials],
   ["b3-074", "DelegatedMailboxAuthority", delegatedMailboxAuthorityTables],
+  ["b3-075", "GovernedCapabilityStep", capabilityStepTables],
 ];
 
 export const runBase3PolicyMigrations = Effect.gen(function* () {

@@ -16,6 +16,8 @@ import { ConcurrencyBudgetService } from "../concurrencyBudget/ConcurrencyBudget
 import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
+type ActionScope = Pick<McpInvocationContext.McpInvocationScope, "environmentId" | "threadId">;
+
 const isActionGateError = Schema.is(ActionGateError);
 
 const blocked = (
@@ -37,9 +39,9 @@ const revalidateAfterQueue = (
   toolName: string,
   args: unknown,
   prior: ActionGateDecision,
-): Effect.Effect<void, McpActionGateBlockedError, McpInvocationContext.McpInvocationContext> =>
+  invocation: ActionScope,
+): Effect.Effect<void, McpActionGateBlockedError> =>
   Effect.gen(function* () {
-    const invocation = yield* McpInvocationContext.McpInvocationContext;
     const { spec, action } = planMcpToolAction({
       toolName,
       args,
@@ -85,7 +87,7 @@ const revalidateAfterQueue = (
   });
 
 const withMcpAdmission = <A, E, R>(
-  invocation: McpInvocationContext.McpInvocationScope,
+  invocation: ActionScope,
   toolName: string,
   run: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E | McpActionGateBlockedError, R> =>
@@ -125,16 +127,12 @@ const withMcpAdmission = <A, E, R>(
     );
   });
 
-export const requireAllowedMcpTool = (
+const requireAllowedScoped = (
+  invocation: ActionScope,
   toolName: string,
   args: unknown,
-): Effect.Effect<
-  ActionGateDecision,
-  McpActionGateBlockedError,
-  McpInvocationContext.McpInvocationContext | ActionGateService
-> =>
+): Effect.Effect<ActionGateDecision, McpActionGateBlockedError, ActionGateService> =>
   Effect.gen(function* () {
-    const invocation = yield* McpInvocationContext.McpInvocationContext;
     const actionGate = yield* ActionGateService;
     const decision = yield* actionGate
       .authorizeTool({
@@ -225,6 +223,30 @@ export const requireAllowedMcpTool = (
     } satisfies ActionGateDecision;
   });
 
+export const requireAllowedMcpTool = (toolName: string, args: unknown) =>
+  Effect.flatMap(McpInvocationContext.McpInvocationContext, (scope) =>
+    requireAllowedScoped(scope, toolName, args),
+  );
+
+/** Only the server-owned saved PR read uses this path; no native MCP session is fabricated. */
+export const withAllowedSavedPrRead = <A, E, R>(scope: ActionScope, run: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const available = yield* Effect.serviceOption(ActionGateService);
+    if (Option.isNone(available))
+      return yield* blocked("list_thread_pull_requests", "ActionGate unavailable.");
+    const gate = available.value;
+    const decision = yield* requireAllowedScoped(scope, "list_thread_pull_requests", {}).pipe(
+      Effect.provideService(ActionGateService, gate),
+    );
+    return yield* withMcpAdmission(
+      scope,
+      "list_thread_pull_requests",
+      revalidateAfterQueue(gate, "list_thread_pull_requests", {}, decision, scope).pipe(
+        Effect.andThen(run),
+      ),
+    );
+  });
+
 export const withAllowedMcpTool = <A, E, R>(
   toolName: string,
   args: unknown,
@@ -246,6 +268,8 @@ export const withAllowedMcpTool = <A, E, R>(
     return yield* withMcpAdmission(
       invocation,
       toolName,
-      revalidateAfterQueue(gate.value, toolName, args, decision).pipe(Effect.andThen(run)),
+      revalidateAfterQueue(gate.value, toolName, args, decision, invocation).pipe(
+        Effect.andThen(run),
+      ),
     );
   });

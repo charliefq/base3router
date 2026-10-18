@@ -1,3 +1,8 @@
+import {
+  TaskCapabilityStep,
+  TaskCapabilityStepRequest,
+  TaskCapabilityStepState,
+} from "./taskCapabilityStep.ts";
 import { TaskCapabilityEvidence } from "./taskCapabilityPlan.ts";
 /**
  * Explicit contract for a governed task on the V2 thread.
@@ -78,6 +83,7 @@ export const TaskContractReviewHint = Schema.Struct({
 });
 export type TaskContractReviewHint = typeof TaskContractReviewHint.Type;
 export const TaskContractReviewInput = Schema.Struct({
+  capabilityStep: Schema.optionalKey(TaskCapabilityStepRequest),
   environmentId: TrimmedNonEmptyString,
   taskId: TrimmedNonEmptyString,
   projectId: TrimmedNonEmptyString,
@@ -89,6 +95,8 @@ export const TaskContractReviewState = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("available"),
     capabilityEvidence: Schema.optionalKey(TaskCapabilityEvidence),
+    capabilityStep: Schema.optionalKey(TaskCapabilityStep),
+    capabilityStepState: Schema.optionalKey(TaskCapabilityStepState),
     taskId: TrimmedNonEmptyString,
     threadId: TrimmedNonEmptyString,
     projectId: TrimmedNonEmptyString,

@@ -1,3 +1,4 @@
+import { commitCapabilityStep } from "../collaboration/TaskCapabilityStep.ts";
 import {
   commitApprovedDelegation,
   commitMailboxAuthority,
@@ -231,6 +232,7 @@ export interface EventSinkV2Shape {
     readonly threadId: ThreadId;
     readonly commandType: string;
     readonly approvedDelegation?: ApprovedDelegation;
+    readonly capabilityCommand?: Extract<OrchestrationV2Command, { type: "message.dispatch" }>;
     readonly governedTaskOwner?: string;
     readonly ordinaryRootOwner?: string;
     readonly contractSetActor?: string;
@@ -1416,6 +1418,29 @@ const baseLayer: Layer.Layer<
               commandId: input.commandId,
               eventCount: input.events.length,
             });
+          if (
+            input.events.some(
+              (event) =>
+                event.type === "message.updated" && event.payload.capabilityStep !== undefined,
+            ) &&
+            input.capabilityCommand?.capabilityStep === undefined
+          )
+            return yield* new EventSinkWriteError({
+              commandId: input.commandId,
+              eventCount: input.events.length,
+            });
+          if (input.capabilityCommand !== undefined) {
+            if (
+              input.commandType !== "message.dispatch" ||
+              input.capabilityCommand.commandId !== input.commandId ||
+              input.capabilityCommand.threadId !== input.threadId
+            )
+              return yield* new EventSinkWriteError({
+                commandId: input.commandId,
+                eventCount: input.events.length,
+              });
+            yield* commitCapabilityStep(sql, input.capabilityCommand, input.events);
+          }
           if (input.approvedDelegation !== undefined) {
             if (
               input.commandType !== "delegated_task.request" ||
