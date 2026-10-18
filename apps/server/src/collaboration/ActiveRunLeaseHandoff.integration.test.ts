@@ -258,6 +258,7 @@ interface Held {
   readonly terminal: (confirmed?: boolean) => Effect.Effect<void>;
   readonly steerCount: () => number;
   readonly lateOldTerminal: () => Effect.Effect<void>;
+  readonly interruptCount: () => number;
 }
 const withHeld = <E>(
   check: (held: Held) => Effect.Effect<void, E, import("effect/Scope").Scope>,
@@ -266,6 +267,7 @@ const withHeld = <E>(
     readonly beforeCommit?: () => Effect.Effect<void>;
     readonly confirmed?: boolean;
     readonly quietReplacement?: boolean;
+    readonly restartSession?: boolean;
     readonly maxStarts?: number;
     readonly interrupt?: (emitTerminal: () => Effect.Effect<void>) => Effect.Effect<void>;
   } = {},
@@ -276,6 +278,7 @@ const withHeld = <E>(
   let lateOldTerminal = () => Effect.void;
   let nativeActive = false;
   let nativeStarts = 0;
+  let interruptCount = 0;
   return withTaskResultLinkageFixture(
     (f) =>
       Effect.gen(function* () {
@@ -309,11 +312,13 @@ const withHeld = <E>(
           terminal: (confirmed) => terminal(confirmed),
           steerCount: () => steerCount,
           lateOldTerminal: () => lateOldTerminal(),
+          interruptCount: () => interruptCount,
         });
       }),
     {
       governedWorker: true,
       startWorker: false,
+      restartSessionOnSelectionChange: options.restartSession ?? false,
       ...(options.dbPath === undefined ? {} : { dbPath: options.dbPath }),
       ...(options.beforeCommit === undefined
         ? {}
@@ -365,6 +370,7 @@ const withHeld = <E>(
           });
         }),
       onInterrupt: (_input, events, emit) => {
+        interruptCount++;
         const root = events.find((e) => e.type === "provider_turn.updated");
         const end = events.find((e) => e.type === "turn.terminal");
         const emitTerminal = () =>
@@ -1118,4 +1124,88 @@ it.live("a new queued command cannot replace a pending active control's original
       assert.equal((yield* occupied(f)).length, 1);
     }),
   ),
+);
+
+it.live(
+  "changed-session cancellation interrupts the original native session before freeing capacity",
+  () =>
+    withHeld(
+      ({ f, first, interruptCount }) =>
+        Effect.gen(function* () {
+          f.setProviders([
+            {
+              ...agentsCreationProvider,
+              models: [
+                ...agentsCreationProvider.models,
+                { ...agentsCreationProvider.models[0]!, slug: "other-model" },
+              ],
+            },
+          ]);
+          const before = yield* f.orchestrator.getThreadProjection(first.threadId);
+          const oldThread = before.providerThreads.find((t) => t.id === first.providerThreadId)!;
+          const base = send(first.threadId, "session-restart", {
+            type: "restart_active",
+            targetRunId: first.id,
+          });
+          if (base.type !== "message.dispatch") throw new Error("wrong fixture command");
+          yield* f.dispatch(
+            {
+              ...base,
+              routingMode: "manual",
+              modelSelection: {
+                instanceId: agentsCreationProvider.instanceId,
+                model: "other-model",
+              },
+            },
+            agentsCreationActor,
+          );
+          const pending = yield* f.orchestrator.getThreadProjection(first.threadId);
+          const newThread = pending.providerThreads.find((t) => t.id === oldThread.id)!;
+          assert.notEqual(newThread.providerSessionId, oldThread.providerSessionId);
+          assert.equal(yield* Ref.get(f.opened), 1);
+          yield* f.dispatch(
+            {
+              type: "run.interrupt",
+              commandId: CommandId.make("cancel-session-restart"),
+              threadId: first.threadId,
+              runId: first.id,
+            },
+            agentsCreationActor,
+          );
+          const effects = yield* f.sql<{
+            payload_json: string;
+          }>`SELECT payload_json FROM orchestration_v2_effect_outbox WHERE command_id='cancel-session-restart' AND effect_type='provider-turn.interrupt'`;
+          const target = JSON.parse(effects[0]!.payload_json) as {
+            providerSessionId: string;
+            replacementProviderSessionId: string;
+          };
+          assert.equal(target.providerSessionId, oldThread.providerSessionId);
+          assert.equal(target.replacementProviderSessionId, newThread.providerSessionId);
+          assert.equal((yield* occupied(f)).length, 1);
+          const stopped = yield* f.orchestrator.streamDomainEvents.pipe(
+            Stream.filter(
+              (e) =>
+                e.type === "provider-turn.updated" &&
+                e.payload.runAttemptId === first.activeAttemptId &&
+                e.payload.status === "interrupted" &&
+                e.payload.terminationConfirmed === true,
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
+          yield* f.worker.drain();
+          assert.equal(interruptCount(), 1);
+          yield* Fiber.join(stopped);
+          assert.equal((yield* occupied(f)).length, 0);
+          assert.equal((yield* Ref.get(f.started)).length, 1);
+          assert.equal(yield* Ref.get(f.opened), 1);
+          assert.equal((yield* admissions(f)).length, 1);
+          yield* f.rebuild;
+          yield* f.worker.drain();
+          assert.equal(interruptCount(), 1);
+          assert.equal((yield* Ref.get(f.started)).length, 1);
+        }),
+      { restartSession: true },
+    ),
 );

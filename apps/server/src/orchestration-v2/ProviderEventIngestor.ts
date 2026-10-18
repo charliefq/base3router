@@ -198,6 +198,13 @@ function withPlanStepDurations(
   };
 }
 
+// Attribution certifies exact persisted turn facts, including explicit native
+// proof. Use the same record on projection and outcome capture paths.
+const withNativeTerminationProof = (turn: OrchestrationV2ProviderTurn) =>
+  ["completed", "failed", "interrupted", "cancelled"].includes(turn.status)
+    ? { ...turn, terminationConfirmed: turn.terminationConfirmed !== false }
+    : turn;
+
 export interface ProviderEventIngestInput {
   readonly providerSessionId: ProviderSessionId;
   readonly providerInstanceId: ProviderInstanceId;
@@ -386,17 +393,7 @@ export const layer: Layer.Layer<
               yield* makeDomainEvent(input, {
                 type: "provider-turn.updated",
                 ...(input.event.threadId === undefined ? {} : { threadId: input.event.threadId }),
-                payload: {
-                  ...input.event.providerTurn,
-                  ...(["completed", "failed", "interrupted", "cancelled"].includes(
-                    input.event.providerTurn.status,
-                  )
-                    ? {
-                        terminationConfirmed:
-                          input.event.providerTurn.terminationConfirmed !== false,
-                      }
-                    : {}),
-                },
+                payload: withNativeTerminationProof(input.event.providerTurn),
                 nodeId: input.event.providerTurn.nodeId,
               }),
             ];
@@ -564,7 +561,7 @@ export const layer: Layer.Layer<
           Effect.tap((storedEvents) =>
             Effect.gen(function* () {
               if (storedEvents.length === 0 || input.event.type !== "provider_turn.updated") return;
-              const providerTurn = input.event.providerTurn;
+              const providerTurn = withNativeTerminationProof(input.event.providerTurn);
               if (
                 providerTurn.status !== "completed" &&
                 providerTurn.status !== "failed" &&

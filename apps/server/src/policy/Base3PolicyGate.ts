@@ -934,17 +934,6 @@ export const authorizeDispatch = <
       });
     }
     if (command.type === "message.dispatch") {
-      // Stable receipt replay is handled before authorization. A new session
-      // command must not replace the grant of a persisted message, including
-      // while an active control is waiting for native interruption.
-      const existing = yield* sql`SELECT message_id FROM orchestration_v2_projection_messages
-          WHERE message_id=${command.messageId ?? null} LIMIT 1`;
-      if (existing.length > 0)
-        return yield* deny(
-          command.type,
-          "message-identity",
-          "This message already has an execution grant. Replay its original command receipt.",
-        );
       const catalog = yield* providersForBind;
       const modelSelection = yield* bindRoute({
         sql,
@@ -952,6 +941,20 @@ export const authorizeDispatch = <
         providers: catalog,
         environmentId: env,
       });
+      // Stable receipt replay is handled before authorization. A new session
+      // command must not replace the grant of a persisted message, including
+      // while an active control is waiting for native interruption.
+      const existing = yield* sql`SELECT message.message_id
+          FROM orchestration_v2_projection_messages AS message
+          JOIN base3_execution_grants AS authority
+            ON authority.grant_id='grant:message:' || message.thread_id || ':' || message.message_id
+          WHERE message.message_id=${command.messageId ?? null} LIMIT 1`;
+      if (existing.length > 0)
+        return yield* deny(
+          command.type,
+          "message-identity",
+          "This message already has an execution grant. Replay its original command receipt.",
+        );
       const effectiveCommand = {
         ...input,
         modelSelection,

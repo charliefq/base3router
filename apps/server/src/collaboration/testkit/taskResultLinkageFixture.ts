@@ -46,6 +46,7 @@ type ProviderInstanceId = typeof agentsCreationProvider.instanceId;
 interface LinkageAdapterOptions {
   readonly governedWorker?: boolean;
   readonly startWorker?: boolean;
+  readonly restartSessionOnSelectionChange?: boolean;
   readonly onSteer?: () => Effect.Effect<void>;
   readonly terminalOnly?: boolean;
   readonly fixtureOpenRouterModel?: string;
@@ -80,7 +81,12 @@ function makeAdapter(
     instanceId: instanceId,
     driver: driver,
     getCapabilities: () => Effect.succeed(capabilities),
-    planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
+    planSelectionTransition: () =>
+      Effect.succeed(
+        options.restartSessionOnSelectionChange
+          ? { type: "restart_session" }
+          : { type: "apply_on_next_turn" },
+      ),
     openSession: (sessionInput) =>
       Effect.gen(function* () {
         yield* Ref.update(opened, (n) => n + 1);

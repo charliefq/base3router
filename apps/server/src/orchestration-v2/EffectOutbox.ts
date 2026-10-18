@@ -42,6 +42,7 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("provider-turn.interrupt"),
     providerSessionId: ProviderSessionId,
+    replacementProviderSessionId: Schema.optional(ProviderSessionId),
     providerThreadId: ProviderThreadId,
     providerTurnId: ProviderTurnId,
   }),

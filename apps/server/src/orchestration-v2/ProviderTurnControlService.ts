@@ -51,6 +51,7 @@ export interface ProviderTurnControlServiceV2Shape {
   readonly interrupt: (input: {
     readonly threadId: ThreadId;
     readonly providerSessionId: ProviderSessionId;
+    readonly replacementProviderSessionId?: ProviderSessionId;
     readonly providerThreadId: ProviderThreadId;
     readonly providerTurnId: ProviderTurnId;
   }) => Effect.Effect<void, ProviderTurnControlError>;
@@ -107,7 +108,7 @@ export const layer: Layer.Layer<
         const targetsRecordedSession =
           providerThread?.providerSessionId === input.providerSessionId;
         const targetsCommittedReplacement =
-          input.operation === "restart" &&
+          (input.operation === "restart" || input.operation === "interrupt") &&
           input.replacementProviderSessionId !== undefined &&
           providerThread?.providerSessionId === input.replacementProviderSessionId;
         if (
@@ -188,7 +189,20 @@ export const layer: Layer.Layer<
           const session = Option.isSome(loaded.session)
             ? loaded.session
             : yield* sessions.get(input.providerSessionId);
-          if (Option.isNone(session)) return;
+          if (Option.isNone(session)) {
+            if (
+              (yield* PolicyExecutionContext).kind !== "kernel-test" &&
+              (loaded.providerTurn.status === "running" ||
+                loaded.providerTurn.terminationConfirmed !== true)
+            )
+              return yield* new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "interrupt",
+                providerTurnId: input.providerTurnId,
+                cause: "Native termination is unconfirmed; the occupied slot is retained.",
+              });
+            return;
+          }
           // A settled turn reaches its adapter too: only the adapter knows
           // whether it still runs work for the thread, and each one either
           // stops it or reports there is nothing left to stop. Background work

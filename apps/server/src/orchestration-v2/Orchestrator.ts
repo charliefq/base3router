@@ -87,7 +87,7 @@ import { notificationTurnItem } from "./Notification.ts";
 import { isRestartNoteSource } from "./RestartBackgroundNote.ts";
 import { isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
-import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
+import { OrchestrationEffectRequestV2, type PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
 import {
   ThreadCommandExecutor,
@@ -361,6 +361,10 @@ function isNativeMaintenanceCommand(message: {
     ["/compact", "/logout"].includes(message.text.trim().toLowerCase())
   );
 }
+
+const decodeEffectRequest = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationEffectRequestV2),
+);
 
 const threadPullRequestLinksEqual = Schema.toEquivalence(Schema.NullOr(ThreadLinkedPullRequest));
 
@@ -8086,7 +8090,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             const oldThread = projection.providerThreads.find(
               (t) => t.id === retired.providerThreadId,
             );
-            if (oldThread?.providerSessionId == null) continue;
+            if (oldThread === undefined) continue;
+            const sql = yield* taskReviewSqlAtCall;
+            if (Option.isNone(sql)) continue;
+            const owners = yield* sql.value<{ payload_json: string }>`
+              SELECT payload_json FROM orchestration_v2_effect_outbox
+              WHERE thread_id=${command.threadId} AND effect_type='provider-turn.restart'
+                AND json_extract(payload_json,'$.runId')=${run.id}
+                AND json_extract(payload_json,'$.replacementAttemptId')=${run.activeAttemptId}
+                AND json_extract(payload_json,'$.interruptedAttemptId')=${retired.runAttemptId}
+            `.pipe(mapDispatchError(command));
+            if (owners.length !== 1) continue;
+            const owner = decodeEffectRequest(owners[0]!.payload_json);
+            if (Option.isNone(owner) || owner.value.type !== "provider-turn.restart") continue;
+            const restart = owner.value;
+            if (
+              restart.providerThreadId !== retired.providerThreadId ||
+              restart.providerTurnId !== retired.id
+            )
+              continue;
             yield* Ref.update(effects, (existing) => [
               ...existing,
               {
@@ -8095,7 +8117,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 threadId: command.threadId,
                 request: {
                   type: "provider-turn.interrupt" as const,
-                  providerSessionId: oldThread.providerSessionId!,
+                  providerSessionId: restart.providerSessionId,
+                  ...(restart.sessionTransition?.type === "replace"
+                    ? {
+                        replacementProviderSessionId:
+                          restart.sessionTransition.replacementProviderSessionId,
+                      }
+                    : {}),
                   providerThreadId: oldThread.id,
                   providerTurnId: retired.id,
                 },

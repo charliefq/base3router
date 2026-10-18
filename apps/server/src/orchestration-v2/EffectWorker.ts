@@ -206,6 +206,11 @@ export const executorLayer: Layer.Layer<
                   .interrupt({
                     threadId: effect.threadId,
                     providerSessionId: effect.request.providerSessionId,
+                    ...(effect.request.replacementProviderSessionId === undefined
+                      ? {}
+                      : {
+                          replacementProviderSessionId: effect.request.replacementProviderSessionId,
+                        }),
                     providerThreadId: effect.request.providerThreadId,
                     providerTurnId: effect.request.providerTurnId,
                   })
