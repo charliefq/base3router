@@ -1,3 +1,5 @@
+import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
+import { planTaskCapabilities } from "@t3tools/shared/taskCapabilityPlan";
 import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
 import { routeHybridModel, emptyLocalEvidence } from "@t3tools/shared/hybridRouter";
 import { routeModel } from "@t3tools/shared/modelRouter";
@@ -6580,3 +6582,131 @@ it.each(["Agents", "Tasks"] as const)(
   },
   60_000,
 );
+
+it("reviews scoped capability recommendations, invalidates catalog edits and restores manual no-match fallback", async () => {
+  creationStorage();
+  Object.assign(state.projects[0]!, { workspaceRoot: "/fixture/capability" });
+  const skill = {
+    name: "parser-tests",
+    description: "Parser regression tests",
+    path: "/fixture/skills/parser/SKILL.md",
+    enabled: true,
+  };
+  const provider = {
+    ...configuredProviders[0]!,
+    skills: [skill],
+    workspaceSnapshots: [
+      {
+        cwd: "/fixture/capability",
+        checkedAt: "2026-10-18T00:00:00Z",
+        skills: [skill],
+        slashCommands: [],
+      },
+    ],
+  };
+  state.providers = [provider];
+  await mount();
+  await creationClick("New task");
+  await fillCreation();
+  await creationClick("Review new task");
+  expect(text()).toContain("Capability plan — review only");
+  expect(text()).toContain("Recommended");
+  expect(text()).toContain("parser-tests");
+  expect(text()).toContain("setup-required");
+  expect(text()).toContain("No automatic skill invocation");
+  expect(state.create).not.toHaveBeenCalled();
+  const disabledProvider = {
+    ...provider,
+    workspaceSnapshots: [
+      { ...provider.workspaceSnapshots[0]!, skills: [{ ...skill, enabled: false }] },
+    ],
+  };
+  state.providers = [disabledProvider];
+  await act(async () => renderer.update(<AgentsPage />));
+  expect(creationButton("Create task")).toBeUndefined();
+  await creationClick("Review new task");
+  expect(text()).toContain("No eligible task-specific match");
+  expect(text()).toContain("Disabled in the native catalog");
+  await creationClick("Back to task draft");
+  await act(async () =>
+    renderer.root
+      .findByProps({ "aria-label": "Goal" })
+      .props.onChange({ target: { value: "Paint landscape" } }),
+  );
+  await creationClick("Review new task");
+  expect(text()).toContain("manual capability choice");
+  expect(state.create).not.toHaveBeenCalled();
+});
+
+it("labels persisted capability validation at dispatch and never presents stale recommendations as current", async () => {
+  const skill = {
+    name: "parser-tests",
+    description: "Parser regression tests",
+    path: "/fixture/parser/SKILL.md",
+    enabled: true,
+  };
+  const provider: ServerProvider = {
+    instanceId: ProviderInstanceId.make("codex"),
+    driver: ProviderDriverKind.make("codex"),
+    enabled: true,
+    installed: true,
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-10-18T00:00:00Z",
+    version: null,
+    skills: [skill],
+    slashCommands: [],
+    models: [{ slug: "fake-model", name: "Fake", isCustom: false, capabilities: null }],
+    workspaceSnapshots: [
+      { cwd: "/fixture", checkedAt: "2026-10-18T00:00:00Z", skills: [skill], slashCommands: [] },
+    ],
+  };
+  const plan = planTaskCapabilities({
+    environmentId: "environment-a",
+    projectId: "project-a",
+    workspace: "/fixture",
+    modelSelection: { instanceId: provider.instanceId, model: "fake-model" },
+    contract: {
+      goal: "Fix parser",
+      redirect: "Ask first",
+      acceptance: "Parser tests pass",
+      brake: { maxProviderStarts: 1, stopConditions: "Scope changed" },
+    },
+    provider,
+  });
+  await act(async () => {
+    renderer = create(
+      <TaskCapabilityReadout
+        historical
+        evidence={{
+          mode: "review-only",
+          status: "current",
+          reason: "Snapshot at dispatch",
+          reviewed: plan,
+        }}
+      />,
+    );
+  });
+  expect(renderer.root.findByProps({ role: "status" }).children.join("")).toContain(
+    "At dispatch: current",
+  );
+  expect(text()).toContain("Recommended");
+  await act(async () =>
+    renderer.update(
+      <TaskCapabilityReadout
+        historical
+        evidence={{
+          mode: "review-only",
+          status: "stale",
+          reason: "Catalog changed",
+          reviewed: plan,
+        }}
+      />,
+    ),
+  );
+  expect(renderer.root.findByProps({ role: "status" }).children.join("")).toContain(
+    "At dispatch: stale",
+  );
+  expect(text()).not.toContain("Recommended");
+  expect(text()).toContain("invalidated");
+});

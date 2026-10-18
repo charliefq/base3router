@@ -1,3 +1,4 @@
+import { readTaskCapabilityEvidence } from "./taskCapabilityPlan.ts";
 import { RouterObservationEventV0 } from "@t3tools/contracts";
 import { verifiedSingleStartV2 } from "../routerEvaluation/persistTurnOutcome.ts";
 import { ThreadId, RunId, MessageId, ProviderDriverKind } from "@t3tools/contracts";
@@ -132,6 +133,7 @@ const contractReadout = (row: {
 };
 
 const StoredRunEvidence = Schema.Struct({
+  capabilityEvidence: OrchestrationV2Run.fields.capabilityEvidence,
   id: OrchestrationV2Run.fields.id,
   threadId: OrchestrationV2Run.fields.threadId,
   ordinal: OrchestrationV2Run.fields.ordinal,
@@ -472,6 +474,9 @@ const readResultEvidence = (
       runId: run.id,
       messageId: run.userMessageId,
       runStatus: run.status,
+      ...(run.capabilityEvidence === undefined
+        ? {}
+        : { capabilityEvidence: run.capabilityEvidence }),
       attemptId: null,
       providerTurnId: null,
       providerTurnStatus: null,
@@ -1394,6 +1399,16 @@ export const readTaskReview = Effect.fn("collaboration.readTaskReview")(function
   const facts = yield* reviewFacts(sql, commands, task, context.actorId, input.environmentId);
   if (facts.status === "available" && facts.contract.revision !== input.revision)
     return no("stale-revision");
+  if (facts.status === "available") {
+    const rows = yield* sql<{
+      payload_json: string;
+    }>`SELECT payload_json FROM orchestration_v2_projection_threads WHERE thread_id=${input.threadId}`;
+    const decoded = rows[0] ? decodeGovernedThread(rows[0].payload_json) : undefined;
+    if (decoded?._tag === "Some") {
+      const capabilityEvidence = yield* readTaskCapabilityEvidence(sql, decoded.value);
+      if (capabilityEvidence) return { ...facts, capabilityEvidence };
+    }
+  }
   return facts;
 });
 // A local child contract does not confer authority over its cancellation root.

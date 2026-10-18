@@ -1,3 +1,5 @@
+import { planTaskCapabilities } from "@t3tools/shared/taskCapabilityPlan";
+import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
 import {
   CommandId,
   ProjectId,
@@ -85,7 +87,9 @@ function parseDraft(draft: typeof blank) {
 
 export function AgentsTaskCreator(props: {
   readonly environmentId: EnvironmentId | null;
-  readonly project: { readonly id: string; readonly title: string } | undefined;
+  readonly project:
+    | { readonly id: string; readonly title: string; readonly workspaceRoot?: string }
+    | undefined;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly request: { readonly providerId: string; readonly token: string } | null;
   readonly onLock: (owner: string) => void;
@@ -142,6 +146,10 @@ export function AgentsTaskCreator(props: {
     draftContext,
     selectedProvider && providerExecutable(selectedProvider),
     selectedProvider?.models.map((model) => [model.slug, model.isDefault]),
+    props.project?.workspaceRoot,
+    selectedProvider?.skills,
+    selectedProvider?.workspaceSnapshots,
+    selectedProvider?.auth,
   ]);
   // Recovery keeps its original strict epoch. Only unsent text and confirmation
   // distinguish selected-provider changes from unrelated catalog churn.
@@ -495,6 +503,14 @@ export function AgentsTaskCreator(props: {
         environmentId: props.environmentId,
         projectId: ProjectId.make(props.project.id),
         modelSelection,
+        capabilityPlan: planTaskCapabilities({
+          environmentId: props.environmentId,
+          projectId: props.project.id,
+          workspace: props.project.workspaceRoot ?? null,
+          modelSelection,
+          contract: proposed.contract,
+          provider,
+        }),
       },
     };
     reviewRef.current = command;
@@ -661,6 +677,7 @@ export function AgentsTaskCreator(props: {
                     <dt>UTC deadline</dt>
                     <dd>{review.taskContract?.brake.deadlineAt ?? "Not selected"}</dd>
                   </dl>
+                  <TaskCapabilityReadout plan={review.taskCreationReview?.capabilityPlan} />
                   <p>Permissions: approval-required/default.</p>
                   <p>
                     Create one distinct owned root with contract revision 1. Creation sends no

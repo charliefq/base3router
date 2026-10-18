@@ -1,3 +1,4 @@
+import { TaskCapabilityPlan, TaskCapabilityEvidence } from "./taskCapabilityPlan.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -94,6 +95,7 @@ export const OrchestrationV2CreationSource = Schema.Literals([
 export type OrchestrationV2CreationSource = typeof OrchestrationV2CreationSource.Type;
 
 export const AgentsTaskCreationReview = Schema.Struct({
+  capabilityPlan: Schema.optionalKey(TaskCapabilityPlan),
   environmentId: EnvironmentId,
   projectId: ProjectId,
   modelSelection: ModelSelection,
@@ -547,6 +549,7 @@ export type OrchestrationV2RunBackgroundWorkCancelled =
   typeof OrchestrationV2RunBackgroundWorkCancelled.Type;
 
 export const OrchestrationV2Run = Schema.Struct({
+  capabilityEvidence: Schema.optionalKey(TaskCapabilityEvidence),
   id: RunId,
   threadId: ThreadId,
   ordinal: PositiveInt,

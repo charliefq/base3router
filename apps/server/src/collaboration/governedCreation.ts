@@ -1,5 +1,7 @@
+import { planTaskCapabilities } from "@t3tools/shared/taskCapabilityPlan";
 import {
   AgentsTaskCreationReview,
+  TaskCapabilityPlan,
   OrchestrationV2Command,
   AuthOrchestrationOperateScope,
   OrchestrationV2AppThreadJson,
@@ -141,8 +143,21 @@ export const validateReviewedCreate = Effect.fn("governedCreation.validateReview
     )
       return yield* refuse();
     const projects =
-      yield* sql`SELECT project_id FROM projection_projects WHERE project_id=${command.projectId} AND deleted_at IS NULL`;
+      yield* sql`SELECT project_id,workspace_root FROM projection_projects WHERE project_id=${command.projectId} AND deleted_at IS NULL`;
     if (projects.length !== 1) return yield* refuse();
+    if (review.capabilityPlan !== undefined) {
+      const expected = planTaskCapabilities({
+        environmentId: review.environmentId,
+        projectId: command.projectId,
+        workspace:
+          review.capabilityPlan.workspace === null ? null : String(projects[0]!.workspace_root),
+        modelSelection: command.modelSelection,
+        contract: command.taskContract,
+        provider,
+      });
+      if (!Schema.toEquivalence(TaskCapabilityPlan)(expected, review.capabilityPlan))
+        return yield* refuse();
+    }
     return {
       commandId: command.commandId,
       actorId,

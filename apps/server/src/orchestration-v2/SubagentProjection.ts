@@ -50,8 +50,15 @@ export function makeSubagentChildThread(input: {
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
 }): OrchestrationV2AppThread {
+  const parentThread = { ...input.parentThread };
+  const creation = parentThread.agentsTaskCreation;
+  if (creation?.review.capabilityPlan !== undefined) {
+    // A child's intent/provider was not reviewed in the parent's capability snapshot.
+    const { capabilityPlan: _parentPlan, ...review } = creation.review;
+    parentThread.agentsTaskCreation = { ...creation, review };
+  }
   return {
-    ...input.parentThread,
+    ...parentThread,
     createdBy: input.createdBy,
     creationSource: input.creationSource,
     id: input.childThreadId,

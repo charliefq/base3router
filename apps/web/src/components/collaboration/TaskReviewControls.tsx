@@ -1,3 +1,4 @@
+import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
 import * as Schema from "effect/Schema";
 import { useLayoutEffect, useRef, useState } from "react";
 import {
@@ -459,6 +460,7 @@ export function TaskReviewControls(props: {
                   {confirmation.action === "set"
                     ? "Goal, Redirect and Acceptance change; Brake stays unchanged. Task remains paused and needs a separate Resume. Saving sends no message and starts no provider work. Cancellation requested does not confirm stopping."
                     : effectText(confirmation.action)}
+                  <TaskCapabilityReadout evidence={confirmation.facts.capabilityEvidence} />
                 </>
               ) : null}
             </AlertDialogDescription>

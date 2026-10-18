@@ -1,3 +1,4 @@
+import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
 import { SelectionBasisReadout } from "./SelectionBasisReadout";
 import { TaskResultFeedback } from "./TaskResultFeedback";
 import { useAtomValue } from "@effect/atom-react";
@@ -276,6 +277,7 @@ function TaskResultReadout({ readout }: { readout: CollaborationTaskResultReadou
       <h3 className="text-sm font-medium">Result evidence</h3>
       {readout?.status === "available" ? (
         <>
+          <TaskCapabilityReadout evidence={readout.capabilityEvidence} historical />
           <p className="text-sm">Latest persisted run status: {readout.runStatus}</p>
           <p className="text-sm">
             Correlated provider-turn status: {readout.providerTurnStatus ?? "Unknown"}

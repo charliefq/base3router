@@ -1,3 +1,5 @@
+import { planTaskCapabilities } from "@t3tools/shared/taskCapabilityPlan";
+import { CommandId, EnvironmentId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import {
   type ModelSelection,
@@ -283,4 +285,51 @@ it("exposes the provider failure rather than a progress message from the failed 
   assert.equal(result.text, failure.message);
   assert.equal(result.turnItemId, artifacts.turnItem.id);
   assert.isNull(result.messageId);
+});
+
+it("does not inherit a parent capability review into a child's different intent/provider", () => {
+  const contract = {
+    goal: "Review parser",
+    redirect: "Ask first",
+    acceptance: "Review output",
+    brake: { maxProviderStarts: 2, stopConditions: "Scope changed" },
+  };
+  const plan = planTaskCapabilities({
+    environmentId: "env",
+    projectId: "project:subagent-snooze",
+    workspace: null,
+    modelSelection: parentModelSelection,
+    contract,
+    provider: undefined,
+  });
+  const parent = {
+    ...makeParentThread(),
+    agentsTaskCreation: {
+      commandId: CommandId.make("parent-create"),
+      actorId: "owner",
+      title: "Parent",
+      taskContract: contract,
+      review: {
+        environmentId: EnvironmentId.make("env"),
+        projectId: ProjectId.make("project:subagent-snooze"),
+        modelSelection: parentModelSelection,
+        capabilityPlan: plan,
+      },
+    },
+  };
+  const child = makeSubagentChildThread({
+    parentThread: parent,
+    childThreadId,
+    parentNodeId: NodeId.make("parent-node"),
+    activeProviderThreadId: null,
+    providerInstanceId: childProviderInstanceId,
+    modelSelection: childModelSelection,
+    title: "Different child task",
+    now: childCreatedAt,
+    createdBy: "agent",
+    creationSource: "provider",
+  });
+  assert.isUndefined(child.agentsTaskCreation?.review.capabilityPlan);
+  assert.strictEqual(parent.agentsTaskCreation.review.capabilityPlan, plan);
+  assert.deepEqual(child.modelSelection, childModelSelection);
 });

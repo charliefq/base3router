@@ -1,3 +1,4 @@
+import { readTaskCapabilityEvidence } from "../collaboration/taskCapabilityPlan.ts";
 import {
   latestExecutedRun,
   latestRootProviderFailure,
@@ -4185,6 +4186,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     Effect.gen(function* () {
       let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
       const startState = taskStateFromUnknown(command.threadId, projection.thread);
+      const capabilitySql = yield* taskReviewSqlAtCall;
+      const capabilityEvidence = Option.isSome(capabilitySql)
+        ? yield* readTaskCapabilityEvidence(capabilitySql.value, {
+            ...projection.thread,
+            modelSelection: command.modelSelection ?? projection.thread.modelSelection,
+          }).pipe(mapDispatchError(command))
+        : undefined;
       if (startState.governance === "required") {
         const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
         if (Option.isNone(sqlOption)) {
@@ -4709,6 +4717,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           checkpointId: null,
           contextHandoffId: null,
           ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+          ...(capabilityEvidence === undefined ? {} : { capabilityEvidence }),
           ...(command.restartContinuationOfRunId === undefined
             ? {}
             : { restartContinuationOfRunId: command.restartContinuationOfRunId }),
@@ -5048,6 +5057,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           checkpointId: null,
           contextHandoffId: legacyImportHandoff?.id ?? null,
           ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+          ...(capabilityEvidence === undefined ? {} : { capabilityEvidence }),
           ...(command.restartContinuationOfRunId === undefined
             ? {}
             : { restartContinuationOfRunId: command.restartContinuationOfRunId }),
@@ -5741,6 +5751,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           legacyImportRecoveryHandoff?.id ??
           null,
         ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+        ...(capabilityEvidence === undefined ? {} : { capabilityEvidence }),
         ...(command.restartContinuationOfRunId === undefined
           ? {}
           : { restartContinuationOfRunId: command.restartContinuationOfRunId }),

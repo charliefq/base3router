@@ -1,3 +1,4 @@
+import { TaskCapabilityEvidence } from "./taskCapabilityPlan.ts";
 /**
  * Explicit contract for a governed task on the V2 thread.
  * Goal, redirect, acceptance, and brake are user intent. The server does not
@@ -87,6 +88,7 @@ export type TaskContractReviewInput = typeof TaskContractReviewInput.Type;
 export const TaskContractReviewState = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("available"),
+    capabilityEvidence: Schema.optionalKey(TaskCapabilityEvidence),
     taskId: TrimmedNonEmptyString,
     threadId: TrimmedNonEmptyString,
     projectId: TrimmedNonEmptyString,

@@ -1,3 +1,4 @@
+import { TaskCapabilityEvidence } from "./taskCapabilityPlan.ts";
 /**
  * Chat-hub identities and cross-agent tasks.
  * A provider CLI is not an employee. A simulated transport is not a live contractor.
@@ -145,6 +146,7 @@ export const CollaborationTaskResultReadout = Schema.Union([
   Schema.Struct({ status: Schema.Literal("unavailable"), reason: Schema.String }),
   Schema.Struct({
     status: Schema.Literal("available"),
+    capabilityEvidence: Schema.optionalKey(TaskCapabilityEvidence),
     runId: TrimmedNonEmptyString,
     messageId: TrimmedNonEmptyString,
     runStatus: OrchestrationV2RunStatus,

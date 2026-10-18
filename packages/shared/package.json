@@ -494,6 +494,10 @@
     "./codexAuthHandoff": {
       "types": "./src/codexAuthHandoff.ts",
       "import": "./src/codexAuthHandoff.ts"
+    },
+    "./taskCapabilityPlan": {
+      "types": "./src/taskCapabilityPlan.ts",
+      "import": "./src/taskCapabilityPlan.ts"
     }
   },
   "scripts": {
