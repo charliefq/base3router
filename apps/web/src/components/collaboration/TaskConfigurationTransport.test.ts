@@ -374,3 +374,88 @@ it("raw forged configuration action is denied by server authority even when bypa
     expect((await f.inspect()).starts).toHaveLength(0);
   });
 }, 30000);
+
+it("raw original save replay survives provider-model withdrawal but denies new writes and cross-owner replay", async () => {
+  await withTaskTransportFixture(async (f) => {
+    const input = save("replay-save");
+    await saved(f, input);
+    f.setProviders([
+      {
+        ...f.providers[0]!,
+        models: f.providers[0]!.models.filter((m) => m.slug !== "exact-second"),
+      },
+    ]);
+    expect((await f.workflowAction(input))._tag).toBe("Success");
+    expect(
+      (
+        await f.workflowAction({
+          ...input,
+          commandId: "new-save-after-withdrawal",
+          expectedVersion: 1,
+        })
+      )._tag,
+    ).toBe("Failure");
+    expect(
+      (
+        await f.workflowAction({
+          ...input,
+          draft: { ...input.draft, instructions: "Forged receipt body." },
+        })
+      )._tag,
+    ).toBe("Failure");
+    const catalog = await f.catalog({ projectId: input.projectId });
+    if (catalog._tag !== "Success") throw new Error("No catalog");
+    expect(catalog.value.profiles.filter((p) => p.id === input.draft.id)).toHaveLength(1);
+    await f.disconnect();
+    await f.connectAs("another-owner");
+    expect((await f.workflowAction(input))._tag).toBe("Failure");
+    expect((await f.inspect()).starts).toHaveLength(0);
+  });
+}, 30000);
+
+it("raw original archive replay after restore and edit returns its receipt without archiving the new revision", async () => {
+  await withTaskTransportFixture(async (f) => {
+    const input = save("replay-archive");
+    await saved(f, input);
+    const archive: WorkflowActionInput = {
+      type: "profile.archive",
+      commandId: "original-archive-receipt",
+      projectId: input.projectId,
+      profileId: input.draft.id,
+      expectedVersion: 1,
+    };
+    expect((await f.configuration(archive))._tag).toBe("Success");
+    expect(
+      (
+        await f.configuration({
+          ...archive,
+          type: "profile.restore",
+          commandId: "restore-before-edit",
+        })
+      )._tag,
+    ).toBe("Success");
+    await saved(f, {
+      ...input,
+      commandId: "edited-after-restore",
+      expectedVersion: 1,
+      draft: { ...input.draft, instructions: "The newer active revision." },
+    });
+    expect((await f.workflowAction(archive))._tag).toBe("Success");
+    expect((await f.workflowAction({ ...archive, expectedVersion: 2 }))._tag).toBe("Failure");
+    const catalog = await f.catalog({ projectId: input.projectId });
+    if (catalog._tag !== "Success") throw new Error("No catalog");
+    const versions = catalog.value.profiles
+      .filter((p) => p.id === input.draft.id)
+      .toSorted((a, b) => a.version - b.version);
+    expect(versions).toHaveLength(2);
+    expect(versions[1]).toMatchObject({
+      version: 2,
+      status: "active",
+      instructions: "The newer active revision.",
+    });
+    await f.disconnect();
+    await f.connectAs("another-owner");
+    expect((await f.workflowAction(archive))._tag).toBe("Failure");
+    expect((await f.inspect()).starts).toHaveLength(0);
+  });
+}, 30000);

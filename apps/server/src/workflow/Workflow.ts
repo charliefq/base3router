@@ -368,7 +368,8 @@ const performWorkflowActionTransaction = Effect.fn("Workflow.actionTransaction")
   yield* requireWorkflowProject(input.projectId);
   const sql = yield* SqlClient.SqlClient;
   const stored = yield* readWorkflowCatalog(input.projectId);
-  const configurationBinding = yield* authorizeProfileAction(input, stored);
+  // Receipt replay needs owner/scope authority, not current new-write eligibility.
+  yield* authorizeProfileAction(input, stored, true);
   const priorRaw = yield* sql`
     SELECT mutation_json AS "payload"
     FROM base3_workflow_commands
@@ -388,6 +389,7 @@ const performWorkflowActionTransaction = Effect.fn("Workflow.actionTransaction")
       });
     return yield* workflowCatalogForProject(input.projectId);
   }
+  const configurationBinding = yield* authorizeProfileAction(input, stored);
   if (input.type === "decision.record") {
     const existing = stored.runs
       .find((run) => run.id === input.runId)
