@@ -8,6 +8,7 @@ import {
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Ref from "effect/Ref";
 import { agentsCreationCommand } from "./testkit/agentsTaskCreationFixture.ts";
@@ -37,7 +38,7 @@ const planAdapter = {
     }),
 } satisfies NonNullable<Parameters<typeof withTaskResultLinkageFixture>[1]>;
 
-it.live.each(["active", "exhausted", "paused", "missing contract"] as const)(
+it.live.each(["active", "exhausted", "redirected", "missing contract"] as const)(
   "governed plan cannot escape to an ordinary root: %s",
   (state) =>
     withTaskResultLinkageFixture(
@@ -50,15 +51,27 @@ it.live.each(["active", "exhausted", "paused", "missing contract"] as const)(
               redirect: "Disposable fixture",
               acceptance: "Review output",
               brake: {
-                maxProviderStarts: state === "active" ? 2 : 1,
+                maxProviderStarts: state === "active" || state === "redirected" ? 2 : 1,
                 stopConditions: "Scope changed",
               },
             },
           };
           yield* f.dispatch(source);
           yield* f.execute(source, "plan-first");
-          if (state === "paused" || state === "missing contract") {
-            yield* f.sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json, '$.taskContractPhase', ${state === "paused" ? "paused" : "active"}, '$.taskContract', CASE WHEN ${state} = 'missing contract' THEN NULL ELSE json_extract(payload_json, '$.taskContract') END) WHERE thread_id=${source.threadId}`;
+          if (state === "redirected" || state === "missing contract") {
+            yield* f.sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json, '$.taskContractPhase', ${state === "redirected" ? "redirected" : "active"}, '$.taskContract', CASE WHEN ${state} = 'missing contract' THEN NULL ELSE json_extract(payload_json, '$.taskContract') END) WHERE thread_id=${source.threadId}`;
+          }
+          const persisted = yield* f.orchestrator.getThreadProjection(source.threadId);
+          assert.equal(
+            persisted.thread.taskContractPhase,
+            state === "redirected" ? "redirected" : "active",
+          );
+          if (state === "redirected") {
+            assert.equal(persisted.thread.taskContract?.brake.maxProviderStarts, 2);
+            const used = yield* f.sql<{
+              n: number;
+            }>`SELECT COUNT(*) AS n FROM task_contract_admissions`;
+            assert.equal(used[0]?.n, 1, "Redirected source retains one reviewed start");
           }
           const {
             taskGovernance: _g,
@@ -89,6 +102,7 @@ it.live.each(["active", "exhausted", "paused", "missing contract"] as const)(
             { type: "steer_active", targetRunId: RunId.make("absent-active") },
             { type: "restart_active", targetRunId: RunId.make("absent-active") },
           ];
+          const rejected = new Set<string>();
           for (const destination of [target, governedTarget]) {
             for (const mode of dispatchModes) {
               for (const suffix of ["same", "same", "new"]) {
@@ -107,10 +121,15 @@ it.live.each(["active", "exhausted", "paused", "missing contract"] as const)(
                     creationSource: "web",
                   })
                   .pipe(Effect.exit);
-                assert.isTrue(
-                  Exit.isFailure(result),
-                  "A governed plan must stay inside its reviewed task",
+                if (!Exit.isFailure(result))
+                  throw new Error("A governed plan must stay inside its reviewed task");
+                assert.include(
+                  Cause.pretty(result.cause),
+                  rejected.has(key)
+                    ? "OrchestratorCommandPreviouslyRejectedError"
+                    : "Implement this plan in its governed task.",
                 );
+                rejected.add(key);
                 assert.deepEqual(
                   yield* reservations(),
                   before,
