@@ -26,6 +26,8 @@ export const TaskCapabilityStep = Schema.Struct({
   reviewedIntent: Schema.optional(
     Schema.Struct({
       text: TrimmedNonEmptyString,
+      /** Absent on earlier saved-summary reviews, which retain summary meaning. */
+      question: Schema.optional(Schema.Literals(["summary", "open", "draft"])),
       configuredModelSelection: ModelSelection,
       route: DispatcherTaskRouteBinding,
       routingBasisDigest: TrimmedNonEmptyString,

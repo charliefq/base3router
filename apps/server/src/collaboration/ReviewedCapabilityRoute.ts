@@ -37,11 +37,24 @@ const denied = () =>
   });
 const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(TaskCapabilityStep));
 
-/** Deliberately narrow: this operation knows saved thread state, never fresh GitHub state. */
-export function supportsSavedPrSummary(text: string) {
-  return /^(?:please\s+)?(?:summari[sz]e|(?:give me )?a summary of|summary of)\s+(?:the\s+)?(?:(?:saved|persisted|thread[- ]linked)\s+(?:pull requests?|prs?)(?:\s+(?:linked to (?:this|the) (?:task|thread)|for (?:this|the) (?:task|thread)|in (?:this|the) thread))?|(?:pull requests?|prs?)\s+linked to (?:this|the) (?:task|thread))[.!?]?$/i.test(
-    text.trim(),
-  );
+const savedPrSubject =
+  /(?:the\s+)?(?:(?:saved|persisted|thread[- ]linked)\s+(?:pull requests?|prs?)(?:\s+(?:linked to (?:this|the) (?:task|thread)|for (?:this|the) (?:task|thread)|in (?:this|the) thread))?|(?:pull requests?|prs?)\s+linked to (?:this|the) (?:task|thread))/
+    .source;
+const summaryQuestion = new RegExp(
+  `^(?:please\\s+)?(?:summari[sz]e|(?:give me )?a summary of|summary of)\\s+${savedPrSubject}[.!?]?$`,
+  "i",
+);
+const statusQuestion = new RegExp(
+  `^(?:please\\s+)?which\\s+${savedPrSubject}\\s+(?:are(?:\\s+still)?|remain)\\s+(open|drafts?)[.!?]?$`,
+  "i",
+);
+
+/** Deliberately narrow: saved state and draft flags cannot prove live or merge-ready status. */
+export function parseSavedPrQuestion(text: string): "summary" | "open" | "draft" | null {
+  const normalized = text.trim();
+  if (summaryQuestion.test(normalized)) return "summary";
+  const match = statusQuestion.exec(normalized);
+  return match ? (match[1]!.toLowerCase() === "open" ? "open" : "draft") : null;
 }
 
 /** The existing dispatcher calculates the route; the review does not initialize policy or execute. */
@@ -130,7 +143,10 @@ export const validateReviewedCapabilityRoute = Effect.fn("validateReviewedCapabi
   function* (sql: SqlClient.SqlClient, review: TaskCapabilityStep, admitted = false) {
     const intent = review.reviewedIntent;
     if (!intent) return;
-    if (!supportsSavedPrSummary(intent.text) || argumentHash(intent.text) !== review.promptDigest)
+    if (
+      parseSavedPrQuestion(intent.text) !== (intent.question ?? "summary") ||
+      argumentHash(intent.text) !== review.promptDigest
+    )
       return yield* denied();
     const current = yield* calculateReviewedCapabilityRoute(sql, {
       ...review,

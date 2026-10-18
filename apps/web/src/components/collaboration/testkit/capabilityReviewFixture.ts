@@ -74,7 +74,10 @@ type IntentFixture = {
     projection: import("@t3tools/contracts").OrchestrationV2ThreadProjection;
   }>;
 };
-export async function withIntentExecutionFixture(check: (f: IntentFixture) => Promise<void>) {
+export async function withIntentExecutionFixture(
+  check: (f: IntentFixture) => Promise<void>,
+  options: { readonly statusQuestions?: boolean } = {},
+) {
   const module = (await import(
     /* @vite-ignore */ new URL(
       "../../../../../server/src/collaboration/testkit/mountedIntentExecutionFixture.ts",
@@ -83,7 +86,8 @@ export async function withIntentExecutionFixture(check: (f: IntentFixture) => Pr
   )) as {
     withMountedIntentExecutionFixture: (
       check: (f: IntentFixture) => Promise<void>,
+      options: { readonly statusQuestions?: boolean },
     ) => Promise<void>;
   };
-  await module.withMountedIntentExecutionFixture(check);
+  await module.withMountedIntentExecutionFixture(check, options);
 }

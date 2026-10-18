@@ -222,6 +222,11 @@ and refresh to read the recorded execution status and result. If no provider is
 ready, existing tasks remain readable and **Set up a provider** opens the
 configuration page.
 
+You can also ask “Which saved PRs are open?” or “Which saved PRs are drafts?”
+Review the interpreted question before confirming. Open state and draft flags are
+separate saved facts; missing values remain unknown. These answers do not refresh
+GitHub or establish CI, approval, mergeability, or merge readiness.
+
 Subagent threads started by the agent can't take messages; message the parent
 thread instead. When such a subagent needs an approval or an answer, the parent
 thread asks for it.

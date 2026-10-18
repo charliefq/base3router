@@ -367,9 +367,10 @@ export function TaskFirstInstructions(props: {
           <AlertDialogHeader>
             <AlertDialogTitle>Review first instructions</AlertDialogTitle>
             <AlertDialogDescription>
-              Write instructions once. For a saved PR summary, review the suggested read and model
-              below, then explicitly confirm execution. You can also prepare a draft and choose
-              Manual/Auto in the conversation. Reviewing starts no work and accepts no task.
+              Write instructions once. For a saved PR summary or open/draft question, review the
+              suggested read and model below, then explicitly confirm execution. You can also
+              prepare a draft and choose Manual/Auto in the conversation. Reviewing starts no work
+              and accepts no task.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {review ? (

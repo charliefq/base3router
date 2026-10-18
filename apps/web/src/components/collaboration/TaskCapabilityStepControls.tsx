@@ -235,6 +235,20 @@ export function TaskCapabilityStepControls(props: {
             Instructions: {review.reviewedIntent?.text ?? prompt}. Schema: {review.schemaDigest}.
           </p>
           {review.reviewedIntent ? (
+            <p>
+              Interpreted question:{" "}
+              {
+                {
+                  summary: "Saved PR summary",
+                  open: "Which saved PRs are open",
+                  draft: "Which saved PRs are drafts",
+                }[review.reviewedIntent.question ?? "summary"]
+              }
+              . Saved status has not been refreshed from GitHub. Open state and draft flag are
+              independent; missing values remain unknown. This does not establish merge readiness.
+            </p>
+          ) : null}
+          {review.reviewedIntent ? (
             <>
               <p>
                 Suggested by the existing Auto router using local rules; this is not an

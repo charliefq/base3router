@@ -6887,7 +6887,7 @@ it("one mounted instruction draft suggests, reviews, confirms and reaches exactl
     await act(async () => {
       await state.reviewRead.mock.results.at(-1)!.value;
     });
-    expect(text()).toContain("not a supported saved PR summary");
+    expect(text()).toContain("not a supported saved PR question");
     expect(creationButton("Run reviewed saved PR step")).toBeUndefined();
     await act(async () =>
       renderer.root
@@ -6936,3 +6936,110 @@ it("one mounted instruction draft suggests, reviews, confirms and reaches exactl
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 }, 30_000);
+
+it.each([
+  {
+    question: "open",
+    instructions: "Which saved PRs are open?",
+    label: "Which saved PRs are open",
+    answer: "Saved open: #1, #2",
+  },
+  {
+    question: "draft",
+    instructions: "Which saved PRs are drafts?",
+    label: "Which saved PRs are drafts",
+    answer: "Saved draft: #1, #5",
+  },
+])(
+  "one draft reviews and answers saved $question facts without treating unknown as false",
+  async ({ question, instructions, label, answer }) => {
+    await withIntentExecutionFixture(
+      async (f) => {
+        state.reviewRead.mockImplementation(
+          async ({ input }: { input: TaskContractReviewInput }) => ({
+            _tag: "Success",
+            value: await f.readReview(input),
+          }),
+        );
+        state.readProjection.mockImplementation(async () => ({
+          _tag: "Success",
+          value: await f.projection(),
+        }));
+        state.startStep.mockImplementation(
+          async ({ input }: { input: Parameters<typeof f.start>[0] }) => ({
+            _tag: "Success",
+            value: await f.start(input),
+          }),
+        );
+        const prose = () =>
+          renderer.root
+            .findAllByType("p")
+            .map((p) => p.children.filter((c) => typeof c === "string").join(""))
+            .join("\n");
+        await act(async () => {
+          renderer = create(
+            <TaskFirstInstructions
+              task={f.task}
+              environmentId={EnvironmentId.make("environment-a")}
+              stale={false}
+              readVersion={1}
+              onOpen={vi.fn()}
+            />,
+          );
+        });
+        await creationClick("Prepare first instructions");
+        await act(async () =>
+          renderer.root
+            .findByProps({ "aria-label": "Initial instructions" })
+            .props.onChange({ target: { value: instructions } }),
+        );
+        expect(
+          renderer.root.findAllByProps({ "aria-label": "Saved PR answer instructions" }),
+        ).toHaveLength(0);
+        await creationClick("Suggest and review saved PR answer");
+        await act(async () => {
+          await state.reviewRead.mock.results.at(-1)!.value;
+        });
+        expect(prose()).toContain(`Interpreted question: ${label}`);
+        expect(prose()).toContain("Saved status has not been refreshed from GitHub");
+        expect(prose()).toContain("missing values remain unknown");
+        expect(prose()).toContain("does not establish merge readiness");
+        expect((await f.inspect()).reads).toBe(0);
+        expect((await f.inspect()).starts).toHaveLength(0);
+        const prepared = state.reviewRead.mock.results.at(-1)!;
+        const proposal = (await prepared.value).value.capabilityStep;
+        expect(proposal.reviewedIntent.question).toBe(question);
+        expect(proposal.reviewedIntent.text).toBe(instructions);
+        await creationClick("Run reviewed saved PR step", true);
+        await act(async () => {
+          await state.startStep.mock.results[0]!.value;
+        });
+        expect(state.startStep).toHaveBeenCalledTimes(1);
+        expect(state.startStep.mock.calls[0]![0].input.message.text).toBe(instructions);
+        await f.drain();
+        const after = await f.inspect();
+        expect(after.reads).toBe(1);
+        expect(after.starts).toEqual([proposal.modelSelection]);
+        expect(after.projection.thread.modelSelection.model).toBe("fake-model");
+        expect(after.projection.runs[0]!.id).toBe(proposal.runId);
+        expect(after.projection.runs[0]!.status).toBe("completed");
+        const modelAnswer = after.projection.turnItems.find((i) => i.type === "assistant_message");
+        expect(modelAnswer?.type === "assistant_message" && modelAnswer.text).toContain(answer);
+        expect(modelAnswer?.type === "assistant_message" && modelAnswer.text).toContain(
+          "unknown: #6",
+        );
+        expect(modelAnswer?.type === "assistant_message" && modelAnswer.text).toContain(
+          "No CI, approval, mergeability or merge-readiness conclusion is supported",
+        );
+        await creationClick("Read step status");
+        await act(async () => {
+          await state.reviewRead.mock.results.at(-1)!.value;
+        });
+        expect(prose()).toContain("Operation: succeeded");
+        expect(prose()).toContain("does not mean the model completed");
+      },
+      { statusQuestions: true },
+    );
+  },
+  30000,
+);

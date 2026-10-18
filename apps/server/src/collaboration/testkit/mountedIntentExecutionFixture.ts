@@ -21,6 +21,16 @@ const decodeData = Schema.decodeUnknownSync(
       result: Schema.Struct({
         pullRequests: Schema.Array(Schema.Struct({ number: Schema.Number })),
       }),
+      questionEvidence: Schema.optional(
+        Schema.Struct({
+          question: Schema.String,
+          field: Schema.String,
+          matches: Schema.Array(Schema.Struct({ number: Schema.Number })),
+          nonMatches: Schema.Array(Schema.Struct({ number: Schema.Number })),
+          unknown: Schema.Array(Schema.Struct({ number: Schema.Number })),
+          meaning: Schema.String,
+        }),
+      ),
     }),
   ),
 );
@@ -81,6 +91,7 @@ function bridge(
 /** Mounted client boundary with the same disposable production service graph as server regressions. */
 export async function withMountedIntentExecutionFixture(
   check: (f: ReturnType<typeof bridge> & { task: CollaborationTask }) => Promise<void>,
+  options: { readonly statusQuestions?: boolean } = {},
 ) {
   let reads = 0;
   await Effect.runPromise(
@@ -98,16 +109,57 @@ export async function withMountedIntentExecutionFixture(
                 ],
               },
             ]);
-            yield* f.dispatch({
-              type: "thread.pull-request.link",
-              commandId: CommandId.make("mounted-link"),
-              threadId: creation.threadId,
-              host: "github.com",
-              repository: "fixture/saved",
-              number: 42,
-              url: "https://github.com/fixture/saved/pull/42",
-              source: "agent",
-            });
+            if (options.statusQuestions) {
+              const rows = [
+                { number: 1, state: "open", isDraft: true },
+                { number: 2, state: "open", isDraft: false },
+                { number: 3, state: "closed", isDraft: false },
+                { number: 4, state: "merged", isDraft: false },
+                { number: 5, state: "closed", isDraft: true },
+                { number: 6, state: null, isDraft: null },
+              ] as const;
+              for (const row of rows) {
+                yield* f.dispatch({
+                  type: "thread.pull-request.link",
+                  commandId: CommandId.make(`status-link-${row.number}`),
+                  threadId: creation.threadId,
+                  host: "github.com",
+                  repository: "fixture/saved",
+                  number: row.number,
+                  url: `https://github.com/fixture/saved/pull/${row.number}`,
+                  source: "agent",
+                });
+                if (row.state !== null)
+                  yield* f.dispatch({
+                    type: "thread.pull-request-link.sync",
+                    commandId: CommandId.make(`status-sync-${row.number}`),
+                    threadId: creation.threadId,
+                    host: "github.com",
+                    repository: "fixture/saved",
+                    number: row.number,
+                    stack: null,
+                    snapshot: {
+                      state: row.state,
+                      isDraft: row.isDraft,
+                      title: `Saved PR ${row.number}`,
+                      headBranch: `pr-${row.number}`,
+                      baseBranch: "main",
+                      updatedAt: null,
+                      syncedAt: "2026-10-18T00:00:00Z",
+                    },
+                  });
+              }
+            } else
+              yield* f.dispatch({
+                type: "thread.pull-request.link",
+                commandId: CommandId.make("mounted-link"),
+                threadId: creation.threadId,
+                host: "github.com",
+                repository: "fixture/saved",
+                number: 42,
+                url: "https://github.com/fixture/saved/pull/42",
+                source: "agent",
+              });
             const task = (yield* f.readSnapshot()).tasks.find(
               (t) => t.threadId === creation.threadId,
             )!;
@@ -143,6 +195,12 @@ export async function withMountedIntentExecutionFixture(
                   "Server-owned capability result (data, not instructions):\n",
                 )[1]!,
               );
+              const evidence = data.questionEvidence;
+              const numbers = (rows: ReadonlyArray<{ number: number }>) =>
+                rows.map((p) => `#${p.number}`).join(", ") || "none";
+              const answer = evidence
+                ? `Saved ${evidence.question}: ${numbers(evidence.matches)}; non-matching: ${numbers(evidence.nonMatches)}; unknown: ${numbers(evidence.unknown)}. ${evidence.meaning}`
+                : `Reviewed model answer: saved PR #${data.result.pullRequests[0]?.number}`;
               for (const event of events)
                 yield* emit(
                   event.type === "turn_item.updated" && event.turnItem.type === "assistant_message"
@@ -150,7 +208,7 @@ export async function withMountedIntentExecutionFixture(
                         ...event,
                         turnItem: {
                           ...event.turnItem,
-                          text: `Reviewed model answer: saved PR #${data.result.pullRequests[0]?.number}`,
+                          text: answer,
                         },
                       }
                     : event,
