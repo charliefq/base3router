@@ -130,12 +130,34 @@ vi.mock("../chat/ProviderModelPicker", () => ({
   ProviderModelPicker: (props: {
     activeInstanceId: string;
     model: string;
+    disabled?: boolean;
+    modelOptionsByInstance: ReadonlyMap<
+      string,
+      ReadonlyArray<{ slug: string; isDefault?: boolean }>
+    >;
     onInstanceModelChange: (i: string, m: string) => void;
   }) => (
     <div aria-label="Task model picker">
+      <button
+        disabled={props.disabled}
+        onClick={() => {
+          const models = props.modelOptionsByInstance.get(props.activeInstanceId) ?? [];
+          const chosen = models.find((m) => m.isDefault) ?? models[0];
+          if (chosen) props.onInstanceModelChange(props.activeInstanceId, chosen.slug);
+        }}
+      >
+        Select fixture exact model
+      </button>
       <button onClick={() => props.onInstanceModelChange(props.activeInstanceId, "manual-choice")}>
         Choose fixture Manual model
       </button>
+      {(props.modelOptionsByInstance.get(props.activeInstanceId) ?? []).map((m) => (
+        <button
+          key={m.slug}
+          disabled={props.disabled}
+          onClick={() => props.onInstanceModelChange(props.activeInstanceId, m.slug)}
+        >{`Select exact model: ${m.slug}`}</button>
+      ))}
       <span>{props.model}</span>
     </div>
   ),
@@ -2027,7 +2049,7 @@ const creationClick = async (name: string, repeat = false) => {
     if (repeat) click();
   });
 };
-const fillCreation = async (title = "Reviewed parser task") => {
+const fillCreation = async (title = "Reviewed parser task", chooseModel = true) => {
   for (const [label, value] of Object.entries({
     "Task title": title,
     Goal: "Fix parser",
@@ -2042,6 +2064,8 @@ const fillCreation = async (title = "Reviewed parser task") => {
     await act(async () =>
       renderer.root.findByProps({ "aria-label": label }).props.onChange({ target: { value } }),
     );
+  if (chooseModel && creationButton("Select fixture exact model"))
+    await creationClick("Select fixture exact model");
 };
 
 it("creates two actual owned tasks from Agents, reloads exact enrollment and uses separate paused revision controls", async () => {
@@ -6473,6 +6497,8 @@ it.each(
     ];
     await act(async () => renderer.update(view()));
     assertRetainedTaskText();
+    expect(creationButton("Review new task")!.props.disabled).toBe(true);
+    await creationClick("Select fixture exact model");
     await creationClick("Review new task");
     expect(text()).toContain("new-model");
     await act(async () => oldConfirm());
@@ -7354,3 +7380,39 @@ it("creation confirmation offers review/start for its exact task and does not st
     );
   });
 }, 30000);
+
+it("governed creation requires explicit exact model and never falls back after withdrawal", async () => {
+  creationStorage();
+  state.providers = [
+    {
+      ...configuredProviders[0]!,
+      models: [
+        ...configuredProviders[0]!.models,
+        { slug: "exact-second", name: "Second", isDefault: false },
+      ],
+    },
+  ];
+  await act(async () => {
+    renderer = create(<TasksPage />);
+  });
+  await creationClick("Create governed task");
+  await fillCreation("Explicit selection", false);
+  expect(creationButton("Review new task")!.props.disabled).toBe(true);
+  await creationClick("Select exact model: exact-second");
+  await creationClick("Review new task");
+  expect(text()).toContain("exact-second");
+  expect(state.create).not.toHaveBeenCalled();
+  const staleConfirm = creationButton("Create task")!.props.onClick;
+  state.providers = [configuredProviders[0]!];
+  await act(async () => renderer.update(<TasksPage />));
+  expect(creationButton("Create task")).toBeUndefined();
+  expect(creationButton("Review new task")!.props.disabled).toBe(true);
+  expect(text()).toContain("exact-second");
+  expect(text()).toContain("Unavailable");
+  await act(async () => staleConfirm());
+  expect(state.create).not.toHaveBeenCalled();
+  await creationClick("Select exact model: fake-model");
+  await creationClick("Review new task");
+  expect(text()).toContain("fake-model");
+  expect(state.create).not.toHaveBeenCalled();
+});

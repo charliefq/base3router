@@ -8,6 +8,7 @@ import {
   ProviderInstanceId,
   TaskContractFields,
   AgentsTaskCreationReview,
+  ModelSelection,
   type EnvironmentId,
   type ServerProvider,
   type CollaborationSnapshot,
@@ -17,11 +18,13 @@ import {
 import * as Option from "effect/Option";
 import { usePreparedConnection } from "../../state/session";
 import * as Schema from "effect/Schema";
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, useMemo } from "react";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { newThreadId } from "../../lib/utils";
 import { providerExecutable } from "./agentDirectory";
+import { ProviderModelPicker } from "../chat/ProviderModelPicker";
+import { deriveProviderInstanceEntries } from "../../providerInstances";
 import {
   readAgentsCreationAttempt,
   writeAgentsCreationAttempt,
@@ -43,6 +46,7 @@ type Create = Extract<OrchestrationV2Command, { type: "thread.create" }>;
 const sameCommand = Schema.toEquivalence(OrchestrationV2Command.members[0]);
 const sameContract = Schema.toEquivalence(TaskContractFields);
 const sameReview = Schema.toEquivalence(AgentsTaskCreationReview);
+const sameSelection = Schema.toEquivalence(ModelSelection);
 const decodeContract = Schema.decodeUnknownOption(TaskContractFields);
 const blank = {
   title: "",
@@ -120,6 +124,8 @@ export function AgentsTaskCreator(props: {
   const editingOwner = useRef<string | null>(null);
   const draftThreadIdentity = useRef<ThreadId | null>(null);
   const [draft, setDraft] = useState(blank);
+  const [modelChoice, setModelChoice] = useState<{ token: string; model: string } | null>(null);
+  const modelChoiceRef = useRef(modelChoice);
   const [review, setReview] = useState<Create | null>(null);
   const reviewRef = useRef<Create | null>(null);
   const closeReview = useCallback(() => {
@@ -138,6 +144,17 @@ export function AgentsTaskCreator(props: {
     editing?.providerId ?? props.request?.providerId ?? attempt?.command.modelSelection.instanceId;
   const selectedProvider = props.providers.find(
     (provider) => provider.instanceId === selectedProviderId,
+  );
+  const chosenModel = editing && modelChoice?.token === editing.token ? modelChoice.model : null;
+  const modelAvailable =
+    chosenModel !== null && selectedProvider?.models.some((m) => m.slug === chosenModel) === true;
+  const instanceEntries = useMemo(
+    () => deriveProviderInstanceEntries(selectedProvider ? [selectedProvider] : []),
+    [selectedProvider],
+  );
+  const modelOptions = useMemo(
+    () => new Map(selectedProvider ? [[selectedProvider.instanceId, selectedProvider.models]] : []),
+    [selectedProvider],
   );
   const draftContext = JSON.stringify([
     props.environmentId,
@@ -202,6 +219,8 @@ export function AgentsTaskCreator(props: {
         editingOwner.current = null;
         setEditing(null);
         setDraft(blank);
+        modelChoiceRef.current = null;
+        setModelChoice(null);
         draftThreadIdentity.current = null;
       }
       if (!retainDraft) closeReview();
@@ -269,6 +288,8 @@ export function AgentsTaskCreator(props: {
     setAttempt(null);
     attemptRef.current = null;
     setDraft(blank);
+    modelChoiceRef.current = null;
+    setModelChoice(null);
     closeReview();
     setNotice(null);
     setPending(false);
@@ -322,6 +343,7 @@ export function AgentsTaskCreator(props: {
       thread.id !== command.threadId ||
       thread.projectId !== command.projectId ||
       thread.providerInstanceId !== command.modelSelection.instanceId ||
+      !sameSelection(thread.modelSelection, command.modelSelection) ||
       thread.lineage.rootThreadId !== command.threadId ||
       thread.lineage.parentThreadId !== null ||
       thread.lineage.relationshipToParent !== null ||
@@ -471,11 +493,13 @@ export function AgentsTaskCreator(props: {
     if (reviewRef.current !== null) return;
     const proposed = parseDraft(draft);
     const provider = props.providers.find((p) => p.instanceId === editing?.providerId);
-    const model = provider?.models.find((m) => m.isDefault) ?? provider?.models[0];
+    const model = provider?.models.find((m) => m.slug === chosenModel);
     if (
       !editing ||
       editingOwner.current !== editing.token ||
       editing.context !== currentReviewContext.current ||
+      modelChoiceRef.current !== modelChoice ||
+      modelChoice?.token !== editing.token ||
       !proposed ||
       !props.environmentId ||
       !props.project ||
@@ -609,6 +633,34 @@ export function AgentsTaskCreator(props: {
             Optional omitted bounds do not mean unlimited budget; reported cost caps are not
             provider billing hard limits.
           </p>
+          <p>
+            Task provider: {selectedProviderId}. Chosen model: {chosenModel ?? "Choose explicitly"}
+            {chosenModel && !modelAvailable ? " (Unavailable)" : ""}.
+          </p>
+          <ProviderModelPicker
+            activeInstanceId={ProviderInstanceId.make(editing.providerId)}
+            model={chosenModel ?? ""}
+            {...(chosenModel === null ? { triggerLabel: "Choose exact task model" } : {})}
+            triggerAriaLabel="Choose exact task model"
+            lockedProvider={editing.driver}
+            instanceEntries={instanceEntries}
+            modelOptionsByInstance={modelOptions}
+            disabled={review !== null || !selectedProvider || !providerExecutable(selectedProvider)}
+            onInstanceModelChange={(instanceId, model) => {
+              if (
+                editingOwner.current !== editing.token ||
+                editing.context !== currentReviewContext.current ||
+                reviewRef.current ||
+                instanceId !== editing.providerId ||
+                !selectedProvider?.models.some((m) => m.slug === model)
+              )
+                return;
+              const choice = { token: editing.token, model };
+              modelChoiceRef.current = choice;
+              setModelChoice(choice);
+              closeReview();
+            }}
+          />
           {Object.keys(blank).map((key) => {
             const field = key as keyof typeof blank;
             const label = {
@@ -652,6 +704,7 @@ export function AgentsTaskCreator(props: {
             disabled={
               !parseDraft(draft) ||
               review !== null ||
+              !modelAvailable ||
               !selectedProvider ||
               !providerExecutable(selectedProvider)
             }

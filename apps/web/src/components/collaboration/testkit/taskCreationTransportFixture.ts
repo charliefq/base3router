@@ -1,0 +1,209 @@
+import {
+  EnvironmentId,
+  type AuthEnvironmentScope,
+  type ServerProvider,
+  type OrchestrationV2Command,
+  type ModelSelection,
+} from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
+import * as Scope from "effect/Scope";
+import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as Socket from "effect/unstable/socket/Socket";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import {
+  PrimaryConnectionTarget,
+  AVAILABLE_CONNECTION_STATE,
+  EnvironmentSupervisor,
+  type PreparedConnection,
+} from "@t3tools/client-runtime/connection";
+import * as Crypto from "effect/Crypto";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import {
+  EnvironmentRpcRequestObserver,
+  makeRpcSessionFactory,
+  type RpcSession,
+  makeEnvironmentHttpApiGroupClient,
+} from "@t3tools/client-runtime/rpc";
+import * as Commands from "@t3tools/client-runtime/operations";
+
+type ServerFixture = {
+  providers: ReadonlyArray<ServerProvider>;
+  connection: (
+    scopes?: ReadonlyArray<AuthEnvironmentScope>,
+  ) => Promise<{ httpBaseUrl: string; socketUrl: string; token: string; sessionId: string }>;
+  revoke: (id: string) => Promise<void>;
+  dropNextReply: () => void;
+  awaitDroppedReply: () => Promise<void>;
+  setEnvironment: (value: string) => void;
+  setProviders: (value: ReadonlyArray<ServerProvider>) => void;
+  drain: () => Promise<void>;
+  inspect: () => Promise<{
+    starts: ReadonlyArray<ModelSelection>;
+    inputs: ReadonlyArray<string>;
+    commands: ReadonlyArray<OrchestrationV2Command>;
+    rpcMethods: ReadonlyArray<string>;
+  }>;
+};
+async function clientFixture(
+  server: ServerFixture,
+  check: (f: Effect.Success<ReturnType<typeof makeClientFixture>>) => Promise<void>,
+) {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = yield* makeClientFixture(server);
+        yield* Effect.promise(() => check(f));
+      }),
+    ),
+  );
+}
+const makeClientFixture = Effect.fn("TaskTransport.makeClientFixture")(function* (
+  server: ServerFixture,
+) {
+  const factory = yield* makeRpcSessionFactory().pipe(
+    Effect.provideService(Socket.WebSocketConstructor, (url) => new WebSocket(url)),
+  );
+  const target = new PrimaryConnectionTarget({
+    environmentId: EnvironmentId.make("environment-a"),
+    label: "Task transport",
+    httpBaseUrl: "http://fixture",
+    wsBaseUrl: "ws://fixture",
+  });
+  const active = yield* SubscriptionRef.make<Option.Option<RpcSession>>(Option.none());
+  const prepared = yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(Option.none());
+  const state = yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE);
+  const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+    target,
+    state,
+    session: active,
+    prepared,
+    connect: Effect.void,
+    disconnect: Effect.void,
+    retryNow: Effect.void,
+  });
+  const methods: string[] = [];
+  const observer = {
+    observe: ({ method }: { method: string }) =>
+      Effect.sync(() => {
+        methods.push(method);
+        return Effect.void;
+      }),
+  };
+  const provide = <A, E>(
+    effect: Effect.Effect<A, E, EnvironmentSupervisor.EnvironmentSupervisor | Crypto.Crypto>,
+  ) =>
+    effect.pipe(
+      Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      Effect.provideService(EnvironmentRpcRequestObserver, observer),
+      Effect.provide(NodeCrypto.layer),
+    );
+  let connectionScope = yield* Scope.make();
+  let identity: RpcSession | null = null;
+  let currentDetails: Awaited<ReturnType<ServerFixture["connection"]>> | undefined;
+  const connect = async (
+    scopes?: ReadonlyArray<AuthEnvironmentScope>,
+    expectedEnvironment = "environment-a",
+    retained = false,
+  ) => {
+    const details = retained ? currentDetails : await server.connection(scopes);
+    if (!details) throw new Error("No original fixture session");
+    currentDetails = details;
+    const connection: PreparedConnection = {
+      environmentId: EnvironmentId.make(expectedEnvironment),
+      label: target.label,
+      httpBaseUrl: details.httpBaseUrl,
+      socketUrl: details.socketUrl,
+      httpAuthorization: { _tag: "Bearer", token: details.token },
+      target,
+    };
+    connectionScope = await Effect.runPromise(Scope.make());
+    const session = await Effect.runPromise(
+      factory.connect(connection).pipe(Effect.provideService(Scope.Scope, connectionScope)),
+    );
+    await Effect.runPromise(session.ready);
+    await Effect.runPromise(session.initialConfig);
+    identity = session;
+    await Effect.runPromise(SubscriptionRef.set(prepared, Option.some(connection)));
+    await Effect.runPromise(SubscriptionRef.set(active, Option.some(session)));
+  };
+  const disconnect = async () => {
+    identity = null;
+    await Effect.runPromise(SubscriptionRef.set(active, Option.none()));
+    await Effect.runPromise(Scope.close(connectionScope, Exit.void));
+  };
+  yield* Effect.addFinalizer(() => Effect.promise(disconnect));
+  yield* Effect.promise(() => connect());
+  const command = <A, E>(
+    effect: Effect.Effect<A, E, EnvironmentSupervisor.EnvironmentSupervisor | Crypto.Crypto>,
+  ) =>
+    Effect.runPromise(
+      provide(effect).pipe(
+        Effect.matchCause({
+          onFailure: (cause) => ({ _tag: "Failure" as const, cause }),
+          onSuccess: (value) => ({ _tag: "Success" as const, value }),
+        }),
+      ),
+    );
+  const snapshot = async () => {
+    if (!currentDetails) throw new Error("No connected fixture session");
+    const details = currentDetails;
+    return await Effect.runPromise(
+      Effect.gen(function* () {
+        const httpClient = yield* HttpClient.HttpClient;
+        const api = yield* makeEnvironmentHttpApiGroupClient(
+          details.httpBaseUrl,
+          "collaboration",
+        ).pipe(
+          Effect.provideService(
+            HttpClient.HttpClient,
+            HttpClient.mapRequest(
+              httpClient,
+              HttpClientRequest.setHeader("authorization", `Bearer ${details.token}`),
+            ),
+          ),
+        );
+        return yield* api.snapshot({ headers: {} });
+      }).pipe(Effect.provide(FetchHttpClient.layer)),
+    );
+  };
+  return {
+    ...server,
+    identity: () => identity,
+    reconnectRetained: () => connect(undefined, "environment-a", true),
+    connect,
+    disconnect,
+    snapshot,
+    methods,
+    create: (input: Parameters<typeof Commands.createThread>[0]) =>
+      command(Commands.createThread(input)),
+    start: (input: Parameters<typeof Commands.startThreadTurn>[0]) =>
+      command(Commands.startThreadTurn(input)),
+    projection: (input: Parameters<typeof Commands.readThreadProjection>[0]) =>
+      command(Commands.readThreadProjection(input)),
+    review: (input: Parameters<typeof Commands.readTaskReview>[0]) =>
+      command(Commands.readTaskReview(input)),
+    creationStatus: (input: Parameters<typeof Commands.readAgentsCreationStatus>[0]) =>
+      command(Commands.readAgentsCreationStatus(input)),
+    launchStatus: (input: Parameters<typeof Commands.readTaskFirstLaunchStatus>[0]) =>
+      command(Commands.readTaskFirstLaunchStatus(input)),
+    revokeCurrent: () =>
+      currentDetails
+        ? server.revoke(currentDetails.sessionId)
+        : Promise.reject(new Error("No fixture session")),
+    inspect: async () => ({ ...(await server.inspect()), methods: [...methods] }),
+  };
+});
+type ClientFixture = Effect.Success<ReturnType<typeof makeClientFixture>>;
+export async function withTaskTransportFixture(check: (f: ClientFixture) => Promise<void>) {
+  const module = (await import(
+    /* @vite-ignore */ new URL(
+      "../../../../../server/src/collaboration/testkit/taskCreationTransportFixture.ts",
+      import.meta.url,
+    ).href
+  )) as {
+    withTaskCreationTransportFixture: (check: (f: ServerFixture) => Promise<void>) => Promise<void>;
+  };
+  await module.withTaskCreationTransportFixture((server) => clientFixture(server, check));
+}

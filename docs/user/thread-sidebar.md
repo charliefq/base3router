@@ -210,8 +210,11 @@ Manual choice. Read each turn's route details to compare the requested and
 executed model identities.
 
 To start a governed task, open **Tasks**, choose its project and a ready provider,
-then select **Create governed task**. Review the goal, acceptance criteria and
-brakes before creating it. Creation records the contract without starting work.
+then select **Create governed task**. Explicitly choose its exact model before
+reviewing the goal, acceptance criteria and
+brakes before creating it. If that model becomes unavailable, choose an available
+model and review again. Creation records the contract and configured selection
+without starting work.
 Use **Prepare first instructions** to write the task’s first message. Choose ordinary
 Manual or Auto, review the exact instructions, current contract and limits, then
 explicitly start. This opens the same task conversation without another Send. Auto
