@@ -43,7 +43,9 @@ import { composerTargetKey, useComposerDraftStore } from "../../composerDraftSto
 import { ChatComposer, type ChatComposerHandle, type ChatComposerProps } from "./ChatComposer";
 vi.mock("../../state/environments", () => ({ usePrimaryEnvironmentId: () => "env-a" }));
 vi.mock("../../state/entities", () => ({ useThreadShells: () => [], readThreadShell: () => null }));
-vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
+vi.mock("../../state/use-atom-command", () => ({
+  useAtomCommand: () => vi.fn(async () => ({ _tag: "Success", value: { providers: [] } })),
+}));
 vi.mock("../../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
 vi.mock("../../state/pullRequests", () => ({
   pullRequestEnvironment: {},
@@ -57,7 +59,11 @@ vi.mock("../../hooks/useMediaQuery", () => ({ useMediaQuery: () => false }));
 vi.mock("../../panelAnimations", () => ({
   usePanelAnimationSettings: () => ({ active: false, durationMs: 0 }),
 }));
-vi.mock("../../hooks/useSettings", () => ({ useEnvironmentIdentificationMode: () => "none" }));
+vi.mock("../../hooks/useSettings", () => ({
+  useEnvironmentIdentificationMode: () => "none",
+  useClientSettings: (select: (value: object) => unknown) => select({ favorites: [] }),
+  useUpdateClientSettings: () => vi.fn(),
+}));
 const uploadFixture = vi.hoisted(() => ({ uploads: {} as Record<string, AttachmentUploadState> }));
 vi.mock("../../lib/attachmentUploadQueue", () => ({
   useAttachmentUploadStore: () => uploadFixture.uploads,
@@ -87,25 +93,61 @@ vi.mock("../SidebarStageBackdrop", () => ({
   useSidebarStageBackdropVariant: () => null,
   StageBackdropButtonArt: () => null,
 }));
-vi.mock("./ProviderModelPicker", () => ({
-  ProviderModelPicker: ({
-    routingMode,
-    onRoutingModeChange,
-  }: {
-    routingMode: "auto" | "manual";
-    onRoutingModeChange: (mode: "auto" | "manual") => void;
-  }) =>
-    createElement("button", {
-      "data-composer-routing": routingMode,
-      onClick: () => onRoutingModeChange(routingMode === "auto" ? "manual" : "auto"),
-    }),
+const pickerFixture = vi.hoisted(() => ({ actual: false }));
+vi.mock("./ProviderModelPicker", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./ProviderModelPicker")>();
+  return {
+    ProviderModelPicker: (
+      props: import("react").ComponentProps<typeof original.ProviderModelPicker>,
+    ) =>
+      pickerFixture.actual
+        ? createElement(original.ProviderModelPicker, { ...props, open: true })
+        : createElement("button", {
+            "data-composer-routing": props.routingMode,
+            onClick: () =>
+              props.onRoutingModeChange?.(props.routingMode === "auto" ? "manual" : "auto"),
+          }),
+  };
+});
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => ({}) }));
+vi.mock("./ChatGptSharingControl", () => ({ ChatGptSharingControl: () => null }));
+vi.mock("./ModelPickerSidebar", () => ({ ModelPickerSidebar: () => null }));
+vi.mock("./ModelListRow", () => ({ ModelListRow: () => null }));
+vi.mock("../ui/popover", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../ui/popover")>();
+  const React = await import("react");
+  const Open = React.createContext(false);
+  return {
+    ...original,
+    Popover: ({ children, open }: { children: import("react").ReactNode; open: boolean }) =>
+      createElement(Open.Provider, { value: open }, children),
+    PopoverTrigger: ({
+      children,
+      render,
+    }: {
+      children: import("react").ReactNode;
+      render: import("react").ReactElement;
+    }) => cloneElement(render, {}, children),
+    PopoverPopup: ({ children }: { children: import("react").ReactNode }) =>
+      React.useContext(Open) ? children : null,
+  };
+});
+vi.mock("../ui/combobox", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ui/combobox")>()),
+  Combobox: ({ children }: { children: import("react").ReactNode }) => children,
+  ComboboxSearchInput: "input",
+  ComboboxListVirtualized: ({ children }: { children: import("react").ReactNode }) => children,
+  ComboboxEmpty: () => null,
+  ComboboxItem: "div",
 }));
+vi.mock("@legendapp/list/react", () => ({ LegendList: () => null }));
 
 vi.mock("../ui/button", () => ({
   Button: ({ children, ...props }: { children: import("react").ReactNode }) =>
     createElement("button", props, children),
 }));
 vi.mock("../ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: import("react").ReactNode }) => children,
   Tooltip: ({ children }: { children: import("react").ReactNode }) => children,
   TooltipPopup: () => null,
   TooltipTrigger: ({
@@ -268,6 +310,7 @@ function propsFor(environment = "env-a", id = "a"): ChatComposerProps {
 }
 let renderer: ReactTestRenderer;
 beforeEach(() => {
+  pickerFixture.actual = false;
   uploadFixture.uploads = {};
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const events = new EventTarget();
@@ -278,6 +321,9 @@ beforeEach(() => {
     cancelAnimationFrame: noop,
     matchMedia: () => ({ matches: false, addEventListener: noop, removeEventListener: noop }),
     getSelection: () => null,
+    innerWidth: 1024,
+    setTimeout: () => 0,
+    clearTimeout: noop,
   });
   vi.stubGlobal("document", {
     addEventListener: noop,
@@ -285,6 +331,8 @@ beforeEach(() => {
     getElementById: () => ({}),
     activeElement: null,
     hasFocus: () => true,
+    documentElement: { style: {}, clientWidth: 1024 },
+    body: { style: {} },
   });
   useComposerDraftStore.setState({
     draftsByThreadKey: {},
@@ -337,7 +385,7 @@ it("restores explicit choice after remount and retains it when providers disappe
 });
 
 effectIt.effect(
-  "binds production send requests before delayed navigation, toggles, fan-out and queue edits",
+  "binds production send requests before delayed navigation, toggles, repeated sends and queue edits",
   () =>
     Effect.gen(function* () {
       const commands: { environment: EnvironmentId; command: OrchestrationV2Command }[] = [];
@@ -447,7 +495,7 @@ effectIt.effect(
       yield* Fiber.join(pending);
       yield* dispatchB.startTurn({ environmentId: envB, input: input("normal-b", "b") });
       yield* dispatchA.startTurn({ environmentId: envA, input: input("queued-a", "a", "queue") });
-      for (const id of ["fanout-one", "fanout-two"]) {
+      for (const id of ["captured-repeat-one", "captured-repeat-two"]) {
         yield* dispatchA.startTurn({ environmentId: envA, input: input(id, id) });
       }
       yield* dispatchA.editQueuedRun({
@@ -471,8 +519,8 @@ effectIt.effect(
         { environment: envA, thread: "a", mode: "auto" },
         { environment: envB, thread: "b", mode: "manual" },
         { environment: envA, thread: "a", mode: "auto" },
-        { environment: envA, thread: "fanout-one", mode: "auto" },
-        { environment: envA, thread: "fanout-two", mode: "auto" },
+        { environment: envA, thread: "captured-repeat-one", mode: "auto" },
+        { environment: envA, thread: "captured-repeat-two", mode: "auto" },
       ]);
       expect(commands[2]?.command).toMatchObject({
         type: "message.dispatch",
@@ -709,7 +757,15 @@ const blockedAutoCases: ReadonlyArray<{
   { name: "failed attachment", changes: { supportsAttachmentUploads: true }, attachment: true },
 ];
 it.each(blockedAutoCases)("Auto fails safely for $name", async ({ changes, attachment }) => {
-  const props = { ...propsFor(), providerStatuses: [signedOut, provider], ...changes };
+  const props = {
+    ...propsFor(),
+    routeKind: "draft" as const,
+    isLocalDraftThread: true,
+    isServerThread: false,
+    multipleModelSelections: [manualSelection],
+    providerStatuses: [signedOut, provider],
+    ...changes,
+  };
   const store = useComposerDraftStore.getState();
   store.setModelSelection(props.composerDraftTarget, manualSelection, { explicit: true });
   store.setPrompt(props.composerDraftTarget, "Explain this code");
@@ -812,6 +868,7 @@ effectIt.effect.each([false, true])(
       const baseProps = propsFor();
       const props = {
         ...baseProps,
+        multipleModelSelections: [manualSelection],
         activeThread: makeThreadFixture({
           id: baseProps.activeThreadId!,
           environmentId: baseProps.environmentId,
@@ -1218,3 +1275,312 @@ it("direct production preflight rejects a governed comparison even without a com
   expect(startTurn).not.toHaveBeenCalled();
   expect(editQueuedRun).not.toHaveBeenCalled();
 });
+
+it.each([0, 1, 2])(
+  "Auto keeps %s saved comparison targets dormant in send context and readiness",
+  async (count) => {
+    const props = {
+      ...propsFor(),
+      routeKind: "draft" as const,
+      isLocalDraftThread: true,
+      isServerThread: false,
+      supportsMultipleModels: true,
+    };
+    const saved = [manualSelection, { ...manualSelection, model: "other-unavailable" }].slice(
+      0,
+      count,
+    );
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(props.composerDraftTarget, "One routed response");
+    store.setModelSelection(props.composerDraftTarget, manualSelection, { explicit: true });
+    store.setRoutingMode(props.composerDraftTarget, "auto");
+    const onSend = vi.fn();
+    await act(async () => {
+      renderer = create(
+        <ChatComposer
+          {...props}
+          multipleModelSelections={saved}
+          providerStatuses={[signedOut, provider]}
+          onSend={onSend}
+        />,
+      );
+    });
+    expect(handle.current!.getSendContext().multipleModelSelections).toBeNull();
+    expect(primarySend().props.disabled).toBe(false);
+    expect(handle.current!.getSendContext().providerAvailable).toBe(true);
+    await act(async () => pressEnter());
+    expect(onSend).toHaveBeenCalledOnce();
+    await act(async () => toggle().props.onClick());
+    expect(handle.current!.getSendContext().multipleModelSelections).toEqual(saved);
+    await act(async () => toggle().props.onClick());
+    await act(async () =>
+      renderer.update(
+        <ChatComposer
+          {...props}
+          multipleModelSelections={saved}
+          providerStatuses={[signedOut]}
+          onSend={onSend}
+        />,
+      ),
+    );
+    expect(primarySend().props.disabled).toBe(true);
+    expect(handle.current!.getSendContext().providerAvailable).toBe(false);
+    await act(async () => {
+      primarySend().props.onClick({ preventDefault: noop, metaKey: false, ctrlKey: false });
+      pressEnter();
+    });
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(startAttachmentUpload).not.toHaveBeenCalled();
+  },
+);
+
+it("direct Auto capture normalizes comparisons but checks raw governed intent first", () => {
+  const props = propsFor();
+  const saved = [manualSelection, { ...manualSelection, model: "other" }];
+  const context = {
+    composerDraftTargetKey: composerTargetKey(props.composerDraftTarget),
+    composerEnvironmentId: props.environmentId,
+    routingMode: "auto" as const,
+    multipleModelSelections: saved,
+  };
+  const operations = { startTurn: vi.fn(), editQueuedRun: vi.fn() };
+  const ordinary = captureComposerSendDispatch(
+    props.composerDraftTarget,
+    props.environmentId,
+    { getSendContext: () => context },
+    operations,
+  )!;
+  expect(ordinary.status).toBe("ready");
+  expect(ordinary.context.multipleModelSelections).toBeNull();
+  const governed = captureComposerSendDispatch(
+    props.composerDraftTarget,
+    props.environmentId,
+    {
+      getSendContext: () => ({
+        ...context,
+        taskContract: governedFields,
+        multipleModelSelections: null,
+        savedManualModelSelections: saved,
+      }),
+    },
+    operations,
+  )!;
+  expect(governed.status).toBe("blocked");
+  expect("startTurn" in governed).toBe(false);
+});
+
+effectIt.effect.each(
+  (["click", "keyboard"] as const).flatMap((method) =>
+    (["auto", "manual"] as const).map((mode) => ({ method, mode })),
+  ),
+)(
+  "actual picker/composer sends $mode via $method with dormant Manual choices intact",
+  ({ method, mode }) =>
+    Effect.gen(function* () {
+      pickerFixture.actual = true;
+      const props = {
+        ...propsFor(),
+        routeKind: "draft" as const,
+        isLocalDraftThread: true,
+        isServerThread: false,
+        supportsMultipleModels: true,
+        gitCwd: "/fake-git-project",
+      };
+      const ready = {
+        ...signedOut,
+        instanceId: provider.instanceId,
+        driver: provider.driver,
+        status: "ready" as const,
+        auth: { status: "authenticated" as const },
+        displayName: "First",
+      };
+      const second = {
+        ...ready,
+        instanceId: ProviderInstanceId.make("second-ready"),
+        displayName: "Second",
+      };
+      const saved = [
+        {
+          instanceId: ready.instanceId,
+          model: "gemini-pro",
+          options: [{ id: "effort", value: "high" }],
+        },
+        {
+          instanceId: second.instanceId,
+          model: "gemini-pro",
+          options: [{ id: "effort", value: "low" }],
+        },
+      ];
+      const store = useComposerDraftStore.getState();
+      store.setModelSelection(props.composerDraftTarget, saved[0]!, { explicit: true });
+      store.setPrompt(
+        props.composerDraftTarget,
+        "One routed response or explicit Manual comparison",
+      );
+      const requests: OrchestrationV2ThreadLaunchInput[] = [];
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const session = yield* SubscriptionRef.make(
+        Option.some({
+          client: {
+            [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input: OrchestrationV2ThreadLaunchInput) =>
+              Effect.gen(function* () {
+                requests.push(input);
+                yield* Deferred.succeed(entered, undefined);
+                yield* Deferred.await(release);
+                return {};
+              }),
+          },
+          initialConfig: Effect.succeed({
+            environment: { capabilities: { serverResolvedCommandContext: true } },
+          }),
+        } as never),
+      );
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target: { environmentId: props.environmentId, label: "Fake" },
+        session,
+      } as never);
+      const operations = {
+        startTurn: ({ input }: { environmentId: EnvironmentId; input: StartThreadTurnInput }) =>
+          startThreadTurn(input).pipe(
+            Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          ),
+        editQueuedRun: vi.fn(),
+      };
+      const effects: ReturnType<typeof operations.startTurn>[] = [];
+      const selectionsChanged = vi.fn();
+      const onSend = vi.fn(() => {
+        const captured = captureComposerSendDispatch(
+          props.composerDraftTarget,
+          props.environmentId,
+          handle.current,
+          operations,
+        )!;
+        if (captured.status !== "ready" || !captured.context.providerAvailable) return;
+        const targets = captured.context.multipleModelSelections ?? [
+          captured.context.selectedModelSelection,
+        ];
+        for (const [index, selection] of targets.entries())
+          effects.push(
+            captured.startTurn({
+              environmentId: props.environmentId,
+              input: {
+                commandId: CommandId.make(`actual-picker-${index}`),
+                threadId: ThreadId.make(`actual-picker-${index}`),
+                modelSelection: selection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                message: {
+                  messageId: MessageId.make(`actual-picker-message-${index}`),
+                  role: "user",
+                  text: captured.context.prompt,
+                  attachments: [],
+                },
+                bootstrap: {
+                  createThread: {
+                    projectId: ProjectId.make("git-project"),
+                    title: "Draft",
+                    modelSelection: selection,
+                    runtimeMode: "full-access",
+                    interactionMode: "default",
+                    branch: "main",
+                    worktreePath: null,
+                    createdAt: "2026-10-18T00:00:00Z",
+                  },
+                  ...(captured.context.multipleModelSelections !== null
+                    ? {
+                        prepareWorktree: {
+                          projectCwd: "/fake-git-project",
+                          baseBranch: "main",
+                          requireWorktree: true,
+                        },
+                      }
+                    : {}),
+                },
+              },
+            }),
+          );
+      });
+      const render = (busy = false) => (
+        <ChatComposer
+          {...props}
+          isSendBusy={busy}
+          multipleModelSelections={saved}
+          providerStatuses={[ready, second]}
+          onMultipleModelSelectionsChange={selectionsChanged}
+          onSend={onSend}
+        />
+      );
+      yield* Effect.promise(() =>
+        act(async () => {
+          renderer = create(render());
+        }),
+      );
+      const routing = (label: string) =>
+        renderer.root.findAllByType("button").find((button) => button.children.join("") === label)!;
+      expect(handle.current!.getSendContext().multipleModelSelections).toEqual(saved);
+      yield* Effect.promise(() => act(async () => routing("Auto").props.onClick()));
+      expect(handle.current!.getSendContext().multipleModelSelections).toBeNull();
+      const explanation = renderer.root
+        .findAllByType("p")
+        .map((node) => node.children.filter((child) => typeof child === "string").join(""))
+        .join(" ");
+      expect(explanation).toContain("Auto sends one routed response");
+      expect(explanation).toContain("Manual comparison choices and options are saved");
+      expect(renderer.root.findAllByProps({ "aria-label": "Model cards" })).toHaveLength(0);
+      yield* Effect.promise(() => act(async () => routing("Manual").props.onClick()));
+      expect(handle.current!.getSendContext().multipleModelSelections).toEqual(saved);
+      expect(selectionsChanged).not.toHaveBeenCalled();
+      yield* Effect.promise(() => act(async () => renderer.unmount()));
+      yield* Effect.promise(() =>
+        act(async () => {
+          renderer = create(render());
+        }),
+      );
+      expect(handle.current!.getSendContext().multipleModelSelections).toEqual(saved);
+      if (mode === "auto")
+        yield* Effect.promise(() => act(async () => routing("Auto").props.onClick()));
+      yield* Effect.promise(() =>
+        act(async () => {
+          if (method === "keyboard") pressEnter();
+          else
+            primarySend().props.onClick({ preventDefault: noop, metaKey: false, ctrlKey: false });
+        }),
+      );
+      const execution = yield* Effect.all(effects, { concurrency: 1 }).pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* Effect.promise(() =>
+        act(async () => {
+          renderer.update(render(true));
+          store.setRoutingMode(props.composerDraftTarget, mode === "auto" ? "manual" : "auto");
+        }),
+      );
+      yield* Effect.promise(() =>
+        act(async () => {
+          primarySend().props.onClick({ preventDefault: noop, metaKey: false, ctrlKey: false });
+          pressEnter();
+        }),
+      );
+      expect(onSend).toHaveBeenCalledOnce();
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(execution);
+      expect(requests).toHaveLength(mode === "auto" ? 1 : 2);
+      expect(new Set(requests.map((request) => request.threadId)).size).toBe(requests.length);
+      expect(requests.map((request) => request.routingMode)).toEqual(requests.map(() => mode));
+      expect(requests.map((request) => request.workspaceStrategy.type)).toEqual(
+        mode === "auto" ? ["root"] : ["worktree", "worktree"],
+      );
+      if (mode === "manual")
+        expect(requests.map((request) => request.modelSelection)).toEqual(saved);
+    }).pipe(
+      Effect.provide(
+        Layer.succeed(
+          Crypto.Crypto,
+          Crypto.make({
+            randomBytes: (size) => new Uint8Array(size),
+            digest: (_algorithm, data) => Effect.succeed(data),
+          }),
+        ),
+      ),
+    ),
+);

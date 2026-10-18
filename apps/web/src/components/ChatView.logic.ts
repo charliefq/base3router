@@ -1415,6 +1415,14 @@ export function readComposerSendContextForTarget<
     : undefined;
 }
 
+/** Saved Manual comparisons are dormant while Auto chooses a single routed response. */
+export function activeModelComparisonSelections(
+  routingMode: "auto" | "manual",
+  saved: ReadonlyArray<ModelSelection> | null,
+): ReadonlyArray<ModelSelection> | null {
+  return routingMode === "manual" ? saved : null;
+}
+
 /** Independent comparison roots cannot share a governed task's start budget. */
 export function governedFanoutSendBlockReason(input: {
   readonly governed: boolean;
@@ -1432,6 +1440,7 @@ export function captureComposerSendDispatch<
     composerEnvironmentId: EnvironmentId;
     routingMode: "auto" | "manual";
     taskContract?: unknown;
+    savedManualModelSelections?: ReadonlyArray<ModelSelection> | null;
     multipleModelSelections?: ReadonlyArray<ModelSelection> | null;
   },
   StartResult,
@@ -1455,14 +1464,20 @@ export function captureComposerSendDispatch<
   if (!context) return undefined;
   const blockReason = governedFanoutSendBlockReason({
     governed: context.taskContract != null,
-    multipleModelSelections: context.multipleModelSelections,
+    multipleModelSelections: context.savedManualModelSelections ?? context.multipleModelSelections,
   });
   // A blocked capture exposes no dispatch operations, including to direct callers.
   if (blockReason !== null) return { status: "blocked" as const, context, blockReason };
   const routingMode = context.routingMode;
   return {
     status: "ready" as const,
-    context,
+    context: {
+      ...context,
+      multipleModelSelections: activeModelComparisonSelections(
+        routingMode,
+        context.multipleModelSelections ?? null,
+      ),
+    },
     startTurn: (request: {
       environmentId: EnvironmentId;
       input: Omit<StartThreadTurnInput, "routingMode">;

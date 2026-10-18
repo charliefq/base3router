@@ -1,4 +1,8 @@
-import { readComposerSendContextForTarget, captureComposerSendDispatch } from "./ChatView.logic";
+import {
+  activeModelComparisonSelections,
+  readComposerSendContextForTarget,
+  captureComposerSendDispatch,
+} from "./ChatView.logic";
 import { ChatCanvas } from "./chat/ChatCanvas";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import {
@@ -1710,6 +1714,9 @@ export default function ChatView(props: ChatViewProps) {
   }, [citationLocation.href, citationLocation.key, environmentId, threadId]);
   const { resolvedTheme } = useTheme();
   // Granular store selectors — avoid subscribing to prompt changes.
+  const composerRoutingMode = useComposerDraftStore((store) =>
+    store.getComposerDraft(composerDraftTarget)?.routingMode === "auto" ? "auto" : "manual",
+  );
   const composerRuntimeMode = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.runtimeMode ?? null,
   );
@@ -1915,6 +1922,10 @@ export default function ChatView(props: ChatViewProps) {
   const isResuming = resumingThreadKeys.has(routeThreadKey);
   const composerSendGenerationRef = useRef(0);
   const multipleModelSelections = fanoutState.selections;
+  const activeComparisonSelections = activeModelComparisonSelections(
+    composerRoutingMode,
+    routeKind === "draft" ? multipleModelSelections : null,
+  );
   const setMultipleModelSelections = useCallback(
     (selections: SetStateAction<ReadonlyArray<ModelSelection> | null>) => {
       appAtomRegistry.update(fanoutStateAtom, (current) => ({
@@ -10112,7 +10123,7 @@ export default function ChatView(props: ChatViewProps) {
   );
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
-      if (multipleModelSelections !== null) return;
+      if (activeComparisonSelections !== null) return;
       if (canOverrideServerThreadEnvMode) {
         setPendingServerThreadEnvMode(mode);
         scheduleComposerFocus();
@@ -10135,7 +10146,7 @@ export default function ChatView(props: ChatViewProps) {
       composerDraftTarget,
       draftThread?.worktreePath,
       isLocalDraftThread,
-      multipleModelSelections,
+      activeComparisonSelections,
       activeProjectSettings.settings.newWorktreesStartFromOrigin,
       setPendingServerThreadEnvMode,
       scheduleComposerFocus,
@@ -10442,7 +10453,7 @@ export default function ChatView(props: ChatViewProps) {
     anchor: threadPanelPopoverAnchorRef,
     handle: threadPanelPopoverHandle,
     onPresentationChange: setThreadPanelPresentation,
-    forceNewWorktree: multipleModelSelections !== null,
+    forceNewWorktree: activeComparisonSelections !== null,
     environmentId: activeThread.environmentId,
     threadId: activeThread.id,
     ...(draftId ? { draftId } : {}),
@@ -11081,7 +11092,7 @@ export default function ChatView(props: ChatViewProps) {
                           {mountComposerContextStrip && (
                             <div className="pointer-events-auto">
                               <BranchToolbar
-                                forceNewWorktree={multipleModelSelections !== null}
+                                forceNewWorktree={activeComparisonSelections !== null}
                                 ref={branchToolbarRef}
                                 environmentId={activeThread.environmentId}
                                 threadId={activeThread.id}

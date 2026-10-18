@@ -191,9 +191,13 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const allModelNames = selectedEntries
     ? selectedEntries.map((selection) => selection.label).join(", ") || "Choose models"
     : undefined;
+  const triggerDescription =
+    props.routingMode === "auto"
+      ? "Auto · one routed response"
+      : (props.triggerLabel ?? allModelNames ?? triggerLabel);
   const triggerTooltipContent = shortcutLabel
-    ? `${props.triggerLabel ?? allModelNames ?? triggerLabel} · ${shortcutLabel}`
-    : (props.triggerLabel ?? allModelNames ?? triggerLabel);
+    ? `${triggerDescription} · ${shortcutLabel}`
+    : triggerDescription;
   const manualIdentityLabel = selectedEntries
     ? selectedEntries
         .map(
@@ -338,7 +342,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             </div>
             <p className="text-xs leading-relaxed text-muted-foreground">
               {props.routingMode === "auto"
-                ? "Auto uses B3R’s local task classifier to choose an eligible configured model. Your saved Manual selection is kept. OpenRouter’s remote Auto is a separate model in Manual."
+                ? "Auto sends one routed response using an eligible configured model. Manual comparison choices and options are saved for when you switch back. OpenRouter’s remote Auto is a separate model in Manual."
                 : "Choose the exact provider and model for this conversation. OpenRouter Auto delegates model selection remotely; other cards use the named model. Existing thread restrictions still apply."}
             </p>
             <p className="text-xs text-muted-foreground">
@@ -346,8 +350,15 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             </p>
             {props.routingMode === "auto" ? (
               <p className="break-all text-xs text-muted-foreground">
-                Saved Manual choice: {activeEntry?.displayName ?? props.activeInstanceId} ·{" "}
-                {props.model}
+                {selectedEntries !== undefined ? "Saved Manual choices: " : "Saved Manual choice: "}
+                {selectedEntries !== undefined
+                  ? selectedEntries
+                      .map(
+                        (selection) =>
+                          `${selection.entry?.displayName ?? selection.instanceId} · ${selection.label}`,
+                      )
+                      .join(", ") || "No comparison models selected"
+                  : `${activeEntry?.displayName ?? props.activeInstanceId} · ${props.model}`}
               </p>
             ) : null}
           </div>

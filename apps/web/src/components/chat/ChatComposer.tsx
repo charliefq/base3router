@@ -86,6 +86,7 @@ import {
 import { DISCONNECTED_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
 import { listContinuationForEnter, listIndentForTab } from "../../composer-list-continuation";
 import {
+  activeModelComparisonSelections,
   deriveComposerSendState,
   governedFanoutSendBlockReason,
   getAntigravitySendBlockReason,
@@ -1487,6 +1488,7 @@ export interface ChatComposerHandle {
     selectedModelOptionsForDispatch: unknown;
     selectedModelSelection: ModelSelection;
     multipleModelSelections: ReadonlyArray<ModelSelection> | null;
+    savedManualModelSelections?: ReadonlyArray<ModelSelection> | null;
     providerAvailable: boolean;
     selectedProvider: ProviderDriverKind;
     selectedModel: string;
@@ -2122,8 +2124,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   const selectedInstanceId =
     selectedProviderEntry?.instanceId ?? NO_PROVIDER_MODEL_SELECTION.instanceId;
+  const routingMode = composerDraft.routingMode === "auto" ? "auto" : "manual";
+  const activeComparisonSelections = activeModelComparisonSelections(
+    routingMode,
+    routeKind === "draft" ? multipleModelSelections : null,
+  );
   const noProviderAvailable =
-    selectedProviderEntry === undefined && multipleModelSelections === null;
+    selectedProviderEntry === undefined && activeComparisonSelections === null;
   // Before the catalog arrives, every thread resolves to "no provider". Send
   // stays blocked either way; only the chrome waits, keeping the picker with
   // the thread's own selection instead of swapping in the setup button and
@@ -2166,7 +2173,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     projectModelSelection: activeProjectDefaultModelSelection,
     settings,
   });
-  const routingMode = composerDraft.routingMode === "auto" ? "auto" : "manual";
   // Auto can choose another eligible instance for an ordinary unlocked turn.
   // Continuations, queued edits, and plan/pending controls retain their selected-provider rules.
   const usesAutoTurnRouting =
@@ -2175,7 +2181,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     phase === "ready" &&
     !isEditingQueuedMessage &&
     !(canResume && !composerDraftHasUserContent(composerDraft)) &&
-    multipleModelSelections === null &&
+    activeComparisonSelections === null &&
     requestedInteractionMode === "default" &&
     !showPlanFollowUpPrompt &&
     activePendingProgress === null &&
@@ -2206,11 +2212,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const sendDisabledReason =
     externalSendDisabledReason ??
     governedFanoutBlockReason ??
-    (multipleModelSelections?.length === 0 ? "Select at least one model." : null) ??
+    (activeComparisonSelections?.length === 0 ? "Select at least one model." : null) ??
     (activePendingProgress
       ? attachmentBlockReason
       : (attachmentBlockReason ??
-        (multipleModelSelections === null ? turnProviderSendBlockReason : null)));
+        (activeComparisonSelections === null ? turnProviderSendBlockReason : null)));
   const isSendDisabled = sendDisabledReason !== null;
   const selectedProviderStatus = useMemo(
     () => selectedProviderEntry?.snapshot ?? null,
@@ -6465,9 +6471,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         selectedPromptEffort,
         selectedModelOptionsForDispatch,
         selectedModelSelection,
+        savedManualModelSelections: routeKind === "draft" ? multipleModelSelections : null,
         multipleModelSelections:
-          routeKind === "draft" && multipleModelSelections !== null
-            ? multipleModelSelections.map((selection) =>
+          activeComparisonSelections !== null
+            ? activeComparisonSelections.map((selection) =>
                 selection.instanceId === selectedModelSelection.instanceId &&
                 selection.model === selectedModelSelection.model
                   ? selectedModelSelection
@@ -6475,7 +6482,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               )
             : null,
         providerAvailable:
-          multipleModelSelections !== null ||
+          activeComparisonSelections !== null ||
           (!noTurnProviderAvailable &&
             turnProviderSendBlockReason === null &&
             !isConnecting &&
@@ -6551,6 +6558,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       selectedModelOptionsForDispatch,
       selectedModelSelection,
       multipleModelSelections,
+      activeComparisonSelections,
       setMultipleModelSelections,
       routeKind,
       noTurnProviderAvailable,
