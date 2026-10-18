@@ -9246,6 +9246,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       "orchestration_v2.command_type": command.type,
       "orchestration_v2.thread_id": commandThreadId(command),
     });
+    // Authorization reserves budgets, capacity and grants. Refuse a governed
+    // plan's independent root before any of those side effects can occur.
+    if (
+      command.type === "message.dispatch" &&
+      command.sourcePlanRef !== undefined &&
+      command.sourcePlanRef.threadId !== command.threadId
+    ) {
+      const source = yield* projectionStore
+        .getThread(command.sourcePlanRef.threadId)
+        .pipe(mapDispatchError(command));
+      if (taskStateFromUnknown(source.id, source).governance === "required") {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause:
+            "Implement this plan in its governed task. A new thread cannot share the task's start limit. Create and review a separate task for separate work.",
+        });
+      }
+    }
     // Plan runs and provider effects from the server-bound target, not the client preference.
     const authorizedCommand = yield* authorizeDispatch(command).pipe(mapDispatchError(command));
     command = authorizedCommand ?? command;

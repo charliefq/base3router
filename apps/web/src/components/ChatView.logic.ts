@@ -1433,6 +1433,17 @@ export function governedFanoutSendBlockReason(input: {
     : null;
 }
 
+export function governedPlanNewThreadBlockReason(
+  thread: {
+    readonly taskGovernance?: "chat" | "required" | undefined;
+    readonly taskContract?: unknown;
+  } | null,
+): string | null {
+  return thread?.taskGovernance === "required" || thread?.taskContract != null
+    ? "Implement this plan in its governed task. A new thread cannot share the task's start limit. Create and review a separate task for separate work."
+    : null;
+}
+
 /** Bind outgoing requests once, before uploads or other asynchronous composer work. */
 export function captureComposerSendDispatch<
   C extends {

@@ -24,7 +24,11 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
-import { captureComposerSendDispatch, readComposerSendContextForTarget } from "../ChatView.logic";
+import {
+  captureComposerSendDispatch,
+  governedPlanNewThreadBlockReason,
+  readComposerSendContextForTarget,
+} from "../ChatView.logic";
 import { act, cloneElement, createElement, createRef, type ReactElement } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -142,6 +146,31 @@ vi.mock("../ui/combobox", async (importOriginal) => ({
 }));
 vi.mock("@legendapp/list/react", () => ({ LegendList: () => null }));
 
+vi.mock("../ui/menu", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../ui/menu")>();
+  const React = await import("react");
+  return {
+    ...original,
+    Menu: ({ children }: { children: import("react").ReactNode }) => children,
+    MenuPopup: ({ children }: { children: import("react").ReactNode }) =>
+      React.Children.toArray(children).some(
+        (child) =>
+          React.isValidElement<{ children?: unknown }>(child) &&
+          child.props.children === "Implement in a new thread",
+      )
+        ? children
+        : null,
+    MenuItem: ({ children, ...props }: { children: import("react").ReactNode }) =>
+      createElement("button", props, children),
+    MenuTrigger: ({
+      render,
+      children,
+    }: {
+      render: ReactElement;
+      children: import("react").ReactNode;
+    }) => cloneElement(render, {}, children),
+  };
+});
 vi.mock("../ui/button", () => ({
   Button: ({ children, ...props }: { children: import("react").ReactNode }) =>
     createElement("button", props, children),
@@ -1583,4 +1612,62 @@ effectIt.effect.each(
         ),
       ),
     ),
+);
+
+it.each(["manual", "auto"] as const)(
+  "governed plan new-thread action refuses in %s while same-thread Implement stays available",
+  async (mode) => {
+    const props = propsFor();
+    const onNewThread = vi.fn();
+    const onSend = vi.fn();
+    useComposerDraftStore.getState().setRoutingMode(props.composerDraftTarget!, mode);
+    const reason = governedPlanNewThreadBlockReason({
+      taskGovernance: "required",
+      taskContract: null,
+    });
+    await act(async () => {
+      renderer = create(
+        <ChatComposer
+          {...props}
+          showPlanFollowUpPrompt
+          planNewThreadDisabledReason={reason}
+          onImplementPlanInNewThread={onNewThread}
+          onSend={onSend}
+        />,
+      );
+    });
+    const newThread = () =>
+      renderer.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Implement in a new thread"))!;
+    expect(newThread().props.disabled).toBe(true);
+    await act(async () => newThread().props.onClick());
+    expect(onNewThread).not.toHaveBeenCalled();
+    expect(
+      renderer.root
+        .findAllByProps({ role: "status" })
+        .some((item) => item.children.includes(reason!)),
+    ).toBe(true);
+    const implement = renderer.root
+      .findAllByType("button")
+      .find((button) => button.children.includes("Implement"))!;
+    expect(implement.props.disabled).toBe(false);
+    await act(async () =>
+      renderer.root.findAllByType("form")[0]!.props.onSubmit({ preventDefault: noop }),
+    );
+    expect(onSend).toHaveBeenCalledTimes(1);
+    await act(async () =>
+      renderer.update(
+        <ChatComposer
+          {...props}
+          showPlanFollowUpPrompt
+          planNewThreadDisabledReason={null}
+          onImplementPlanInNewThread={onNewThread}
+        />,
+      ),
+    );
+    expect(newThread().props.disabled).toBe(false);
+    await act(async () => newThread().props.onClick());
+    expect(onNewThread).toHaveBeenCalledTimes(1);
+  },
 );

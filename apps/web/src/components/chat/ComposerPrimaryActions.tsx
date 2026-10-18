@@ -53,6 +53,7 @@ interface ComposerPrimaryActionsProps {
   onResume?: () => void;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
+  planNewThreadDisabledReason?: string | null | undefined;
   onImplementPlanInNewThread: () => void;
 }
 
@@ -105,6 +106,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   onResume,
   onPreviousPendingQuestion,
   onInterrupt,
+  planNewThreadDisabledReason = null,
   onImplementPlanInNewThread,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
@@ -241,11 +243,24 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           </MenuTrigger>
           <MenuPopup align="end" side="top" {...composerFloatingLayerProps}>
             <MenuItem
-              disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
-              onClick={() => void onImplementPlanInNewThread()}
+              disabled={
+                planNewThreadDisabledReason !== null ||
+                isSendBusy ||
+                isSendDisabled ||
+                isConnecting ||
+                isEnvironmentUnavailable
+              }
+              onClick={() => {
+                if (planNewThreadDisabledReason === null) onImplementPlanInNewThread();
+              }}
             >
               Implement in a new thread
             </MenuItem>
+            {planNewThreadDisabledReason ? (
+              <p role="status" className="max-w-64 px-3 py-2 text-xs text-muted-foreground">
+                {planNewThreadDisabledReason}
+              </p>
+            ) : null}
           </MenuPopup>
         </Menu>
       </div>

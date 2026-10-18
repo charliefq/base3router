@@ -14,7 +14,7 @@ import {
   resolveWorktreeSetupProgress,
 } from "./ChatView.logic";
 import * as DateTime from "effect/DateTime";
-import { restorePlanFollowUpComposer } from "./ChatView.logic";
+import { governedPlanNewThreadBlockReason, restorePlanFollowUpComposer } from "./ChatView.logic";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { prepareQueuedEditAttachments, recoverQueuedMessageEdit } from "./chat/queuedMessageEdit";
 import {
@@ -9860,6 +9860,12 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
 
+    const blockReason = governedPlanNewThreadBlockReason(serverProjection?.thread ?? null);
+    if (blockReason !== null) {
+      setThreadError(activeThread.id, blockReason);
+      return;
+    }
+
     const sendCtx = readComposerSendContextForTarget(
       composerDraftTarget,
       environmentId,
@@ -9990,6 +9996,8 @@ export default function ChatView(props: ChatViewProps) {
     }
     finish();
   }, [
+    setThreadError,
+    serverProjection,
     activeProject,
     activeProposedPlan,
     activeThreadBranch,
@@ -11037,6 +11045,9 @@ export default function ChatView(props: ChatViewProps) {
                               onSend={onSend}
                               onResume={onResume}
                               onInterrupt={onInterrupt}
+                              planNewThreadDisabledReason={governedPlanNewThreadBlockReason(
+                                serverProjection?.thread ?? null,
+                              )}
                               onImplementPlanInNewThread={onImplementPlanInNewThread}
                               onRespondToApproval={onRespondToApproval}
                               onSelectActivePendingUserInputOption={

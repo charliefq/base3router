@@ -356,7 +356,7 @@ function linkageOperations(
     routing: Partial<
       Pick<
         Extract<OrchestrationV2Command, { type: "message.dispatch" }>,
-        "routingMode" | "modelSelection" | "dispatchMode"
+        "routingMode" | "modelSelection" | "dispatchMode" | "sourcePlanRef"
       >
     > = {},
     afterDispatch: () => Effect.Effect<void> = () => Effect.void,
