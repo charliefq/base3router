@@ -156,3 +156,37 @@ For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 - [Remote access](./remote-access.md): connect from another device.
 - [Running in the background](./background-service.md): keep a Linux or macOS host available.
 - [Updating T3 Code](./updating.md): update the app and connected servers.
+
+## Local Node package
+
+Use a Node tarball built from the version you intend to run, matching its README's
+OS/CPU target. The locally built Linux artifact targets glibc; other OS/CPU/libc
+combinations need their own artifact and verification. This path requires Node
+matching `package.json`, pnpm 11, and
+registry access to download runtime and native dependencies. It is not an offline
+or self-contained installer, and installing provider SDK dependencies does not
+activate a provider or make it ready.
+
+Extract into a fresh directory and install with the shipped native-build and
+patch policy:
+
+```sh
+T3_NODE_ROOT=$(mktemp -d /tmp/t3-node-install-XXXXXX)
+tar -xzf /path/to/t3-0.0.45.tgz -C "$T3_NODE_ROOT"
+cd "$T3_NODE_ROOT/package"
+pnpm install --prod
+node dist/bin.mjs serve --base-dir "$T3_NODE_ROOT/data" --no-browser
+```
+
+Leave `NODE_PATH` unset and do not link another checkout's `node_modules`. Keep
+the included `pnpm-workspace.yaml` and `patches` directory. If installation fails,
+retain the error and check registry/native-build requirements before proceeding;
+blanket script approval changes the package's reviewed policy.
+
+The server prints a pairing URL for the local web client. Keep it private. Use
+Settings → Providers in that environment to check readiness before explicitly
+starting work. See [governed work](./composer.md#start-and-review-governed-work)
+for routing, review, acceptance and uncertain-result recovery. Stop the server
+from its owning terminal when finished. This local artifact has no separately
+verified download link, desktop/mobile installation or real-provider readiness
+claim.

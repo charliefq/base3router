@@ -148,6 +148,34 @@ server package, `start --entrypoint <package>/dist/bin.mjs` can use a path below
 `/tmp/b3r-local-product-package-*`; its declared runtime dependencies must already
 be installed. A package run using cached dependencies is not an installer test.
 
+## Build a registry-dependent Node package
+
+After the web and server build above, create a new artifact directory:
+
+```sh
+node scripts/build-node-package.ts --output-dir /tmp/t3-node-artifact
+```
+
+The tarball contains the built server/client, registry-resolvable runtime
+externals, and the existing native-build, patch and override policy. It omits
+repository scripts and workspace dependencies. The artifact targets the build
+host's OS/CPU and records that target in its README. Linux uses the existing
+glibc staging policy; other libc targets are not verified here. It requires registry access
+and pnpm 11; it does not include Node or installed dependencies.
+
+Use the [local Node package instructions](../user/install.md#local-node-package)
+to extract and install into a fresh directory. Keep `NODE_PATH` unset. To verify
+without real providers, extract below a fresh
+`/tmp/b3r-portable-node-install-*/package` directory, give the install a fresh
+HOME/cache/config, and use its installed `dist/bin.mjs` with the existing local
+fixture launcher `--entrypoint`. The launcher checks every installed dependency
+and symlink resolves within the installed tree before boot. Continue the
+journey/lifecycle/checkpointed restart steps above. The installation command may
+use the existing `vp install --prod` tooling; the runtime must not link checkout
+`node_modules`. Preserve the shipped native-build/patch policy. Registry or native
+build/download failures are prerequisites to report, not permission to approve
+extra scripts or substitute cached repository links.
+
 ## Checks
 
 Run checks for the files and packages you changed:

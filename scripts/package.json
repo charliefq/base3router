@@ -6,7 +6,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vp test run --config ../vite.config.ts --dir .",
     "verify:local-product": "node local-product-check.ts",
-    "verify:local-runtime": "node local-product-runtime.ts"
+    "verify:local-runtime": "node local-product-runtime.ts",
+    "build:node-package": "node build-node-package.ts"
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",

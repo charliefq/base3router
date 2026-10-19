@@ -9,6 +9,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as Schema from "effect/Schema";
+import { inspectInstalledNodePackage } from "./lib/node-package.ts";
 
 const repo = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 const Runtime = Schema.Struct({
@@ -99,8 +100,18 @@ export async function launchLocalProductRuntime(input: {
   const entrypoint = NodePath.resolve(
     input.entrypoint ?? prior?.entrypoint ?? NodePath.join(repo, "apps/server/dist/bin.mjs"),
   );
+  const portableRoot = NodePath.resolve(NodePath.dirname(entrypoint), "..");
+  const portableInstall =
+    NodePath.dirname(NodePath.dirname(portableRoot)) === NodePath.resolve(NodeOS.tmpdir()) &&
+    /^b3r-portable-node-install-[A-Za-z0-9_-]+$/.test(
+      NodePath.basename(NodePath.dirname(portableRoot)),
+    ) &&
+    NodePath.basename(portableRoot) === "package" &&
+    entrypoint === NodePath.join(portableRoot, "dist/bin.mjs");
+  if (portableInstall) inspectInstalledNodePackage(portableRoot);
   NodeAssert.ok(
-    entrypoint.startsWith(NodePath.join(repo, "apps/server/dist/")) ||
+    portableInstall ||
+      entrypoint.startsWith(NodePath.join(repo, "apps/server/dist/")) ||
       entrypoint.startsWith(NodePath.join(NodeOS.tmpdir(), "b3r-local-product-package-")),
     "Only local built or disposable package entrypoints are allowed",
   );
