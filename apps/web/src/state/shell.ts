@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import {
   AVAILABLE_CONNECTION_STATE,
   connectionProjectionPhase,
@@ -82,3 +83,16 @@ export const allEnvironmentProjectSnapshotsReadyAtom =
     shellStateValueAtom: environmentShell.stateValueAtom,
     requiresPrimaryEnvironment: !isHostedStaticApp(),
   });
+
+const emptyEnvironmentShell = Atom.make<EnvironmentShellState>({
+  status: "empty",
+  snapshot: Option.none(),
+  error: Option.none(),
+});
+export function useEnvironmentShellState(
+  environmentId: EnvironmentId | null,
+): EnvironmentShellState {
+  return useAtomValue(
+    environmentId === null ? emptyEnvironmentShell : environmentShell.stateValueAtom(environmentId),
+  );
+}

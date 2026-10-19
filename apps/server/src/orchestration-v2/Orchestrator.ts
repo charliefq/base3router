@@ -7961,6 +7961,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         },
       );
       const run = projection.runs.find((candidate) => candidate.id === command.runId);
+      if (
+        command.expectedAttemptId !== undefined &&
+        (run?.activeAttemptId !== command.expectedAttemptId ||
+          !["preparing", "starting", "running"].includes(run.status) ||
+          projection.runs.some(
+            (candidate) =>
+              candidate.ordinal > run.ordinal &&
+              ["preparing", "starting", "running"].includes(candidate.status),
+          ))
+      )
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "The displayed run/attempt is no longer the interrupt target.",
+        });
       const rootNode =
         run?.rootNodeId === null
           ? undefined
@@ -8192,6 +8207,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 threadId: command.threadId,
                 request: {
                   type: "provider-turn.interrupt" as const,
+                  ...(command.expectedAttemptId === undefined
+                    ? {}
+                    : {
+                        expectedTarget: {
+                          runId: command.runId,
+                          attemptId: command.expectedAttemptId,
+                        },
+                      }),
                   providerSessionId: restart.providerSessionId,
                   ...(restart.sessionTransition?.type === "replace"
                     ? {
@@ -8336,6 +8359,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           threadId: command.threadId,
           request: {
             type: "provider-turn.interrupt",
+            ...(command.expectedAttemptId === undefined
+              ? {}
+              : {
+                  expectedTarget: {
+                    runId: command.runId,
+                    attemptId: command.expectedAttemptId,
+                  },
+                }),
             providerSessionId,
             providerThreadId: providerThread.id,
             providerTurnId: providerTurn.id,

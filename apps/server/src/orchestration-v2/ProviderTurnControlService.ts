@@ -17,6 +17,7 @@ import {
   ProviderThreadId,
   ProviderTurnId,
   RunAttemptId,
+  RunId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -55,6 +56,7 @@ const isProviderTurnControlError = Schema.is(ProviderTurnControlError);
 export interface ProviderTurnControlServiceV2Shape {
   readonly interrupt: (input: {
     readonly threadId: ThreadId;
+    readonly expectedTarget?: { readonly runId: RunId; readonly attemptId: RunAttemptId };
     readonly providerSessionId: ProviderSessionId;
     readonly replacementProviderSessionId?: ProviderSessionId;
     readonly providerThreadId: ProviderThreadId;
@@ -206,6 +208,28 @@ export const layer: Layer.Layer<
                 cause: "Native termination is unconfirmed; the occupied slot is retained.",
               });
             return;
+          }
+          if (input.expectedTarget) {
+            const [shell, records] = yield* Effect.all([
+              projections.getThreadShell(input.threadId),
+              projections.getThreadRecords(input.threadId, ["runs"], {
+                runIds: [input.expectedTarget.runId],
+              }),
+            ]);
+            const run = records.runs[0];
+            if (
+              shell?.activeRunId !== input.expectedTarget.runId ||
+              run?.activeAttemptId !== input.expectedTarget.attemptId ||
+              !["starting", "running"].includes(run.status) ||
+              loaded.providerTurn.runAttemptId !== input.expectedTarget.attemptId ||
+              loaded.providerTurn.status !== "running"
+            )
+              return yield* new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "interrupt",
+                providerTurnId: input.providerTurnId,
+                cause: "Expected run/attempt settled or was superseded before native interruption.",
+              });
           }
           // A settled turn reaches its adapter too: only the adapter knows
           // whether it still runs work for the thread, and each one either

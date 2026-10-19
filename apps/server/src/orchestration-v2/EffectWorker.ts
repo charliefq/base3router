@@ -206,6 +206,9 @@ export const executorLayer: Layer.Layer<
                 providerTurnControl
                   .interrupt({
                     threadId: effect.threadId,
+                    ...(effect.request.expectedTarget
+                      ? { expectedTarget: effect.request.expectedTarget }
+                      : {}),
                     providerSessionId: effect.request.providerSessionId,
                     ...(effect.request.replacementProviderSessionId === undefined
                       ? {}

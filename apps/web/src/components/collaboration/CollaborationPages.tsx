@@ -2,6 +2,8 @@ import { useSetupDetour } from "./useSetupDetour";
 import { useCollaborationScope, type CollaborationScopeProps } from "./useCollaborationScope";
 import { resolveCollaborationScope } from "./collaborationScope";
 import { ProjectSetupAction } from "./ProjectSetupAction";
+import { useTaskLiveSupervision } from "./useTaskLiveSupervision";
+import { TaskRunSupervision } from "./TaskRunSupervision";
 import { TaskCapabilityStepControls } from "./TaskCapabilityStepControls";
 import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
 import { SelectionBasisReadout } from "./SelectionBasisReadout";
@@ -527,6 +529,7 @@ function useCollaboration(environmentId: EnvironmentId | null) {
 
   return {
     refresh: () => read(true),
+    refreshLive: () => read(false),
     refreshing: readState.context === context && readState.refreshing,
     fresh: loaded?.context === context && readState.context === context && readState.fresh,
     canOperate,
@@ -1391,6 +1394,8 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
   const {
     snapshot,
+    refreshLive,
+    context: directoryContext,
     error,
     refresh,
     refreshing,
@@ -1400,6 +1405,14 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
     invalidateReads,
   } = useCollaboration(environmentId);
   const tasks = snapshot?.tasks ?? [];
+  const supervision = useTaskLiveSupervision({
+    environmentId,
+    tasks,
+    context: directoryContext,
+    refresh: refreshLive,
+    invalidate: invalidateReads,
+  });
+
   const selection = useCollaborationScope(environmentId, scopeProps);
   const projectId = selection.scope.scopeProjectId ?? null;
   const providerId = selection.scope.scopeProviderId ?? null;
@@ -1425,8 +1438,8 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
     selectedProject?.id,
     selectedProvider?.instanceId,
   );
-  const fresh = connectionFresh && !scopeInvalid;
-  const canOperate = () => !scopeInvalid && canOperateConnection();
+  const fresh = connectionFresh && supervision.live && !scopeInvalid;
+  const canOperate = () => supervision.live && !scopeInvalid && canOperateConnection();
   const lockCreation = (owner: string) => {
     creationOwner.current = owner;
     setCreating(true);
@@ -1455,9 +1468,9 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
         <ScrollArea radius="none">
           <WorkspacePageContainer width="wide">
             <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
-              Create a governed task, review its contract, then open its conversation to send
-              instructions. Refresh to see recorded execution status and result evidence. Creating
-              or opening a task does not start provider work.
+              Create a governed task and review its first instructions before starting. Watch the
+              linked run and result here, or explicitly request Stop for the displayed run. Open
+              conversation for the full history. Creating or watching a task starts no work.
             </p>
             <section
               aria-label="Create governed task"
@@ -1604,6 +1617,12 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
                 ) : null}
               </Alert>
             ) : null}
+            {environmentId && !supervision.live ? (
+              <p role="status">
+                Tasks are stale / UNKNOWN while the shared stream reconnects. Execution controls are
+                disabled; reconnect only reads evidence.
+              </p>
+            ) : null}
             {!environmentId ? (
               <Alert variant="info">
                 <AlertDescription>No primary environment is connected.</AlertDescription>
@@ -1662,7 +1681,12 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
                               task={task}
                               environmentId={environmentId}
                               readVersion={readVersion}
-                              stale={error !== null || refreshing}
+                              stale={
+                                !connectionFresh ||
+                                !supervision.live ||
+                                error !== null ||
+                                refreshing
+                              }
                               invalidateReads={invalidateReads}
                               refresh={async () => await refresh()}
                             />
@@ -1671,7 +1695,12 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
                             <TaskCapabilityStepControls
                               task={task}
                               environmentId={environmentId}
-                              stale={error !== null || refreshing}
+                              stale={
+                                !connectionFresh ||
+                                !supervision.live ||
+                                error !== null ||
+                                refreshing
+                              }
                               readVersion={readVersion}
                             />
                           ) : null}
@@ -1716,15 +1745,30 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
                     </div>
                     <TaskBudgetReadout
                       readout={task.budgetReadout}
-                      stale={error !== null || refreshing}
+                      stale={!connectionFresh || !supervision.live || error !== null || refreshing}
                     />
                     <TaskRoutingReadout readout={task.routingReadout} />
+                    {environmentId && task.threadId ? (
+                      <TaskRunSupervision
+                        task={task}
+                        environmentId={environmentId}
+                        enabled={supervision.watched.has(task.threadId)}
+                        live={supervision.live}
+                        stale={
+                          !connectionFresh || !supervision.live || error !== null || refreshing
+                        }
+                        changed={supervision.changed}
+                        observe={supervision.observe}
+                      />
+                    ) : null}
                     <TaskResultReadout readout={task.resultReadout} />
                     {environmentId ? (
                       <TaskResultFeedback
                         task={task}
                         environmentId={environmentId}
-                        stale={error !== null || refreshing}
+                        stale={
+                          !connectionFresh || !supervision.live || error !== null || refreshing
+                        }
                         readVersion={readVersion}
                       />
                     ) : null}
@@ -1732,7 +1776,9 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
                       <TaskRevisionRequest
                         task={task}
                         environmentId={environmentId}
-                        stale={error !== null || refreshing}
+                        stale={
+                          !connectionFresh || !supervision.live || error !== null || refreshing
+                        }
                         readVersion={readVersion}
                         readCollaboration={loadSnapshot}
                         onOpen={() => openTask(task)}
@@ -1752,7 +1798,9 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
                           <TaskFirstInstructions
                             task={task}
                             environmentId={environmentId}
-                            stale={error !== null || refreshing}
+                            stale={
+                              !connectionFresh || !supervision.live || error !== null || refreshing
+                            }
                             readVersion={readVersion}
                             onOpen={() => openTask(task)}
                           />

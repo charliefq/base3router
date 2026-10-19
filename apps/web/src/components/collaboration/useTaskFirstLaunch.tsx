@@ -239,7 +239,7 @@ export function useTaskFirstLaunch(props: {
             : { taskFirstLaunch: review }),
         },
       });
-      if (current(generation)) await reconcile(command, generation, true);
+      if (current(generation)) await reconcile(command, generation, false);
     } catch {
       if (current(generation)) {
         const next: FirstLaunchAttempt = { command, status: "unknown" };

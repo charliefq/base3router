@@ -1,5 +1,7 @@
 import { expect, it } from "vite-plus/test";
 import {
+  AuthOrchestrationReadScope,
+  RunAttemptId,
   CommandId,
   ThreadId,
   ProjectId,
@@ -285,3 +287,97 @@ it("a selected model removed after actual review cannot launch through productio
     expect((await f.inspect()).starts).toHaveLength(0);
   });
 }, 30000);
+
+it.each(["interrupted", "completed"] as const)(
+  "authenticated Stop remains requested until the exact native %s outcome and duplicates do not interrupt twice",
+  async (outcome) => {
+    await withTaskTransportFixture(async (f) => {
+      const { marker, original, task: initialTask } = await prepare(f, `live-stop-${outcome}`);
+      expect(initialTask.review?.supportsExpectedRunInterrupt).toBe(true);
+      f.runInput(marker.text);
+      expect((await launch(f, marker))._tag).toBe("Success");
+      await f.awaitRunning();
+      await f.flush();
+      const observed = await f.projection({ threadId: original.threadId });
+      if (observed._tag !== "Success") throw new Error("No running projection");
+      const run = observed.value.runs.at(-1)!;
+      expect(run.status).toBe("running");
+      const stop = {
+        commandId: CommandId.make(`stop-${outcome}`),
+        threadId: original.threadId,
+        runId: run.id,
+        expectedAttemptId: run.activeAttemptId!,
+      };
+      expect((await f.interrupt(stop))._tag).toBe("Success");
+      await f.awaitInterrupted();
+      await f.flush();
+      expect(f.interruptCount()).toBe(1);
+      const requested = await f.projection({ threadId: original.threadId });
+      if (requested._tag !== "Success") throw new Error("No requested projection");
+      expect(requested.value.runs.at(-1)!.status).toBe("running");
+      expect(requested.value.turnItems.some((item) => item.type === "run_interrupt_request")).toBe(
+        true,
+      );
+      expect((await f.interrupt(stop))._tag).toBe("Success");
+      await f.flush();
+      expect(f.interruptCount()).toBe(1);
+      await f.finishRunning(outcome);
+      await f.settle(marker.messageId);
+      const result = await f.projection({ threadId: original.threadId });
+      if (result._tag !== "Success") throw new Error("No terminal projection");
+      expect(result.value.runs.at(-1)!.status).toBe(outcome);
+      const task = (await f.snapshot()).tasks.find((task) => task.threadId === original.threadId)!;
+      expect(task.contractReadout).toMatchObject({ acceptedRevision: null });
+      const commandsBefore = (await f.inspect()).commands.length;
+      await f.disconnect();
+      await f.reconnectRetained();
+      await f.projection({ threadId: original.threadId });
+      expect((await f.inspect()).commands).toHaveLength(commandsBefore);
+      expect(f.interruptCount()).toBe(1);
+      expect((await f.inspect()).starts).toHaveLength(1);
+    });
+  },
+  30000,
+);
+
+it.each(["wrong attempt", "completed", "read-only", "revoked"] as const)(
+  "authenticated Stop rejects %s without native interruption",
+  async (change) => {
+    await withTaskTransportFixture(async (f) => {
+      const { marker, original } = await prepare(f, `stop-reject-${change.replaceAll(" ", "-")}`);
+      f.runInput(marker.text);
+      expect((await launch(f, marker))._tag).toBe("Success");
+      await f.awaitRunning();
+      await f.flush();
+      const result = await f.projection({ threadId: original.threadId });
+      if (result._tag !== "Success") throw new Error("No projection");
+      const run = result.value.runs.at(-1)!;
+      if (change === "completed") {
+        await f.finishRunning("completed");
+        await f.settle(marker.messageId);
+      }
+      if (change === "read-only") {
+        await f.disconnect();
+        await f.connect([AuthOrchestrationReadScope]);
+      }
+      if (change === "revoked") await f.revokeCurrent();
+      expect(
+        (
+          await f.interrupt({
+            commandId: CommandId.make(`reject-${change.replaceAll(" ", "-")}`),
+            threadId: original.threadId,
+            runId: run.id,
+            expectedAttemptId:
+              change === "wrong attempt"
+                ? RunAttemptId.make("unobserved-attempt")
+                : run.activeAttemptId!,
+          })
+        )._tag,
+      ).toBe("Failure");
+      await f.flush();
+      expect(f.interruptCount()).toBe(0);
+      expect((await f.inspect()).starts).toHaveLength(1);
+    });
+  },
+  30000,
+);

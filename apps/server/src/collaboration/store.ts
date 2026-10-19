@@ -1334,6 +1334,7 @@ export const readCollaborationSnapshot = (
           ? {
               ...task,
               review: {
+                supportsExpectedRunInterrupt: true as const,
                 reference: facts.reference,
                 revision: facts.contract.revision,
                 actions: facts.actions,

@@ -50,6 +50,7 @@ import { PolicyExecutionContext } from "../../policy/executionContext.ts";
 import { ServerRuntimeStartup, makeCommandGate } from "../../serverRuntimeStartup.ts";
 import { collaborationHttpApiLayer } from "../http.ts";
 import * as CollaborationThreads from "../CollaborationThreads.ts";
+import type { ProviderAdapterV2Event } from "../../orchestration-v2/ProviderAdapter.ts";
 import { withTaskResultLinkageFixture } from "./taskResultLinkageFixture.ts";
 import { agentsCreationProvider } from "./agentsTaskCreationFixture.ts";
 
@@ -91,6 +92,12 @@ export async function withTaskCreationTransportFixture(
     settle: (messageId: string) => Promise<void>;
     alterLatestOutput: (threadId: string, text: string) => Promise<void>;
     alterBackgroundWork: (threadId: string) => Promise<void>;
+    runInput: (text: string) => void;
+    awaitRunning: () => Promise<void>;
+    awaitInterrupted: () => Promise<void>;
+    finishRunning: (status: "completed" | "interrupted") => Promise<void>;
+    flush: () => Promise<void>;
+    interruptCount: () => number;
     holdInput: (text: string) => void;
     awaitHeldStart: () => Promise<void>;
     releaseHeldStart: () => void;
@@ -137,6 +144,11 @@ export async function withTaskCreationTransportFixture(
     }
     return gate;
   };
+  let runningStarted = Deferred.makeUnsafe<void>();
+  const nativeInterrupted = Deferred.makeUnsafe<void>();
+  let runningText: string | null = null;
+  let interrupts = 0;
+  let finishRunning: ((status: "completed" | "interrupted") => Effect.Effect<void>) | null = null;
   let heldText: string | null = null;
   let failedText: string | null = null;
   let heldStarted = Deferred.makeUnsafe<void>();
@@ -368,14 +380,17 @@ export async function withTaskCreationTransportFixture(
               Context.get(server, HttpServer.HttpServer).address,
             );
             const run = Effect.runPromiseWith(context);
+            const runningMessages = yield* Queue.unbounded<void>();
             const terminalMessages = yield* Queue.unbounded<string>();
             yield* f.orchestrator.streamDomainEvents.pipe(
               Stream.runForEach((e) =>
-                e.type === "run.updated" &&
-                e.payload.userMessageId &&
-                ["completed", "failed", "interrupted", "cancelled"].includes(e.payload.status)
-                  ? Queue.offer(terminalMessages, e.payload.userMessageId)
-                  : Effect.void,
+                e.type === "provider-turn.updated" && e.payload.status === "running"
+                  ? Queue.offer(runningMessages, undefined)
+                  : e.type === "run.updated" &&
+                      e.payload.userMessageId &&
+                      ["completed", "failed", "interrupted", "cancelled"].includes(e.payload.status)
+                    ? Queue.offer(terminalMessages, e.payload.userMessageId)
+                    : Effect.void,
               ),
               Effect.forkScoped,
             );
@@ -428,6 +443,23 @@ export async function withTaskCreationTransportFixture(
                   providers = value;
                   f.setProviders(value);
                 },
+                runInput: (text) => {
+                  runningText = text;
+                  runningStarted = Deferred.makeUnsafe<void>();
+                },
+                awaitRunning: () =>
+                  run(
+                    Deferred.await(runningStarted).pipe(
+                      Effect.andThen(Queue.take(runningMessages)),
+                    ),
+                  ),
+                awaitInterrupted: () => run(Deferred.await(nativeInterrupted)),
+                finishRunning: (status) => {
+                  if (!finishRunning) throw new Error("No running fixture turn");
+                  return run(finishRunning(status));
+                },
+                flush: () => run(f.worker.drain().pipe(Effect.asVoid)),
+                interruptCount: () => interrupts,
                 holdInput: (text) => {
                   heldText = text;
                   heldStarted = Deferred.makeUnsafe<void>();
@@ -535,8 +567,39 @@ export async function withTaskCreationTransportFixture(
                 return yield* service.commitCommand(input);
               }),
           }),
+          onInterrupt: () =>
+            Effect.sync(() => {
+              interrupts++;
+            }).pipe(Effect.andThen(Deferred.succeed(nativeInterrupted, undefined))),
           onStart: (input, events, emit) =>
             Effect.gen(function* () {
+              if (runningText === input.message.text) {
+                const first = events.find((e) => e.type === "provider_turn.updated");
+                if (first?.type !== "provider_turn.updated")
+                  throw new Error("Missing running turn");
+                finishRunning = (status) =>
+                  Effect.forEach(
+                    events,
+                    (e) => {
+                      let event: ProviderAdapterV2Event = e;
+                      if (status === "interrupted" && e.type === "provider_turn.updated")
+                        event = {
+                          ...e,
+                          providerTurn: { ...e.providerTurn, status, terminationConfirmed: true },
+                        };
+                      else if (status === "interrupted" && e.type === "turn.terminal")
+                        event = { ...e, status, failure: null };
+                      return emit(event);
+                    },
+                    { discard: true },
+                  );
+                yield* emit({
+                  ...first,
+                  providerTurn: { ...first.providerTurn, status: "running", completedAt: null },
+                });
+                yield* Deferred.succeed(runningStarted, undefined);
+                return;
+              }
               if (heldText === input.message.text) {
                 const first = events.find((e) => e.type === "provider_turn.updated");
                 if (first?.type !== "provider_turn.updated")

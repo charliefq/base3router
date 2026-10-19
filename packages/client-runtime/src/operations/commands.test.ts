@@ -1146,6 +1146,32 @@ describe("V2 environment commands", () => {
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
+  it.effect(
+    "retains the original Stop identity and expected attempt without selecting another run",
+    () =>
+      Effect.gen(function* () {
+        const commands: OrchestrationV2Command[] = [];
+        const projectionRequests: ThreadId[] = [];
+        const supervisor = yield* makeSupervisor({ commands, projects: [], projectionRequests });
+        yield* interruptThreadTurn({
+          commandId: CommandId.make("original-stop"),
+          threadId: v2ThreadId,
+          runId: RunId.make("displayed-run"),
+          expectedAttemptId: RunAttemptId.make("displayed-attempt"),
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+        expect(projectionRequests).toEqual([]);
+        expect(commands).toEqual([
+          {
+            type: "run.interrupt",
+            commandId: "original-stop",
+            threadId: v2ThreadId,
+            runId: "displayed-run",
+            expectedAttemptId: "displayed-attempt",
+            holdQueue: true,
+          },
+        ]);
+      }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
 });
 
 it.effect(

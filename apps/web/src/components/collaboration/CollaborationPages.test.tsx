@@ -23,6 +23,8 @@ import {
   EnvironmentId,
   ThreadId,
   MessageId,
+  RunAttemptId,
+  RunId,
   CommandId,
   ProviderInstanceId,
   HYBRID_TASK_ROUTER_POLICY_VERSION,
@@ -75,6 +77,7 @@ const state = vi.hoisted(() => ({
   recover: vi.fn(),
   navigate: vi.fn(),
   createProject: vi.fn(),
+  interrupt: vi.fn(),
   startStep: vi.fn(),
   firstLaunchRead: vi.fn(),
   reviewRead: vi.fn(),
@@ -83,6 +86,9 @@ const state = vi.hoisted(() => ({
   readCreationStatus: vi.fn(),
   autoPreview: vi.fn(),
   sessionIdentity: {} as object | null,
+  detailWatches: [] as Array<string | null>,
+  streamLive: true,
+  liveProjection: null as OrchestrationV2ThreadProjection | null,
   feedbackRead: vi.fn(),
   feedbackSubmit: vi.fn(),
 }));
@@ -114,10 +120,26 @@ vi.mock("../../state/workflow", () => ({
     configurationStatus: "configuration-status",
   },
 }));
+vi.mock("../../state/shell", () => ({
+  useEnvironmentShellState: () => ({
+    status: state.streamLive ? "live" : "cached",
+    snapshot: Option.none(),
+    error: Option.none(),
+  }),
+}));
 vi.mock("../../state/threads", () => ({
+  useEnvironmentThread: (_environment: unknown, threadId: string | null) => {
+    state.detailWatches.push(threadId);
+    return {
+      status: state.streamLive ? "live" : "cached",
+      data: state.liveProjection ? Option.some(state.liveProjection) : Option.none(),
+      error: Option.none(),
+    };
+  },
   threadEnvironment: {
     create: "create",
     startTurn: "capability-start",
+    interruptTurn: "interrupt",
     readFirstLaunchStatus: "first-launch-status",
     readTaskReview: "review-read",
     decideTaskContract: "review-decide",
@@ -128,21 +150,23 @@ vi.mock("../../state/threads", () => ({
 }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
-    command === "first-launch-status"
-      ? state.firstLaunchRead
-      : command === "capability-start"
-        ? state.startStep
-        : command === "auto-preview"
-          ? state.autoPreview
-          : command === "read-creation-status"
-            ? state.readCreationStatus
-            : command === "review-read"
-              ? state.reviewRead
-              : command === "review-decide"
-                ? state.reviewDecide
-                : command === "read-projection"
-                  ? state.readProjection
-                  : state.create,
+    command === "interrupt"
+      ? state.interrupt
+      : command === "first-launch-status"
+        ? state.firstLaunchRead
+        : command === "capability-start"
+          ? state.startStep
+          : command === "auto-preview"
+            ? state.autoPreview
+            : command === "read-creation-status"
+              ? state.readCreationStatus
+              : command === "review-read"
+                ? state.reviewRead
+                : command === "review-decide"
+                  ? state.reviewDecide
+                  : command === "read-projection"
+                    ? state.readProjection
+                    : state.create,
 }));
 vi.mock("../chat/ProviderModelPicker", () => ({
   ProviderModelPicker: (props: {
@@ -355,6 +379,7 @@ beforeEach(() => {
   state.navigate.mockReset();
   state.createProject.mockReset().mockResolvedValue(true);
   state.startStep.mockReset();
+  state.interrupt.mockReset().mockResolvedValue({ _tag: "Success", value: { sequence: 1 } });
   state.reviewRead.mockReset();
   state.reviewDecide.mockReset();
   state.readProjection.mockReset();
@@ -365,6 +390,9 @@ beforeEach(() => {
   state.feedbackSubmit.mockReset();
   state.autoPreview.mockReset();
   state.sessionIdentity = {};
+  state.streamLive = true;
+  state.detailWatches = [];
+  state.liveProjection = null;
 });
 afterEach(async () => {
   await act(async () => renderer?.unmount());
@@ -7250,7 +7278,7 @@ it.each(["manual", "auto"] as const)(
         await state.firstLaunchRead.mock.results.at(-1)!.value;
       });
       expect(state.startStep).toHaveBeenCalledTimes(1);
-      expect(props.onOpen).toHaveBeenCalledTimes(1);
+      expect(props.onOpen).not.toHaveBeenCalled();
       await EffectForFixture.runPromise(f.drain());
       const before = await EffectForFixture.runPromise(f.inspect());
       expect(before.starts).toEqual([
@@ -7963,3 +7991,457 @@ it("explicitly selects and reviews recorded workspace, starts nothing until conf
     expect(text()).toContain("Operation: ");
   });
 }, 30000);
+
+it("refreshes late attributed output from the linked native stream without manual Refresh or chat navigation", async () => {
+  await withTaskRevisionRequestFixture(async (f) => {
+    const completed = await EffectForFixture.runPromise(f.readSnapshot());
+    const task = completed.tasks[0]!;
+    if (
+      task.resultReadout?.status !== "available" ||
+      task.resultReadout.content.status !== "output"
+    )
+      throw new Error("Missing fixture output");
+    const output = task.resultReadout.content.preview;
+    const projection = await EffectForFixture.runPromise(
+      f.orchestrator.getThreadProjection(f.command.threadId),
+    );
+    state.snapshot = {
+      ...completed,
+      tasks: [
+        {
+          ...task,
+          resultReadout: {
+            ...task.resultReadout,
+            runStatus: "running",
+            content: { status: "unknown", reason: "no_completed_result" },
+          },
+        },
+      ],
+    };
+    state.liveProjection = {
+      ...projection,
+      runs: projection.runs.map((run) => ({ ...run, status: "running" })),
+    };
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    expect(text()).not.toContain(output);
+    const reads = state.load.mock.calls.length;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      state.snapshot = completed;
+      state.liveProjection = projection;
+      await act(async () => {
+        renderer.update(<TasksPage />);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      expect(state.load.mock.calls.length).toBeGreaterThan(reads);
+      expect(text()).toContain(output);
+      expect(state.navigate).not.toHaveBeenCalled();
+      expect(state.startStep).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// Mounted controls consume the same attributed projection as the result fixture.
+const mountRunningSupervision = async (
+  f: Parameters<Parameters<typeof withTaskRevisionRequestFixture>[0]>[0],
+) => {
+  const snapshot = await EffectForFixture.runPromise(f.readSnapshot());
+  const projection = await EffectForFixture.runPromise(
+    f.orchestrator.getThreadProjection(f.command.threadId),
+  );
+  const records = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => records.get(key) ?? null,
+    setItem: (key: string, value: string) => records.set(key, value),
+  });
+  state.liveProjection = {
+    ...projection,
+    runs: projection.runs.map((run) => ({ ...run, status: "running", completedAt: null })),
+    providerTurns: projection.providerTurns.map((turn) => ({
+      ...turn,
+      status: "running",
+      completedAt: null,
+    })),
+  };
+  const { TaskRunSupervision } = await import("./TaskRunSupervision");
+  const props = {
+    task: snapshot.tasks[0]!,
+    environmentId: EnvironmentId.make("environment-a"),
+    enabled: true,
+    live: true,
+    stale: false,
+    changed: vi.fn(),
+    observe: vi.fn(),
+  };
+  const render = async (changes: Partial<typeof props> = {}) => {
+    await act(async () => {
+      renderer.update(<TaskRunSupervision {...props} {...changes} />);
+    });
+  };
+  await act(async () => {
+    renderer = create(<TaskRunSupervision {...props} />);
+  });
+  return { props, render, projection, records, TaskRunSupervision };
+};
+it("retains one original Stop before submission, survives lost reply/remount/reconnect and only reads recovery", async () => {
+  await withTaskRevisionRequestFixture(async (f) => {
+    const fixture = await mountRunningSupervision(f);
+    const pending = deferred<{ _tag: "Success" }>();
+    state.interrupt.mockReturnValueOnce(pending.promise);
+    expect(creationButton("Stop task run")!.props.disabled).toBe(false);
+    await creationClick("Stop task run", true);
+    expect(state.interrupt).toHaveBeenCalledTimes(1);
+    const original = state.interrupt.mock.calls[0]![0].input;
+    expect(original.runId).toBe(fixture.projection.runs.at(-1)!.id);
+    expect(original.expectedAttemptId).toBe(fixture.projection.runs.at(-1)!.activeAttemptId);
+    expect([...fixture.records.values()][0]).toContain(original.commandId);
+    const { TaskRunSupervision, props } = fixture;
+    await act(async () => {
+      renderer.unmount();
+      renderer = create(<TaskRunSupervision {...props} />);
+    });
+    expect(text()).toContain("UNKNOWN");
+    expect(creationButton("Stop task run")!.props.disabled).toBe(true);
+    await fixture.render({ live: false });
+    expect(creationButton("Reconcile original Stop")!.props.disabled).toBe(true);
+    state.sessionIdentity = {};
+    await fixture.render();
+    state.readProjection.mockResolvedValue({ _tag: "Success", value: fixture.projection });
+    await creationClick("Reconcile original Stop");
+    expect(text()).toContain("Completion won");
+    await act(async () => pending.resolve({ _tag: "Success" }));
+    expect(text()).not.toContain("Matching target interruption confirmed");
+    expect(state.interrupt).toHaveBeenCalledTimes(1);
+    expect(state.startStep).not.toHaveBeenCalled();
+  });
+});
+it.each(["readonly", "legacy-server", "disconnect", "stale", "session", "A-B-A"] as const)(
+  "rejects a retained Stop callback after %s scope changes",
+  async (change) => {
+    await withTaskRevisionRequestFixture(async (f) => {
+      const fixture = await mountRunningSupervision(f);
+      const callback = creationButton("Stop task run")!.props.onClick;
+      if (change === "readonly") {
+        const { review: _review, ...readonlyTask } = fixture.props.task;
+        await fixture.render({ task: readonlyTask });
+      }
+      if (change === "legacy-server") {
+        const { supportsExpectedRunInterrupt: _support, ...review } = fixture.props.task.review!;
+        await fixture.render({ task: { ...fixture.props.task, review } });
+        expect(creationButton("Stop task run")!.props.disabled).toBe(true);
+      }
+      if (change === "disconnect") await fixture.render({ live: false });
+      if (change === "stale") await fixture.render({ stale: true });
+      if (change === "session") {
+        state.sessionIdentity = {};
+        await fixture.render();
+      }
+      if (change === "A-B-A") {
+        await fixture.render({ environmentId: EnvironmentId.make("environment-b") });
+        await fixture.render();
+      }
+      await act(async () => callback());
+      expect(state.interrupt).not.toHaveBeenCalled();
+    });
+  },
+);
+it.each(["interrupted", "unconfirmed", "completed", "failed", "newer-attempt"] as const)(
+  "attributes %s after Stop to its original run and attempt",
+  async (outcome) => {
+    await withTaskRevisionRequestFixture(async (f) => {
+      const fixture = await mountRunningSupervision(f);
+      await creationClick("Stop task run");
+      expect(text()).toContain("Stop requested");
+      expect(text()).toContain("not confirmed");
+      const base = fixture.projection;
+      state.liveProjection = {
+        ...base,
+        runs: base.runs.map((run) => ({
+          ...run,
+          status:
+            outcome === "newer-attempt"
+              ? "running"
+              : outcome === "unconfirmed"
+                ? "interrupted"
+                : outcome,
+          ...(outcome === "newer-attempt"
+            ? { activeAttemptId: RunAttemptId.make("newer-attempt") }
+            : {}),
+        })),
+        attempts:
+          outcome === "newer-attempt"
+            ? [
+                ...base.attempts,
+                {
+                  ...base.attempts.at(-1)!,
+                  id: RunAttemptId.make("newer-attempt"),
+                  attemptOrdinal: 2,
+                },
+              ]
+            : base.attempts,
+        providerTurns: base.providerTurns.map((turn) => ({
+          ...turn,
+          status:
+            outcome === "completed" ? "completed" : outcome === "failed" ? "failed" : "interrupted",
+          terminationConfirmed: outcome !== "unconfirmed",
+        })),
+      };
+      await fixture.render();
+      expect(text()).toContain(
+        outcome === "interrupted"
+          ? "Matching target interruption confirmed"
+          : outcome === "unconfirmed"
+            ? "native termination remains UNKNOWN"
+            : outcome === "completed"
+              ? "Completion won"
+              : outcome === "failed"
+                ? "Target run failed"
+                : "superseded",
+      );
+      expect(state.interrupt).toHaveBeenCalledTimes(1);
+      expect(state.reviewDecide).not.toHaveBeenCalled();
+    });
+  },
+);
+
+it("coalesces linked lifecycle changes and ignores streamed token updates", async () => {
+  await withTaskRevisionRequestFixture(async (f) => {
+    state.snapshot = await EffectForFixture.runPromise(f.readSnapshot());
+    state.liveProjection = await EffectForFixture.runPromise(
+      f.orchestrator.getThreadProjection(f.command.threadId),
+    );
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const reads = state.load.mock.calls.length;
+      const base = state.liveProjection;
+      for (let i = 0; i < 20; i++) {
+        state.liveProjection = {
+          ...base,
+          messages: base.messages.map((m) =>
+            m.role === "assistant" ? { ...m, streaming: true, text: `token ${i}` } : m,
+          ),
+        };
+        await act(async () => renderer.update(<TasksPage />));
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      // Initial transition to streaming removes a completed-message signature once; token chunks add no reads.
+      expect(state.load.mock.calls.length - reads).toBeLessThanOrEqual(1);
+      const after = state.load.mock.calls.length;
+      for (let i = 0; i < 10; i++) {
+        state.liveProjection = {
+          ...state.liveProjection!,
+          runs: base.runs.map((r) => ({ ...r, status: i % 2 ? "running" : "starting" })),
+        };
+        await act(async () => renderer.update(<TasksPage />));
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      expect(state.load.mock.calls.length - after).toBe(1);
+      state.streamLive = false;
+      await act(async () => renderer.update(<TasksPage />));
+      expect(text()).toContain("UNKNOWN");
+      state.streamLive = true;
+      await act(async () => renderer.update(<TasksPage />));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      expect(state.load.mock.calls.length - after).toBe(2);
+      expect(state.interrupt).not.toHaveBeenCalled();
+      expect(state.startStep).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+it("keeps a governed Start in Tasks and observes its attributed result without manual refresh", async () => {
+  await withFirstLaunchFixture(async (f) => {
+    wireGenericLaunch(f);
+    state.load.mockImplementation(() => EffectForFixture.runPromise(f.snapshot()));
+    state.liveProjection = await EffectForFixture.runPromise(f.projection());
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    await prepareGeneric("Stay in Tasks for this implementation.", "manual");
+    await creationClick("Choose fixture Manual model");
+    await creationClick("Review ordinary task launch");
+    await creationClick("Start reviewed ordinary task");
+    await act(async () => {
+      await state.startStep.mock.results[0]!.value;
+    });
+    state.liveProjection = await EffectForFixture.runPromise(f.projection());
+    await act(async () => renderer.update(<TasksPage />));
+    expect(text()).toContain("Observed run:");
+    expect(state.navigate).not.toHaveBeenCalled();
+    await EffectForFixture.runPromise(f.drain());
+    state.liveProjection = await EffectForFixture.runPromise(f.projection());
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await act(async () => renderer.update(<TasksPage />));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      const snapshot = await EffectForFixture.runPromise(f.snapshot());
+      const result = snapshot.tasks.find(
+        (task) => task.threadId === f.task.threadId,
+      )!.resultReadout;
+      if (result?.status !== "available" || result.content.status !== "output")
+        throw new Error("No attributed native output");
+      expect(text()).toContain(result.content.preview);
+      expect(state.startStep).toHaveBeenCalledTimes(1);
+      expect(state.navigate).not.toHaveBeenCalled();
+      expect(state.reviewDecide).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+}, 30000);
+
+it("retains draft instructions through unrelated refresh and invalidates old executable review on authoritative change", async () => {
+  const module = await loadTaskReviewFixture();
+  await EffectForFixture.runPromise(
+    module.withTaskReviewFixture((f) =>
+      EffectForFixture.promise(async () => {
+        state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+        state.reviewRead.mockImplementation(async ({ input }) => ({
+          _tag: "Success",
+          value: await EffectForFixture.runPromise(f.readReview(input)),
+        }));
+        state.reviewDecide.mockImplementation(async ({ input }) => ({
+          _tag: "Success",
+          value: await EffectForFixture.runPromise(f.decide(input)),
+        }));
+        await act(async () => {
+          renderer = create(<TasksPage />);
+        });
+        await act(async () =>
+          renderer.root
+            .findAllByType("button")
+            .find((b) => b.props["data-task-contract-redirect-action"] !== undefined)!
+            .props.onClick(),
+        );
+        await creationClick("Confirm decision");
+        await creationClick("Revise paused instructions");
+        await act(async () =>
+          renderer.root
+            .findByProps({ "aria-label": "goal instruction" })
+            .props.onChange({ target: { value: "Do not erase my unsaved goal" } }),
+        );
+        await creationClick("Preview instruction changes");
+        const oldSave = creationButton("Save new revision")!.props.onClick;
+        await creationClick("Refresh tasks");
+        expect(renderer.root.findByProps({ "aria-label": "goal instruction" }).props.value).toBe(
+          "Do not erase my unsaved goal",
+        );
+        expect(creationButton("Save new revision")).toBeUndefined();
+        await EffectForFixture.runPromise(f.revise());
+        await creationClick("Refresh tasks");
+        expect(renderer.root.findByProps({ "aria-label": "goal instruction" }).props.value).toBe(
+          "Do not erase my unsaved goal",
+        );
+        const writes = state.reviewDecide.mock.calls.length;
+        await act(async () => oldSave());
+        expect(state.reviewDecide).toHaveBeenCalledTimes(writes);
+        expect(text()).toContain("Fresh authoritative facts");
+        expect((await EffectForFixture.runPromise(f.facts())).runs).toBe(0);
+      }),
+    ),
+  );
+}, 30000);
+
+it("bounds detail subscriptions for a large Tasks catalog to eight relevant linked rows", async () => {
+  await withTaskRevisionRequestFixture(async (f) => {
+    const original = await EffectForFixture.runPromise(f.readSnapshot());
+    const task = original.tasks[0]!;
+    state.snapshot = {
+      ...original,
+      tasks: Array.from({ length: 24 }, (_, index) => ({
+        ...task,
+        id: `task-${index}`,
+        threadId: `thread-${index}`,
+      })),
+    };
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    const watches = state.detailWatches.slice(-24).filter((id) => id !== null);
+    expect(watches).toHaveLength(8);
+    expect(watches).toEqual(Array.from({ length: 8 }, (_, index) => `thread-${index}`));
+    expect(state.interrupt).not.toHaveBeenCalled();
+    expect(state.startStep).not.toHaveBeenCalled();
+  });
+});
+it("recovers the original Stop after remount even when a newer run is displayed", async () => {
+  await withTaskRevisionRequestFixture(async (f) => {
+    const fixture = await mountRunningSupervision(f);
+    state.interrupt.mockResolvedValueOnce({ _tag: "Failure", cause: "lost reply" });
+    await creationClick("Stop task run");
+    const originalId = state.interrupt.mock.calls[0]![0].input.commandId;
+    const base = fixture.projection;
+    const run = base.runs.at(-1)!;
+    const attempt = base.attempts.at(-1)!;
+    state.liveProjection = {
+      ...base,
+      runs: [
+        ...base.runs,
+        {
+          ...run,
+          id: RunId.make("newer-run"),
+          ordinal: run.ordinal + 1,
+          status: "running",
+          activeAttemptId: RunAttemptId.make("newer-run-attempt"),
+        },
+      ],
+      attempts: [
+        ...base.attempts,
+        {
+          ...attempt,
+          id: RunAttemptId.make("newer-run-attempt"),
+          runId: RunId.make("newer-run"),
+          status: "running",
+        },
+      ],
+    };
+    const { TaskRunSupervision, props } = fixture;
+    await act(async () => {
+      renderer.unmount();
+      renderer = create(<TaskRunSupervision {...props} />);
+    });
+    expect(text()).toContain(originalId);
+    expect(text()).toContain("Completion won");
+    expect(state.interrupt).toHaveBeenCalledTimes(1);
+  });
+});
+
+it.each(["unavailable", "corrupt", "discarded writes"] as const)(
+  "submits no Stop when original identity storage is %s",
+  async (failure) => {
+    await withTaskRevisionRequestFixture(async (f) => {
+      const fixture = await mountRunningSupervision(f);
+      if (failure === "unavailable") vi.stubGlobal("localStorage", undefined);
+      else if (failure === "corrupt")
+        for (const key of [
+          `task-stop-v1:${JSON.stringify([fixture.props.environmentId, fixture.props.task.projectId, fixture.props.task.id, fixture.props.task.threadId])}:${fixture.projection.runs.at(-1)!.id}:${fixture.projection.runs.at(-1)!.activeAttemptId}`,
+        ])
+          fixture.records.set(key, "unreadable");
+      else vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => undefined });
+      state.sessionIdentity = {};
+      await fixture.render();
+      if (failure === "discarded writes") await creationClick("Stop task run");
+      else expect(creationButton("Stop task run")!.props.disabled).toBe(true);
+      expect(state.interrupt).not.toHaveBeenCalled();
+    });
+  },
+);

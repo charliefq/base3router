@@ -28,6 +28,7 @@ import {
   type ProviderInteractionMode,
   type ProviderUserInputAnswers,
   type RunId,
+  type RunAttemptId,
   type RuntimeMode,
   type RuntimeRequestId,
   type ThreadId,
@@ -202,6 +203,7 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
 
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
   readonly runId?: RunId;
+  readonly expectedAttemptId?: RunAttemptId;
   /** Temporary caller compatibility while UI naming moves from turns to runs. */
   readonly turnId?: string;
 }
@@ -1043,6 +1045,9 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
   if (runId === undefined) return { sequence: 0 };
   return yield* dispatch({
     type: "run.interrupt",
+    ...(input.expectedAttemptId === undefined
+      ? {}
+      : { expectedAttemptId: input.expectedAttemptId }),
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     runId,

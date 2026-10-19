@@ -49,6 +49,12 @@ type ServerFixture = {
   settle: (messageId: string) => Promise<void>;
   alterLatestOutput: (threadId: string, text: string) => Promise<void>;
   alterBackgroundWork: (threadId: string) => Promise<void>;
+  runInput: (text: string) => void;
+  awaitRunning: () => Promise<void>;
+  awaitInterrupted: () => Promise<void>;
+  finishRunning: (status: "completed" | "interrupted") => Promise<void>;
+  flush: () => Promise<void>;
+  interruptCount: () => number;
   holdInput: (text: string) => void;
   awaitHeldStart: () => Promise<void>;
   releaseHeldStart: () => void;
@@ -228,6 +234,8 @@ const makeClientFixture = Effect.fn("TaskTransport.makeClientFixture")(function*
       command(Commands.writeConfiguration(input)),
     create: (input: Parameters<typeof Commands.createThread>[0]) =>
       command(Commands.createThread(input)),
+    interrupt: (input: Parameters<typeof Commands.interruptThreadTurn>[0]) =>
+      command(Commands.interruptThreadTurn(input)),
     start: (input: Parameters<typeof Commands.startThreadTurn>[0]) =>
       command(Commands.startThreadTurn(input)),
     projection: (input: Parameters<typeof Commands.readThreadProjection>[0]) =>

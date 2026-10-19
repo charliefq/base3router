@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
   type ModelSelection,
+  MessageId,
   NodeId,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ThreadProjection,
@@ -329,5 +330,155 @@ it.effect(
       assert.equal(interrupted?.providerSessionId, oldSessionId);
       assert.equal(interrupted?.id, providerThreadId);
       assert.equal(interrupted?.nativeThreadRef?.nativeId, "native-thread:restart-session");
+    }),
+);
+
+it.effect(
+  "revalidates a persisted Tasks Stop after completion, replacement or a newer run before calling the native runtime",
+  () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:guarded-stop");
+      const runId = RunId.make("run:restart-session");
+      const attemptId = RunAttemptId.make("attempt:displayed");
+      const providerTurnId = ProviderTurnId.make("turn:displayed");
+      const providerThreadId = ProviderThreadId.make("provider-thread:displayed");
+      const sessionId = ProviderSessionId.make("session:displayed");
+      const providerThread: OrchestrationV2ProviderThread = {
+        id: providerThreadId,
+        driver,
+        providerInstanceId,
+        providerSessionId: sessionId,
+        appThreadId: threadId,
+        ownerNodeId: null,
+        nativeThreadRef: { driver, nativeId: "shared-native-thread", strength: "strong" },
+        nativeConversationHeadRef: null,
+        status: "active",
+        firstRunOrdinal: 1,
+        lastRunOrdinal: 1,
+        handoffIds: [],
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const initial = makeProjection({ now, threadId, providerThread, providerTurnId, attemptId });
+      const run = {
+        id: runId,
+        threadId,
+        ordinal: 1,
+        providerInstanceId,
+        modelSelection,
+        providerThreadId,
+        userMessageId: MessageId.make("message:displayed"),
+        rootNodeId: initial.attempts[0]!.rootNodeId,
+        activeAttemptId: attemptId,
+        status: "running" as const,
+        requestedAt: now,
+        startedAt: now,
+        completedAt: null,
+        checkpointId: null,
+        contextHandoffId: null,
+      };
+      const current = yield* Ref.make<OrchestrationV2ThreadProjection>({ ...initial, runs: [run] });
+      const nativeCalls = yield* Ref.make(0);
+      const providerSession = {
+        id: sessionId,
+        driver,
+        providerInstanceId,
+        status: "running" as const,
+        cwd: "/workspace",
+        model: modelSelection.model,
+        capabilities: CodexProviderCapabilitiesV2,
+        createdAt: now,
+        updatedAt: now,
+        lastError: null,
+      };
+      const unused = () => Effect.die("Unused guarded Stop runtime method");
+      const runtime: ProviderAdapterV2SessionRuntime = {
+        instanceId: providerInstanceId,
+        driver,
+        providerSessionId: sessionId,
+        providerSession,
+        events: Stream.empty,
+        ensureThread: unused,
+        resumeThread: unused,
+        startTurn: unused,
+        steerTurn: unused,
+        interruptTurn: () => Ref.update(nativeCalls, (n) => n + 1),
+        respondToRuntimeRequest: unused,
+        readThreadSnapshot: unused,
+        rollbackThread: unused,
+        forkThread: unused,
+      };
+      let race: "same" | "completed" | "replacement" | "newer" = "same";
+      const layer = ProviderTurnControlService.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ProjectionStore.ProjectionStoreV2)({
+              getProviderControlContext: () =>
+                Effect.succeed({
+                  providerThread,
+                  providerTurn: initial.providerTurns[0],
+                  attempt: initial.attempts[0],
+                  message: undefined,
+                  run,
+                }),
+              getThreadShell: () =>
+                Ref.get(current).pipe(Effect.map(ProjectionStore.threadShellFromProjection)),
+              getThreadRecords: (_thread, _collections, filter) => {
+                assert.deepEqual(filter?.runIds, [runId]);
+                return Ref.get(current).pipe(
+                  Effect.map((p) => ({ ...p, runs: p.runs.filter((r) => r.id === runId) })),
+                );
+              },
+            }),
+            Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+              get: () =>
+                Effect.gen(function* () {
+                  // Simulate settlement while loading the previously persisted effect's recorded runtime.
+                  yield* Ref.set(current, {
+                    ...initial,
+                    runs:
+                      race === "same"
+                        ? [run]
+                        : race === "completed"
+                          ? [{ ...run, status: "completed", completedAt: now }]
+                          : race === "replacement"
+                            ? [{ ...run, activeAttemptId: RunAttemptId.make("replacement") }]
+                            : [
+                                run,
+                                {
+                                  ...run,
+                                  id: RunId.make("newer"),
+                                  ordinal: 2,
+                                  activeAttemptId: RunAttemptId.make("newer"),
+                                },
+                              ],
+                  });
+                  return Option.some(runtime);
+                }),
+            }),
+            IdAllocator.layer,
+            Layer.mock(EventSink.EventSinkV2)({}),
+          ),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
+        for (const scenario of ["same", "completed", "replacement", "newer"] as const) {
+          race = scenario;
+          const result = yield* Effect.exit(
+            control.interrupt({
+              threadId,
+              providerSessionId: sessionId,
+              providerThreadId,
+              providerTurnId,
+              expectedTarget: { runId, attemptId },
+            }),
+          );
+          assert.equal(Exit.isSuccess(result), scenario === "same");
+        }
+        assert.equal(yield* Ref.get(nativeCalls), 1);
+      }).pipe(Effect.provide(layer));
     }),
 );

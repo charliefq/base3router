@@ -60,6 +60,10 @@ export function TaskReviewControls(props: {
     key: string;
   } | null>(null);
   const editorRef = useRef(editor);
+  const [retainedDraft, setRetainedDraft] = useState<{
+    identity: string;
+    draft: TaskInstructionDraft;
+  } | null>(null);
   const resolveEditor = useRef<((draft: TaskInstructionDraft | null) => void) | null>(null);
   const previewingRef = useRef(false);
   const previewGeneration = useRef(0);
@@ -193,11 +197,14 @@ export function TaskReviewControls(props: {
               resolveEditor.current = resolve;
               setEditor({
                 facts,
-                draft: {
-                  goal: facts.contract.goal,
-                  redirect: facts.contract.redirect,
-                  acceptance: facts.contract.acceptance,
-                },
+                draft:
+                  retainedDraft?.identity === identity
+                    ? retainedDraft.draft
+                    : {
+                        goal: facts.contract.goal,
+                        redirect: facts.contract.redirect,
+                        acceptance: facts.contract.acceptance,
+                      },
                 key: initialFacts,
               });
             })
@@ -261,6 +268,7 @@ export function TaskReviewControls(props: {
         );
         return;
       }
+      if (action === "set") setRetainedDraft(null);
       setNoticeRevision(action === "set" ? revision + 1 : revision);
       setNotice(
         action === "set"
@@ -407,6 +415,22 @@ export function TaskReviewControls(props: {
           Revise paused instructions
         </Button>
       ) : null}
+      {!editor && retainedDraft?.identity === identity ? (
+        <section>
+          <p>
+            Instruction draft retained. Fresh authoritative facts must be reviewed before saving.
+          </p>
+          <TaskInstructionEditor
+            contract={readout.contract}
+            draft={retainedDraft.draft}
+            busy={pending || previewing}
+            blocked={!canReview || hint?.canEditInstructions !== true}
+            onChange={(draft) => setRetainedDraft({ identity, draft })}
+            onPreview={() => void run("set")}
+            onCancel={() => setRetainedDraft(null)}
+          />
+        </section>
+      ) : null}
       {editor ? (
         <TaskInstructionEditor
           contract={editor.facts.contract}
@@ -414,8 +438,10 @@ export function TaskReviewControls(props: {
           busy={previewing || confirmation !== null}
           blocked={blocked}
           onChange={(draft) => {
-            if (!previewingRef.current && !confirmation && !blocked)
+            if (!previewingRef.current && !confirmation && !blocked) {
+              setRetainedDraft({ identity, draft });
               setEditor((current) => (current ? { ...current, draft } : null));
+            }
           }}
           onPreview={() => void previewInstructions()}
           onCancel={() => {
@@ -425,6 +451,7 @@ export function TaskReviewControls(props: {
             previewingRef.current = false;
             setPreviewing(false);
             setEditor(null);
+            setRetainedDraft(null);
             setConfirmation(null);
             resolve?.(null);
           }}

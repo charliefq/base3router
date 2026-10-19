@@ -76,6 +76,8 @@ export type TaskContractReviewReference = typeof TaskContractReviewReference.Typ
 export const TaskContractReviewAction = Schema.Literals(["accept", "redirect", "resume"]);
 export type TaskContractReviewAction = typeof TaskContractReviewAction.Type;
 export const TaskContractReviewHint = Schema.Struct({
+  /** Absent on older servers: clients must not submit a Stop relying on ignored target guards. */
+  supportsExpectedRunInterrupt: Schema.optionalKey(Schema.Literal(true)),
   reference: TaskContractReviewReference,
   revision: PositiveInt,
   actions: Schema.Array(TaskContractReviewAction),

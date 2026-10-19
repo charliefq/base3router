@@ -2810,6 +2810,7 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     runId: RunId,
+    expectedAttemptId: Schema.optionalKey(RunAttemptId),
     reason: Schema.optional(Schema.String),
     holdQueue: Schema.optional(Schema.Boolean),
   }),
