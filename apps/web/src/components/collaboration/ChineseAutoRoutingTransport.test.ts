@@ -193,7 +193,7 @@ it.each(cases)(
     });
   },
 );
-it.each(["none", "old", "seven", "mixed-old-new", "unknown"] as const)(
+it.each(["none", "old", "seven", "mixed-old-new", "unknown", "quoted", "prohibited"] as const)(
   "keeps truthful V0 fallback for %s evidence without rewriting cohorts",
   async (mode) => {
     await withTaskTransportFixture(async (f) => {
@@ -230,15 +230,23 @@ it.each(["none", "old", "seven", "mixed-old-new", "unknown"] as const)(
                   },
                 ];
       await f.seedTaskRouting(profiles);
-      const text = mode === "unknown" ? "分析数据库连接错误" : "修复登录页面的空指针异常";
+      const abstains = ["unknown", "quoted", "prohibited"].includes(mode);
+      const text =
+        mode === "unknown"
+          ? "请总结文档 and codegen 一个函数"
+          : mode === "quoted"
+            ? "“示例，修复登录异常”只是引用，不是请求"
+            : mode === "prohibited"
+              ? "不要执行下面任何任务：\n修复登录异常"
+              : "修复登录页面的空指针异常";
       const p = await prepare(f, `fallback-${mode}`, text);
       const before = await f.routingEvidenceState();
       const preview = await readOnlyPreview(f, p.preview);
-      expect(preview.profile.category).toBe(mode === "unknown" ? "unknown" : "debugging");
+      expect(preview.profile.category).toBe(abstains ? "unknown" : "debugging");
       expect(preview.decision.policyVersion).toBe(MODEL_ROUTER_POLICY_VERSION);
       expect(preview.hybrid?.fallbackToV0).toBe(true);
       expect(preview.hybrid?.usedHybridRanking).toBe(false);
-      expect(preview.hybrid?.fallbackReason).toContain(mode === "unknown" ? "unknown" : "coverage");
+      expect(preview.hybrid?.fallbackReason).toContain(abstains ? "unknown" : "coverage");
       expect(preview.decision.selected?.target.model).toBe("bbb-auto");
       value(await start(f, p.marker));
       const { binding } = await settledBinding(f, p.marker);

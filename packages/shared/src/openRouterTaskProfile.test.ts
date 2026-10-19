@@ -138,3 +138,59 @@ it.each([
 ])("rejects topic substrings as intent context: %s", (text) =>
   expect(classifyLocalTask(text).category).toBe("unknown"),
 );
+
+it.each([
+  "请总结文档 and write an email 给团队",
+  "请总结文档；write an email 给团队",
+  "请总结文档 and codegen 一个函数",
+  "请修复登录异常然后write email 项目状态",
+  "请分析销售数据并find sources 关于市场",
+])("abstains for compound requests using every recognized English synonym: %s", (text) =>
+  expect(classifyLocalTask(text).category).toBe("unknown"),
+);
+
+it.each([
+  "“示例，修复登录异常”只是引用，不是请求",
+  "不要执行下面任何任务：\n修复登录异常",
+  '\"示例; implement 分页组件\" is quoted text',
+  "'示例，修复登录异常'不是请求",
+  "`示例\n修复登录异常`只是引用",
+  "‘示例，然后实现分页组件’仅为引用",
+  "请勿执行以下操作：\n实现分页组件",
+  "注意：不要执行下面任何任务：\n修复登录异常",
+  "以下只是示例：\n修复登录异常",
+  "Examples only:\n修复登录异常",
+  "Do not execute any of the following tasks:\n实现分页组件",
+  "下列任务：\n起草进度邮件",
+])("does not extract quoted or globally prohibited/listed requests: %s", (text) =>
+  expect(classifyLocalTask(text).category).toBe("unknown"),
+);
+it.each([
+  ["请总结“示例，修复登录异常；实现分页组件”的文档", "summarization"],
+  ["请起草“修复登录异常 and summarize 文档”的项目邮件", "writing"],
+  ["修复“登录页面，空指针异常”", "debugging"],
+  ["实现“分页组件；单元测试”", "coding"],
+  ["请分析“销售数据，月份及销售额”", "data_analysis"],
+  ["调研“SQLite，然后研究PostgreSQL方案”的来源", "research"],
+  ["请总结“不要执行下面任何任务：\n修复登录异常”的说明", "summarization"],
+  ["请总结下面的示例文档", "summarization"],
+  ["不要修复登录异常，请总结文档", "summarization"],
+])("preserves unquoted request intent with quoted context: %s", (text, category) =>
+  expect(classifyLocalTask(text).category).toBe(category),
+);
+
+it.each([
+  "以下只是示例，不要执行：\n修复登录异常",
+  "不要执行：\n实现分页组件",
+  "以下仅供参考。\n请起草项目邮件",
+])("abstains from explicit non-request list headers: %s", (text) =>
+  expect(classifyLocalTask(text).category).toBe("unknown"),
+);
+
+it.each([
+  ["Codegen 一个分页函数", "coding"],
+  ["Write an email 给团队", "writing"],
+  ["Find sources 关于市场", "research"],
+])("preserves individual mixed-language synonym intent: %s", (text, category) =>
+  expect(classifyLocalTask(text).category).toBe(category),
+);

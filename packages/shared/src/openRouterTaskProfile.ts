@@ -84,7 +84,10 @@ const HAN_INTENT_RULES: ReadonlyArray<{
   { pattern: /^(?:research|find sources|sources for)\b/i, macro: "research" },
   { pattern: /^(?:prove|reason about|why does this)\b/i, macro: "reasoning" },
   {
-    pattern: /^(?:solve|calculate)\b.*\b(?:integral|derivative|equation|theorem)\b/i,
+    pattern: new RegExp(
+      String.raw`^(?:solve|calculate)\b${objectContext}\b(?:integral|derivative|equation|theorem)\b`,
+      "iu",
+    ),
     macro: "mathematics",
   },
   { pattern: /^(?:summari[sz]e|tldr)\b/i, macro: "summarization" },
@@ -95,16 +98,44 @@ const HAN_INTENT_RULES: ReadonlyArray<{
     macro: "data_analysis",
   },
 ];
-const requestVerbs = String.raw`(?:修复|排查|定位|解决|调试|实现|重构|开发|编写|添加|写|总结|概括|汇总|起草|撰写|改写|润色|分析|统计|可视化|比较|对比|绘制|画|调研|研究|检索|查证|debug\b|fix\b|implement\b|refactor\b|research\b|summari[sz]e\b|draft\b|rewrite\b|analy[sz]e\b|plot\b)`;
+// Compound boundaries recognize exactly the same supported heads and context as clauses.
+const recognizedRequest = HAN_INTENT_RULES.map(
+  ({ pattern }) => `(?:${pattern.source.replace(/^\^/u, "")})`,
+).join("|");
 const compoundRequest = new RegExp(
-  String.raw`(?:然后|接着|并且|并|再)\s*(?=${REQUEST_PREFIX}${requestVerbs})|\b(?:and|then)\s+(?=${REQUEST_PREFIX}${requestVerbs})`,
+  String.raw`(?:(?:然后|接着|并且|并|再)\s*|\b(?:and|then)\s+)(?=${REQUEST_PREFIX}(?:${recognizedRequest}))`,
+  "iu",
+);
+// Preserve quoted object words (e.g. a quoted exception name), but prevent punctuation
+// or conjunctions inside paired quotes from manufacturing new request heads.
+const quotedBoundaries = /[，,。！？!?；;:：\n\r]|然后|接着|并且|并|再|\b(?:and|then)\b/giu;
+const pairedQuotes =
+  /(“[^”]*”|‘[^’]*’|"(?:\\[\s\S]|[^"\\])*"|```[\s\S]*?```|`[^`]*`)|(^|[^A-Za-z0-9])('(?:\\[\s\S]|[^'\\])*')/gu;
+const protectQuotedSpans = (text: string) =>
+  text.replace(
+    pairedQuotes,
+    (_match, paired: string | undefined, prefix: string | undefined, single: string | undefined) =>
+      paired !== undefined
+        ? paired.replace(quotedBoundaries, " ")
+        : (prefix ?? "") + (single ?? "").replace(quotedBoundaries, " "),
+  );
+const prohibition = String.raw`(?:不要|别|勿|禁止|无需|不必)\s*(?:执行|运行|进行|完成|处理|做)\s*(?:下面|以下|下列|这些|任何|所有|任意|[:：])`;
+const englishProhibition = String.raw`(?:do not|don't|never)\s+(?:execute|run|perform|do)\b[^，,。！？!?；;\n]{0,80}(?:\b(?:following|below|these|any|all)\b|[:：])`;
+const listIntroduction = String.raw`(?:(?:执行|运行|处理|完成)\s*)?(?:下面|以下|下列|这些\s*(?:任务|操作|请求|指令|步骤|示例|文本|代码))[^，,。！？!?；;\n]{0,80}(?:[:：]|仅供参考|只是示例|仅是示例|不是请求|非请求)`;
+const exampleIntroduction = String.raw`(?:示例|样例|例子|引用|代码示例|参考文本|examples?\b|samples?\b|quoted text\b|reference only\b)[^，,。！？!?；;\n]{0,80}[:：]`;
+// Lists/prohibitions need context beyond a single extracted clause: abstain rather
+// than interpreting their subsequent lines as independent affirmative requests.
+const globalAbstention = new RegExp(
+  String.raw`(?:^|[，,。！？!?；;:：\n])\s*${REQUEST_PREFIX}(?:${prohibition}|${englishProhibition}|${listIntroduction}|${exampleIntroduction})`,
   "iu",
 );
 const requestCategories = (text: string) =>
   HAN_INTENT_RULES.filter((rule) => rule.pattern.test(text)).map((rule) => rule.macro);
 const hanRequestCategory = (text: string): TaskMacroCategory => {
+  const protectedText = protectQuotedSpans(text);
+  if (globalAbstention.test(protectedText)) return "unknown";
   const categories = new Set<TaskMacroCategory>();
-  for (const sentence of text.split(/[，,。！？!?；;\n]+/u)) {
+  for (const sentence of protectedText.split(/[，,。！？!?；;\n]+/u)) {
     const request = sentence.trim().replace(stripRequestPrefix, "");
     // Do not discover an imperative by splitting unsupported prose or a negated head.
     if (requestCategories(request).length === 0) continue;
