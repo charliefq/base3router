@@ -161,7 +161,8 @@ For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 
 This local Node delivery supports Linux x64/glibc only. Use a tarball built
 from the version you intend to run, matching its README's target. Windows,
-macOS, ARM and other libc targets are not included or verified. This path
+macOS, ARM and other libc targets are not included or verified. The builder
+rejects musl or unidentified libc hosts. This path
 requires Node matching `package.json`, pnpm 11, and registry access to download runtime and native dependencies. It is not an offline
 or self-contained installer, and installing provider SDK dependencies does not
 activate a provider or make it ready.

@@ -160,7 +160,8 @@ The tarball contains the built server/client, registry-resolvable runtime
 externals, and the existing native-build, patch and override policy. It omits
 repository scripts and workspace dependencies. This delivery builds Linux
 x64/glibc only; the builder rejects Windows, macOS and ARM hosts before staging
-or invoking npm. It records the target in the artifact README. Registry access
+or invoking npm. It also requires a positively reported glibc runtime; musl or
+unidentified libc hosts fail before output writes. It records the target in the artifact README. Registry access
 and pnpm 11 are required; the artifact includes neither Node nor installed
 dependencies.
 

@@ -110,10 +110,18 @@ export function inspectInstalledNodePackage(root: string) {
 }
 
 /** This bounded delivery emits only the target verified by its clean-install journey. */
-export function resolvePortableNodeTarget(hostPlatform: string, hostArch: string) {
+export function resolvePortableNodeTarget(
+  hostPlatform: string,
+  hostArch: string,
+  glibcVersionRuntime?: string,
+) {
   if (hostPlatform !== "linux" || hostArch !== "x64")
     throw Error(
       "Portable Node delivery supports Linux x64/glibc only; no Windows, macOS or ARM artifact is verified",
+    );
+  if (!glibcVersionRuntime || !/^\d+\.\d+(?:\.\d+)?$/.test(glibcVersionRuntime))
+    throw Error(
+      "Portable Node delivery requires a positively reported glibc runtime; musl or unknown libc is not verified",
     );
   return { platform: "linux" as const, arch: "x64" as const, label: "linux-x64-glibc" };
 }

@@ -1,5 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 /** Build a registry-dependent Node artifact; never installs or invokes a provider. */
+import * as NodeProcess from "node:process";
+import * as Option from "effect/Option";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
@@ -37,9 +39,22 @@ const Stage = Schema.Struct({
   nodeLinker: Schema.Literal("hoisted"),
 });
 const encodeStage = Schema.encodeEffect(fromYaml(Stage));
+const decodeGlibcHeader = Schema.decodeUnknownOption(
+  Schema.Struct({
+    header: Schema.Struct({ glibcVersionRuntime: Schema.String }),
+  }),
+);
+// Read only the libc header. Never log or persist Node's full diagnostic report.
+const glibcVersionRuntime = Option.getOrUndefined(
+  Option.map(
+    decodeGlibcHeader(NodeProcess.report.getReport()),
+    (report) => report.header.glibcVersionRuntime,
+  ),
+);
 const target = resolvePortableNodeTarget(
   Effect.runSync(HostProcessPlatform),
   Effect.runSync(HostProcessArchitecture),
+  glibcVersionRuntime,
 );
 const { platform, arch } = target;
 const repo = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
@@ -119,6 +134,7 @@ process.stdout.write(
     stage,
     package: NodePath.join(output, `${manifest.name}-${manifest.version}.tgz`),
     target: target.label,
+    hostGlibcVersion: glibcVersionRuntime,
     runtimeDependencies: manifest.dependencies,
     installation: "Registry-dependent; reviewed policy included; no dependencies bundled",
   }) + "\n",

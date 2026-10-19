@@ -116,13 +116,23 @@ it.each([
   ["darwin", "arm64"],
   ["linux", "arm64"],
 ])("rejects unverified Node artifact host %s/%s before staging", (platform, arch) => {
-  assert.throws(() => resolvePortableNodeTarget(platform, arch), /Linux x64\/glibc only/);
+  assert.throws(() => resolvePortableNodeTarget(platform, arch, "2.36"), /Linux x64\/glibc only/);
 });
 
 it("selects only the verified Linux x64/glibc artifact before staging", () => {
-  assert.deepStrictEqual(resolvePortableNodeTarget("linux", "x64"), {
+  assert.deepStrictEqual(resolvePortableNodeTarget("linux", "x64", "2.36"), {
     platform: "linux",
     arch: "x64",
     label: "linux-x64-glibc",
   });
 });
+
+it.each([undefined, "", "musl", "not-a-version"])(
+  "rejects musl or unverified libc %s before staging",
+  (glibc) => {
+    assert.throws(
+      () => resolvePortableNodeTarget("linux", "x64", glibc),
+      /positively reported glibc runtime/,
+    );
+  },
+);
