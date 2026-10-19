@@ -349,3 +349,27 @@ it("blocks mutations when original-command storage cannot be retained", async ()
   expect(mocks.action).not.toHaveBeenCalled();
   expect(text()).toContain("No mutation was sent");
 });
+
+it("does not claim an acknowledged mutation was unsent when clearing its recovery record fails", async () => {
+  await copied();
+  await click("Review workflow save");
+  const storage = globalThis.sessionStorage;
+  vi.stubGlobal("sessionStorage", {
+    getItem: (key: string) => storage.getItem(key),
+    setItem: (key: string, value: string) => {
+      if (JSON.parse(value).command === null) throw new Error("clear denied");
+      storage.setItem(key, value);
+    },
+  });
+  await click("Confirm workflow command");
+  expect(mocks.action).toHaveBeenCalledTimes(1);
+  expect(text()).toContain(mocks.action.mock.calls[0]![0].input.commandId);
+  expect(text()).toContain("storage could not be updated");
+  expect(text()).toContain("Original command is committed");
+  expect(text()).not.toContain("No mutation was sent");
+  expect(button("Review workflow save").props.disabled).toBe(true);
+  vi.stubGlobal("sessionStorage", storage);
+  await click("Check original workflow command");
+  expect(button("New workflow draft").props.disabled).toBe(false);
+  expect(mocks.action).toHaveBeenCalledTimes(1);
+});

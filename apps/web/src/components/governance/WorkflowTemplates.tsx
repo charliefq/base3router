@@ -90,7 +90,12 @@ function TemplateEditor(props: Parameters<typeof WorkflowTemplates>[0] & { sessi
   const [initial] = useState(() => read(storageKey, props.projectId));
   const [retained, setRetained] = useState(initial.value);
   const retainedRef = useRef(retained);
-  const [notice, setNotice] = useState<string | null>(initial.error);
+  const [notice, setNotice] = useState<string | null>(
+    initial.error ??
+      (initial.value.command
+        ? "Original command outcome UNKNOWN after recovery. Check it without resending."
+        : null),
+  );
   const [blocked, setBlocked] = useState(initial.error !== null);
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
@@ -133,13 +138,14 @@ function TemplateEditor(props: Parameters<typeof WorkflowTemplates>[0] & { sessi
       const raw = encode(next);
       globalThis.sessionStorage.setItem(storageKey, raw);
       if (globalThis.sessionStorage.getItem(storageKey) !== raw) throw new Error();
+      setBlocked(false);
       retainedRef.current = next;
       setRetained(next);
       return true;
     } catch {
       setBlocked(true);
       setNotice(
-        "Workflow recovery storage could not retain the original identity. No mutation was sent.",
+        "Workflow recovery storage could not be updated. Mutation controls remain blocked.",
       );
       return false;
     }
@@ -247,7 +253,10 @@ function TemplateEditor(props: Parameters<typeof WorkflowTemplates>[0] & { sessi
           "Original command committed. Refresh and separately review the saved version or ledger.",
         );
         props.refresh();
-      }
+      } else
+        setNotice(
+          "Original command is committed; recovery storage could not be updated. Retained identity remains blocked; no resend.",
+        );
     } else
       setNotice(
         result.value === "conflict"
@@ -269,6 +278,7 @@ function TemplateEditor(props: Parameters<typeof WorkflowTemplates>[0] & { sessi
     const value = review.token;
     const next = { ...retainedRef.current, command: review.command };
     if (!persist(next)) {
+      setNotice("Original command identity could not be retained. No mutation was sent.");
       pending.current = false;
       setBusy(false);
       return;
@@ -309,8 +319,8 @@ function TemplateEditor(props: Parameters<typeof WorkflowTemplates>[0] & { sessi
       {retained.command ? (
         <div>
           <p>
-            Original {retained.command.type} command {retained.command.commandId} is pending /
-            UNKNOWN. No automatic resend.
+            Original {retained.command.type} command {retained.command.commandId} is retained for
+            read-only reconciliation. No automatic resend.
           </p>
           <Button
             type="button"
