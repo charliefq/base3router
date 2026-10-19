@@ -2881,7 +2881,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               driver: CODEX_PROVIDER,
               nativeItemId: item.id,
             });
-            const { ordinal, startedAt } = yield* resolveItemPosition(context, item.id);
+            const { ordinal, startedAt } = yield* resolveItemPosition(context, item.id, updatedAt);
             const messageId = idAllocator.derive.messageFromProviderItem({
               driver: CODEX_PROVIDER,
               nativeItemId: item.id,
@@ -5036,6 +5036,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               }
               yield* agentMessageDeltas.flushTurn(input.nativeTurnId);
               yield* reasoningDeltas.flushTurn(input.nativeTurnId);
+              // Native terminal timestamps have second precision; output nodes
+              // are observed in milliseconds and must fit inside their turn.
+              const completedAt = DateTime.max(input.completedAt, yield* DateTime.now);
               for (const [key, part] of reasoningParts) {
                 if (part.turnId === input.nativeTurnId) reasoningParts.delete(key);
               }
@@ -5057,7 +5060,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   ordinal: input.context.providerTurnOrdinal,
                   status: input.status,
                   startedAt: input.context.startedAt,
-                  completedAt: input.completedAt,
+                  completedAt,
                   turnTokenUsage: completeCodexTurnTokenUsage(
                     usageStateForThread(
                       input.context.providerThread.nativeThreadRef?.nativeId ??
@@ -5087,7 +5090,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                     runtimeRequestId: null,
                     checkpointScopeId: null,
                     startedAt: input.context.providerNodeStartedAt,
-                    completedAt: input.completedAt,
+                    completedAt,
                   },
                 });
                 yield* emitProviderEvent({
@@ -5096,7 +5099,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   providerThread: {
                     ...input.context.providerThread,
                     status: "idle",
-                    updatedAt: input.completedAt,
+                    updatedAt: completedAt,
                   },
                 });
                 yield* emitProviderEvent({
@@ -5117,13 +5120,13 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                     runtimeRequestId: null,
                     checkpointScopeId: null,
                     startedAt: input.context.subagent.startedAt,
-                    completedAt: input.completedAt,
+                    completedAt,
                   },
                 });
                 yield* emitSubagentTaskUpdate({
                   subagent: input.context.subagent,
                   status: input.status,
-                  completedAt: input.completedAt,
+                  completedAt,
                 });
               }
               if (input.status === "interrupted" || input.status === "failed") {
@@ -5131,7 +5134,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   input.context,
                   input.nativeTurnId,
                   input.status,
-                  input.completedAt,
+                  completedAt,
                 );
               }
               const dynamicToolStatus: "cancelled" | "interrupted" | "failed" =
@@ -5142,7 +5145,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 input.context,
                 input.nativeTurnId,
                 dynamicToolStatus,
-                input.completedAt,
+                completedAt,
                 input.status === "interrupted" || input.status === "failed",
               );
               if (input.context.subagent === null) {

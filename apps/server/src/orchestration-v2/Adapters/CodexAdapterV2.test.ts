@@ -51,6 +51,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
+import * as Clock from "effect/Clock";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import packageJson from "../../../package.json" with { type: "json" };
@@ -1735,6 +1736,99 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         firstTerminal: Deferred.await(firstTerminal),
       };
     });
+
+  it.effect("a coarse native terminal timestamp cannot predate its completed output", () =>
+    Effect.gen(function* () {
+      const clock = yield* Clock.Clock;
+      let millis = 1782622450650;
+      yield* Effect.gen(function* () {
+        const nativeThreadId = "coarse-terminal-thread";
+        const nativeTurnId = "coarse-terminal-turn";
+        const prompt = "Return one attributable completed answer";
+        const transcript = makeCodexReplayTranscript({
+          scenario: "coarse-terminal-output-order",
+          entries: [
+            ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt }),
+            {
+              type: "emit_inbound",
+              label: "completed-output",
+              frame: {
+                method: "item/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  item: {
+                    type: "agentMessage",
+                    id: "coarse-answer",
+                    text: "Attributable answer",
+                    phase: "final_answer",
+                    memoryCitation: null,
+                  },
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "coarse-native-completion",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            },
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript);
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("coarse-terminal-attempt"),
+            text: prompt,
+          }),
+        );
+        yield* harness.firstTerminal;
+        const output = harness.events.findLast(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "assistant_message" &&
+            event.turnItem.status === "completed",
+        );
+        const terminal = harness.events.findLast(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
+        );
+        assert.isDefined(output);
+        assert.isDefined(terminal);
+        if (
+          output?.type !== "turn_item.updated" ||
+          terminal?.type !== "provider_turn.updated" ||
+          !output.turnItem.completedAt ||
+          !terminal.providerTurn.completedAt
+        )
+          throw Error("Missing completed native evidence");
+        assert.isAtLeast(
+          DateTime.toEpochMillis(terminal.providerTurn.completedAt),
+          DateTime.toEpochMillis(output.turnItem.completedAt),
+        );
+        assert.equal(DateTime.toEpochMillis(terminal.providerTurn.startedAt!), 1782622440000);
+        assert.isAtLeast(
+          DateTime.toEpochMillis(output.turnItem.completedAt),
+          DateTime.toEpochMillis(output.turnItem.startedAt!),
+        );
+        assert.equal(harness.terminalEvents().length, 1);
+      }).pipe(
+        Effect.provideService(Clock.Clock, {
+          ...clock,
+          currentTimeMillis: Effect.sync(() => millis++),
+          currentTimeMillisUnsafe: () => millis++,
+        }),
+      );
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+  );
 
   it.effect.each(["supported", "unsupported", "invalid"] as const)(
     "delivers native history with %s app-server protocol",

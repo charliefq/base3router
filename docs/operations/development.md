@@ -96,6 +96,52 @@ startup and keeps its own SQLite data, signing key, and revocation state. Deskto
 servers ignore the value. See [environment authentication](../internals/environment-auth.md#reusable-dev-credential)
 for the security model.
 
+## Verify the disposable production journey
+
+Build the web client and package the server before starting the local fixture:
+
+```sh
+vp run --filter @t3tools/web build
+node apps/server/scripts/cli.ts build
+node scripts/local-product-runtime.ts start --output /tmp/b3r-local-product-evidence
+```
+
+Run the launcher in its own terminal. It prints the isolated root and localhost
+origin; pairing material stays in that root's private log. In another terminal:
+
+```sh
+node scripts/local-product-check.ts --journey --output /tmp/b3r-local-product-evidence
+node scripts/local-product-check.ts --lifecycle --output /tmp/b3r-local-product-evidence
+node scripts/local-product-check.ts --recover --output /tmp/b3r-local-product-evidence
+```
+
+This uses the built production server, normal authentication and shared client
+HTTP/WebSocket contracts. The only enabled provider is a deterministic local
+fixture. The launcher gives it fresh home, project and data directories and
+blocks non-loopback Node traffic. It does not activate a real provider. Journey
+and lifecycle modes refuse to rerun on a root with retained original commands;
+use read-only recovery instead of replacing an uncertain Start.
+
+Use the printed root for process control; the launcher retains its child handle:
+
+```sh
+node scripts/local-product-runtime.ts restart --runtime <printed-root> --output /tmp/b3r-local-product-evidence
+node scripts/local-product-check.ts --recover --output /tmp/b3r-local-product-evidence
+node scripts/local-product-check.ts --inflight --output /tmp/b3r-local-product-evidence
+node scripts/local-product-runtime.ts restart --crash --runtime <printed-root> --output /tmp/b3r-local-product-evidence
+node scripts/local-product-check.ts --recover --output /tmp/b3r-local-product-evidence
+node scripts/local-product-runtime.ts cleanup --runtime <printed-root>
+```
+
+Restart in its own terminal too. Cleanup waits for confirmed child exit before
+removing only that disposable root. Keep private logs, auth material and raw
+provider journals out of shared evidence. These checks prove the local protocol
+journey and recovery; they do not prove browser interaction, desktop/mobile
+installation, remote TLS, or real-provider readiness. For a locally extracted
+server package, `start --entrypoint <package>/dist/bin.mjs` can use a path below
+`/tmp/b3r-local-product-package-*`; its declared runtime dependencies must already
+be installed. A package run using cached dependencies is not an installer test.
+
 ## Checks
 
 Run checks for the files and packages you changed:

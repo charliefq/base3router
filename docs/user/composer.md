@@ -76,6 +76,33 @@ returns to the remembered selection.
 
 Leaving reasoning level or service tier unset uses the provider's own configuration.
 
+## Start and review governed work
+
+Connect to the environment that owns your project under **Settings → Connections**.
+Check **Settings → Providers** in that environment before starting work. A saved
+provider entry or model choice does not mean its runtime is installed,
+authenticated, or ready. Return to the same environment and project in Agents or
+Tasks after changing provider settings.
+
+Model routing is in the model picker used to prepare a task or a result revision.
+Choose **Manual** for an exact provider instance and model, or deliberately choose
+**Auto** to let the router select an eligible model. **Settings → Providers →
+Router policy** controls the environment's Auto policy. The configured choice is
+intent; inspect the result's actual route to see what ran. A configuration does
+not activate an external runtime or grant access.
+
+Review the task's Goal, Redirect, Acceptance and Brake, then use its separate
+**Start** action. Saving a configuration, creating a task, reviewing it, opening
+its conversation, or resuming it does not start a turn. After a completed result,
+request changes as described below or explicitly accept the result. Successful
+execution and your acceptance are separate decisions.
+
+Pause the task before changing its contract. Resume makes it eligible for a
+future explicit Start. Stop and pause cancellation are requests: wait for the
+run's confirmed terminal state before treating execution as stopped. A lost
+response or restart can leave the outcome **UNKNOWN**. Recover the original
+command's status; do not submit a replacement Start to resolve uncertainty.
+
 ## Reuse task configurations
 
 From Agents or Tasks, choose New task and an exact model, then save a named configuration with working instructions. Select its revision explicitly and review the instructions together with your task's Goal, Redirect, Acceptance and Brake. Saving or creating a task starts no work; use the separate reviewed Start action.
