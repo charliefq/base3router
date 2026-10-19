@@ -1,4 +1,5 @@
 import { commitCapabilityStep } from "../collaboration/TaskCapabilityStep.ts";
+import { commitResultContinuation } from "../collaboration/ResultContinuation.ts";
 import { commitFirstTaskLaunch } from "../collaboration/FirstTaskLaunch.ts";
 import {
   commitApprovedDelegation,
@@ -235,6 +236,10 @@ export interface EventSinkV2Shape {
     readonly approvedDelegation?: ApprovedDelegation;
     readonly capabilityCommand?: Extract<OrchestrationV2Command, { type: "message.dispatch" }>;
     readonly firstLaunchCommand?: Extract<OrchestrationV2Command, { type: "message.dispatch" }>;
+    readonly resultContinuationCommand?: Extract<
+      OrchestrationV2Command,
+      { type: "message.dispatch" }
+    >;
     readonly governedTaskOwner?: string;
     readonly ordinaryRootOwner?: string;
     readonly contractSetActor?: string;
@@ -1464,6 +1469,33 @@ const baseLayer: Layer.Layer<
                 eventCount: input.events.length,
               });
             yield* commitFirstTaskLaunch(sql, input.firstLaunchCommand, input.events);
+          }
+          if (
+            input.events.some(
+              (e) => e.type === "message.updated" && e.payload.taskResultContinuation !== undefined,
+            ) &&
+            !input.resultContinuationCommand?.taskResultContinuation
+          )
+            return yield* new EventSinkWriteError({
+              commandId: input.commandId,
+              eventCount: input.events.length,
+            });
+          if (input.resultContinuationCommand) {
+            if (
+              input.resultContinuationCommand.commandId !== input.commandId ||
+              input.resultContinuationCommand.threadId !== input.threadId ||
+              input.commandType !== "message.dispatch"
+            )
+              return yield* new EventSinkWriteError({
+                commandId: input.commandId,
+                eventCount: input.events.length,
+              });
+            yield* commitResultContinuation(
+              sql,
+              input.resultContinuationCommand,
+              input.events,
+              (id) => projectionStore.getThreadProjection(id),
+            );
           }
           if (input.approvedDelegation !== undefined) {
             if (

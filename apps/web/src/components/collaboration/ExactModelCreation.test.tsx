@@ -7,6 +7,9 @@ import {
   type TaskContractReviewInput,
 } from "@t3tools/contracts";
 
+import { TaskRevisionRequest } from "./TaskRevisionRequest";
+import { completed as completedResult } from "./testkit/resultContinuationJourney";
+import { continuationStorageKey } from "./taskFirstLaunchAttempt";
 import { TaskFirstInstructions } from "./TaskFirstInstructions";
 import { AgentsTaskCreator } from "./AgentsTaskCreator";
 import { withTaskTransportFixture } from "./testkit/taskCreationTransportFixture";
@@ -22,6 +25,7 @@ const state = vi.hoisted(() => ({
   review: vi.fn(),
   creationStatus: vi.fn(),
   launchStatus: vi.fn(),
+  continuationStatus: vi.fn(),
   start: vi.fn(),
   configuration: vi.fn(),
   catalog: vi.fn(),
@@ -52,6 +56,7 @@ vi.mock("../../state/threads", () => ({
     readTaskReview: "review",
     readCreationStatus: "creationStatus",
     readFirstLaunchStatus: "launchStatus",
+    readResultContinuationStatus: "continuationStatus",
     startTurn: "start",
     readAutoPreview: "preview",
   },
@@ -232,6 +237,7 @@ beforeEach(() => {
     state.review,
     state.creationStatus,
     state.launchStatus,
+    state.continuationStatus,
     state.start,
     state.configuration,
     state.catalog,
@@ -279,6 +285,10 @@ const wire = (f: Fixture) => {
   );
   state.creationStatus.mockImplementation(
     ({ input }: { input: Parameters<Fixture["creationStatus"]>[0] }) => f.creationStatus(input),
+  );
+  state.continuationStatus.mockImplementation(
+    ({ input }: { input: Parameters<Fixture["continuationStatus"]>[0] }) =>
+      f.continuationStatus(input),
   );
   state.launchStatus.mockImplementation(
     ({ input }: { input: Parameters<Fixture["launchStatus"]>[0] }) => f.launchStatus(input),
@@ -959,3 +969,185 @@ it.each(["creation", "launch"] as const)(
   },
   30000,
 );
+
+async function prepareResultReview(load: ReturnType<typeof vi.fn>) {
+  const reviews = state.review.mock.results.length,
+    projections = state.projection.mock.results.length,
+    snapshots = load.mock.results.length;
+  await click("Prepare revision request");
+  await act(async () => {
+    await state.review.mock.results[reviews]!.value;
+    await load.mock.results[snapshots]!.value;
+    await state.projection.mock.results[projections]!.value;
+    await state.projection.mock.results[projections + 1]!.value;
+    await load.mock.results[snapshots + 1]!.value;
+    await state.review.mock.results[reviews + 1]!.value;
+  });
+}
+it.each(["manual", "auto"] as const)(
+  "mounted result-bound %s review starts the same task's exact next output without composer Send",
+  async (mode) => {
+    await withTaskTransportFixture(async (f) => {
+      const c = await completedResult(f, `mounted-continuation-${mode}`);
+      wire(f);
+      const task = (await f.snapshot()).tasks.find((t) => t.threadId === c.threadId)!;
+      const load = vi.fn(f.snapshot),
+        onOpen = vi.fn();
+      const props = {
+        task,
+        environmentId: EnvironmentId.make("environment-a"),
+        stale: false,
+        readVersion: 0,
+        readCollaboration: load,
+        onOpen,
+      };
+      await act(async () => {
+        renderer = create(<TaskRevisionRequest {...props} />);
+      });
+      await prepareResultReview(load);
+      const changes = "Owner requested exact changes from Tasks.";
+      await act(async () =>
+        renderer.root
+          .findByProps({ "aria-label": "Requested changes" })
+          .props.onChange({ target: { value: changes } }),
+      );
+      await click(mode === "manual" ? "Choose Manual" : "Choose Auto");
+      await click("Review result continuation");
+      const body = JSON.stringify(renderer.toJSON());
+      expect(body).toContain(changes);
+      expect(body).toContain(
+        task.resultReadout!.status === "available" ? task.resultReadout!.runId : "",
+      );
+      expect(body).toContain("Scope changed");
+      expect(body).toContain("Owner reads actual linked output");
+      expect((await f.inspect()).starts).toHaveLength(1);
+      expect(state.start).not.toHaveBeenCalled();
+      if (mode === "auto")
+        f.setProviders([
+          {
+            ...f.providers[0]!,
+            models: [
+              {
+                ...f.providers[0]!.models[0]!,
+                slug: "aaa-mounted-continuation",
+                name: "Actual next",
+              },
+              ...f.providers[0]!.models,
+            ],
+          },
+        ]);
+      await click("Start reviewed result continuation", true);
+      await act(async () => {
+        await state.start.mock.results[0]!.value;
+        await state.continuationStatus.mock.results.at(-1)!.value;
+      });
+      const key = continuationStorageKey("environment-a", c.threadId);
+      const original = readFirstLaunchAttempt(key).attempt!.command;
+      expect(original.taskFirstLaunch).toBeUndefined();
+      expect(original.taskResultContinuation!.text).toBe(changes);
+      await f.settle(original.messageId);
+      await click("Read original continuation status");
+      await act(async () => {
+        await state.continuationStatus.mock.results.at(-1)!.value;
+      });
+      expect(JSON.stringify(renderer.toJSON())).toContain(`Transport answer: ${changes}`);
+      expect(onOpen).not.toHaveBeenCalled();
+      expect((await f.inspect()).inputs).toEqual(["First attributable output", changes]);
+      expect((await f.inspect()).starts[1]!.model).toBe(
+        mode === "manual" ? "exact-second" : "aaa-mounted-continuation",
+      );
+      expect(state.start).toHaveBeenCalledTimes(1);
+      const after = await f.projection({ threadId: c.threadId });
+      if (after._tag !== "Success") throw new Error("Missing same-task history");
+      expect(after.value.runs).toHaveLength(2);
+      expect(after.value.thread.taskContract).toEqual(original.taskResultContinuation!.contract);
+      expect(after.value.thread.taskAcceptedRevision).toBeNull();
+      if (mode === "manual") {
+        const latestTask = (await f.snapshot()).tasks.find((t) => t.threadId === c.threadId)!;
+        await act(async () =>
+          renderer.update(<TaskRevisionRequest {...props} task={latestTask} readVersion={1} />),
+        );
+        await prepareResultReview(load);
+        expect(readFirstLaunchAttempt(key).attempt!.command.commandId).toBe(original.commandId);
+        await click("Review changes on latest result");
+        expect(readFirstLaunchAttempt(key).attempt).toBeNull();
+        const next = "A third explicit reviewed turn.";
+        await act(async () =>
+          renderer.root
+            .findByProps({ "aria-label": "Requested changes" })
+            .props.onChange({ target: { value: next } }),
+        );
+        await click("Choose Manual");
+        await click("Review result continuation");
+        await click("Start reviewed result continuation");
+        await act(async () => {
+          await state.start.mock.results[1]!.value;
+          await state.continuationStatus.mock.results.at(-1)!.value;
+        });
+        const third = readFirstLaunchAttempt(key).attempt!.command;
+        expect(third.commandId).not.toBe(original.commandId);
+        expect(third.taskResultContinuation!.priorResult.runId).toBe(
+          latestTask.resultReadout!.status === "available" ? latestTask.resultReadout!.runId : "",
+        );
+        await f.settle(third.messageId);
+        expect((await f.inspect()).inputs).toEqual(["First attributable output", changes, next]);
+        expect((await f.snapshot()).tasks).toHaveLength(1);
+      }
+    });
+  },
+  30000,
+);
+it("mounted lost continuation reply retains original command across disconnect/remount and only reads recovery", async () => {
+  await withTaskTransportFixture(async (f) => {
+    const c = await completedResult(f, "mounted-lost-continuation");
+    wire(f);
+    const task = (await f.snapshot()).tasks.find((t) => t.threadId === c.threadId)!;
+    const load = vi.fn(f.snapshot);
+    const props = {
+      task,
+      environmentId: EnvironmentId.make("environment-a"),
+      stale: false,
+      readVersion: 0,
+      readCollaboration: load,
+      onOpen: vi.fn(),
+    };
+    await act(async () => {
+      renderer = create(<TaskRevisionRequest {...props} />);
+    });
+    await prepareResultReview(load);
+    await act(async () =>
+      renderer.root
+        .findByProps({ "aria-label": "Requested changes" })
+        .props.onChange({ target: { value: "Retain this exact original continuation." } }),
+    );
+    await click("Choose Manual");
+    await click("Review result continuation");
+    f.dropNextReply();
+    await click("Start reviewed result continuation", true);
+    await Promise.race([
+      f.awaitDroppedReply(),
+      state.start.mock.results[0]!.value.then(() => {
+        throw new Error("No dropped reply");
+      }),
+    ]);
+    const key = continuationStorageKey("environment-a", c.threadId);
+    const original = readFirstLaunchAttempt(key).attempt!.command;
+    await act(async () => renderer.unmount());
+    await f.disconnect();
+    await state.start.mock.results[0]!.value;
+    await f.connect();
+    await f.settle(original.messageId);
+    const latestTask = (await f.snapshot()).tasks.find((t) => t.threadId === c.threadId)!;
+    await act(async () => {
+      renderer = create(<TaskRevisionRequest {...props} task={latestTask} readVersion={1} />);
+    });
+    await click("Read original continuation status");
+    await act(async () => {
+      await state.continuationStatus.mock.results.at(-1)!.value;
+    });
+    expect(readFirstLaunchAttempt(key).attempt!.command).toEqual(original);
+    expect(readFirstLaunchAttempt(key).attempt!.status).toBe("admitted");
+    expect(state.start).toHaveBeenCalledTimes(1);
+    expect((await f.inspect()).starts).toHaveLength(2);
+  });
+}, 30000);

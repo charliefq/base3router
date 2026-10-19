@@ -1,5 +1,9 @@
 import { TaskCapabilityStep } from "./taskCapabilityStep.ts";
-import { TaskFirstLaunch, TaskFirstLaunchStatus } from "./taskFirstLaunch.ts";
+import {
+  TaskFirstLaunch,
+  TaskFirstLaunchStatus,
+  TaskResultContinuation,
+} from "./taskFirstLaunch.ts";
 import { TaskCapabilityPlan, TaskCapabilityEvidence } from "./taskCapabilityPlan.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import * as Effect from "effect/Effect";
@@ -1078,6 +1082,7 @@ export type OrchestrationV2Notification = typeof OrchestrationV2Notification.Typ
 
 export const OrchestrationV2ConversationMessage = Schema.Struct({
   taskFirstLaunch: Schema.optionalKey(TaskFirstLaunch),
+  taskResultContinuation: Schema.optionalKey(TaskResultContinuation),
   capabilityStep: Schema.optionalKey(TaskCapabilityStep),
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
@@ -2722,6 +2727,7 @@ export const OrchestrationV2Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("message.dispatch"),
     taskFirstLaunch: Schema.optionalKey(TaskFirstLaunch),
+    taskResultContinuation: Schema.optionalKey(TaskResultContinuation),
     capabilityStep: Schema.optionalKey(TaskCapabilityStep),
     notification: Schema.optional(OrchestrationV2Notification),
     ...OrchestrationV2CreationFields,
@@ -3051,6 +3057,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getTaskUsage: "orchestration.getTaskUsage",
   getTaskReview: "orchestration.getTaskReview",
   getTaskFirstLaunchStatus: "orchestration.getTaskFirstLaunchStatus",
+  getTaskResultContinuationStatus: "orchestration.getTaskResultContinuationStatus",
   getTaskAutoPreview: "orchestration.getTaskAutoPreview",
   getAgentsCreationStatus: "orchestration.getAgentsCreationStatus",
   getTaskUsageCohort: "orchestration.getTaskUsageCohort",
@@ -3421,6 +3428,10 @@ export const OrchestrationV2RpcSchemas = {
   },
   getTaskReview: { input: TaskContractReviewInput, output: TaskContractReviewState },
   getTaskFirstLaunchStatus: {
+    input: Schema.Struct({ command: OrchestrationV2Command }),
+    output: TaskFirstLaunchStatus,
+  },
+  getTaskResultContinuationStatus: {
     input: Schema.Struct({ command: OrchestrationV2Command }),
     output: TaskFirstLaunchStatus,
   },

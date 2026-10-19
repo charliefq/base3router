@@ -17,6 +17,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Queue from "effect/Queue";
 import * as Deferred from "effect/Deferred";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -86,6 +87,13 @@ export async function withTaskCreationTransportFixture(
     setEnvironment: (value: string) => void;
     setProviders: (value: ReadonlyArray<ServerProvider>) => void;
     drain: () => Promise<void>;
+    settle: (messageId: string) => Promise<void>;
+    alterLatestOutput: (threadId: string, text: string) => Promise<void>;
+    alterBackgroundWork: (threadId: string) => Promise<void>;
+    holdInput: (text: string) => void;
+    awaitHeldStart: () => Promise<void>;
+    releaseHeldStart: () => void;
+    failInput: (text: string) => void;
     inspect: () => Promise<{
       starts: ReadonlyArray<import("@t3tools/contracts").ModelSelection>;
       inputs: ReadonlyArray<string>;
@@ -94,6 +102,10 @@ export async function withTaskCreationTransportFixture(
     }>;
   }) => Promise<void>,
 ) {
+  let heldText: string | null = null;
+  let failedText: string | null = null;
+  let heldStarted = Deferred.makeUnsafe<void>();
+  let heldRelease = Deferred.makeUnsafe<void>();
   await Effect.runPromise(
     Effect.scoped(
       withTaskResultLinkageFixture(
@@ -255,6 +267,17 @@ export async function withTaskCreationTransportFixture(
               Context.get(server, HttpServer.HttpServer).address,
             );
             const run = Effect.runPromiseWith(context);
+            const terminalMessages = yield* Queue.unbounded<string>();
+            yield* f.orchestrator.streamDomainEvents.pipe(
+              Stream.runForEach((e) =>
+                e.type === "run.updated" &&
+                e.payload.userMessageId &&
+                ["completed", "failed", "interrupted", "cancelled"].includes(e.payload.status)
+                  ? Queue.offer(terminalMessages, e.payload.userMessageId)
+                  : Effect.void,
+              ),
+              Effect.forkScoped,
+            );
             const completed = yield* f.orchestrator.streamDomainEvents.pipe(
               Stream.filter(
                 (e) =>
@@ -304,6 +327,44 @@ export async function withTaskCreationTransportFixture(
                   providers = value;
                   f.setProviders(value);
                 },
+                holdInput: (text) => {
+                  heldText = text;
+                  heldStarted = Deferred.makeUnsafe<void>();
+                  heldRelease = Deferred.makeUnsafe<void>();
+                },
+                awaitHeldStart: () => Effect.runPromise(Deferred.await(heldStarted)),
+                releaseHeldStart: () => {
+                  Deferred.doneUnsafe(heldRelease, Effect.void);
+                },
+                failInput: (text) => {
+                  failedText = text;
+                },
+                alterBackgroundWork: (threadId) =>
+                  run(
+                    f.sql`UPDATE orchestration_v2_projection_provider_threads SET payload_json=json_set(payload_json,'$.pendingBackgroundTasks',json('[{"taskId":"fixture-background","kind":"background_task"}]')) WHERE thread_id=${threadId}`.pipe(
+                      Effect.asVoid,
+                    ),
+                  ),
+                settle: (messageId) =>
+                  run(
+                    f.worker.drain().pipe(
+                      Effect.andThen(
+                        Stream.fromQueue(terminalMessages).pipe(
+                          Stream.filter((id) => id === messageId),
+                          Stream.take(1),
+                          Stream.runDrain,
+                        ),
+                      ),
+                      Effect.andThen(f.worker.drain()),
+                      Effect.asVoid,
+                    ),
+                  ),
+                alterLatestOutput: (threadId, text) =>
+                  run(
+                    f.sql`UPDATE orchestration_v2_projection_turn_items SET payload_json=json_set(payload_json,'$.text',${text}) WHERE turn_item_id=(SELECT turn_item_id FROM orchestration_v2_projection_turn_items WHERE thread_id=${threadId} AND json_extract(payload_json,'$.type')='assistant_message' ORDER BY json_extract(payload_json,'$.ordinal') DESC LIMIT 1)`.pipe(
+                      Effect.asVoid,
+                    ),
+                  ),
                 drain: () =>
                   Effect.runPromise(
                     f.worker
@@ -332,22 +393,49 @@ export async function withTaskCreationTransportFixture(
           governedWorker: true,
           useProjectRuntimePolicy: true,
           onStart: (input, events, emit) =>
-            Effect.forEach(
-              events,
-              (e) =>
-                emit(
-                  e.type === "turn_item.updated" && e.turnItem.type === "assistant_message"
-                    ? {
-                        ...e,
-                        turnItem: {
-                          ...e.turnItem,
-                          text: `Transport answer: ${input.message.text}`,
-                        },
-                      }
-                    : e,
-                ),
-              { discard: true },
-            ),
+            Effect.gen(function* () {
+              if (heldText === input.message.text) {
+                const first = events.find((e) => e.type === "provider_turn.updated");
+                if (first?.type !== "provider_turn.updated")
+                  throw new Error("Missing fake provider turn");
+                yield* emit({
+                  ...first,
+                  providerTurn: { ...first.providerTurn, status: "running", completedAt: null },
+                });
+                yield* Deferred.succeed(heldStarted, undefined);
+                yield* Deferred.await(heldRelease);
+              }
+              yield* Effect.forEach(
+                events,
+                (e) =>
+                  emit(
+                    failedText === input.message.text && e.type === "turn.terminal"
+                      ? {
+                          ...e,
+                          status: "failed" as const,
+                          failureItemOrdinal: e.runOrdinal * 100 + 99,
+                          failure: {
+                            class: "provider_error" as const,
+                            message: "Disposable fake provider failure",
+                            code: null,
+                            retryable: false,
+                          },
+                        }
+                      : failedText === input.message.text && e.type === "provider_turn.updated"
+                        ? { ...e, providerTurn: { ...e.providerTurn, status: "failed" as const } }
+                        : e.type === "turn_item.updated" && e.turnItem.type === "assistant_message"
+                          ? {
+                              ...e,
+                              turnItem: {
+                                ...e.turnItem,
+                                text: `Transport answer: ${input.message.text}`,
+                              },
+                            }
+                          : e,
+                  ),
+                { discard: true },
+              );
+            }),
         },
       ),
     ),

@@ -12,6 +12,7 @@ import {
   CheckpointScopeId,
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationV2CheckpointUnavailableError,
+  OrchestrationV2DispatchCommandError,
   WS_METHODS,
   WorkflowOperationError,
   type ChatAttachment,
@@ -179,6 +180,7 @@ interface StartThreadBootstrap {
 
 export interface StartThreadTurnInput extends ThreadCommandInput {
   readonly taskFirstLaunch?: import("@t3tools/contracts").TaskFirstLaunch;
+  readonly taskResultContinuation?: import("@t3tools/contracts").TaskResultContinuation;
   readonly capabilityStep?: import("@t3tools/contracts").TaskCapabilityStep;
   readonly manualContinuationOfRunId?: RunId;
   readonly message: {
@@ -321,6 +323,20 @@ export const readAgentsCreationStatus = Effect.fn("EnvironmentCommands.readAgent
     return result;
   },
 );
+
+export const readTaskResultContinuationStatus = Effect.fn(
+  "EnvironmentCommands.readTaskResultContinuationStatus",
+)(function* (input: {
+  readonly command: Extract<OrchestrationV2Command, { type: "message.dispatch" }>;
+}) {
+  const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+  const before = yield* SubscriptionRef.get(supervisor.session);
+  const result = yield* request(ORCHESTRATION_V2_WS_METHODS.getTaskResultContinuationStatus, input);
+  const after = yield* SubscriptionRef.get(supervisor.session);
+  return Option.isNone(before) || Option.isNone(after) || before.value !== after.value
+    ? { status: "unavailable" as const, reason: "Authenticated session changed." }
+    : result;
+});
 
 export const readTaskFirstLaunchStatus = Effect.fn("EnvironmentCommands.readTaskFirstLaunchStatus")(
   function* (input: {
@@ -774,6 +790,47 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
   input: StartThreadTurnInput,
 ) {
   const commandId = yield* allocateCommandId(input);
+  if (input.taskResultContinuation) {
+    const m = input.taskResultContinuation;
+    const refuse = () =>
+      new OrchestrationV2DispatchCommandError({
+        commandId,
+        commandType: "message.dispatch",
+        message:
+          "Result continuation requires its original reviewed ordinary Start. No replacement was sent.",
+      });
+    if (
+      input.taskFirstLaunch ||
+      input.capabilityStep ||
+      input.bootstrap ||
+      input.message.attachments.length ||
+      input.message.context ||
+      input.sourceProposedPlan ||
+      input.titleSeed ||
+      input.dispatchMode !== "start" ||
+      input.manualContinuationOfRunId
+    )
+      return yield* refuse();
+    const original: Extract<OrchestrationV2Command, { type: "message.dispatch" }> = {
+      type: "message.dispatch",
+      commandId,
+      threadId: input.threadId,
+      messageId: input.message.messageId,
+      text: input.message.text,
+      attachments: [],
+      modelSelection: input.modelSelection ?? m.modelSelection,
+      routingMode: input.routingMode ?? "manual",
+      taskResultContinuation: m,
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "user",
+      creationSource: input.creationSource ?? "web",
+    };
+    // An older server cannot safely interpret the new precondition. Probe the
+    // read-only receipt method before any mutation; never downgrade to Send.
+    const status = yield* readTaskResultContinuationStatus({ command: original });
+    if (status.status === "admitted") return { sequence: 0 };
+    if (status.status !== "unknown") return yield* refuse();
+  }
   const attachments = yield* persistAttachments(
     input.threadId,
     input.message.messageId,
@@ -800,6 +857,9 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       dispatchMode: { type: "queue_after_active" },
       capabilityStep: input.capabilityStep,
       ...(input.taskFirstLaunch ? { taskFirstLaunch: input.taskFirstLaunch } : {}),
+      ...(input.taskResultContinuation
+        ? { taskResultContinuation: input.taskResultContinuation }
+        : {}),
     });
   }
   const bootstrap = input.bootstrap?.createThread;
@@ -865,6 +925,9 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       creationSource: input.creationSource ?? "web",
       threadId: input.threadId,
       ...(input.taskFirstLaunch ? { taskFirstLaunch: input.taskFirstLaunch } : {}),
+      ...(input.taskResultContinuation
+        ? { taskResultContinuation: input.taskResultContinuation }
+        : {}),
       messageId: input.message.messageId,
       ...(input.manualContinuationOfRunId === undefined
         ? {}
@@ -931,6 +994,9 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     creationSource: input.creationSource ?? "web",
     threadId: input.threadId,
     ...(input.taskFirstLaunch ? { taskFirstLaunch: input.taskFirstLaunch } : {}),
+    ...(input.taskResultContinuation
+      ? { taskResultContinuation: input.taskResultContinuation }
+      : {}),
     messageId: input.message.messageId,
     text: input.message.text,
     ...(context ? { context } : {}),

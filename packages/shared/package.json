@@ -502,6 +502,10 @@
     "./agentConfiguration": {
       "types": "./src/agentConfiguration.ts",
       "import": "./src/agentConfiguration.ts"
+    },
+    "./taskRevisionRequest": {
+      "types": "./src/taskRevisionRequest.ts",
+      "import": "./src/taskRevisionRequest.ts"
     }
   },
   "scripts": {

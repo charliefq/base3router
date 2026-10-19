@@ -1,3 +1,4 @@
+import { validateResultContinuation } from "../collaboration/ResultContinuation.ts";
 import {
   SavedPrRead,
   prepareCapabilityStep,
@@ -314,6 +315,9 @@ export interface OrchestratorV2Shape {
     readonly command: OrchestrationV2Command;
   }) => Effect.Effect<{ readonly status: "committed" | "rejected" | "unknown" | "unavailable" }>;
   readonly getTaskAutoPreview: (input: TaskAutoPreviewInput) => Effect.Effect<TaskAutoPreviewState>;
+  readonly getTaskResultContinuationStatus: (input: {
+    readonly command: OrchestrationV2Command;
+  }) => Effect.Effect<TaskFirstLaunchStatus>;
   readonly getTaskFirstLaunchStatus: (input: {
     readonly command: OrchestrationV2Command;
   }) => Effect.Effect<TaskFirstLaunchStatus>;
@@ -4846,6 +4850,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.taskFirstLaunch === undefined
             ? {}
             : { taskFirstLaunch: command.taskFirstLaunch }),
+          ...(command.taskResultContinuation === undefined
+            ? {}
+            : { taskResultContinuation: command.taskResultContinuation }),
           ...(command.capabilityStep === undefined
             ? {}
             : { capabilityStep: command.capabilityStep }),
@@ -5193,6 +5200,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.taskFirstLaunch === undefined
             ? {}
             : { taskFirstLaunch: command.taskFirstLaunch }),
+          ...(command.taskResultContinuation === undefined
+            ? {}
+            : { taskResultContinuation: command.taskResultContinuation }),
           ...(command.capabilityStep === undefined
             ? {}
             : { capabilityStep: command.capabilityStep }),
@@ -5891,6 +5901,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(command.taskFirstLaunch === undefined
           ? {}
           : { taskFirstLaunch: command.taskFirstLaunch }),
+        ...(command.taskResultContinuation === undefined
+          ? {}
+          : { taskResultContinuation: command.taskResultContinuation }),
         ...(command.capabilityStep === undefined ? {} : { capabilityStep: command.capabilityStep }),
         id: command.messageId,
         threadId: command.threadId,
@@ -9388,6 +9401,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       readonly approvedDelegation?: ApprovedDelegation;
       readonly capabilityCommand?: Extract<OrchestrationV2Command, { type: "message.dispatch" }>;
       readonly firstLaunchCommand?: Extract<OrchestrationV2Command, { type: "message.dispatch" }>;
+      readonly resultContinuationCommand?: Extract<
+        OrchestrationV2Command,
+        { type: "message.dispatch" }
+      >;
       readonly governedTaskOwner?: string;
       readonly ordinaryRootOwner?: string;
       readonly contractSetActor?: string;
@@ -9431,6 +9448,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     if (command.type === "message.dispatch") {
       const database = yield* taskReviewSqlAtCall;
+      if (command.taskResultContinuation) {
+        if (Option.isNone(database))
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Result-continuation store unavailable.",
+          });
+        yield* validateResultContinuation(database.value, command, (id) =>
+          projectionStore.getThreadProjection(id),
+        ).pipe(mapDispatchError(command));
+      }
       if (command.taskFirstLaunch) {
         if (Option.isNone(database))
           return yield* new OrchestratorDispatchError({
@@ -9745,6 +9773,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(command.type === "message.dispatch" && command.taskFirstLaunch
         ? { firstLaunchCommand: command }
         : {}),
+      ...(command.type === "message.dispatch" && command.taskResultContinuation
+        ? { resultContinuationCommand: command }
+        : {}),
       ...(command.type === "thread.task-contract.set" &&
       (command.expectedRevision !== undefined || command.reviewTask !== undefined)
         ? { reviewedSet: command }
@@ -9828,6 +9859,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       if (command.type === "message.dispatch") {
         const database = yield* taskReviewSqlAtCall;
+        if (command.taskResultContinuation) {
+          const proof = Option.isSome(database)
+            ? yield* readFirstTaskLaunchStatus(database.value, command, "continuation")
+            : null;
+          if (proof?.status !== "admitted")
+            return yield* new OrchestratorDispatchError({
+              commandId: command.commandId,
+              commandType: command.type,
+              cause: "Original result-continuation identity cannot be replayed.",
+            });
+        }
         if (command.taskFirstLaunch) {
           const proof = Option.isSome(database)
             ? yield* readFirstTaskLaunchStatus(database.value, command)
@@ -10099,6 +10141,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(plan.firstLaunchCommand === undefined
           ? {}
           : { firstLaunchCommand: plan.firstLaunchCommand }),
+        ...(plan.resultContinuationCommand === undefined
+          ? {}
+          : { resultContinuationCommand: plan.resultContinuationCommand }),
         ...(plan.taskContractDecision === undefined
           ? {}
           : { taskContractDecision: plan.taskContractDecision }),
@@ -10319,6 +10364,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             : Effect.succeed({ status: "unavailable" as const }),
         ),
       ),
+    getTaskResultContinuationStatus: ({ command }) =>
+      taskReviewSqlAtCall.pipe(
+        Effect.flatMap((database) =>
+          Option.isSome(database)
+            ? readFirstTaskLaunchStatus(database.value, command, "continuation")
+            : Effect.succeed({
+                status: "unavailable" as const,
+                reason: "Result-continuation store unavailable.",
+              }),
+        ),
+      ),
     getTaskFirstLaunchStatus: ({ command }) =>
       taskReviewSqlAtCall.pipe(
         Effect.flatMap((database) =>
@@ -10510,6 +10566,11 @@ const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
     getMessageCount: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
     getThreadRecords: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
     getAgentsCreationStatus: () => Effect.succeed({ status: "unavailable" as const }),
+    getTaskResultContinuationStatus: () =>
+      Effect.succeed({
+        status: "unavailable" as const,
+        reason: "Result-continuation store unavailable.",
+      }),
     getTaskFirstLaunchStatus: () =>
       Effect.succeed({ status: "unavailable" as const, reason: "Unavailable" }),
     getTaskAutoPreview: () =>

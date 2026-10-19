@@ -42,6 +42,7 @@ export const TaskRpcGroup = RpcGroup.make(
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getThreadProjection ||
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getAgentsCreationStatus ||
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskFirstLaunchStatus ||
+      rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskResultContinuationStatus ||
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskAutoPreview ||
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskReview ||
       rpc._tag === WS_METHODS.workflowCatalog ||
@@ -225,6 +226,16 @@ export const makeTaskRpcHandlers = Effect.fn("ws.makeTaskRpcHandlers")(function*
             Effect.provideService(SqlClient.SqlClient, sql),
           ),
         { "rpc.aggregate": "orchestrationV2" },
+      ),
+    [ORCHESTRATION_V2_WS_METHODS.getTaskResultContinuationStatus]: (input) =>
+      observeRpcEffect(
+        ORCHESTRATION_V2_WS_METHODS.getTaskResultContinuationStatus,
+        orchestrationEngine
+          .getTaskResultContinuationStatus(input)
+          .pipe(
+            Effect.provideService(ServerEnvironment.ServerEnvironment, serverEnvironment),
+            Effect.provideService(SqlClient.SqlClient, sql),
+          ),
       ),
     [ORCHESTRATION_V2_WS_METHODS.getTaskFirstLaunchStatus]: (input) =>
       observeRpcEffect(

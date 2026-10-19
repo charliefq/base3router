@@ -20,6 +20,9 @@ import {
   type OrchestrationV2ThreadLaunchInput,
   type OrchestrationV2ThreadProjection,
   type ProjectMutation,
+  type TaskFirstLaunchStatus,
+  type TaskResultContinuation,
+  RunAttemptId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -81,6 +84,7 @@ const TARGET = new PrimaryConnectionTarget({
 });
 
 const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(function* (input: {
+  readonly continuationState?: TaskFirstLaunchStatus;
   readonly configurationState?: "unsupported" | "unknown" | "committed" | "conflict";
   readonly configurationWrites?: unknown[];
   readonly dispatchResult?: OrchestrationV2DispatchCommandResult;
@@ -96,6 +100,17 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly advertiseServerResolvedCommandContext?: boolean;
 }) {
   const client = {
+    ...(input.continuationState
+      ? {
+          [ORCHESTRATION_V2_WS_METHODS.getTaskResultContinuationStatus]: (request: unknown) =>
+            Effect.gen(function* () {
+              input.statusRequests?.push(request);
+              if (input.statusStarted) yield* Deferred.succeed(input.statusStarted, undefined);
+              if (input.statusGate) yield* Deferred.await(input.statusGate);
+              return input.continuationState!;
+            }),
+        }
+      : {}),
     ...(input.configurationState && input.configurationState !== "unsupported"
       ? { [WS_METHODS.workflowConfigurationStatus]: () => Effect.succeed(input.configurationState) }
       : {}),
@@ -1517,4 +1532,117 @@ it.effect(
         expect(writes).toHaveLength(state === "unknown" ? 1 : 0);
       }
     }),
+);
+
+const continuationMarker = (): TaskResultContinuation => ({
+  commandId: CommandId.make("result-continuation-original"),
+  messageId: MessageId.make("result-continuation-message"),
+  threadId: v2ThreadId,
+  reference: {
+    environmentId: "environment-1",
+    projectId: "project-1",
+    taskId: "task-1",
+    threadUpdatedAt: "2026-10-19T00:00:00.000Z",
+    threadSequence: 1,
+  },
+  contract: {
+    revision: 1,
+    goal: "Goal",
+    redirect: "Scope",
+    acceptance: "Owner checks",
+    brake: { maxProviderStarts: 3, stopConditions: "Scope changes" },
+  },
+  text: "Exact reviewed changes",
+  routingMode: "manual",
+  modelSelection: v2Projection.thread.modelSelection,
+  runtimeMode: v2Projection.thread.runtimeMode,
+  interactionMode: v2Projection.thread.interactionMode,
+  priorResult: {
+    runId: "prior-run",
+    messageId: "prior-message",
+    attemptId: "prior-attempt",
+    providerThreadId: "prior-provider",
+    providerTurnId: "prior-turn",
+    itemId: "prior-item",
+    rootNodeId: "prior-root",
+    nodeId: "prior-node",
+    outputSha256: "0".repeat(64),
+  },
+});
+const continuationInput = (m: TaskResultContinuation): Parameters<typeof startThreadTurn>[0] => ({
+  commandId: m.commandId,
+  threadId: m.threadId,
+  message: { messageId: m.messageId, role: "user", text: m.text, attachments: [] },
+  modelSelection: m.modelSelection,
+  routingMode: m.routingMode,
+  runtimeMode: m.runtimeMode,
+  interactionMode: m.interactionMode,
+  dispatchMode: "start",
+  taskResultContinuation: m,
+});
+it.effect(
+  "result continuation never downgrades on an unsupported server or resends a confirmed original",
+  () =>
+    Effect.gen(function* () {
+      const marker = continuationMarker();
+      const states = [
+        undefined,
+        { status: "unknown", reason: "Original absent" },
+        { status: "unavailable", reason: "Scope changed" },
+        { status: "rejected", reason: "Original rejected" },
+        {
+          status: "admitted",
+          runId: RunId.make("original-run"),
+          attemptId: RunAttemptId.make("original-attempt"),
+          actualModelSelection: marker.modelSelection,
+          runStatus: "completed",
+          resultPreview: "Original result",
+        },
+      ] as const;
+      for (const state of states) {
+        const commands: OrchestrationV2Command[] = [];
+        const supervisor = yield* makeSupervisor({
+          commands,
+          projects: [],
+          ...(state ? { continuationState: state } : {}),
+        });
+        const result = yield* Effect.exit(
+          startThreadTurn(continuationInput(marker)).pipe(
+            Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          ),
+        );
+        expect(result._tag).toBe(
+          state?.status === "unknown" || state?.status === "admitted" ? "Success" : "Failure",
+        );
+        expect(commands).toHaveLength(state?.status === "unknown" ? 1 : 0);
+        if (commands[0]?.type === "message.dispatch") {
+          expect(commands[0].taskResultContinuation).toEqual(marker);
+          expect(commands[0].taskFirstLaunch).toBeUndefined();
+        }
+      }
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+);
+it.effect("session change during continuation receipt probe prevents the mutation", () =>
+  Effect.gen(function* () {
+    const commands: OrchestrationV2Command[] = [];
+    const gate = yield* Deferred.make<void>();
+    const started = yield* Deferred.make<void>();
+    const supervisor = yield* makeSupervisor({
+      commands,
+      projects: [],
+      continuationState: { status: "unknown", reason: "Absent" },
+      statusGate: gate,
+      statusStarted: started,
+    });
+    const pending = yield* startThreadTurn(continuationInput(continuationMarker())).pipe(
+      Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      Effect.exit,
+      Effect.forkChild,
+    );
+    yield* Deferred.await(started);
+    yield* SubscriptionRef.set(supervisor.session, Option.none());
+    yield* Deferred.succeed(gate, undefined);
+    expect((yield* Fiber.join(pending))._tag).toBe("Failure");
+    expect(commands).toHaveLength(0);
+  }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
 );

@@ -82,6 +82,12 @@ From Agents or Tasks, choose New task and an exact model, then save a named conf
 
 Configurations belong to your environment and project. They reuse an existing provider rather than creating another online agent or granting permissions. Edits apply to future tasks; created tasks retain their reviewed instructions. Archive a configuration to stop selecting it, or restore it for future tasks. If a save response is lost, recover the original command before saving again.
 
+## Request changes on a task result
+
+For a completed result awaiting acceptance, choose **Prepare revision request** in Tasks. Enter the changes, choose Manual or Auto, review the result and task contract, then choose **Start reviewed result continuation**. This starts one ordinary turn in the same task without a separate composer Send. It does not accept the result or change the contract or limits.
+
+**Fill empty draft and open** remains available if you prefer the conversation editor; existing draft content is preserved. If a Start response is uncertain, read the original continuation status instead of submitting again. Another continuation requires an explicitly reviewed latest completed result; failed results are not eligible for this path.
+
 ## Quote an assistant response
 
 On web and desktop, select text within one assistant response and choose

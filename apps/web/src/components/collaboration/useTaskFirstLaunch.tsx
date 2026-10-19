@@ -9,6 +9,7 @@ import {
   type TaskContractReviewState,
   type OrchestrationV2AppThread,
   type TaskFirstLaunch,
+  type TaskContinuationResult,
   type ModelSelection,
   type TaskFirstLaunchStatus,
   type OrchestrationV2Command,
@@ -27,6 +28,8 @@ import {
   writeFirstLaunchAttempt,
   clearRejectedFirstLaunchAttempt,
   firstLaunchStorageKey,
+  continuationStorageKey,
+  retireCompletedContinuationAttempt,
   type FirstLaunchAttempt,
 } from "./taskFirstLaunchAttempt";
 type Review = Extract<TaskContractReviewState, { status: "available" }>;
@@ -41,21 +44,32 @@ export function useTaskFirstLaunch(props: {
   text: string;
   stale: boolean;
   onOpen: () => void;
+  resultBound?: boolean;
+  priorResult?: TaskContinuationResult | null;
 }) {
   const start = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
-  const readStatus = useAtomCommand(threadEnvironment.readFirstLaunchStatus, {
-    reportFailure: false,
-  });
+  const readStatus = useAtomCommand(
+    props.resultBound
+      ? threadEnvironment.readResultContinuationStatus
+      : threadEnvironment.readFirstLaunchStatus,
+    {
+      reportFailure: false,
+    },
+  );
   const session = Option.getOrNull(usePreparedConnection(props.environmentId));
   const providers = useAtomValue(primaryServerProvidersAtom);
   const entries = useMemo(() => deriveProviderInstanceEntries(providers), [providers]);
   const options = useMemo(() => new Map(entries.map((e) => [e.instanceId, e.models])), [entries]);
-  const key = firstLaunchStorageKey(props.environmentId, props.task.threadId ?? "missing");
+  const key = (props.resultBound ? continuationStorageKey : firstLaunchStorageKey)(
+    props.environmentId,
+    props.task.threadId ?? "missing",
+  );
   const [saved, setSaved] = useState(() => readFirstLaunchAttempt(key));
   const [mode, setMode] = useState<"manual" | "auto" | null>(null);
   const [manualChoice, setManual] = useState<ModelSelection | null>(null);
   const manual = manualChoice ?? props.thread?.modelSelection ?? null;
-  const [reviewed, setReviewed] = useState<{ key: string; value: TaskFirstLaunch } | null>(null);
+  type LaunchReview = TaskFirstLaunch & { readonly priorResult?: TaskContinuationResult };
+  const [reviewed, setReviewed] = useState<{ key: string; value: LaunchReview } | null>(null);
   const [status, setStatus] = useState<TaskFirstLaunchStatus | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -111,9 +125,10 @@ export function useTaskFirstLaunch(props: {
     props.facts?.reference,
     props.facts?.contract,
     props.stale,
+    props.priorResult,
   ]);
   const review = reviewed?.key === reviewKey ? reviewed.value : null;
-  const setReview = (value: TaskFirstLaunch | null) =>
+  const setReview = (value: LaunchReview | null) =>
     setReviewed(value === null ? null : { key: reviewKey, value });
   const current = (generation: number) =>
     mounted.current &&
@@ -153,11 +168,18 @@ export function useTaskFirstLaunch(props: {
     }
     if (proof.status === "admitted") {
       setNotice("Original launch admitted. Admission is not model completion or task acceptance.");
-      if (open) latest.current.onOpen();
+      if (open && !props.resultBound) latest.current.onOpen();
     } else setNotice(proof.reason);
   };
   const submit = async () => {
-    if (!review || pending.current || session === null || props.stale) return;
+    if (
+      !review ||
+      pending.current ||
+      session === null ||
+      props.stale ||
+      (props.resultBound && !review.priorResult)
+    )
+      return;
     const existing = readFirstLaunchAttempt(key);
     if (existing.error || existing.attempt) {
       setSaved(existing);
@@ -177,7 +199,9 @@ export function useTaskFirstLaunch(props: {
       attachments: [],
       modelSelection: review.modelSelection,
       routingMode: review.routingMode,
-      taskFirstLaunch: review,
+      ...(props.resultBound && review.priorResult
+        ? { taskResultContinuation: { ...review, priorResult: review.priorResult } }
+        : { taskFirstLaunch: review }),
       dispatchMode: { type: "start_immediately" },
       createdBy: "user",
       creationSource: "web",
@@ -210,7 +234,9 @@ export function useTaskFirstLaunch(props: {
           dispatchMode: "start",
           runtimeMode: review.runtimeMode,
           interactionMode: review.interactionMode,
-          taskFirstLaunch: review,
+          ...(command.taskResultContinuation
+            ? { taskResultContinuation: command.taskResultContinuation }
+            : { taskFirstLaunch: review }),
         },
       });
       if (current(generation)) await reconcile(command, generation, true);
@@ -260,6 +286,7 @@ export function useTaskFirstLaunch(props: {
     providerExecutable(selected) &&
     selected.models.some((m) => m.slug === manual.model);
   const available =
+    (!props.resultBound || (props.priorResult !== null && props.priorResult !== undefined)) &&
     props.facts !== null &&
     props.thread !== null &&
     !props.stale &&
@@ -282,7 +309,9 @@ export function useTaskFirstLaunch(props: {
             disabled={busy || session === null}
             onClick={() => void recover()}
           >
-            Read original launch status
+            {props.resultBound
+              ? "Read original continuation status"
+              : "Read original launch status"}
           </Button>
           <Button
             size="sm"
@@ -298,6 +327,35 @@ export function useTaskFirstLaunch(props: {
               {status.actualModelSelection.instanceId} / {status.actualModelSelection.model}; run
               status {status.runStatus}. {status.resultPreview}
             </p>
+          ) : null}
+          {props.resultBound &&
+          status?.status === "admitted" &&
+          status.runStatus === "completed" &&
+          props.priorResult?.runId === status.runId &&
+          props.facts &&
+          !props.stale ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy || session === null}
+              onClick={() => {
+                try {
+                  retireCompletedContinuationAttempt(key, saved.attempt!.command.commandId);
+                  setSaved({ attempt: null, error: null });
+                  setStatus(null);
+                  setReview(null);
+                  setMode(null);
+                  setManual(null);
+                  setNotice(
+                    "Original completed continuation retained in task history. Review another request explicitly.",
+                  );
+                } catch {
+                  setNotice("Original continuation could not be retired safely.");
+                }
+              }}
+            >
+              Review changes on latest result
+            </Button>
           ) : null}
           {saved.attempt.status === "rejected" ? (
             <Button
@@ -328,8 +386,9 @@ export function useTaskFirstLaunch(props: {
   const controls = (
     <section aria-label="Ordinary governed task launch">
       <p>
-        Ordinary model turn — choose and review separately from the saved-PR operation below.
-        Unsupported saved-PR suggestions never start this path automatically.
+        {props.resultBound
+          ? "Ordinary requested changes on the exact completed result. No contract, acceptance, configuration or capability mutation."
+          : "Ordinary model turn — choose and review separately from the saved-PR operation below. Unsupported saved-PR suggestions never start this path automatically."}
       </p>
       <div className="flex gap-2">
         <Button
@@ -395,10 +454,11 @@ export function useTaskFirstLaunch(props: {
             modelSelection: manual,
             runtimeMode: props.thread.runtimeMode,
             interactionMode: props.thread.interactionMode,
+            ...(props.resultBound && props.priorResult ? { priorResult: props.priorResult } : {}),
           });
         }}
       >
-        Review ordinary task launch
+        {props.resultBound ? "Review result continuation" : "Review ordinary task launch"}
       </Button>
       {review ? (
         <div aria-label="Reviewed ordinary task launch">
@@ -427,11 +487,19 @@ export function useTaskFirstLaunch(props: {
             disabled={!available || busy || (review.routingMode === "manual" && !manualReady)}
             onClick={() => void submit()}
           >
-            Start reviewed ordinary task
+            {props.resultBound
+              ? "Start reviewed result continuation"
+              : "Start reviewed ordinary task"}
           </Button>
         </div>
       ) : null}
     </section>
   );
-  return { controls, recovery, busy, hasOriginal: saved.attempt !== null || saved.error !== null };
+  return {
+    controls,
+    recovery,
+    busy,
+    reviewed: review !== null,
+    hasOriginal: saved.attempt !== null || saved.error !== null,
+  };
 }

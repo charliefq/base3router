@@ -1,3 +1,5 @@
+import { useTaskFirstLaunch } from "./useTaskFirstLaunch";
+import { continuationResult } from "./taskRevisionRequest";
 import {
   ThreadId,
   type CollaborationTask,
@@ -82,6 +84,17 @@ export function TaskRevisionRequest(props: {
       reviewRef.current = null;
     };
   }, []);
+  const continuation = useTaskFirstLaunch({
+    environmentId: props.environmentId,
+    task: props.task,
+    facts: review?.review ?? null,
+    thread: review?.projection.thread ?? null,
+    text: changes,
+    stale: props.stale,
+    onOpen: props.onOpen,
+    resultBound: true,
+    priorResult: review ? continuationResult(review) : null,
+  });
   const available = !props.stale && session !== null && hasRevisionOutput(props.task);
   const current = (generation: number, token: object) =>
     mounted.current &&
@@ -219,9 +232,10 @@ export function TaskRevisionRequest(props: {
       }
     }
   };
-  if (!hasRevisionOutput(props.task)) return null;
+  if (!hasRevisionOutput(props.task)) return <>{continuation.recovery}</>;
   return (
     <div>
+      {review === null ? continuation.recovery : null}
       <Button
         type="button"
         size="sm"
@@ -242,8 +256,9 @@ export function TaskRevisionRequest(props: {
           <AlertDialogHeader>
             <AlertDialogTitle>Review revision request</AlertDialogTitle>
             <AlertDialogDescription>
-              Write the changes you want for this completed output. Preparation does not judge
-              acceptance or start work. Manual/Auto and Send remain separate.
+              Write the changes you want for this completed output, choose Manual/Auto and review
+              before explicit Start. Preparation starts no work and does not judge acceptance. The
+              separate draft-only fallback remains available.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {review ? (
@@ -251,6 +266,8 @@ export function TaskRevisionRequest(props: {
               <dl>
                 <dt>Current Goal</dt>
                 <dd>{review.review.contract.goal}</dd>
+                <dt>Current Redirect</dt>
+                <dd>{review.review.contract.redirect}</dd>
                 <dt>Current Acceptance</dt>
                 <dd>{review.review.contract.acceptance}</dd>
               </dl>
@@ -271,12 +288,14 @@ export function TaskRevisionRequest(props: {
               <Textarea
                 aria-label="Requested changes"
                 value={changes}
-                disabled={busy}
+                disabled={busy || continuation.busy}
                 onChange={(e) => {
                   changesRef.current = e.target.value;
                   setChanges(e.target.value);
                 }}
               />
+              {continuation.recovery}
+              {continuation.controls}
             </>
           ) : null}
           <AlertDialogFooter>
@@ -293,7 +312,17 @@ export function TaskRevisionRequest(props: {
             >
               Open conversation for full context
             </Button>
-            <Button type="button" disabled={busy || !changes.trim()} onClick={() => void apply()}>
+            <Button
+              type="button"
+              disabled={
+                busy ||
+                continuation.busy ||
+                continuation.reviewed ||
+                continuation.hasOriginal ||
+                !changes.trim()
+              }
+              onClick={() => void apply()}
+            >
               Fill empty draft and open
             </Button>
           </AlertDialogFooter>

@@ -12,6 +12,8 @@ export type FirstLaunchAttempt = {
 };
 export const firstLaunchStorageKey = (environmentId: string, threadId: string) =>
   `t3:task-first-launch:v1:${JSON.stringify([environmentId, threadId])}`;
+export const continuationStorageKey = (environmentId: string, threadId: string) =>
+  `t3:task-result-continuation:v1:${JSON.stringify([environmentId, threadId])}`;
 export function readFirstLaunchAttempt(key: string): {
   attempt: FirstLaunchAttempt | null;
   error: string | null;
@@ -23,12 +25,16 @@ export function readFirstLaunchAttempt(key: string): {
     if (
       value._tag === "Some" &&
       value.value.command.type === "message.dispatch" &&
-      value.value.command.taskFirstLaunch
+      (value.value.command.taskFirstLaunch || value.value.command.taskResultContinuation)
     ) {
       const c = value.value.command;
-      const m = c.taskFirstLaunch!;
+      const m = (c.taskFirstLaunch ?? c.taskResultContinuation)!;
       if (
-        firstLaunchStorageKey(m.reference.environmentId, c.threadId) === key &&
+        !(c.taskFirstLaunch && c.taskResultContinuation) &&
+        (c.taskResultContinuation ? continuationStorageKey : firstLaunchStorageKey)(
+          m.reference.environmentId,
+          c.threadId,
+        ) === key &&
         m.commandId === c.commandId &&
         m.messageId === c.messageId &&
         m.threadId === c.threadId
@@ -57,5 +63,17 @@ export function clearRejectedFirstLaunchAttempt(key: string) {
   const saved = readFirstLaunchAttempt(key);
   if (saved.error || saved.attempt?.status !== "rejected")
     throw new Error("Unresolved launch cannot be replaced");
+  sessionStorage.removeItem(key);
+}
+
+export function retireCompletedContinuationAttempt(key: string, commandId: string) {
+  const saved = readFirstLaunchAttempt(key);
+  if (
+    saved.error ||
+    saved.attempt?.status !== "admitted" ||
+    !saved.attempt.command.taskResultContinuation ||
+    saved.attempt.command.commandId !== commandId
+  )
+    throw new Error("Original continuation is not confirmed admitted");
   sessionStorage.removeItem(key);
 }

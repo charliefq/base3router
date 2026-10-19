@@ -41,6 +41,13 @@ type ServerFixture = {
   setEnvironment: (value: string) => void;
   setProviders: (value: ReadonlyArray<ServerProvider>) => void;
   drain: () => Promise<void>;
+  settle: (messageId: string) => Promise<void>;
+  alterLatestOutput: (threadId: string, text: string) => Promise<void>;
+  alterBackgroundWork: (threadId: string) => Promise<void>;
+  holdInput: (text: string) => void;
+  awaitHeldStart: () => Promise<void>;
+  releaseHeldStart: () => void;
+  failInput: (text: string) => void;
   inspect: () => Promise<{
     starts: ReadonlyArray<ModelSelection>;
     inputs: ReadonlyArray<string>;
@@ -198,6 +205,10 @@ const makeClientFixture = Effect.fn("TaskTransport.makeClientFixture")(function*
       command(Commands.readTaskReview(input)),
     creationStatus: (input: Parameters<typeof Commands.readAgentsCreationStatus>[0]) =>
       command(Commands.readAgentsCreationStatus(input)),
+    continuationStatus: (input: Parameters<typeof Commands.readTaskResultContinuationStatus>[0]) =>
+      command(Commands.readTaskResultContinuationStatus(input)),
+    dispatch: (input: OrchestrationV2Command) =>
+      command(request("orchestration.dispatchCommand", input)),
     launchStatus: (input: Parameters<typeof Commands.readTaskFirstLaunchStatus>[0]) =>
       command(Commands.readTaskFirstLaunchStatus(input)),
     revokeCurrent: () =>

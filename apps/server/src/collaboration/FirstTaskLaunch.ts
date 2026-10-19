@@ -1,6 +1,7 @@
 import {
   AuthOrchestrationOperateScope,
   TaskFirstLaunch,
+  TaskResultContinuation,
   TaskContract,
   TaskContractReviewReference,
   isProviderAvailable,
@@ -45,10 +46,30 @@ const decodeAttempt = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2RunAttemptJson),
 );
 const sameMarker = Schema.toEquivalence(TaskFirstLaunch);
+const validContinuation = Schema.is(TaskResultContinuation);
+const sameContinuation = Schema.toEquivalence(TaskResultContinuation);
+type Kind = "first" | "continuation";
+const marker = (c: Dispatch, kind: Kind) =>
+  kind === "first" ? c.taskFirstLaunch : c.taskResultContinuation;
+const markerMessage = (
+  message: {
+    readonly taskFirstLaunch?: Dispatch["taskFirstLaunch"];
+    readonly taskResultContinuation?: Dispatch["taskResultContinuation"];
+  },
+  kind: Kind,
+) => (kind === "first" ? message.taskFirstLaunch : message.taskResultContinuation);
+const equalMarker = (
+  a: NonNullable<Dispatch["taskFirstLaunch"]>,
+  b: NonNullable<Dispatch["taskFirstLaunch"]>,
+  kind: Kind,
+) =>
+  kind === "first"
+    ? sameMarker(a, b)
+    : validContinuation(a) && validContinuation(b) && sameContinuation(a, b);
 const sameContract = Schema.toEquivalence(TaskContract);
 const sameReference = Schema.toEquivalence(TaskContractReviewReference);
 type Dispatch = Extract<OrchestrationV2Command, { type: "message.dispatch" }>;
-const principal = Effect.gen(function* () {
+export const reviewedTaskPrincipal = Effect.gen(function* () {
   const c = yield* PolicyExecutionContext;
   if (
     c.kind !== "session" ||
@@ -62,10 +83,11 @@ const principal = Effect.gen(function* () {
     return yield* deny();
   return c;
 });
-const commandMatches = (c: Dispatch, authorized: boolean) => {
-  const m = c.taskFirstLaunch;
+export const reviewedDispatchMatches = (c: Dispatch, authorized: boolean, kind: Kind = "first") => {
+  const m = marker(c, kind);
   return (
     m !== undefined &&
+    (kind === "first" ? c.taskResultContinuation === undefined : c.taskFirstLaunch === undefined) &&
     m.commandId === c.commandId &&
     m.messageId === c.messageId &&
     m.threadId === c.threadId &&
@@ -100,8 +122,8 @@ export const validateFirstTaskLaunch = Effect.fn("FirstTaskLaunch.validate")(fun
   authorized = false,
 ) {
   if (!c.taskFirstLaunch) return;
-  yield* principal;
-  if (!commandMatches(c, authorized)) return yield* deny();
+  yield* reviewedTaskPrincipal;
+  if (!reviewedDispatchMatches(c, authorized)) return yield* deny();
   const m = c.taskFirstLaunch;
   if (authorized || m.routingMode === "manual") {
     const registry = yield* Effect.serviceOption(ProviderRegistry);
@@ -185,7 +207,16 @@ export const commitFirstTaskLaunch = Effect.fn("FirstTaskLaunch.commit")(functio
 ) {
   if (!c.taskFirstLaunch) return;
   yield* validateFirstTaskLaunch(sql, c, true);
-  const m = c.taskFirstLaunch;
+  yield* commitReviewedTaskDispatch(sql, c, events, "first");
+});
+
+export const commitReviewedTaskDispatch = Effect.fn("ReviewedTaskDispatch.commit")(function* (
+  sql: SqlClient.SqlClient,
+  c: Dispatch,
+  events: ReadonlyArray<OrchestrationV2DomainEvent>,
+  kind: Kind,
+) {
+  const m = marker(c, kind)!;
   const message = events.find((e) => e.type === "message.updated" && e.payload.id === c.messageId);
   const run = events.find(
     (e) => e.type === "run.created" && e.payload.userMessageId === c.messageId,
@@ -197,8 +228,8 @@ export const commitFirstTaskLaunch = Effect.fn("FirstTaskLaunch.commit")(functio
   );
   if (
     message?.type !== "message.updated" ||
-    !message.payload.taskFirstLaunch ||
-    !sameMarker(message.payload.taskFirstLaunch, m) ||
+    !markerMessage(message.payload, kind) ||
+    !equalMarker(markerMessage(message.payload, kind)!, m, kind) ||
     message.payload.text !== m.text ||
     run?.type !== "run.created" ||
     message.payload.runId !== run.payload.id ||
@@ -226,28 +257,34 @@ export const readFirstTaskLaunchStatus = Effect.fn("FirstTaskLaunch.status")(
   function* (
     sql: SqlClient.SqlClient,
     c: OrchestrationV2Command,
+    kind: Kind = "first",
   ): Effect.fn.Return<TaskFirstLaunchStatus, unknown> {
-    if (c.type !== "message.dispatch" || !c.taskFirstLaunch || !commandMatches(c, false))
+    if (
+      c.type !== "message.dispatch" ||
+      !marker(c, kind) ||
+      !reviewedDispatchMatches(c, false, kind)
+    )
       return {
         status: "unknown",
         reason: "Original launch command is unavailable or inconsistent.",
       };
-    const actor = yield* principal;
+    const original = marker(c, kind)!;
+    const actor = yield* reviewedTaskPrincipal;
     const env = yield* Effect.serviceOption(ServerEnvironment);
     if (
       Option.isNone(env) ||
-      (yield* env.value.getEnvironmentId) !== c.taskFirstLaunch.reference.environmentId
+      (yield* env.value.getEnvironmentId) !== original.reference.environmentId
     )
       return { status: "unavailable", reason: "Original environment unavailable." };
     const snapshot = yield* readCollaborationSnapshot(sql, actor.actorId, {
-      environmentId: c.taskFirstLaunch.reference.environmentId,
+      environmentId: original.reference.environmentId,
       canOperate: false,
     });
     const task = snapshot.tasks.find(
       (t) =>
-        t.id === c.taskFirstLaunch!.reference.taskId &&
+        t.id === original.reference.taskId &&
         t.threadId === c.threadId &&
-        t.projectId === c.taskFirstLaunch!.reference.projectId,
+        t.projectId === original.reference.projectId,
     );
     if (!task) return { status: "unknown", reason: "Original task ownership unavailable." };
     const receipts = yield* sql<{
@@ -283,8 +320,8 @@ export const readFirstTaskLaunchStatus = Effect.fn("FirstTaskLaunch.status")(
       actor_id: string;
     }>`SELECT actor_id FROM base3_execution_grants WHERE grant_id=${`grant:message:${c.threadId}:${c.messageId}`}`;
     if (
-      !message.taskFirstLaunch ||
-      !sameMarker(message.taskFirstLaunch, c.taskFirstLaunch) ||
+      !markerMessage(message, kind) ||
+      !equalMarker(markerMessage(message, kind)!, original, kind) ||
       message.text !== c.text ||
       message.runId === null ||
       grants[0]?.actor_id !== actor.actorId
