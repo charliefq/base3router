@@ -224,8 +224,8 @@ For a first task message, you can optionally select **Evidence-grounded summary*
 **Structured comparison** as an instruction-only task skill. Choose Manual, then review
 its exact instructions and version alongside the model and task contract. Selection and
 review start nothing; only your explicit Start includes those instructions. The review
-expires after five minutes and must be repeated if the instructions, model or task facts
-change. These skills grant no tools, permissions or extra budget. Result provenance shows
+expires after five minutes and must be repeated if the instructions, model, authenticated
+session or task facts change. These skills grant no tools, permissions or extra budget. Result provenance shows
 selection and input delivery separately; adapter acceptance means input delivery, not
 successful work or task acceptance.
 

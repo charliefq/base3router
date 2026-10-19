@@ -14,6 +14,7 @@ import {
   taskInstructionSkillModules,
   taskInstructionSkillRef,
   taskInstructionSkillText,
+  taskInstructionSkillBinding,
 } from "@t3tools/shared/taskInstructionSkills";
 import { sha256Hex } from "@t3tools/shared/actionCanonical";
 import { withTaskTransportFixture } from "./testkit/taskCreationTransportFixture";
@@ -220,3 +221,44 @@ it("fails closed for provider catalog IDs, client bodies, expanded fields and re
     expect((await f.inspect()).starts).toHaveLength(0);
   });
 });
+
+it.each(["rehashed expiry", "rehashed launch", "new session"] as const)(
+  "authenticated Start rejects %s despite the same authorized actor",
+  async (mutation) => {
+    await withTaskTransportFixture(async (f) => {
+      const p = await prepare(f, `authenticated-issued-${mutation}`);
+      const reviewed = value(
+        await f.reviewInstructionSkill({
+          launch: p.launch,
+          module: taskInstructionSkillRef(taskInstructionSkillModules()[0]!),
+        }),
+      );
+      if (reviewed.status !== "available") throw new Error(reviewed.reason);
+      let marker: TaskFirstLaunch = { ...p.launch, instructionSkill: reviewed.review };
+      const { bindingSha256: _old, ...binding } = reviewed.review;
+      if (mutation === "rehashed expiry") {
+        const now = Date.now() - 60000;
+        binding.reviewedAt = new Date(now).toISOString();
+        binding.expiresAt = new Date(now + 300000).toISOString();
+      }
+      if (mutation === "rehashed launch")
+        marker = { ...marker, text: "A never-issued replacement request" };
+      if (mutation !== "new session")
+        marker = {
+          ...marker,
+          instructionSkill: {
+            ...binding,
+            bindingSha256: taskInstructionSkillBinding(marker, binding),
+          },
+        };
+      else {
+        await f.disconnect();
+        await f.connect();
+      }
+      const before = await f.executionCounts();
+      expect((await start(f, marker))._tag).toBe("Failure");
+      expect(await f.executionCounts()).toEqual(before);
+      expect((await f.inspect()).starts).toHaveLength(0);
+    });
+  },
+);

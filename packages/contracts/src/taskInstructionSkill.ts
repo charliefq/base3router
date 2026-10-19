@@ -42,6 +42,7 @@ export const TaskInstructionSkillRef = Schema.Unknown.check(
 ).pipe(Schema.decodeTo(RefSchema));
 export type TaskInstructionSkillRef = typeof TaskInstructionSkillRef.Type;
 const ReviewSchema = Schema.Struct({
+  reviewId: TrimmedNonEmptyString.check(Schema.isMaxLength(80)),
   module: TaskInstructionSkillRef,
   actorId: TrimmedNonEmptyString,
   reviewedAt: IsoDateTime,

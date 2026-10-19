@@ -1,4 +1,6 @@
+import * as NodeCrypto from "node:crypto";
 import {
+  TaskInstructionSkillReview,
   TaskInstructionSkillReviewInput,
   type TaskInstructionSkillReviewState,
 } from "@t3tools/contracts";
@@ -59,6 +61,17 @@ const decodeSkillReviewInput = Schema.decodeUnknownOption(TaskInstructionSkillRe
 const decodeStrictLaunch = Schema.decodeUnknownOption(TaskFirstLaunch);
 const validLaunch = (raw: unknown) =>
   Option.isSome(decodeStrictLaunch(raw, { onExcessProperty: "error" }));
+// A single bounded pending issuance lives with the task. Projection replacement/rebuild
+// retires it fail-closed; committed receipts and native delivery never depend on this cache.
+const IssuedInstructionReview = Schema.fromJsonString(
+  Schema.Struct({
+    review: TaskInstructionSkillReview,
+    sessionId: Schema.String,
+    launchSha256: Schema.String,
+  }),
+);
+const decodeIssuedInstructionReview = Schema.decodeUnknownOption(IssuedInstructionReview);
+const encodeIssuedInstructionReview = Schema.encodeSync(IssuedInstructionReview);
 const validContinuation = Schema.is(TaskResultContinuation);
 const sameContinuation = Schema.toEquivalence(TaskResultContinuation);
 type Kind = "first" | "continuation";
@@ -140,6 +153,20 @@ export const validateFirstTaskLaunch = Effect.fn("FirstTaskLaunch.validate")(fun
   const m = c.taskFirstLaunch;
   if (!validLaunch(m)) return yield* deny();
   if (m.instructionSkill) {
+    const rows = yield* sql<{
+      issued_json: string | null;
+    }>`SELECT json_extract(payload_json,'$.__taskInstructionSkillReview') AS issued_json FROM orchestration_v2_projection_threads WHERE thread_id=${m.threadId}`;
+    const issued = rows[0]?.issued_json
+      ? decodeIssuedInstructionReview(rows[0].issued_json)
+      : Option.none();
+    const { instructionSkill: _proof, ...originalLaunch } = m;
+    if (
+      Option.isNone(issued) ||
+      issued.value.sessionId !== principal.sessionId ||
+      argumentHash(issued.value.review) !== argumentHash(m.instructionSkill) ||
+      issued.value.launchSha256 !== argumentHash(originalLaunch)
+    )
+      return yield* deny();
     const skillNow = DateTime.formatIso(yield* DateTime.now);
     yield* Effect.try({
       try: () => verifyInstructionSkillReview(m, principal.actorId, skillNow),
@@ -257,16 +284,31 @@ export const reviewTaskInstructionSkill = Effect.fn("TaskInstructionSkill.review
     yield* validateFirstTaskLaunch(sql, command);
     const now = yield* DateTime.now;
     const binding = {
+      reviewId: NodeCrypto.randomUUID(),
       module: input.module,
       actorId: actor.actorId,
       reviewedAt: DateTime.formatIso(now),
-      expiresAt: DateTime.formatIso(DateTime.add(now, { minutes: 5 })),
+      expiresAt: DateTime.formatIso(
+        DateTime.makeUnsafe(
+          Math.min(
+            DateTime.toEpochMillis(now) + 300000,
+            actor.expiresAt === undefined ? Infinity : Date.parse(actor.expiresAt),
+          ),
+        ),
+      ),
     };
-    return {
-      status: "available",
-      module,
-      review: { ...binding, bindingSha256: taskInstructionSkillBinding(launch, binding) },
-    };
+    const review = { ...binding, bindingSha256: taskInstructionSkillBinding(launch, binding) };
+    const record = encodeIssuedInstructionReview({
+      review,
+      sessionId: actor.sessionId,
+      launchSha256: argumentHash(launch),
+    });
+    if (new TextEncoder().encode(record).length > 4096) return yield* deny();
+    const stored = yield* sql<{
+      thread_id: string;
+    }>`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.__taskInstructionSkillReview',json(${record})) WHERE thread_id=${launch.threadId} RETURNING thread_id`;
+    if (stored.length !== 1) return yield* deny();
+    return { status: "available", module, review };
   },
   Effect.catchCause(() =>
     Effect.succeed({
@@ -285,6 +327,12 @@ export const commitFirstTaskLaunch = Effect.fn("FirstTaskLaunch.commit")(functio
   if (!c.taskFirstLaunch) return;
   yield* validateFirstTaskLaunch(sql, c, true);
   yield* commitReviewedTaskDispatch(sql, c, events, "first");
+  if (c.taskFirstLaunch.instructionSkill) {
+    const retired = yield* sql<{
+      thread_id: string;
+    }>`UPDATE orchestration_v2_projection_threads SET payload_json=json_remove(payload_json,'$.__taskInstructionSkillReview') WHERE thread_id=${c.threadId} AND json_extract(payload_json,'$.__taskInstructionSkillReview.review.reviewId')=${c.taskFirstLaunch.instructionSkill.reviewId} RETURNING thread_id`;
+    if (retired.length !== 1) return yield* deny();
+  }
 });
 
 export const commitReviewedTaskDispatch = Effect.fn("ReviewedTaskDispatch.commit")(function* (

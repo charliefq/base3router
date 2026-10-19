@@ -18,8 +18,8 @@ export function TaskInstructionSkillReadout({
       {selection ? (
         <p>
           Selected body SHA256 {selection.module.contentSha256}; module SHA256{" "}
-          {selection.module.moduleSha256}. Review binding SHA256 {selection.bindingSha256}; reviewed{" "}
-          {selection.reviewedAt}; expires {selection.expiresAt}.
+          {selection.module.moduleSha256}. Review {selection.reviewId}; binding SHA256{" "}
+          {selection.bindingSha256}; reviewed {selection.reviewedAt}; expires {selection.expiresAt}.
         </p>
       ) : null}
       <p>

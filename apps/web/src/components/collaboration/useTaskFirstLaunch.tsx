@@ -655,9 +655,9 @@ export function useTaskFirstLaunch(props: {
               <pre className="whitespace-pre-wrap break-all">{reviewModule.body}</pre>
               <p>
                 Instruction-only; grantsAccess false; tools none; permissions none. Review expires{" "}
-                {review.instructionSkill.expiresAt}. Command {review.commandId}; message{" "}
-                {review.messageId}. Adapter delivery will be recorded separately; this is no
-                completion or acceptance claim.
+                {review.instructionSkill.expiresAt}. Review {review.instructionSkill.reviewId}.
+                Command {review.commandId}; message {review.messageId}. Adapter delivery will be
+                recorded separately; this is no completion or acceptance claim.
               </p>
             </section>
           ) : null}

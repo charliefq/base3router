@@ -64,9 +64,11 @@ export function resolveTaskInstructionSkill(ref: TaskInstructionSkillRef) {
     throw new Error("Instruction module content changed. Review again.");
   return module;
 }
+/** Consistency fingerprint only; admission also requires the exact server-issued session record. */
 export function taskInstructionSkillBinding(
   launch: TaskFirstLaunch,
   proof: {
+    reviewId: string;
     module: TaskInstructionSkillRef;
     actorId: string;
     reviewedAt: string;
@@ -82,6 +84,7 @@ export const taskInstructionSkillText = (module: TaskInstructionSkillModule) =>
 const decodeLaunch = Schema.decodeUnknownOption(TaskFirstLaunch);
 const validLaunch = (raw: unknown) =>
   Option.isSome(decodeLaunch(raw, { onExcessProperty: "error" }));
+/** Checks content and launch consistency, not server issuance or human attention. */
 export function verifyTaskInstructionSkillReview(
   launch: TaskFirstLaunch,
   actorId: string,

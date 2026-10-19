@@ -318,6 +318,7 @@ const instructionDeliverySurvivesStaleUpdate = Effect.gen(function* () {
   const module = taskInstructionSkillRef(taskInstructionSkillModules()[0]!);
   const selection = {
     module,
+    reviewId: "fixture-issued-review",
     actorId: "owner",
     reviewedAt: "2026-10-19T00:00:00.000Z",
     expiresAt: "2026-10-19T00:05:00.000Z",

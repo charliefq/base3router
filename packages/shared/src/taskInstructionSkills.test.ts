@@ -70,6 +70,7 @@ it.each([
 ])("rejects extra instruction review fields %j", (extra) => {
   const proof = {
     module: taskInstructionSkillRef(taskInstructionSkillModules()[0]!),
+    reviewId: "fixture-issued-review",
     actorId: "actor",
     reviewedAt: "2026-10-19T00:00:00.000Z",
     expiresAt: "2026-10-19T00:05:00.000Z",
@@ -107,6 +108,7 @@ it("legacy launch remains valid without selecting a module", () => {
   expect(launch.instructionSkill).toBeUndefined();
   const binding = {
     module: taskInstructionSkillRef(taskInstructionSkillModules()[0]!),
+    reviewId: "fixture-issued-review",
     actorId: "actor",
     reviewedAt: "2026-10-19T00:00:00.000Z",
     expiresAt: "2026-10-19T00:05:00.000Z",
