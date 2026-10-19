@@ -1,5 +1,10 @@
 import {
   EnvironmentId,
+  type WorkflowStagePreviewInput,
+  type WorkflowReconcileDispatchInput,
+  type WorkflowProposeArtifactInput,
+  type WorkflowDispatchStageInput,
+  type WorkflowReadRunInput,
   type AuthEnvironmentScope,
   type ServerProvider,
   type OrchestrationV2Command,
@@ -207,6 +212,16 @@ const makeClientFixture = Effect.fn("TaskTransport.makeClientFixture")(function*
       command(Commands.readConfigurationCatalog(input)),
     configurationStatus: (input: Parameters<typeof Commands.readConfigurationCommandStatus>[0]) =>
       command(Commands.readConfigurationCommandStatus(input)),
+    workflowPreview: (input: typeof WorkflowStagePreviewInput.Type) =>
+      command(request("workflow.stagePreview", input)),
+    workflowDispatch: (input: typeof WorkflowDispatchStageInput.Type) =>
+      command(request("workflow.dispatchStage", input)),
+    workflowReconcile: (input: typeof WorkflowReconcileDispatchInput.Type) =>
+      command(request("workflow.reconcileDispatch", input)),
+    workflowPropose: (input: typeof WorkflowProposeArtifactInput.Type) =>
+      command(request("workflow.proposeArtifact", input)),
+    workflowRun: (input: typeof WorkflowReadRunInput.Type) =>
+      command(request("workflow.readRun", input)),
     workflowAction: (input: Parameters<typeof Commands.writeConfiguration>[0]) =>
       command(request("workflow.action", input)),
     configuration: (input: Parameters<typeof Commands.writeConfiguration>[0]) =>

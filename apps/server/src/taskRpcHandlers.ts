@@ -4,6 +4,7 @@ import {
   WsRpcGroup,
   WS_METHODS,
   WorkflowOperationError,
+  CommandId,
   ThreadId,
   EnvironmentAuthorizationError,
   OrchestrationV2DispatchCommandError,
@@ -11,6 +12,10 @@ import {
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
 import * as Workflow from "./workflow/Workflow.ts";
+import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
+import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
+import { ServerSettingsService } from "./serverSettings.ts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as DateTime from "effect/DateTime";
@@ -47,15 +52,29 @@ export const TaskRpcGroup = RpcGroup.make(
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskReview ||
       rpc._tag === WS_METHODS.workflowCatalog ||
       rpc._tag === WS_METHODS.workflowAction ||
-      rpc._tag === WS_METHODS.workflowConfigurationStatus,
+      rpc._tag === WS_METHODS.workflowConfigurationStatus ||
+      rpc._tag === WS_METHODS.workflowReadRun ||
+      rpc._tag === WS_METHODS.workflowStagePreview ||
+      rpc._tag === WS_METHODS.workflowDispatchStage ||
+      rpc._tag === WS_METHODS.workflowReconcileDispatch ||
+      rpc._tag === WS_METHODS.workflowProposeArtifact,
   ),
 );
+
+const isWorkflowOperationError = Schema.is(WorkflowOperationError);
 
 export const makeTaskRpcHandlers = Effect.fn("ws.makeTaskRpcHandlers")(function* (
   currentSession: AuthenticatedSession,
   recordClientCommandAnalytics: (command: OrchestrationV2Command) => Effect.Effect<void>,
 ) {
   const sql = yield* SqlClient.SqlClient;
+  const providerRegistry = yield* ProviderRegistry;
+  const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
+  const settings = yield* Effect.serviceOption(ServerSettingsService);
+  const recordedDefault =
+    Option.isSome(settings) && settings.value.getRecordedDefaultModelSelection
+      ? settings.value.getRecordedDefaultModelSelection
+      : Effect.succeed(null);
   const sessions = yield* AuthSessionRepository;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const orchestrationEngine = yield* Orchestrator.OrchestratorV2;
@@ -95,13 +114,148 @@ export const makeTaskRpcHandlers = Effect.fn("ws.makeTaskRpcHandlers")(function*
         return yield* effect;
       },
     );
-    return instrumentRpcEffect(method, authorized, attributes);
+    return instrumentRpcEffect(
+      method,
+      authorized.pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+      attributes,
+    );
   };
   const workflowFailure = () =>
     new WorkflowOperationError({
       message: "Workflow action or catalog is unavailable, unauthorized or stale.",
     });
   return TaskRpcGroup.of({
+    [WS_METHODS.workflowReadRun]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.workflowReadRun,
+        Effect.gen(function* () {
+          const catalog = yield* Workflow.workflowCatalogForProject(input.projectId);
+          return catalog.runs.find((run) => run.id === input.runId) ?? null;
+        }).pipe(
+          Effect.catchCause((cause) => {
+            const error = Cause.squash(cause);
+            if (isWorkflowOperationError(error)) return Effect.fail(error);
+            return Effect.fail(
+              new WorkflowOperationError({ message: "Workflow run is unavailable." }),
+            );
+          }),
+        ),
+        { "rpc.aggregate": "workflow" },
+      ),
+    [WS_METHODS.workflowStagePreview]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.workflowStagePreview,
+        Effect.gen(function* () {
+          const [environmentId, providers, settings] = yield* Effect.all([
+            serverEnvironment.getEnvironmentId,
+            providerRegistry.getProviders,
+            recordedDefault,
+          ]);
+          const preview = yield* Workflow.previewWorkflowStage(input, {
+            environmentId,
+            providers,
+            environmentDefaultModelSelection: settings,
+          });
+          return {
+            stage: preview.stage,
+            profile: preview.profile,
+            attempt: preview.attempt,
+            packetText: preview.packetText,
+            route: preview.route,
+            ...(preview.review ? { review: preview.review } : {}),
+          };
+        }).pipe(
+          Effect.catchCause((cause) => {
+            const error = Cause.squash(cause);
+            if (isWorkflowOperationError(error)) return Effect.fail(error);
+            return Effect.fail(
+              new WorkflowOperationError({
+                message: "Workflow stage preview is unavailable.",
+              }),
+            );
+          }),
+        ),
+        { "rpc.aggregate": "workflow" },
+      ),
+    [WS_METHODS.workflowReconcileDispatch]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.workflowReconcileDispatch,
+        Workflow.reconcileWorkflowDispatch(input).pipe(
+          Effect.catchCause(() =>
+            Effect.fail(
+              new WorkflowOperationError({
+                message: "Dispatch outcome UNKNOWN. No resend was attempted.",
+              }),
+            ),
+          ),
+        ),
+        { "rpc.aggregate": "workflow" },
+      ),
+    [WS_METHODS.workflowDispatchStage]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.workflowDispatchStage,
+        Effect.gen(function* () {
+          const [environmentId, providers, settings] = yield* Effect.all([
+            serverEnvironment.getEnvironmentId,
+            providerRegistry.getProviders,
+            recordedDefault,
+          ]);
+          return yield* Workflow.dispatchWorkflowStage(input, {
+            environmentId,
+            providers,
+            environmentDefaultModelSelection: settings,
+            launch: (payload) =>
+              threadLaunch
+                .launch({
+                  commandId: CommandId.make(`workflow-create-${input.dispatchId}`),
+                  threadId: payload.threadId,
+                  projectId: input.projectId,
+                  title: `Workflow: ${payload.stage.label}`,
+                  modelSelection: input.target,
+                  taskGovernance: "required",
+                  taskContract: payload.taskContract,
+                  runtimeMode: "approval-required",
+                  interactionMode: "default",
+                  workspaceStrategy: { type: "root" },
+                  initialMessage: {
+                    messageId: payload.messageId,
+                    text: payload.prompt,
+                    attachments: [],
+                  },
+                  createdBy: "user",
+                  creationSource: "web",
+                })
+                .pipe(Effect.as({ sequence: 1 })),
+          });
+        }).pipe(
+          Effect.catchCause((cause) => {
+            const error = Cause.squash(cause);
+            if (isWorkflowOperationError(error)) return Effect.fail(error);
+            return Effect.fail(
+              new WorkflowOperationError({
+                message: "Workflow dispatch failed or is stale.",
+              }),
+            );
+          }),
+        ),
+        { "rpc.aggregate": "workflow" },
+      ),
+    [WS_METHODS.workflowProposeArtifact]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.workflowProposeArtifact,
+        Workflow.proposeWorkflowArtifact(input, () => Effect.succeed({ sequence: 1 })).pipe(
+          Effect.catchCause((cause) => {
+            const error = Cause.squash(cause);
+            if (isWorkflowOperationError(error)) return Effect.fail(error);
+            return Effect.fail(
+              new WorkflowOperationError({
+                message: "Workflow artifact could not be proposed.",
+              }),
+            );
+          }),
+        ),
+        { "rpc.aggregate": "workflow" },
+      ),
     [WS_METHODS.workflowConfigurationStatus]: (input) =>
       observeRpcEffect(
         WS_METHODS.workflowConfigurationStatus,

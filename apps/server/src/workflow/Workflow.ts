@@ -1,4 +1,9 @@
 import {
+  AuthOrchestrationOperateScope,
+  WorkflowStageDispatchMutation,
+  WorkflowReconcileDispatchInput,
+  WorkflowDispatchStatus,
+  type TaskContractFields,
   AgentProfile,
   AgentProfileDraft,
   CommandId,
@@ -21,11 +26,19 @@ import {
   type WorkflowStagePreviewInput,
   type WorkflowTemplate,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
+import { argumentHash } from "../policy/grantArguments.ts";
+import { PolicyExecutionContext } from "../policy/executionContext.ts";
+import {
+  CommandReceiptStoreV2,
+  layer as receiptLayer,
+} from "../orchestration-v2/CommandReceiptStore.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { authorizeProfileAction, visibleConfiguration } from "./TaskConfigurations.ts";
 import * as Dispatcher from "../dispatcher/Dispatcher.ts";
 import { projectedSummarySection } from "../dispatcher/Handoff.ts";
@@ -81,6 +94,8 @@ const ProjectRows = Schema.Array(Schema.Struct({ projectId: ProjectId }));
 const SourceRows = Schema.Array(
   Schema.Struct({
     turnId: TurnId,
+    outputMessageId: Schema.NullOr(MessageId),
+    sourceItemId: Schema.NullOr(Schema.String),
     state: Schema.String,
     assistantText: Schema.NullOr(Schema.String),
     sessionStatus: Schema.NullOr(Schema.String),
@@ -88,6 +103,8 @@ const SourceRows = Schema.Array(
     worktreePath: Schema.NullOr(Schema.String),
   }),
 );
+const decodeProjectRows = Schema.decodeUnknownEffect(ProjectRows);
+const decodeSourceRows = Schema.decodeUnknownEffect(SourceRows);
 const decodeActionReceipts = Schema.decodeUnknownEffect(
   Schema.Array(
     Schema.Struct({
@@ -100,6 +117,10 @@ const decodeActionReceipts = Schema.decodeUnknownEffect(
       ),
     }),
   ),
+);
+const encodeDispatchInput = Schema.encodeEffect(Schema.fromJsonString(WorkflowDispatchStageInput));
+const encodeStageMutation = Schema.encodeEffect(
+  Schema.fromJsonString(WorkflowStageDispatchMutation),
 );
 const sameAction = Schema.toEquivalence(WorkflowActionInputSchema);
 const sameProfileDraft = Schema.toEquivalence(AgentProfileDraft);
@@ -197,7 +218,7 @@ const requireWorkflowProject = Effect.fn("Workflow.requireProject")(function* (
   const sql = yield* SqlClient.SqlClient;
   const raw =
     yield* sql`SELECT project_id AS "projectId" FROM projection_projects WHERE project_id = ${projectId} AND deleted_at IS NULL LIMIT 1`;
-  const rows = yield* Schema.decodeUnknownEffect(ProjectRows)(raw);
+  const rows = yield* decodeProjectRows(raw);
   if (rows.length === 0)
     return yield* new WorkflowOperationError({
       message: "Project is unavailable in this environment.",
@@ -525,6 +546,166 @@ const buildWorkflowTaskPacket = (catalog: WorkflowCatalog, projectId: ProjectId,
   return { run, stage, attempt, profile, packetText: text };
 };
 
+const dispatchSubject = Effect.gen(function* () {
+  const actor = yield* PolicyExecutionContext;
+  if (actor.kind === "kernel-test") return actor.actorId;
+  if (
+    actor.kind !== "session" ||
+    !actor.actorId.trim() ||
+    !actor.sessionId.trim() ||
+    !actor.scopes.includes(AuthOrchestrationOperateScope) ||
+    (actor.expiresAt !== undefined &&
+      (!Number.isFinite(Date.parse(actor.expiresAt)) ||
+        Date.parse(actor.expiresAt) <= DateTime.toEpochMillis(yield* DateTime.now)))
+  )
+    return yield* new WorkflowOperationError({
+      message: "A current operating session is required.",
+    });
+  return actor.actorId;
+});
+const reviewDigest = (
+  input: {
+    environmentId: string;
+    projectId: string;
+    runId: string;
+    target: unknown;
+    taskContract: TaskContractFields;
+    additionalInstruction: string;
+  },
+  packet: ReturnType<typeof buildWorkflowTaskPacket>,
+  expiresAt: string,
+  subject: string,
+  routeBinding: unknown,
+) =>
+  argumentHash({
+    ...input,
+    stage: packet.stage,
+    attempt: packet.attempt.attempt,
+    updatedAt: packet.run.updatedAt,
+    packetText: packet.packetText,
+    expiresAt,
+    subject,
+    routeBinding,
+  });
+const decodeDispatchRows = Schema.decodeUnknownEffect(
+  Schema.Array(
+    Schema.Struct({
+      actorId: Schema.String,
+      prompt: Schema.String,
+      input: Schema.fromJsonString(WorkflowDispatchStageInput),
+      mutation: Schema.fromJsonString(WorkflowStageDispatchMutation),
+    }),
+  ),
+);
+const readDispatch = Effect.fn("Workflow.readDispatch")(function* (
+  input: typeof WorkflowReconcileDispatchInput.Type,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  return (yield* decodeDispatchRows(
+    yield* sql`SELECT actor_id AS "actorId",
+    input_json AS "input", mutation_json AS "mutation", prompt FROM base3_workflow_dispatches
+    WHERE project_id=${input.projectId} AND run_id=${input.runId}
+      AND stage_id=${input.stageId} AND attempt=${input.attempt}`,
+  ))[0];
+});
+
+/** Reads the original native receipts; only the derived workflow binding may be repaired.
+ * This path must never call launch, including when no receipt can be proved after restart. */
+export const reconcileWorkflowDispatch = Effect.fn("Workflow.reconcileDispatch")(function* (
+  input: typeof WorkflowReconcileDispatchInput.Type,
+) {
+  const subject = yield* dispatchSubject;
+  const environment = yield* Effect.serviceOption(ServerEnvironment);
+  if (
+    Option.isSome(environment) &&
+    (yield* environment.value.getEnvironmentId) !== input.environmentId
+  )
+    return yield* new WorkflowOperationError({ message: "Original dispatch environment changed." });
+  const sql = yield* SqlClient.SqlClient;
+  return yield* sql.withTransaction(
+    Effect.gen(function* () {
+      yield* requireWorkflowProject(input.projectId);
+      const row = yield* readDispatch(input);
+      const catalog = yield* workflowCatalogForProject(input.projectId);
+      const run = catalog.runs.find((entry) => entry.id === input.runId) ?? null;
+      if (!row)
+        return {
+          status: "not-submitted" as const,
+          dispatchId: null,
+          threadId: null,
+          messageId: null,
+          run,
+        } satisfies typeof WorkflowDispatchStatus.Type;
+      if (row.actorId !== subject || row.input.environmentId !== input.environmentId)
+        return yield* new WorkflowOperationError({
+          message: "Original dispatch belongs to another session or environment.",
+        });
+      const { threadId, messageId } = row.mutation;
+      const result = { dispatchId: row.input.dispatchId, threadId, messageId, run };
+      const store = yield* CommandReceiptStoreV2.pipe(Effect.provide(receiptLayer));
+      const commandId = CommandId.make(`workflow-create-${row.input.dispatchId}`);
+      const create = yield* store.getByCommandId(commandId);
+      const message = yield* store.getByCommandId(CommandId.make(`${commandId}:initial-message`));
+      if (
+        Option.isNone(create) ||
+        Option.isNone(message) ||
+        create.value.status !== "accepted" ||
+        message.value.status !== "accepted" ||
+        create.value.threadId !== threadId ||
+        message.value.threadId !== threadId ||
+        create.value.commandType !== "thread.create" ||
+        message.value.commandType !== "message.dispatch"
+      )
+        return { ...result, status: "unknown" as const };
+      const proof = yield* sql<{ runId: string }>`SELECT r.run_id AS "runId"
+    FROM orchestration_v2_projection_runs r
+    JOIN orchestration_v2_projection_threads t ON t.thread_id=r.thread_id
+    JOIN orchestration_v2_projection_messages m ON m.thread_id=r.thread_id
+      AND m.message_id=${messageId} AND m.role='user'
+    WHERE r.thread_id=${threadId} AND r.ordinal=1 AND t.project_id=${input.projectId}
+      AND json_extract(r.payload_json,'$.userMessageId')=${messageId}
+      AND json_extract(m.payload_json,'$.text')=${row.prompt}
+      AND t.deleted_at IS NULL
+      AND json_extract(r.payload_json,'$.modelSelection.instanceId')=${row.input.target.instanceId}
+      AND json_extract(r.payload_json,'$.modelSelection.model')=${row.input.target.model}
+      AND json_extract(t.payload_json,'$.taskGovernance')='required'
+      AND json_extract(t.payload_json,'$.taskContract.goal')=${row.input.review?.taskContract.goal ?? null}
+      AND json_extract(t.payload_json,'$.taskContract.redirect')=${row.input.review?.taskContract.redirect ?? null}
+      AND json_extract(t.payload_json,'$.taskContract.acceptance')=${row.input.review?.taskContract.acceptance ?? null}
+      AND json_extract(t.payload_json,'$.taskContract.brake.maxProviderStarts')=${row.input.review?.taskContract.brake.maxProviderStarts ?? null}
+      AND json_extract(t.payload_json,'$.taskContract.brake.maxTokens')=${row.input.review?.taskContract.brake.maxTokens ?? null}
+      AND json_extract(t.payload_json,'$.taskContract.brake.deadlineAt')=${row.input.review?.taskContract.brake.deadlineAt ?? null}
+      AND json_extract(t.payload_json,'$.taskContract.brake.stopConditions')=${row.input.review?.taskContract.brake.stopConditions ?? null}
+      AND json_extract(t.payload_json,'$.taskContract.brake.maxCostUsd') IS ${row.input.review?.taskContract.brake.maxCostUsd ?? null}
+    LIMIT 1`;
+      if (proof.length !== 1) return { ...result, status: "unknown" as const };
+      const attempt = run?.attempts.findLast((entry) => entry.stageId === input.stageId);
+      if (attempt?.attempt !== input.attempt) return { ...result, status: "unknown" as const };
+      if (attempt.destinationThreadId === threadId && attempt.destinationMessageId === messageId)
+        return { ...result, status: "accepted" as const };
+      if (
+        run?.status !== "active" ||
+        run.currentStageId !== input.stageId ||
+        attempt.status !== "pending"
+      )
+        return { ...result, status: "unknown" as const };
+      yield* persistWorkflowMutation({
+        type: "workflow.record",
+        commandId: CommandId.make(`workflow-dispatch-${row.input.dispatchId}`),
+        projectId: input.projectId,
+        mutation: row.mutation,
+        createdAt: row.mutation.at,
+      });
+      const repaired = yield* workflowCatalogForProject(input.projectId);
+      return {
+        ...result,
+        run: repaired.runs.find((entry) => entry.id === input.runId) ?? null,
+        status: "accepted" as const,
+      };
+    }),
+  );
+});
+
 export const previewWorkflowStage = Effect.fn("Workflow.previewStage")(function* (
   input: typeof WorkflowStagePreviewInput.Type,
   dependencies: {
@@ -554,7 +735,36 @@ export const previewWorkflowStage = Effect.fn("Workflow.previewStage")(function*
     environmentDefaultModelSelection: dependencies.environmentDefaultModelSelection,
     ...(input.preferredRoute === undefined ? {} : { candidateMode: "explicit-only" as const }),
   });
+  const review =
+    input.taskContract && input.preferredRoute && route.gate.decision === "ALLOW"
+      ? {
+          expiresAt: DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 5 })),
+          taskContract: input.taskContract,
+        }
+      : undefined;
+  const subject = review ? yield* dispatchSubject : "";
   return {
+    ...(review
+      ? {
+          review: {
+            ...review,
+            digest: reviewDigest(
+              {
+                environmentId: input.environmentId,
+                projectId: input.projectId,
+                runId: input.runId,
+                target: input.preferredRoute,
+                taskContract: review.taskContract,
+                additionalInstruction: input.additionalInstruction ?? "",
+              },
+              packet,
+              review.expiresAt,
+              subject,
+              Dispatcher.taskRouteBindingFromDecision(route),
+            ),
+          },
+        }
+      : {}),
     stage: packet.stage,
     profile: packet.profile,
     attempt: packet.attempt.attempt,
@@ -608,7 +818,9 @@ export const proposeWorkflowArtifact = Effect.fn("Workflow.proposeArtifact")(fun
   const raw = yield* sql`
     SELECT t.run_id AS "turnId",
       CASE t.status WHEN 'failed' THEN 'error' ELSE t.status END AS "state",
-      json_extract(am.payload_json, '$.text') AS "assistantText",
+      COALESCE(am.message_id, json_extract(ai.payload_json, '$.messageId')) AS "outputMessageId",
+      CASE WHEN am.message_id IS NULL THEN ai.turn_item_id ELSE NULL END AS "sourceItemId",
+      COALESCE(json_extract(am.payload_json, '$.text'), json_extract(ai.payload_json, '$.text')) AS "assistantText",
       (
         SELECT s.status
         FROM orchestration_v2_projection_provider_sessions s
@@ -628,19 +840,29 @@ export const proposeWorkflowArtifact = Effect.fn("Workflow.proposeArtifact")(fun
         ORDER BY created_at DESC, message_id DESC
         LIMIT 1
       )
-    WHERE t.thread_id = ${attempt.destinationThreadId}
+    LEFT JOIN orchestration_v2_projection_turn_items ai ON ai.turn_item_id = (
+      SELECT turn_item_id FROM orchestration_v2_projection_turn_items
+      WHERE thread_id=t.thread_id AND run_id=t.run_id
+        AND json_extract(payload_json, '$.type')='assistant_message'
+      ORDER BY json_extract(payload_json, '$.ordinal') DESC, turn_item_id DESC LIMIT 1
+    )
+    WHERE t.thread_id = ${attempt.destinationThreadId} AND t.ordinal = 1
       AND json_extract(t.payload_json, '$.userMessageId') = ${attempt.destinationMessageId}
       AND th.project_id = ${input.projectId}
     LIMIT 1
   `;
-  const source = (yield* Schema.decodeUnknownEffect(SourceRows)(raw))[0];
-  if (!source || !["completed", "interrupted", "error"].includes(source.state))
+  const source = (yield* decodeSourceRows(raw))[0];
+  if (!source || !["completed", "interrupted", "cancelled", "error"].includes(source.state))
     return yield* new WorkflowOperationError({
       message: "Wait for the stage turn to settle before proposing its artifact.",
     });
   if (source.sessionStatus === "starting" || source.sessionStatus === "running")
     return yield* new WorkflowOperationError({
       message: "Wait for the active provider session to stop before proposing its artifact.",
+    });
+  if (source.state === "completed" && (!source.outputMessageId || !source.assistantText?.trim()))
+    return yield* new WorkflowOperationError({
+      message: "No attributable output is available for this completed run.",
     });
   let remaining = 12_000;
   const sections = stage.requiredOutputSections.map((label) => {
@@ -658,6 +880,18 @@ export const proposeWorkflowArtifact = Effect.fn("Workflow.proposeArtifact")(fun
     attempt: attempt.attempt,
     kind: stage.artifactKind,
     sourceTurnId: source.turnId,
+    sourceOutcome:
+      source.state === "error"
+        ? "failed"
+        : source.state === "interrupted"
+          ? "interrupted"
+          : source.state === "cancelled"
+            ? "cancelled"
+            : "completed",
+    sourceThreadId: attempt.destinationThreadId,
+    sourceMessageId: attempt.destinationMessageId,
+    outputMessageId: source.outputMessageId,
+    ...(source.sourceItemId ? { sourceItemId: source.sourceItemId } : {}),
     profileId: stage.profileId,
     profileVersion: stage.profileVersion,
     sections,
@@ -691,6 +925,7 @@ export interface WorkflowStageLaunch {
   readonly messageId: MessageId;
   readonly prompt: string;
   readonly stage: WorkflowStage;
+  readonly taskContract: TaskContractFields;
 }
 
 export const dispatchWorkflowStage = Effect.fn("Workflow.dispatchStage")(function* (
@@ -706,6 +941,9 @@ export const dispatchWorkflowStage = Effect.fn("Workflow.dispatchStage")(functio
     ) => Effect.Effect<{ readonly sequence: number }, Error>;
   },
 ) {
+  const subject = yield* dispatchSubject;
+  if (input.environmentId !== dependencies.environmentId)
+    return yield* new WorkflowOperationError({ message: "Environment changed. Review again." });
   if (input.runnerKind === "cursor-cloud") {
     return yield* new WorkflowOperationError({
       message: "Cursor Cloud REST is not a second engine.",
@@ -725,6 +963,11 @@ export const dispatchWorkflowStage = Effect.fn("Workflow.dispatchStage")(functio
   const existingAttempt = existingRun?.attempts.find(
     (attempt) => attempt.stageId === input.stageId && attempt.attempt === input.attempt,
   );
+  const prior = yield* readDispatch(input);
+  if (prior && (prior.actorId !== subject || argumentHash(prior.input) !== argumentHash(input)))
+    return yield* new WorkflowOperationError({
+      message: "Original dispatch identity conflicts. Do not resend.",
+    });
   if (
     existingAttempt?.destinationThreadId !== null &&
     existingAttempt?.destinationThreadId !== undefined
@@ -747,6 +990,14 @@ export const dispatchWorkflowStage = Effect.fn("Workflow.dispatchStage")(functio
       threadId,
       messageId,
     } satisfies typeof WorkflowDispatchStageResult.Type;
+  }
+  if (prior) {
+    const recovered = yield* reconcileWorkflowDispatch(input);
+    if (recovered.status !== "accepted" || recovered.run === null)
+      return yield* new WorkflowOperationError({
+        message: "Dispatch outcome UNKNOWN. Reconcile the original identity; do not resend.",
+      });
+    return { run: recovered.run, threadId, messageId };
   }
   const packet = buildWorkflowTaskPacket(existing, input.projectId, input.runId);
   if (packet.stage.id !== input.stageId || packet.attempt.attempt !== input.attempt) {
@@ -778,33 +1029,94 @@ export const dispatchWorkflowStage = Effect.fn("Workflow.dispatchStage")(functio
     });
   }
   const at = yield* nowIso;
+  const review = input.review;
+  const expires = review ? Date.parse(review.expiresAt) : NaN;
+  if (
+    !review ||
+    !Number.isFinite(expires) ||
+    expires <= Date.parse(at) ||
+    expires > Date.parse(at) + 300_000 ||
+    review.digest !==
+      reviewDigest(
+        {
+          environmentId: input.environmentId,
+          projectId: input.projectId,
+          runId: input.runId,
+          target: input.target,
+          taskContract: review.taskContract,
+          additionalInstruction: input.additionalInstruction,
+        },
+        packet,
+        review.expiresAt,
+        subject,
+        routeBinding,
+      ) ||
+    review.taskContract.brake.maxProviderStarts !== 1 ||
+    !review.taskContract.brake.maxTokens ||
+    review.taskContract.brake.maxTokens > 100_000 ||
+    !review.taskContract.brake.deadlineAt ||
+    !Number.isFinite(Date.parse(review.taskContract.brake.deadlineAt)) ||
+    Date.parse(review.taskContract.brake.deadlineAt) <= Date.parse(at) ||
+    Date.parse(review.taskContract.brake.deadlineAt) > Date.parse(at) + 86_400_000
+  )
+    return yield* new WorkflowOperationError({
+      message: "Review the current exact model and bounded task contract before Start.",
+    });
+  const mutation: typeof WorkflowStageDispatchMutation.Type = {
+    type: "stage.dispatch",
+    runId: packet.run.id,
+    stageId: packet.stage.id,
+    attempt: packet.attempt.attempt,
+    threadId,
+    messageId,
+    routeBinding,
+    at,
+  };
+  const sql = yield* SqlClient.SqlClient;
+  const encodedInput = yield* encodeDispatchInput(input);
+  const encodedMutation = yield* encodeStageMutation(mutation);
   const prompt = `${packet.packetText}\n\n## User instruction\n${input.additionalInstruction || "Continue with the bounded stage task."}`;
+  const claimed = yield* sql.withTransaction(
+    Effect.gen(function* () {
+      const current = buildWorkflowTaskPacket(
+        yield* workflowCatalogForProject(input.projectId),
+        input.projectId,
+        input.runId,
+      );
+      if (
+        current.run.updatedAt !== packet.run.updatedAt ||
+        current.packetText !== packet.packetText ||
+        current.stage.id !== input.stageId ||
+        current.attempt.attempt !== input.attempt
+      )
+        return yield* new WorkflowOperationError({
+          message: "The reviewed occurrence changed before Start.",
+        });
+      return yield* sql`INSERT INTO base3_workflow_dispatches
+    (dispatch_id, project_id, run_id, stage_id, attempt, actor_id, input_json, mutation_json, prompt)
+    VALUES (${input.dispatchId}, ${input.projectId}, ${input.runId}, ${input.stageId}, ${input.attempt},
+      ${subject}, ${encodedInput}, ${encodedMutation}, ${prompt}) ON CONFLICT DO NOTHING RETURNING dispatch_id`;
+    }),
+  );
+  if (claimed.length !== 1)
+    return yield* new WorkflowOperationError({
+      message: "An original dispatch already exists. Reconcile it; do not resend.",
+    });
   yield* dependencies
-    .launch({
-      threadId,
-      messageId,
-      prompt,
-      stage: packet.stage,
-    })
+    .launch({ threadId, messageId, prompt, stage: packet.stage, taskContract: review.taskContract })
     .pipe(
       Effect.mapError(
-        () => new WorkflowOperationError({ message: "Workflow dispatch failed or is stale." }),
+        () =>
+          new WorkflowOperationError({
+            message: "Dispatch outcome UNKNOWN. Reconcile the original identity; do not resend.",
+          }),
       ),
     );
   yield* persistWorkflowMutation({
     type: "workflow.record",
     commandId: CommandId.make(`workflow-dispatch-${input.dispatchId}`),
     projectId: input.projectId,
-    mutation: {
-      type: "stage.dispatch",
-      runId: packet.run.id,
-      stageId: packet.stage.id,
-      attempt: packet.attempt.attempt,
-      threadId,
-      messageId,
-      routeBinding,
-      at,
-    },
+    mutation,
     createdAt: at,
   });
   const latest = yield* workflowCatalogForProject(input.projectId);

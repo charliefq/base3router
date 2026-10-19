@@ -284,6 +284,16 @@ const capabilityStepTables = Effect.gen(function* () {
   )`;
 });
 
+const workflowDispatchTables = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE TABLE base3_workflow_dispatches (
+    dispatch_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, run_id TEXT NOT NULL,
+    stage_id TEXT NOT NULL, attempt INTEGER NOT NULL, actor_id TEXT NOT NULL,
+    input_json TEXT NOT NULL, mutation_json TEXT NOT NULL, prompt TEXT NOT NULL,
+    UNIQUE(project_id, run_id, stage_id, attempt)
+  )`;
+});
+
 const steps: ReadonlyArray<
   readonly [string, string, Effect.Effect<void, SqlError, SqlClient.SqlClient>]
 > = [
@@ -309,6 +319,7 @@ const steps: ReadonlyArray<
   ["b3-073", "ImageDeliveryDenials", imageDeliveryDenials],
   ["b3-074", "DelegatedMailboxAuthority", delegatedMailboxAuthorityTables],
   ["b3-075", "GovernedCapabilityStep", capabilityStepTables],
+  ["b3-076", "WorkflowDispatchIdentity", workflowDispatchTables],
 ];
 
 export const runBase3PolicyMigrations = Effect.gen(function* () {

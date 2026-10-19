@@ -78,6 +78,8 @@ import {
   WorkflowReadRunInput,
   WorkflowRun,
   WorkflowStagePreview,
+  WorkflowReconcileDispatchInput,
+  WorkflowDispatchStatus,
   WorkflowStagePreviewInput,
 } from "./workflow.ts";
 import {
@@ -570,6 +572,7 @@ export const WS_METHODS = {
   workflowReadRun: "workflow.readRun",
   workflowAction: "workflow.action",
   workflowStagePreview: "workflow.stagePreview",
+  workflowReconcileDispatch: "workflow.reconcileDispatch",
   workflowDispatchStage: "workflow.dispatchStage",
   workflowProposeArtifact: "workflow.proposeArtifact",
   actionGateAuthorizeTool: "actionGate.authorizeTool",
@@ -627,6 +630,11 @@ const WsWorkflowActionRpc = Rpc.make(WS_METHODS.workflowAction, {
 const WsWorkflowStagePreviewRpc = Rpc.make(WS_METHODS.workflowStagePreview, {
   payload: WorkflowStagePreviewInput,
   success: WorkflowStagePreview,
+  error: WorkflowRpcError,
+});
+const WsWorkflowReconcileDispatchRpc = Rpc.make(WS_METHODS.workflowReconcileDispatch, {
+  payload: WorkflowReconcileDispatchInput,
+  success: WorkflowDispatchStatus,
   error: WorkflowRpcError,
 });
 const WsWorkflowDispatchStageRpc = Rpc.make(WS_METHODS.workflowDispatchStage, {
@@ -1863,6 +1871,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsWorkflowReadRunRpc,
   WsWorkflowActionRpc,
   WsWorkflowStagePreviewRpc,
+  WsWorkflowReconcileDispatchRpc,
   WsWorkflowDispatchStageRpc,
   WsWorkflowProposeArtifactRpc,
   WsActionGateAuthorizeToolRpc,

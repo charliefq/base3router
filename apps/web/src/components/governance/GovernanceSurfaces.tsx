@@ -8,12 +8,14 @@ import type {
   WorkflowCatalog,
   WorkflowRun,
   WorkflowStage,
+  WorkflowArtifact,
 } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { WorkflowStagePreview } from "./WorkflowStagePreview";
 import { TaskContractReadout } from "../chat/TaskContractPanel";
+import { randomUUID } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { useProjects } from "../../state/entities";
@@ -62,6 +64,41 @@ function currentStage(catalog: WorkflowCatalog, run: WorkflowRun): WorkflowStage
   );
 }
 
+function ArtifactReview(props: { readonly artifact: WorkflowArtifact }) {
+  const artifact = props.artifact;
+  return (
+    <article className="space-y-1 border-t pt-2" aria-label={`Artifact ${artifact.id}`}>
+      <p className="text-xs">
+        {artifact.kind} · {artifact.status} · Stage {artifact.stageId} · Attempt {artifact.attempt}
+      </p>
+      <p className="text-xs">
+        Source outcome: {artifact.sourceOutcome ?? "Unknown (legacy record)"} · Run{" "}
+        {artifact.sourceTurnId ?? "Unknown"}
+      </p>
+      <p className="text-xs">
+        Thread {artifact.sourceThreadId ?? "Unknown"} · User message{" "}
+        {artifact.sourceMessageId ?? "Unknown"} · Output message{" "}
+        {artifact.outputMessageId ?? "Unknown"}
+      </p>
+      <p className="text-xs">
+        Redactions: {artifact.redacted ? "present" : "none recorded"} · Missing sections:{" "}
+        {artifact.missingSections.join(", ") || "none"}
+      </p>
+      {artifact.sections.map((section) => (
+        <section key={section.label}>
+          <h4 className="text-xs font-medium">
+            {section.label}
+            {section.missing ? " · Unknown" : ""}
+          </h4>
+          <p className="whitespace-pre-wrap text-xs">
+            {section.missing ? "Unknown" : section.content}
+          </p>
+        </section>
+      ))}
+    </article>
+  );
+}
+
 export function ProjectWorkflowDecisions(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
@@ -75,31 +112,63 @@ export function ProjectWorkflowDecisions(props: {
     }),
   );
   const recordAction = useAtomCommand(workflowEnvironment.action, { reportFailure: false });
+  const proposeArtifact = useAtomCommand(workflowEnvironment.proposeArtifact, {
+    reportFailure: false,
+  });
+  const operation = useRef({ pending: false, generation: 0 });
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     catalogQuery.refresh();
   }, [props.refreshTick]);
   const catalog = catalogQuery.data;
-  const activeRun = catalog?.runs.find((run) => run.status === "active") ?? null;
+  const activeRun =
+    catalog?.runs.find((run) => run.status === "active" || run.status === "paused") ?? null;
   const decision =
     catalog !== null && activeRun !== null ? pendingDecision(catalog, activeRun) : null;
   const stage = catalog !== null && activeRun !== null ? currentStage(catalog, activeRun) : null;
   const attempt = activeRun?.attempts.findLast((entry) => entry.stageId === stage?.id);
-  const submit = async (input: Parameters<typeof recordAction>[0]["input"]): Promise<void> => {
+  const operationContext = JSON.stringify([
+    props.environmentId,
+    props.projectId,
+    activeRun?.id,
+    activeRun?.updatedAt,
+    stage?.id,
+    attempt?.attempt,
+  ]);
+  const observedContext = useRef(operationContext);
+  useLayoutEffect(() => {
+    if (observedContext.current !== operationContext) {
+      observedContext.current = operationContext;
+      operation.current.pending = false;
+      setBusy(false);
+    }
+    return () => {
+      operation.current.generation++;
+    };
+  }, [operationContext, observedContext]);
+  const submitOperation = async (run: () => Promise<{ readonly _tag: string }>): Promise<void> => {
+    if (operation.current.pending || catalogQuery.isPending || !catalogQuery.isSuccess) return;
+    operation.current.pending = true;
+    const generation = ++operation.current.generation;
+    setBusy(true);
     setError(null);
-    const result = await recordAction({
-      environmentId: props.environmentId,
-      input,
-    });
-    if (result._tag === "Failure") {
-      const failure = squashAtomCommandFailure(result);
-      setError(
-        failure instanceof Error && failure.message.trim().length > 0
-          ? failure.message
-          : "The workflow action failed.",
-      );
+    try {
+      const result = await run();
+      if (operation.current.generation !== generation) return;
+      if (result._tag === "Failure") throw squashAtomCommandFailure(result as never);
+    } catch (failure) {
+      if (operation.current.generation === generation)
+        setError(failure instanceof Error ? failure.message : "The workflow action failed.");
+    } finally {
+      if (operation.current.generation === generation) {
+        operation.current.pending = false;
+        setBusy(false);
+      }
     }
   };
+  const submit = (input: Parameters<typeof recordAction>[0]["input"]) =>
+    submitOperation(() => recordAction({ environmentId: props.environmentId, input }));
   return (
     <article className="rounded-md border border-border/60 p-3" data-workflow-surface="">
       <h3 className="text-xs font-medium">Workflow · {props.projectTitle}</h3>
@@ -121,6 +190,7 @@ export function ProjectWorkflowDecisions(props: {
           <p className="text-xs text-muted-foreground">No active workflow.</p>
           <div>
             <Button
+              disabled={busy || catalogQuery.isPending || !catalogQuery.isSuccess}
               size="sm"
               variant="outline"
               type="button"
@@ -148,7 +218,8 @@ export function ProjectWorkflowDecisions(props: {
             {stage?.label ?? activeRun.currentStageId ?? activeRun.status} · {activeRun.status}
             {stage?.type === "human_gate" ? " · human gate" : ""}
           </p>
-          {stage?.type === "agent" &&
+          {activeRun.status === "active" &&
+          stage?.type === "agent" &&
           attempt?.status === "pending" &&
           catalogQuery.isSuccess &&
           !catalogQuery.isPending ? (
@@ -170,6 +241,79 @@ export function ProjectWorkflowDecisions(props: {
               attempt={attempt.attempt}
             />
           ) : null}
+          {attempt?.destinationThreadId ? (
+            <div className="space-y-1 text-xs">
+              <a
+                href={`/${encodeURIComponent(props.environmentId)}/${encodeURIComponent(attempt.destinationThreadId)}`}
+              >
+                Open stage conversation and native Stop
+              </a>
+              <p>
+                Dispatch acceptance is not completion. Workflow pause/cancel only changes the
+                workflow ledger; use Stop in the conversation to interrupt native work.
+              </p>
+              {activeRun.status === "active" && attempt.status === "dispatched" ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  type="button"
+                  disabled={busy || catalogQuery.isPending || !catalogQuery.isSuccess}
+                  onClick={() =>
+                    void submitOperation(() =>
+                      proposeArtifact({
+                        environmentId: props.environmentId,
+                        input: {
+                          projectId: props.projectId,
+                          runId: activeRun.id,
+                          artifactId: `artifact_${activeRun.id}_${attempt.stageId}_${attempt.attempt}`,
+                          commandId: `propose_${activeRun.id}_${attempt.stageId}_${attempt.attempt}`,
+                        },
+                      }),
+                    )
+                  }
+                >
+                  Inspect settled output
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+          {activeRun.artifacts.map((artifact) => (
+            <ArtifactReview key={artifact.id} artifact={artifact} />
+          ))}
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              type="button"
+              disabled={busy || catalogQuery.isPending || !catalogQuery.isSuccess}
+              onClick={() =>
+                void submit({
+                  type: activeRun.status === "paused" ? "run.resume" : "run.pause",
+                  projectId: props.projectId,
+                  commandId: `workflow_${randomUUID().replaceAll("-", "")}`,
+                  runId: activeRun.id,
+                })
+              }
+            >
+              {activeRun.status === "paused" ? "Resume workflow ledger" : "Pause workflow ledger"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              type="button"
+              disabled={busy || catalogQuery.isPending || !catalogQuery.isSuccess}
+              onClick={() =>
+                void submit({
+                  type: "run.cancel",
+                  projectId: props.projectId,
+                  commandId: `cancel${activeRun.id}`,
+                  runId: activeRun.id,
+                })
+              }
+            >
+              Cancel workflow ledger
+            </Button>
+          </div>
           {decision === null ? (
             <p className="text-xs text-muted-foreground">
               {stage?.type === "agent" &&
@@ -192,6 +336,14 @@ export function ProjectWorkflowDecisions(props: {
                   size="sm"
                   type="button"
                   data-workflow-approve=""
+                  disabled={
+                    busy ||
+                    catalogQuery.isPending ||
+                    !catalogQuery.isSuccess ||
+                    (decision.stage.type === "agent" &&
+                      activeRun.artifacts.find((entry) => entry.id === decision.artifactId)
+                        ?.sourceOutcome !== "completed")
+                  }
                   onClick={() => {
                     void submit({
                       type: "decision.record",
@@ -213,6 +365,7 @@ export function ProjectWorkflowDecisions(props: {
                   variant="outline"
                   type="button"
                   data-workflow-reject=""
+                  disabled={busy || catalogQuery.isPending || !catalogQuery.isSuccess}
                   onClick={() => {
                     void submit({
                       type: "decision.record",
@@ -231,9 +384,31 @@ export function ProjectWorkflowDecisions(props: {
                 </Button>
                 <Button
                   size="sm"
+                  variant="outline"
+                  type="button"
+                  disabled={busy || catalogQuery.isPending || !catalogQuery.isSuccess}
+                  onClick={() =>
+                    void submit({
+                      type: "decision.record",
+                      projectId: props.projectId,
+                      commandId: `cmd${activeRun.id}${decision.stage.id}${decision.attempt.attempt}revision`,
+                      decisionId: `d${activeRun.id}${decision.stage.id}${decision.attempt.attempt}`,
+                      runId: activeRun.id,
+                      stageId: decision.stage.id,
+                      attempt: decision.attempt.attempt,
+                      artifactId: decision.artifactId,
+                      value: "request_revision",
+                    })
+                  }
+                >
+                  Request revision
+                </Button>
+                <Button
+                  size="sm"
                   variant="ghost"
                   type="button"
                   data-workflow-cancel=""
+                  disabled={busy || catalogQuery.isPending || !catalogQuery.isSuccess}
                   onClick={() => {
                     void submit({
                       type: "run.cancel",
@@ -250,6 +425,21 @@ export function ProjectWorkflowDecisions(props: {
           )}
         </div>
       )}
+      {catalog?.runs
+        .filter((run) => run !== activeRun)
+        .map((run) => (
+          <details key={run.id}>
+            <summary>
+              Workflow {run.id} · {run.status}
+            </summary>
+            <p className="text-xs">
+              {run.attempts.length} attempts · {run.decisions.length} decisions
+            </p>
+            {run.artifacts.map((artifact) => (
+              <ArtifactReview key={artifact.id} artifact={artifact} />
+            ))}
+          </details>
+        ))}
     </article>
   );
 }

@@ -46,7 +46,10 @@ it.effect(
             );
             assert.deepEqual(
               yield* sql`SELECT migration_id,name FROM base3_policy_migrations WHERE migration_id>'b3-074'`,
-              [{ migration_id: "b3-075", name: "GovernedCapabilityStep" }],
+              [
+                { migration_id: "b3-075", name: "GovernedCapabilityStep" },
+                { migration_id: "b3-076", name: "WorkflowDispatchIdentity" },
+              ],
             );
             assert.deepEqual(yield* sql`SELECT * FROM base3_capability_steps`, []);
             assert.deepEqual(yield* sql`SELECT * FROM base3_execution_grants`, []);

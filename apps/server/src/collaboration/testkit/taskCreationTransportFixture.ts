@@ -168,7 +168,59 @@ export async function withTaskCreationTransportFixture(
               engine,
               Layer.succeed(SqlClient.SqlClient, f.sql),
               ThreadManagement.layer.pipe(Layer.provide(engine)),
-              Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
+              // Transport fake at the launch boundary; the separate workflow process journey
+              // covers the real ThreadLaunchService and its preparation/recovery receipts.
+              Layer.mock(ThreadLaunch.ThreadLaunchService)({
+                launch: (input) =>
+                  Effect.gen(function* () {
+                    const initial = input.initialMessage;
+                    if (!input.threadId || !initial?.messageId)
+                      return yield* Effect.die("workflow fixture requires stable IDs");
+                    yield* f.orchestrator.dispatch({
+                      type: "thread.create",
+                      commandId: input.commandId,
+                      threadId: input.threadId,
+                      projectId: input.projectId,
+                      title: input.title,
+                      modelSelection: input.modelSelection,
+                      runtimeMode: input.runtimeMode,
+                      interactionMode: input.interactionMode,
+                      branch: null,
+                      worktreePath: null,
+                      taskGovernance: input.taskGovernance,
+                      taskContract: input.taskContract,
+                      createdBy: "user",
+                      creationSource: "web",
+                    });
+                    yield* f.orchestrator.dispatch({
+                      type: "message.dispatch",
+                      commandId: CommandId.make(`${input.commandId}:initial-message`),
+                      threadId: input.threadId,
+                      messageId: initial.messageId,
+                      text: initial.text,
+                      attachments: [],
+                      modelSelection: input.modelSelection,
+                      dispatchMode: { type: "start_immediately" },
+                      createdBy: "user",
+                      creationSource: "web",
+                    });
+                    return {
+                      threadId: input.threadId,
+                      projection: yield* f.orchestrator.getThreadProjection(input.threadId),
+                      resumed: false,
+                    };
+                  }).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new ThreadLaunch.ThreadLaunchError({
+                          operation: "dispatch-message",
+                          commandId: input.commandId,
+                          projectId: input.projectId,
+                          cause,
+                        }),
+                    ),
+                  ),
+              }),
               ServerConfig.layerTest(process.cwd(), { prefix: "b3r-task-transport-" }),
               environmentLayer,
               Layer.succeed(ServerRuntimeStartup, {
@@ -226,8 +278,21 @@ export async function withTaskCreationTransportFixture(
                 );
                 const actualDispatch = handlers[ORCHESTRATION_V2_WS_METHODS.dispatchCommand];
                 const actualConfiguration = handlers[WS_METHODS.workflowAction];
+                const actualWorkflowDispatch = handlers[WS_METHODS.workflowDispatchStage];
                 const layer = group.toLayer({
                   ...handlers,
+                  [WS_METHODS.workflowDispatchStage]: (input) =>
+                    actualWorkflowDispatch(input).pipe(
+                      Effect.flatMap((result) =>
+                        drop
+                          ? Effect.gen(function* () {
+                              drop = false;
+                              yield* Deferred.succeed(dropped, undefined);
+                              return yield* Effect.never;
+                            })
+                          : Effect.succeed(result),
+                      ),
+                    ),
                   [WS_METHODS.workflowAction]: (input) =>
                     actualConfiguration(input).pipe(
                       Effect.flatMap((result) =>

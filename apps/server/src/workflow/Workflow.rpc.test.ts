@@ -12,6 +12,7 @@ import {
   type WorkflowMutation,
 } from "@t3tools/contracts";
 import { assert, expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
@@ -24,6 +25,7 @@ import { BUILTIN_AGENT_PROFILES, BUILTIN_WORKFLOW_TEMPLATES } from "./Builtins.t
 import { initialWorkflowRun } from "./Policy.ts";
 import { projectWorkflowEvent, type WorkflowRecordedEvent } from "./Projection.ts";
 import {
+  previewWorkflowStage,
   dispatchWorkflowStage,
   performWorkflowAction,
   workflowCatalogForProject,
@@ -94,6 +96,7 @@ const insertProject = Effect.fn("workflow.rpc.insertProject")(function* () {
   yield* sql`DELETE FROM projection_workflow_runs`;
   yield* sql`DELETE FROM projection_workflow_cursors`;
   yield* sql`DELETE FROM base3_workflow_commands`;
+  yield* sql`DELETE FROM base3_workflow_dispatches`;
   yield* sql`DELETE FROM projection_projects WHERE project_id = ${projectId}`;
   yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at) VALUES (${projectId}, 'Project', '/tmp/workflow-rpc', '[]', ${at}, ${at})`;
 });
@@ -378,7 +381,7 @@ memoryLayer("workflow human decisions", (it) => {
       );
       assert.equal(stale._tag, "Failure");
       const launches: string[] = [];
-      const dispatchInput = {
+      const draftInput = {
         environmentId,
         projectId,
         runId: "run-1",
@@ -388,6 +391,27 @@ memoryLayer("workflow human decisions", (it) => {
         target: route.target,
         additionalInstruction: "",
       };
+      const review = (yield* previewWorkflowStage(
+        {
+          environmentId,
+          projectId,
+          runId: "run-1",
+          preferredRoute: route.target,
+          taskContract: {
+            goal: "Architecture",
+            redirect: "Current stage only",
+            acceptance: "Human review",
+            brake: {
+              maxProviderStarts: 1,
+              maxTokens: 4000,
+              deadlineAt: DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 10 })),
+              stopConditions: "Stop after output",
+            },
+          },
+        },
+        { environmentId, providers: [provider(true)], environmentDefaultModelSelection: null },
+      )).review;
+      const dispatchInput = { ...draftInput, ...(review ? { review } : {}) };
       const launched = yield* dispatchWorkflowStage(dispatchInput, {
         environmentId,
         providers: [provider(true)],
@@ -460,6 +484,27 @@ memoryLayer("workflow human decisions", (it) => {
       );
       assert.equal(closed._tag, "Failure");
       const launches: string[] = [];
+      const review = (yield* previewWorkflowStage(
+        {
+          environmentId,
+          projectId,
+          runId: "run-1",
+          preferredRoute: route.target,
+          additionalInstruction: "Stay on the bound route.",
+          taskContract: {
+            goal: "Architecture",
+            redirect: "Current stage only",
+            acceptance: "Human review",
+            brake: {
+              maxProviderStarts: 1,
+              maxTokens: 4000,
+              deadlineAt: DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 10 })),
+              stopConditions: "Stop after output",
+            },
+          },
+        },
+        { environmentId, providers: [provider(true)], environmentDefaultModelSelection: null },
+      )).review;
       const dispatched = yield* dispatchWorkflowStage(
         {
           environmentId,
@@ -468,6 +513,7 @@ memoryLayer("workflow human decisions", (it) => {
           stageId: "architecture",
           attempt: 1,
           dispatchId: "dispatch-arch-2",
+          ...(review ? { review } : {}),
           target: route.target,
           additionalInstruction: "Stay on the bound route.",
         },

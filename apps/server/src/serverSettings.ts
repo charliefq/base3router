@@ -253,6 +253,10 @@ export class ServerSettingsService extends Context.Service<
 
     /** Recorded nonsecret metadata only; never loads files or materializes credentials. */
     readonly getRecordedWorktreeDefault?: Effect.Effect<boolean, ServerSettingsError>;
+    readonly getRecordedDefaultModelSelection?: Effect.Effect<
+      ModelSelection | null,
+      ServerSettingsError
+    >;
 
     /** Patch settings and persist. Returns the new full settings object. */
     readonly updateSettings: (
@@ -321,6 +325,9 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
       getSettings,
       getRecordedWorktreeDefault: Ref.get(currentSettingsRef).pipe(
         Effect.map((settings) => settings.newWorktreesStartFromOrigin),
+      ),
+      getRecordedDefaultModelSelection: Ref.get(currentSettingsRef).pipe(
+        Effect.map((settings) => settings.defaultModelSelection),
       ),
       updateSettings: (patch) =>
         updateTestSettings((currentSettings) =>
@@ -637,9 +644,13 @@ const make = Effect.gen(function* () {
   const watcherScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
 
+  const recordedModelDefault = yield* Ref.make<ModelSelection | null>(null);
   const recordedWorktreeDefault = yield* Ref.make<Option.Option<boolean>>(Option.none());
   const recordWorktreeDefault = (settings: ServerSettings) =>
-    Ref.set(recordedWorktreeDefault, Option.some(settings.newWorktreesStartFromOrigin));
+    Effect.all([
+      Ref.set(recordedWorktreeDefault, Option.some(settings.newWorktreesStartFromOrigin)),
+      Ref.set(recordedModelDefault, settings.defaultModelSelection),
+    ]).pipe(Effect.asVoid);
   const emitChange = (settings: ServerSettings) =>
     recordWorktreeDefault(settings).pipe(
       Effect.andThen(PubSub.publish(changesPubSub, settings)),
@@ -1256,6 +1267,7 @@ const make = Effect.gen(function* () {
   return {
     start,
     ready: Deferred.await(startedDeferred),
+    getRecordedDefaultModelSelection: Ref.get(recordedModelDefault),
     getRecordedWorktreeDefault: Ref.get(recordedWorktreeDefault).pipe(
       Effect.flatMap(
         Option.match({

@@ -52,6 +52,19 @@ export function createWorkflowEnvironmentAtoms<R, E>(
       label: "environment-data:workflow:stage-preview",
       tag: WS_METHODS.workflowStagePreview,
     }),
+    reconcileDispatch: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:workflow:reconcile-dispatch",
+      tag: WS_METHODS.workflowReconcileDispatch,
+      onSuccess: (target, registry) =>
+        Effect.sync(() =>
+          registry.refresh(
+            catalog({
+              environmentId: target.environmentId,
+              input: { projectId: target.input.projectId },
+            }),
+          ),
+        ),
+    }),
     dispatchStage: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:workflow:dispatch-stage",
       tag: WS_METHODS.workflowDispatchStage,

@@ -127,7 +127,7 @@ it("recovers real command receipts after process death before stage persistence,
   assert.deepEqual(after.receipts, before.receipts);
   await run(directory, "recover");
   assert.deepEqual(inspect(directory), after);
-  assert.equal(calls(directory).filter((call) => call.event === "launch.enter").length, 2);
+  assert.equal(calls(directory).filter((call) => call.event === "launch.enter").length, 1);
   assert.equal(calls(directory).filter((call) => call.event === "provider.openSession").length, 0);
 });
 
@@ -158,7 +158,7 @@ it("rejects conflicting route, dispatch identity and future attempt after recove
     assert.equal(report(directory, phase).result, "Failure");
     assert.deepEqual(inspect(directory), before);
   }
-  assert.equal(calls(directory).filter((call) => call.event === "launch.enter").length, 2);
+  assert.equal(calls(directory).filter((call) => call.event === "launch.enter").length, 1);
   assert.equal(calls(directory).filter((call) => call.event === "provider.openSession").length, 0);
 });
 
@@ -199,3 +199,87 @@ it("rejects a superseded attempt after a revision is persisted by another proces
   assert.equal(calls(directory).filter((call) => call.event === "provider.openSession").length, 0);
   assert.deepEqual(inspect(directory), before);
 });
+
+it("executes one disposable fake-provider Discovery, inspects real persisted output and reaches Architecture pending without an automatic successor", async () => {
+  const directory = fixture();
+  await run(directory, "journey");
+  const result = JSON.parse(
+    NodeFS.readFileSync(NodePath.join(directory, "journey.json"), "utf8"),
+  ) as {
+    artifact: {
+      sourceOutcome: string;
+      sourceTurnId: string;
+      sourceMessageId: string;
+      outputMessageId: string;
+      sections: Array<{ content: string }>;
+    };
+    duplicate: unknown;
+    gate: { currentStageId: string };
+    architecture: {
+      currentStageId: string;
+      attempts: Array<{ stageId: string; status: string; destinationThreadId: string | null }>;
+    };
+    sourceRunId: string;
+    native: {
+      thread: {
+        taskGovernance: string;
+        taskContract: { brake: { maxProviderStarts: number; maxTokens: number } };
+      };
+    };
+  };
+  assert.equal(result.artifact.sourceOutcome, "completed");
+  assert.equal(result.artifact.sourceTurnId, result.sourceRunId);
+  assert.equal(result.artifact.sourceMessageId, "workflow-message-recovery-dispatch");
+  assert.equal(result.artifact.outputMessageId, "disposable-fake-output");
+  assert.isTrue(
+    result.artifact.sections.some((section) =>
+      section.content.includes("Disposable fake discovery product"),
+    ),
+  );
+  assert.deepEqual(result.artifact, result.duplicate);
+  assert.equal(result.gate.currentStageId, "build_gate");
+  assert.equal(result.architecture.currentStageId, "architecture");
+  assert.equal(result.architecture.attempts.at(-1)?.status, "pending");
+  assert.equal(result.architecture.attempts.at(-1)?.destinationThreadId, null);
+  assert.equal(result.native.thread.taskGovernance, "required");
+  assert.equal(result.native.thread.taskContract.brake.maxProviderStarts, 1);
+  assert.equal(result.native.thread.taskContract.brake.maxTokens, 4000);
+  assert.equal(
+    calls(directory).filter((call) => call.event === "provider.startTurn.fake").length,
+    1,
+  );
+  assert.equal(calls(directory).filter((call) => call.event === "launch.enter").length, 1);
+  const before = inspect(directory);
+  await run(directory, "journey-read");
+  const reloaded = JSON.parse(
+    NodeFS.readFileSync(NodePath.join(directory, "journey-read.json"), "utf8"),
+  ) as { runs: Array<unknown> };
+  assert.deepEqual(reloaded.runs[0], result.architecture);
+  assert.deepEqual(inspect(directory), before);
+});
+
+it("keeps uncertainty after a restart with no native receipt and never re-enters launch", async () => {
+  const directory = fixture();
+  await run(directory, "unknown-launch");
+  assert.equal(report(directory, "unknown-launch").result, "Failure");
+  const before = inspect(directory);
+  await run(directory, "recover");
+  assert.equal(report(directory, "recover").result, "Failure");
+  assert.deepEqual(inspect(directory), before);
+  assert.equal(calls(directory).filter((call) => call.event === "launch.enter").length, 1);
+  assert.equal(before.threads, 0);
+});
+it.each(["pause-original", "replace-original-model"])(
+  "does not repair a stale or substituted binding after %s",
+  async (change) => {
+    const directory = fixture();
+    await run(directory, "crash");
+    await run(directory, change);
+    const before = inspect(directory);
+    await run(directory, "recover");
+    assert.equal(report(directory, "recover").result, "Failure");
+    assert.deepEqual(inspect(directory), before);
+    assert.equal(before.stage.destinationThreadId, null);
+    assert.equal(calls(directory).filter((call) => call.event === "launch.enter").length, 1);
+  },
+);

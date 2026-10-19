@@ -17,7 +17,11 @@ import { runMigrations } from "../persistence/Migrations.ts";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./Builtins.ts";
 import { initialWorkflowRun } from "./Policy.ts";
 import { projectWorkflowEvent, type WorkflowRecordedEvent } from "./Projection.ts";
-import { proposeWorkflowArtifact, type WorkflowRecordCommand } from "./Workflow.ts";
+import {
+  performWorkflowAction,
+  proposeWorkflowArtifact,
+  type WorkflowRecordCommand,
+} from "./Workflow.ts";
 
 const encodeText = Schema.encodeSync(Schema.fromJsonString(Schema.Struct({ text: Schema.String })));
 const projectId = ProjectId.make("project-1");
@@ -112,3 +116,65 @@ layer("workflow artifact extraction", (it) => {
       }),
   );
 });
+
+it.effect.each(["failed", "interrupted", "cancelled"] as const)(
+  "preserves settled %s source outcome and cannot approve it as completed",
+  (outcome) =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO projection_projects(project_id,title,workspace_root,scripts_json,created_at,updated_at) VALUES (${projectId},'Fixture','/tmp','[]',${at},${at})`;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads(thread_id,project_id,title,default_provider,runtime_mode,interaction_mode,created_at,updated_at,payload_json) VALUES (${threadId},${projectId},'Fixture','codex','approval-required','default',${at},${at},'{}')`;
+      yield* projectWorkflowEvent(
+        event(1, {
+          type: "run.start",
+          run: initialWorkflowRun({
+            runId: "run-1",
+            projectId,
+            template: BUILTIN_WORKFLOW_TEMPLATES[0]!,
+            originThreadId: null,
+            originMessageId: null,
+            at,
+          }),
+        }),
+      );
+      yield* projectWorkflowEvent(
+        event(2, {
+          type: "stage.dispatch",
+          runId: "run-1",
+          stageId: "discovery",
+          attempt: 1,
+          threadId,
+          messageId,
+          routeBinding: route,
+          at,
+        }),
+      );
+      yield* sql`INSERT INTO orchestration_v2_projection_runs(run_id,thread_id,ordinal,provider,status,requested_at,payload_json) VALUES ('source-run',${threadId},1,'codex',${outcome},${at},'{"userMessageId":"user-1"}')`;
+      const artifact = yield* proposeWorkflowArtifact(
+        { projectId, runId: "run-1", artifactId: "failed-artifact", commandId: "propose-failed" },
+        () => Effect.succeed({ sequence: 1 }),
+      );
+      assert.equal(artifact.sourceOutcome, outcome);
+      assert.isTrue(
+        artifact.sections.every((section) => section.missing && section.content === "Unknown"),
+      );
+      const approved = yield* Effect.exit(
+        performWorkflowAction(
+          {
+            type: "decision.record",
+            projectId,
+            commandId: "approve-failed",
+            decisionId: "failed-decision",
+            runId: "run-1",
+            stageId: "discovery",
+            attempt: 1,
+            artifactId: artifact.id,
+            value: "approve",
+          },
+          () => Effect.succeed({ sequence: 1 }),
+        ),
+      );
+      assert.equal(approved._tag, "Failure");
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);

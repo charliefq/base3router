@@ -107,7 +107,7 @@ const preview = (): WorkflowStagePreview => {
   };
 };
 const button = (name = "Preview stage") =>
-  renderer.root.findAllByType("button").find((node) => node.children.includes(name))!;
+  renderer.root.findAllByType("button").find((node) => node.children.join("") === name)!;
 const text = () => JSON.stringify(renderer.toJSON());
 const update = async () => {
   await act(async () => renderer.update(<ProjectWorkflowDecisions {...props} />));
@@ -121,7 +121,26 @@ beforeEach(async () => {
   catalog = { profiles: [profile], templates: [template], runs: [run] };
   revision = 1;
   isPending = false;
-  mocks.read.mockReset().mockImplementation(async () => ({ _tag: "Success", value: preview() }));
+  const storage = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+  });
+  mocks.read.mockReset().mockImplementation(async (target) => ({
+    _tag: "Success",
+    value: {
+      ...preview(),
+      ...(target.input.taskContract
+        ? {
+            review: {
+              digest: "fixture-review",
+              expiresAt: new Date(Date.now() + 300000).toISOString(),
+              taskContract: target.input.taskContract,
+            },
+          }
+        : {}),
+    },
+  }));
   mocks.action.mockReset();
   mocks.options.mockClear();
   mocks.refresh.mockClear();
@@ -156,7 +175,7 @@ it("reads only on demand, deduplicates same-render clicks and shows the actual r
   await act(async () => response.resolve({ _tag: "Success", value: preview() }));
   expect(text()).toContain("configured-provider");
   expect(text()).toContain("configured-model");
-  expect(text()).toContain("not dispatch permission");
+  expect(text()).toContain("Preview and review start no work");
   expect(mocks.action).not.toHaveBeenCalled();
   expect(mocks.options).toHaveBeenCalledWith({ reportFailure: false });
   await click();
@@ -323,4 +342,148 @@ it("ignores an old request error after switching environment and reading a new p
   await act(async () => response.resolve());
   expect(text()).not.toContain("old environment offline");
   expect(text()).toContain("configured-model");
+});
+
+const fill = async (label: string, value: string) => {
+  await act(async () =>
+    renderer.root.findByProps({ "aria-label": label }).props.onChange({ target: { value } }),
+  );
+};
+const reviewStage = async () => {
+  await click();
+  await click("Choose configured-provider / configured-model");
+  await fill("Goal", "Produce a discovery brief");
+  await fill("Redirect", "Only Discovery, then stop");
+  await fill("Acceptance", "Human reviews the listed sections");
+  await fill("Stop conditions", "Stop before the next stage");
+  await click("Review exact stage");
+};
+it("reviews without execution, then starts once with the exact reviewed contract and pre-saved identity", async () => {
+  await reviewStage();
+  expect(mocks.action).not.toHaveBeenCalled();
+  expect(button("Start reviewed stage").props.disabled).toBe(false);
+  const response = deferred<unknown>();
+  mocks.action.mockImplementationOnce((target) => {
+    const persisted = localStorage.getItem(
+      `workflow-dispatch:${JSON.stringify([environmentId, projectId, run.id, "test-stage", 1])}`,
+    );
+    expect(persisted).toBe(target.input.dispatchId);
+    return response.promise;
+  });
+  await act(async () => {
+    const start = button("Start reviewed stage").props.onClick;
+    start();
+    start();
+  });
+  expect(mocks.action).toHaveBeenCalledTimes(1);
+  expect(mocks.action.mock.calls[0]![0].input).toMatchObject({
+    target: {
+      instanceId: "configured-provider",
+      model: "configured-model",
+    },
+    review: {
+      taskContract: {
+        goal: "Produce a discovery brief",
+        brake: { maxProviderStarts: 1, maxTokens: 4000 },
+      },
+    },
+  });
+  await act(async () =>
+    response.resolve({ _tag: "Success", value: { threadId: "fixture-thread" } }),
+  );
+  expect(text()).toContain("Acceptance is not completed work");
+  expect(button("Start reviewed stage").props.disabled).toBe(true);
+});
+it.each([
+  "Goal",
+  "Redirect",
+  "Acceptance",
+  "Stop conditions",
+  "Maximum tokens",
+  "Deadline (UTC)",
+  "Model",
+  "Provider instance",
+  "Additional instruction",
+])("invalidates review after editing %s", async (field) => {
+  await reviewStage();
+  await fill(field, field === "Maximum tokens" ? "2000" : "changed");
+  expect(button("Start reviewed stage").props.disabled).toBe(true);
+  expect(mocks.action).not.toHaveBeenCalled();
+});
+it("retains UNKNOWN across a lost reply, Reset and remount and only reconciles original identity", async () => {
+  await reviewStage();
+  mocks.action.mockRejectedValueOnce(new Error("lost reply"));
+  await click("Start reviewed stage");
+  const original = mocks.action.mock.calls[0]![0].input.dispatchId;
+  await click("Reset preview");
+  expect(button("Start reviewed stage").props.disabled).toBe(true);
+  await act(async () => renderer.unmount());
+  await act(async () => {
+    renderer = create(<ProjectWorkflowDecisions {...props} />);
+  });
+  expect(text()).toContain(original);
+  expect(mocks.action).toHaveBeenCalledTimes(1);
+  mocks.action.mockResolvedValueOnce({
+    _tag: "Success",
+    value: { status: "unknown", dispatchId: original },
+  });
+  await click("Reconcile original dispatch");
+  expect(mocks.action).toHaveBeenCalledTimes(2);
+  expect(mocks.action.mock.calls[1]![0].input).toEqual({
+    environmentId,
+    projectId,
+    runId: run.id,
+    stageId: "test-stage",
+    attempt: 1,
+  });
+  expect(text()).toContain("No resend was attempted");
+  expect(button("Start reviewed stage").props.disabled).toBe(true);
+});
+it("shows actual artifact sections, provenance, Unknown and redactions before human decisions", async () => {
+  catalog = {
+    ...catalog,
+    runs: [
+      {
+        ...run,
+        attempts: [{ ...run.attempts[0]!, status: "proposed" }],
+        artifacts: [
+          {
+            id: "artifact-fixture",
+            runId: run.id,
+            stageId: "test-stage",
+            attempt: 1,
+            kind: "result",
+            sourceTurnId: null,
+            sourceOutcome: "failed",
+            profileId: profile.id,
+            profileVersion: 1,
+            sections: [
+              {
+                label: "Evidence",
+                content: "Observed fake output [credential omitted]",
+                missing: false,
+              },
+              { label: "Missing", content: "Unknown", missing: true },
+            ],
+            missingSections: ["Missing"],
+            extractionVersion: 1,
+            redacted: true,
+            status: "proposed",
+            createdAt: run.createdAt,
+            acceptedAt: null,
+          },
+        ],
+      },
+    ],
+  };
+  await update();
+  expect(text()).toContain("Observed fake output");
+  expect(text()).toContain("failed");
+  expect(text()).toContain("Unknown");
+  expect(text()).toContain("present");
+  expect(button("Approve").props.disabled).toBe(true);
+  expect(mocks.action).not.toHaveBeenCalled();
+  mocks.action.mockResolvedValueOnce({ _tag: "Success", value: catalog });
+  await click("Request revision");
+  expect(mocks.action.mock.calls[0]![0].input.value).toBe("request_revision");
 });

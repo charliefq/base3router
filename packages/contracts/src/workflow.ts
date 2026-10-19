@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { TaskContractFields } from "./taskContract.ts";
 import { ModelSelection } from "./modelSelection.ts";
 
 import {
@@ -163,6 +164,13 @@ export const WorkflowArtifact = Schema.Struct({
   attempt: Attempt,
   kind: Id,
   sourceTurnId: Schema.NullOr(TurnId),
+  sourceOutcome: Schema.optionalKey(
+    Schema.Literals(["completed", "failed", "interrupted", "cancelled"]),
+  ),
+  sourceThreadId: Schema.optionalKey(ThreadId),
+  sourceMessageId: Schema.optionalKey(MessageId),
+  outputMessageId: Schema.optionalKey(Schema.NullOr(MessageId)),
+  sourceItemId: Schema.optionalKey(TrimmedNonEmptyString),
   profileId: Schema.NullOr(AgentProfileId),
   profileVersion: Schema.NullOr(Version),
   sections: Schema.Array(WorkflowArtifactSection).check(Schema.isMaxLength(20)),
@@ -309,11 +317,32 @@ export const WorkflowActionInput = Schema.Union([
 ]);
 export type WorkflowActionInput = typeof WorkflowActionInput.Type;
 
+export const WorkflowDispatchReview = Schema.Struct({
+  digest: TrimmedNonEmptyString,
+  expiresAt: IsoDateTime,
+  taskContract: TaskContractFields,
+});
+export const WorkflowReconcileDispatchInput = Schema.Struct({
+  environmentId: EnvironmentId,
+  projectId: ProjectId,
+  runId: WorkflowRunId,
+  stageId: WorkflowStageId,
+  attempt: Attempt,
+});
+export const WorkflowDispatchStatus = Schema.Struct({
+  status: Schema.Literals(["not-submitted", "unknown", "accepted"]),
+  dispatchId: Schema.NullOr(RecordId),
+  threadId: Schema.NullOr(ThreadId),
+  messageId: Schema.NullOr(MessageId),
+  run: Schema.NullOr(WorkflowRun),
+});
 export const WorkflowStagePreviewInput = Schema.Struct({
   environmentId: EnvironmentId,
   projectId: ProjectId,
   runId: WorkflowRunId,
   preferredRoute: Schema.optional(DispatcherRouteTarget),
+  taskContract: Schema.optionalKey(TaskContractFields),
+  additionalInstruction: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(2_000))),
   cursorCloudTarget: Schema.optionalKey(CursorCloudExecutionTarget),
 });
 export const WorkflowStagePreview = Schema.Struct({
@@ -322,6 +351,7 @@ export const WorkflowStagePreview = Schema.Struct({
   attempt: Attempt,
   packetText: TrimmedNonEmptyString.check(Schema.isMaxLength(16_000)),
   route: DispatcherRouteDecision,
+  review: Schema.optionalKey(WorkflowDispatchReview),
   cursorCloud: Schema.optionalKey(CursorCloudDispatchPreview),
 });
 export type WorkflowStagePreview = typeof WorkflowStagePreview.Type;
@@ -334,6 +364,7 @@ export const WorkflowDispatchStageInput = Schema.Struct({
   dispatchId: RecordId.check(Schema.isMaxLength(100)),
   target: DispatcherRouteTarget,
   additionalInstruction: Schema.String.check(Schema.isMaxLength(2_000)),
+  review: Schema.optionalKey(WorkflowDispatchReview),
   runnerKind: Schema.optionalKey(Schema.Literal("cursor-cloud")),
   cursorCloudTarget: Schema.optionalKey(CursorCloudExecutionTarget),
 });

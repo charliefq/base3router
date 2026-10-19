@@ -477,6 +477,12 @@ export function applyWorkflowMutation(
         (!artifact || artifact.status !== "proposed" || attempt.status !== "proposed")
       )
         reject("Review the current proposed artifact first.");
+      if (
+        decision.value === "approve" &&
+        artifact?.sourceOutcome !== undefined &&
+        artifact.sourceOutcome !== "completed"
+      )
+        reject("Failed or interrupted output cannot be approved as completed work.");
       if (stage.type !== "agent" && decision.artifactId !== null)
         reject("A human gate cannot claim a provider artifact.");
       if (stage.type === "human_gate" && attempt.status !== "pending")
