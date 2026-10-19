@@ -322,10 +322,36 @@ if (NodePath.resolve(process.argv[1] ?? "") === NodeURL.fileURLToPath(import.met
   if (action === "start" || action === "restart") {
     if (action === "restart") {
       NodeAssert.ok(root);
-      await stopLocalProductRuntime(
-        readLocalProductRuntime(root),
-        process.argv.includes("--crash"),
+      const prior = readLocalProductRuntime(root);
+      NodeAssert.ok(
+        !NodeFS.existsSync(exitFile(root, prior.serverPid)),
+        "Restart requires a live process for its pre-restart checkpoint; use start --runtime for a previously stopped fixture",
       );
+      const checkpoint = NodeChildProcess.spawnSync(
+        process.execPath,
+        [
+          NodePath.join(repo, "scripts/local-product-check.ts"),
+          "--checkpoint",
+          "--runtime",
+          root,
+          "--output",
+          output,
+          "--recovery-kind",
+          process.argv.includes("--crash") ? "crash" : "graceful",
+        ],
+        { cwd: repo, encoding: "utf8" },
+      );
+      NodeFS.writeFileSync(
+        NodePath.join(root, "checkpoint-client-private.log"),
+        (checkpoint.stdout ?? "") + (checkpoint.stderr ?? ""),
+        { mode: 0o600 },
+      );
+      NodeAssert.equal(
+        checkpoint.status,
+        0,
+        "Pre-restart checkpoint failed; server left running, private diagnostic retained",
+      );
+      await stopLocalProductRuntime(prior, process.argv.includes("--crash"));
     }
     const entrypoint = option("--entrypoint");
     const runtime = await launchLocalProductRuntime({

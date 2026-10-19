@@ -112,7 +112,6 @@ origin; pairing material stays in that root's private log. In another terminal:
 ```sh
 node scripts/local-product-check.ts --journey --output /tmp/b3r-local-product-evidence
 node scripts/local-product-check.ts --lifecycle --output /tmp/b3r-local-product-evidence
-node scripts/local-product-check.ts --recover --output /tmp/b3r-local-product-evidence
 ```
 
 This uses the built production server, normal authentication and shared client
@@ -120,7 +119,8 @@ HTTP/WebSocket contracts. The only enabled provider is a deterministic local
 fixture. The launcher gives it fresh home, project and data directories and
 blocks non-loopback Node traffic. It does not activate a real provider. Journey
 and lifecycle modes refuse to rerun on a root with retained original commands;
-use read-only recovery instead of replacing an uncertain Start.
+use `--read-originals` to inspect original statuses instead of replacing an
+uncertain Start. This inspection does not certify restart recovery.
 
 Use the printed root for process control; the launcher retains its child handle:
 
@@ -133,8 +133,14 @@ node scripts/local-product-check.ts --recover --output /tmp/b3r-local-product-ev
 node scripts/local-product-runtime.ts cleanup --runtime <printed-root>
 ```
 
-Restart in its own terminal too. Cleanup waits for confirmed child exit before
-removing only that disposable root. Keep private logs, auth material and raw
+Restart in its own terminal too. Before signalling the server, restart saves a
+checkpoint of the original command hashes, receipts, native-start count and task
+readouts. Recovery requires that pre-restart checkpoint and fails on replay,
+receipt loss, changed run/output/route, or admission of the unsubmitted original.
+The crash-held original must retain its run identity, cancel without a completed
+result, and add no native starts. Observation and review timestamps may refresh.
+Cleanup waits for confirmed child exit before removing only that disposable
+root. Keep private logs, auth material and raw
 provider journals out of shared evidence. These checks prove the local protocol
 journey and recovery; they do not prove browser interaction, desktop/mobile
 installation, remote TLS, or real-provider readiness. For a locally extracted

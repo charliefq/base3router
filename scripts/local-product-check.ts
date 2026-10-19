@@ -4,6 +4,13 @@ import * as NodeFS from "node:fs";
 import * as NodeAssert from "node:assert/strict";
 import * as NodePath from "node:path";
 import * as NodeOS from "node:os";
+import * as NodeCrypto from "node:crypto";
+import {
+  assertRecovery,
+  assertRecoveryCheckpoint,
+  decodeRecoveryCheckpoint,
+  type RecoveryCheckpoint,
+} from "./local-product-recovery.ts";
 import { readLocalProductRuntime } from "./local-product-runtime.ts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
@@ -14,7 +21,7 @@ import * as Schema from "effect/Schema";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Stream from "effect/Stream";
 import * as Socket from "effect/unstable/socket/Socket";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeCryptoServices from "@effect/platform-node/NodeCrypto";
 import {
   EnvironmentId,
   ProjectId,
@@ -247,15 +254,18 @@ await Effect.runPromise(
           Effect.timeout("30 seconds"),
           Effect.forkScoped,
         );
-      if (process.argv.includes("--recover")) {
+      if (
+        process.argv.includes("--recover") ||
+        process.argv.includes("--checkpoint") ||
+        process.argv.includes("--read-originals")
+      ) {
         const beforeStarts = starts().length;
         const proofs = [];
         for (const name of NodeFS.readdirSync(root).filter(
           (name) => name.startsWith("original-") && name.endsWith("-command.json"),
         )) {
-          const command = yield* decodeCommand(
-            NodeFS.readFileSync(NodePath.join(root, name), "utf8"),
-          );
+          const originalText = NodeFS.readFileSync(NodePath.join(root, name), "utf8");
+          const command = yield* decodeCommand(originalText);
           const proof =
             command.type === "thread.create"
               ? yield* use(Commands.readAgentsCreationStatus({ command }))
@@ -264,12 +274,87 @@ await Effect.runPromise(
                 : command.type === "message.dispatch" && command.taskFirstLaunch
                   ? yield* use(Commands.readTaskFirstLaunchStatus({ command }))
                   : null;
-          proofs.push({ file: name, commandId: command.commandId, proof });
+          NodeAssert.ok(
+            proof && (command.type === "thread.create" || command.type === "message.dispatch"),
+          );
+          proofs.push({
+            file: name,
+            commandId: command.commandId,
+            commandSha256: NodeCrypto.createHash("sha256").update(originalText).digest("hex"),
+            threadId: command.threadId,
+            proof,
+          });
         }
         NodeAssert.equal(
           starts().length,
           beforeStarts,
           "Read-only recovery must never start a provider",
+        );
+        const currentSnapshot = yield* snapshot();
+        const observation = {
+          environmentId,
+          proofs,
+          providerStarts: beforeStarts,
+          tasks: currentSnapshot.tasks,
+        };
+        NodeAssert.equal(
+          starts().length,
+          beforeStarts,
+          "Read-only snapshot inspection must not start work",
+        );
+        if (process.argv.includes("--read-originals")) {
+          NodeFS.writeFileSync(
+            NodePath.join(evidence, "production-original-inspection.json"),
+            encodeJson({
+              ...observation,
+              source: "Inspection only; no pre-restart comparison or recovery pass",
+            }),
+          );
+          yield* Effect.log(
+            encodeJson({ inspection: "original statuses only", providerStarts: beforeStarts }),
+          );
+          return;
+        }
+        const checkpointFile = NodePath.join(root, "recovery-checkpoint.json");
+        if (process.argv.includes("--checkpoint")) {
+          const kind = option("--recovery-kind");
+          NodeAssert.ok(kind === "graceful" || kind === "crash");
+          const checkpoint = {
+            kind,
+            serverPid: runtime.serverPid,
+            before: observation,
+          } satisfies RecoveryCheckpoint;
+          assertRecoveryCheckpoint(checkpoint);
+          const serialized = encodeJson(checkpoint);
+          NodeFS.writeFileSync(checkpointFile, serialized, { mode: 0o600 });
+          NodeFS.writeFileSync(
+            NodePath.join(evidence, `recovery-checkpoint-${runtime.serverPid}-${kind}.json`),
+            serialized,
+          );
+          yield* Effect.log(
+            encodeJson({
+              checkpoint: kind,
+              providerStarts: beforeStarts,
+              originals: proofs.length,
+            }),
+          );
+          return;
+        }
+        NodeAssert.ok(
+          NodeFS.existsSync(checkpointFile),
+          "Recovery requires a durable pre-restart checkpoint; never infer it from post-start state",
+        );
+        const checkpoint = decodeRecoveryCheckpoint(NodeFS.readFileSync(checkpointFile, "utf8"));
+        NodeAssert.notEqual(
+          runtime.serverPid,
+          checkpoint.serverPid,
+          "Expected an actual restart after the checkpoint",
+        );
+        assertRecovery(checkpoint, observation);
+        NodeAssert.equal(
+          starts().length,
+          checkpoint.before.providerStarts,
+          "Recovery inspection must not start work",
         );
         NodeFS.writeFileSync(
           NodePath.join(evidence, "production-recovery.json"),
@@ -277,8 +362,14 @@ await Effect.runPromise(
             environmentId,
             proofs,
             providerStarts: beforeStarts,
-            snapshot: yield* snapshot(),
-            recovery: "Original identities read-only; zero resends or replacement commands",
+            snapshot: currentSnapshot,
+            verifiedCheckpoint: {
+              serverPid: checkpoint.serverPid,
+              kind: checkpoint.kind,
+              providerStarts: checkpoint.before.providerStarts,
+            },
+            recovery:
+              "Persisted pre-restart originals, native starts, stable tasks/results/routes verified; zero resends",
           }),
         );
         yield* Effect.log(
@@ -853,5 +944,5 @@ await Effect.runPromise(
         }),
       );
     }),
-  ).pipe(Effect.provide(NodeCrypto.layer)),
+  ).pipe(Effect.provide(NodeCryptoServices.layer)),
 );
