@@ -36,6 +36,22 @@ import * as Commands from "@t3tools/client-runtime/operations";
 
 type ServerFixture = {
   providers: ReadonlyArray<ServerProvider>;
+  seedTaskRouting: (
+    profiles: ReadonlyArray<{
+      category: import("@t3tools/contracts").TaskMacroCategory;
+      classifierVersion: string;
+      trials: number;
+    }>,
+  ) => Promise<void>;
+  routingBinding: (
+    threadId: string,
+    messageId: string,
+  ) => Promise<import("@t3tools/contracts").DispatcherTaskRouteBinding>;
+  routingEvidenceState: () => Promise<{
+    totalChanges: number;
+    observations: ReadonlyArray<{ observation_id: string; payload_json: string }>;
+    policies: ReadonlyArray<{ policy_id: string; payload_json: string }>;
+  }>;
   connection: (
     scopes?: ReadonlyArray<AuthEnvironmentScope>,
     subject?: string,
@@ -243,6 +259,8 @@ const makeClientFixture = Effect.fn("TaskTransport.makeClientFixture")(function*
       command(Commands.startThreadTurn(input)),
     projection: (input: Parameters<typeof Commands.readThreadProjection>[0]) =>
       command(Commands.readThreadProjection(input)),
+    previewAuto: (input: Parameters<typeof Commands.readTaskAutoPreview>[0]) =>
+      command(Commands.readTaskAutoPreview(input)),
     review: (input: Parameters<typeof Commands.readTaskReview>[0]) =>
       command(Commands.readTaskReview(input)),
     creationStatus: (input: Parameters<typeof Commands.readAgentsCreationStatus>[0]) =>

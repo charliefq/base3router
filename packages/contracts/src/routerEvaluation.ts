@@ -22,7 +22,7 @@ export const ROUTER_EVALUATION_DATASET_VERSION = "router-evaluation-dataset.v0" 
 export const ROUTER_POLICY_SNAPSHOT_VERSION = "router-policy-snapshot.v0" as const;
 export const DEFAULT_OBSERVATION_RETENTION_DAYS = 90;
 export const HYBRID_TASK_ROUTER_POLICY_VERSION = "hybrid-router.task-v2.0.0" as const;
-export const LOCAL_TASK_CLASSIFIER_VERSION = "local-task.heuristic.v1.0.0" as const;
+export const LOCAL_TASK_CLASSIFIER_VERSION = "local-task.heuristic.v2.0.0" as const;
 export const LocalTaskProfile = Schema.Struct({
   classifierVersion: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
   category: TaskMacroCategory,

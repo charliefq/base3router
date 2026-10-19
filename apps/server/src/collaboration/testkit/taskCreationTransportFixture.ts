@@ -1,4 +1,15 @@
 import {
+  DispatcherTaskRouteBinding,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
+  MODEL_ROUTER_POLICY_VERSION,
+  TURN_OUTCOME_OBSERVATION_VERSION,
+  UNKNOWN_TASK_PROFILE,
+  ObservationId,
+  emptyTiming,
+  emptyUsageMeasurement,
+  emptyCostMeasurement,
+  emptyOutcomeEvidence,
+  type TaskMacroCategory,
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
   EnvironmentId,
@@ -15,6 +26,7 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -79,6 +91,19 @@ const configuredProviders: ReadonlyArray<ServerProvider> = [
 export async function withTaskCreationTransportFixture(
   check: (f: {
     providers: ReadonlyArray<ServerProvider>;
+    seedTaskRouting: (
+      profiles: ReadonlyArray<{
+        category: TaskMacroCategory;
+        classifierVersion: string;
+        trials: number;
+      }>,
+    ) => Promise<void>;
+    routingBinding: (threadId: string, messageId: string) => Promise<DispatcherTaskRouteBinding>;
+    routingEvidenceState: () => Promise<{
+      totalChanges: number;
+      observations: ReadonlyArray<{ observation_id: string; payload_json: string }>;
+      policies: ReadonlyArray<{ policy_id: string; payload_json: string }>;
+    }>;
     connection: (
       scopes?: ReadonlyArray<AuthEnvironmentScope>,
       subject?: string,
@@ -409,6 +434,79 @@ export async function withTaskCreationTransportFixture(
             yield* Effect.promise(() =>
               check({
                 providers: configuredProviders,
+                // Fixture setup only: seed an already-selected policy in disposable SQLite.
+                // This does not call the activation API or change a real environment's policy.
+                seedTaskRouting: (profiles) =>
+                  run(
+                    Effect.gen(function* () {
+                      const env = EnvironmentId.make("environment-a");
+                      yield* f.evaluation.status(env);
+                      const now = DateTime.formatIso(yield* DateTime.now);
+                      yield* f.sql`UPDATE router_policies SET state='retired',payload_json=json_set(payload_json,'$.state','retired','$.retiredAt',${now}) WHERE environment_id=${env} AND state='active'`;
+                      yield* f.sql`UPDATE router_policies SET state='active',payload_json=json_set(payload_json,'$.state','active','$.activationConfirmed',json('true'),'$.activatedAt',${now},'$.activatedBy','fixture-owner') WHERE environment_id=${env} AND json_extract(payload_json,'$.policyVersion')=${HYBRID_TASK_ROUTER_POLICY_VERSION}`;
+                      for (const [profileIndex, profile] of profiles.entries())
+                        for (const model of ["bbb-auto", "exact-second"])
+                          for (let index = 0; index < profile.trials; index++)
+                            yield* f.evaluation.recordObservation({
+                              version: TURN_OUTCOME_OBSERVATION_VERSION,
+                              observationId: ObservationId.make(
+                                `zh-fixture-${profileIndex}-${model}-${index}`,
+                              ),
+                              environmentId: env,
+                              recordedAt: now,
+                              policyVersion: MODEL_ROUTER_POLICY_VERSION,
+                              routingMode: "auto",
+                              instanceId: agentsCreationProvider.instanceId,
+                              model,
+                              taskProfile: UNKNOWN_TASK_PROFILE,
+                              localTaskProfile: {
+                                classifierVersion: profile.classifierVersion,
+                                category: profile.category,
+                                source: "local-heuristic",
+                              },
+                              timing: emptyTiming(),
+                              usage: emptyUsageMeasurement(),
+                              cost: emptyCostMeasurement(),
+                              providerAttempts: 1,
+                              fallbackCount: 0,
+                              cancelled: false,
+                              timedOut: false,
+                              finishReason: model === "exact-second" ? "stop" : "error",
+                              terminalCategory:
+                                model === "exact-second" ? "success" : "provider_failure",
+                              evidence: emptyOutcomeEvidence(),
+                            });
+                    }),
+                  ),
+                routingBinding: (threadId, messageId) =>
+                  run(
+                    Effect.gen(function* () {
+                      const rows = yield* f.sql<{
+                        binding_json: string;
+                      }>`SELECT binding_json FROM projection_dispatcher_task_routes WHERE thread_id=${threadId} AND message_id=${messageId}`;
+                      if (!rows[0]) return yield* Effect.die("No fixture route binding");
+                      return yield* Schema.decodeUnknownEffect(
+                        Schema.fromJsonString(DispatcherTaskRouteBinding),
+                      )(rows[0].binding_json);
+                    }),
+                  ),
+                routingEvidenceState: () =>
+                  run(
+                    Effect.gen(function* () {
+                      const changes = yield* f.sql<{ n: number }>`SELECT total_changes() AS n`;
+                      return {
+                        totalChanges: Number(changes[0]!.n),
+                        observations: yield* f.sql<{
+                          observation_id: string;
+                          payload_json: string;
+                        }>`SELECT observation_id,payload_json FROM router_turn_observations ORDER BY observation_id`,
+                        policies: yield* f.sql<{
+                          policy_id: string;
+                          payload_json: string;
+                        }>`SELECT policy_id,payload_json FROM router_policies ORDER BY policy_id`,
+                      };
+                    }),
+                  ),
                 connection: async (
                   scopes = [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
                   subject = "fixture-owner",

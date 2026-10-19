@@ -1,3 +1,4 @@
+import { classifyLocalTask } from "./routerEvaluation.ts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   HYBRID_ROUTER_POLICY_VERSION,
@@ -626,3 +627,41 @@ describe("eligible cap hybrid", () => {
     },
   );
 });
+
+it.each([
+  "修复登录页面的空指针异常",
+  "实现一个分页组件并添加单元测试",
+  "总结这份产品需求文档",
+  "请起草一封项目进度邮件",
+  "分析这组销售数据并画图",
+  "调研这些方案并提供来源",
+])(
+  "uses eight current-version trials for Chinese intent, never unsupported profile versions: %s",
+  (text) => {
+    const profile = classifyLocalTask(text);
+    expect(profile.category).not.toBe("unknown");
+    const request = {
+      mode: "auto" as const,
+      catalog: [entry({ instanceId: "a", model: "a" }), entry({ instanceId: "b", model: "b" })],
+      activePolicyVersion: HYBRID_TASK_ROUTER_POLICY_VERSION,
+      localTaskProfile: profile,
+      evidenceByTarget: new Map([
+        ["a\u0000a", evidence({ successTrials: 8, successCount: 0 })],
+        ["b\u0000b", evidence({ successTrials: 8, successCount: 8 })],
+      ]),
+    };
+    const current = routeHybridModel(request);
+    expect(current.decision.policyVersion).toBe(HYBRID_TASK_ROUTER_POLICY_VERSION);
+    expect(current.decision.selected?.target.instanceId).toBe("b");
+    expect(current.decision.explanation).toContain(
+      `Local task ${profile.category} (${profile.classifierVersion})`,
+    );
+    const old = routeHybridModel({
+      ...request,
+      localTaskProfile: { ...profile, classifierVersion: "local-task.heuristic.v1.0.0" },
+    });
+    expect(old.hybrid.fallbackToV0).toBe(true);
+    expect(old.decision.policyVersion).toBe(MODEL_ROUTER_POLICY_VERSION);
+    expect(old.hybrid.usedHybridRanking).toBe(false);
+  },
+);

@@ -294,3 +294,33 @@ describe("local task evidence cohorts", () => {
     ).toBe(0);
   });
 });
+
+it("separates actual v1 and v2 Chinese cohorts without rewriting historical observations", () => {
+  const profile = classifyLocalTask("修复登录页面的空指针异常");
+  expect(profile.classifierVersion).toBe("local-task.heuristic.v2.0.0");
+  const rows: TurnOutcomeObservationV0[] = [
+    ...Array.from({ length: 8 }, (_, index) => ({
+      ...observation({ id: `old-zh-${index}`, at: "2026-10-19T00:00:00.000Z" }),
+      localTaskProfile: { ...profile, classifierVersion: "local-task.heuristic.v1.0.0" },
+    })),
+    ...Array.from({ length: 7 }, (_, index) => ({
+      ...observation({ id: `new-zh-${index}`, at: "2026-10-19T00:00:00.000Z" }),
+      localTaskProfile: profile,
+    })),
+  ];
+  const before = JSON.stringify(rows);
+  const env = rows[0]!.environmentId;
+  expect(
+    evidenceForLocalTask({ records: rows, profile, environmentId: env }).get("codex\u0000gpt-5.5")
+      ?.successTrials,
+  ).toBe(7);
+  expect(evidenceFromObservations(rows).get("codex\u0000gpt-5.5")?.successTrials).toBe(15);
+  expect(
+    evidenceForLocalTask({
+      records: rows,
+      profile: { ...profile, classifierVersion: "local-task.heuristic.v1.0.0" },
+      environmentId: env,
+    }).size,
+  ).toBe(0);
+  expect(JSON.stringify(rows)).toBe(before);
+});

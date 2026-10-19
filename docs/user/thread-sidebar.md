@@ -209,6 +209,15 @@ model selection to OpenRouter remotely. Switching modes retains your saved
 Manual choice. Read each turn's route details to compare the requested and
 executed model identities.
 
+Auto recognizes a limited set of explicit Chinese and mixed-language requests for
+coding, debugging, summaries, writing, research and data analysis. Unsupported or
+conflicting wording can remain unknown; a heuristic category does not establish model
+quality. When task-conditioned routing is selected, it requires eight matching
+current-classifier outcomes for each eligible model. A classifier update keeps old
+observations in history but excludes them from the new task cohort, so Auto uses
+its baseline until current-version coverage is sufficient. This does not activate
+a different routing policy.
+
 To start a governed task, open **Tasks**, choose its project and a ready provider,
 then select **Create governed task**. Explicitly choose its exact model before
 reviewing the goal, acceptance criteria and
