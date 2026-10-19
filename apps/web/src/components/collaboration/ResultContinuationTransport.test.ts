@@ -485,3 +485,105 @@ it("continuation cannot expand the reviewed contract or combine first-launch aut
     });
   });
 }, 30000);
+
+it("atomic commit rejects full-result mutation after successful continuation planning without writing events", async () => {
+  await withTaskTransportFixture(async (f) => {
+    const c = await completed(f, "commit-tail", "x".repeat(2200) + "original-tail");
+    const { m, facts } = await continuation(f, c, "commit-tail");
+    const beforeCounts = await f.executionCounts();
+    f.holdContinuationCommit(m.commandId);
+    const pending = send(f, m, m);
+    try {
+      const boundary = await Promise.race([
+        f.awaitContinuationCommit(),
+        pending.then(() => {
+          throw new Error("Dispatch ended before the commit boundary");
+        }),
+      ]);
+      expect(boundary).toMatchObject({
+        commandId: m.commandId,
+        priorRunId: m.priorResult.runId,
+        eventTypes: expect.arrayContaining(["message.updated", "run.created"]),
+      });
+      expect(boundary.plannedRunId).not.toBe(m.priorResult.runId);
+      expect(await f.eventsForCommand(m.commandId)).toEqual([]);
+      // Ordinary authorization stages one inert grant before planning; the
+      // transaction must add no executable state or further grant on rejection.
+      const plannedCounts = await f.executionCounts();
+      expect(plannedCounts).toEqual({ ...beforeCounts, grants: beforeCounts.grants + 1 });
+      const item = facts.projection.turnItems.find((v) => v.id === m.priorResult.itemId)!;
+      if (item.type !== "assistant_message") throw new Error("Missing full prior output");
+      // Negative-only content mutation after real planning; all attribution IDs remain native.
+      await f.alterLatestOutput(c.threadId, item.text.slice(0, -13) + "different-tail");
+      const mutated = await f.projection({ threadId: c.threadId });
+      expect((await f.snapshot()).tasks[0]!.resultReadout).toMatchObject({
+        status: "available",
+        content: { preview: facts.result.content.preview, truncated: true },
+      });
+      f.releaseContinuationCommit();
+      expect((await pending)._tag).toBe("Failure");
+      await f.drain();
+      expect(await f.eventsForCommand(m.commandId)).toEqual([]);
+      expect(await f.executionCounts()).toEqual(plannedCounts);
+      expect(await f.projection({ threadId: c.threadId })).toEqual(mutated);
+      expect((await f.inspect()).starts).toHaveLength(1);
+    } finally {
+      f.releaseContinuationCommit();
+    }
+  });
+}, 30000);
+
+it("competing result-bound request observed while the first plan waits at commit cannot add events or a provider start", async () => {
+  await withTaskTransportFixture(async (f) => {
+    const c = await completed(f, "commit-competitor");
+    const { m, facts } = await continuation(f, c, "commit-competitor");
+    const competing = {
+      ...m,
+      commandId: CommandId.make("commit-competitor-b"),
+      messageId: MessageId.make("commit-competitor-b"),
+    };
+    f.holdContinuationCommit(m.commandId);
+    const first = send(f, m, m);
+    try {
+      const boundary = await Promise.race([
+        f.awaitContinuationCommit(),
+        first.then(() => {
+          throw new Error("Dispatch ended before the commit boundary");
+        }),
+      ]);
+      expect(boundary.eventTypes).toContain("run.created");
+      expect(boundary.priorRunId).toBe(m.priorResult.runId);
+      expect(await f.eventsForCommand(m.commandId)).toEqual([]);
+      const second = send(f, competing, competing);
+      await Promise.race([
+        f.awaitDispatchReceived(competing.commandId),
+        second.then(() => {
+          throw new Error("Competitor never reached the actual RPC handler");
+        }),
+      ]);
+      expect(await f.eventsForCommand(competing.commandId)).toEqual([]);
+      expect((await f.inspect()).starts).toHaveLength(1);
+      f.releaseContinuationCommit();
+      expect((await first)._tag).toBe("Success");
+      expect((await second)._tag).toBe("Failure");
+      await f.settle(m.messageId);
+      expect(await f.eventsForCommand(m.commandId)).toContain("run.created");
+      expect(await f.eventsForCommand(competing.commandId)).toEqual([]);
+      const final = await f.projection({ threadId: c.threadId });
+      if (final._tag !== "Success") throw new Error("Missing final same-task history");
+      expect(final.value.runs).toHaveLength(2);
+      expect(final.value.messages).toHaveLength(2);
+      expect(final.value.runs.find((r) => r.id === m.priorResult.runId)).toEqual(
+        facts.projection.runs.find((r) => r.id === m.priorResult.runId),
+      );
+      expect(final.value.turnItems.find((i) => i.id === m.priorResult.itemId)).toEqual(
+        facts.projection.turnItems.find((i) => i.id === m.priorResult.itemId),
+      );
+      expect(final.value.thread.taskContract).toEqual(facts.review.contract);
+      expect(final.value.thread.taskAcceptedRevision).toBeNull();
+      expect((await f.inspect()).starts).toHaveLength(2);
+    } finally {
+      f.releaseContinuationCommit();
+    }
+  });
+}, 30000);

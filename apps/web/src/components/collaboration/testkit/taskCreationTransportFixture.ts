@@ -48,6 +48,22 @@ type ServerFixture = {
   awaitHeldStart: () => Promise<void>;
   releaseHeldStart: () => void;
   failInput: (text: string) => void;
+  holdContinuationCommit: (commandId: string) => void;
+  awaitContinuationCommit: () => Promise<{
+    commandId: string;
+    priorRunId: string;
+    plannedRunId: string;
+    eventTypes: ReadonlyArray<string>;
+  }>;
+  releaseContinuationCommit: () => void;
+  awaitDispatchReceived: (commandId: string) => Promise<void>;
+  eventsForCommand: (commandId: string) => Promise<ReadonlyArray<string>>;
+  executionCounts: () => Promise<{
+    runs: number;
+    grants: number;
+    outbox: number;
+    messages: number;
+  }>;
   inspect: () => Promise<{
     starts: ReadonlyArray<ModelSelection>;
     inputs: ReadonlyArray<string>;

@@ -2,6 +2,7 @@ import {
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
   EnvironmentId,
+  CommandId,
   EnvironmentHttpApi,
   ORCHESTRATION_PROTOCOL_VERSION,
   ORCHESTRATION_V2_WS_METHODS,
@@ -94,6 +95,22 @@ export async function withTaskCreationTransportFixture(
     awaitHeldStart: () => Promise<void>;
     releaseHeldStart: () => void;
     failInput: (text: string) => void;
+    holdContinuationCommit: (commandId: string) => void;
+    awaitContinuationCommit: () => Promise<{
+      commandId: string;
+      priorRunId: string;
+      plannedRunId: string;
+      eventTypes: ReadonlyArray<string>;
+    }>;
+    releaseContinuationCommit: () => void;
+    awaitDispatchReceived: (commandId: string) => Promise<void>;
+    eventsForCommand: (commandId: string) => Promise<ReadonlyArray<string>>;
+    executionCounts: () => Promise<{
+      runs: number;
+      grants: number;
+      outbox: number;
+      messages: number;
+    }>;
     inspect: () => Promise<{
       starts: ReadonlyArray<import("@t3tools/contracts").ModelSelection>;
       inputs: ReadonlyArray<string>;
@@ -102,6 +119,24 @@ export async function withTaskCreationTransportFixture(
     }>;
   }) => Promise<void>,
 ) {
+  type CommitBoundary = {
+    commandId: string;
+    priorRunId: string;
+    plannedRunId: string;
+    eventTypes: ReadonlyArray<string>;
+  };
+  let commitTarget: string | null = null;
+  let commitEntered = Deferred.makeUnsafe<CommitBoundary>();
+  let commitRelease = Deferred.makeUnsafe<void>();
+  const dispatchReceived = new Map<string, Deferred.Deferred<void>>();
+  const received = (id: string) => {
+    let gate = dispatchReceived.get(id);
+    if (!gate) {
+      gate = Deferred.makeUnsafe<void>();
+      dispatchReceived.set(id, gate);
+    }
+    return gate;
+  };
   let heldText: string | null = null;
   let failedText: string | null = null;
   let heldStarted = Deferred.makeUnsafe<void>();
@@ -207,6 +242,7 @@ export async function withTaskCreationTransportFixture(
                     ),
                   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) => {
                     commands.push(command);
+                    Deferred.doneUnsafe(received(command.commandId), Effect.void);
                     rpcMethods.push(ORCHESTRATION_V2_WS_METHODS.dispatchCommand);
                     return actualDispatch(command).pipe(
                       Effect.flatMap((result) =>
@@ -339,6 +375,25 @@ export async function withTaskCreationTransportFixture(
                 failInput: (text) => {
                   failedText = text;
                 },
+                holdContinuationCommit: (commandId) => {
+                  commitTarget = commandId;
+                  commitEntered = Deferred.makeUnsafe<CommitBoundary>();
+                  commitRelease = Deferred.makeUnsafe<void>();
+                },
+                awaitContinuationCommit: () => Effect.runPromise(Deferred.await(commitEntered)),
+                releaseContinuationCommit: () => {
+                  Deferred.doneUnsafe(commitRelease, Effect.void);
+                },
+                awaitDispatchReceived: (commandId) =>
+                  Effect.runPromise(Deferred.await(received(commandId))),
+                eventsForCommand: (commandId) =>
+                  run(
+                    f.eventSink.readByCommandId({ commandId: CommandId.make(commandId) }).pipe(
+                      Stream.runCollect,
+                      Effect.map((events) => Array.from(events, (event) => event.event.type)),
+                    ),
+                  ),
+                executionCounts: () => run(f.noExecution()),
                 alterBackgroundWork: (threadId) =>
                   run(
                     f.sql`UPDATE orchestration_v2_projection_provider_threads SET payload_json=json_set(payload_json,'$.pendingBackgroundTasks',json('[{"taskId":"fixture-background","kind":"background_task"}]')) WHERE thread_id=${threadId}`.pipe(
@@ -392,6 +447,29 @@ export async function withTaskCreationTransportFixture(
         {
           governedWorker: true,
           useProjectRuntimePolicy: true,
+          // Pause only after the real orchestrator has validated and planned.
+          // Resume into the unchanged production transaction; never forge a plan.
+          decorateEventSink: (service) => ({
+            ...service,
+            commitCommand: (input) =>
+              Effect.gen(function* () {
+                const marker = input.resultContinuationCommand?.taskResultContinuation;
+                if (marker && input.commandId === commitTarget) {
+                  commitTarget = null;
+                  const plannedRun = input.events.find((event) => event.type === "run.created");
+                  if (plannedRun?.type !== "run.created")
+                    throw new Error("Continuation did not reach a successful run plan");
+                  yield* Deferred.succeed(commitEntered, {
+                    commandId: input.commandId,
+                    priorRunId: marker.priorResult.runId,
+                    plannedRunId: plannedRun.payload.id,
+                    eventTypes: input.events.map((event) => event.type),
+                  });
+                  yield* Deferred.await(commitRelease);
+                }
+                return yield* service.commitCommand(input);
+              }),
+          }),
           onStart: (input, events, emit) =>
             Effect.gen(function* () {
               if (heldText === input.message.text) {
