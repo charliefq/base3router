@@ -1,3 +1,4 @@
+import { SetupReturnAction } from "../components/collaboration/SetupReturnAction";
 import { createFileRoute } from "@tanstack/react-router";
 import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 
@@ -14,19 +15,29 @@ function SettingsProvidersRoute() {
   const { environment, scope } = useSettingsScope();
   if (!environment) {
     return (
-      <p className="p-8 text-sm text-muted-foreground">
-        {scope.kind === "environment"
-          ? `Reconnect ${scope.label} to set up its providers.`
-          : "Connect an environment to set up its providers."}
-      </p>
+      <>
+        <div className="px-6 pt-4">
+          <SetupReturnAction search={target} />
+        </div>
+        <p className="p-8 text-sm text-muted-foreground">
+          {scope.kind === "environment"
+            ? `Reconnect ${scope.label} to set up its providers.`
+            : "Connect an environment to set up its providers."}
+        </p>
+      </>
     );
   }
   return (
-    <ProviderSettingsPanel
-      environmentId={environment.environmentId}
-      {...(target.instanceId ? { instanceId: target.instanceId } : {})}
-      scoped
-    />
+    <>
+      <div className="px-6 pt-4">
+        <SetupReturnAction search={target} />
+      </div>
+      <ProviderSettingsPanel
+        environmentId={environment.environmentId}
+        {...(target.instanceId ? { instanceId: target.instanceId } : {})}
+        scoped
+      />
+    </>
   );
 }
 

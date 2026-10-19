@@ -78,6 +78,8 @@ export function useNewProject() {
       readonly environmentId: EnvironmentId;
       readonly name: string;
       readonly github: { readonly account: string | null } | null;
+      /** Setup from Agents/Tasks stays on its reviewed scope; ordinary callers still open a draft. */
+      readonly openDraft?: boolean;
     }): Promise<boolean> => {
       const result = await createNew({
         environmentId: input.environmentId,
@@ -130,7 +132,7 @@ export function useNewProject() {
         );
         return null;
       });
-      if (project === null) return true;
+      if (project === null || input.openDraft === false) return true;
       await handleNewThread(projectRef).catch((error: unknown) => {
         toastManager.add(
           stackedThreadToast({

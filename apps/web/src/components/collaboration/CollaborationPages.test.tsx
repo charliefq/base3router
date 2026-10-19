@@ -74,6 +74,7 @@ const state = vi.hoisted(() => ({
   bind: vi.fn(),
   recover: vi.fn(),
   navigate: vi.fn(),
+  createProject: vi.fn(),
   startStep: vi.fn(),
   firstLaunchRead: vi.fn(),
   reviewRead: vi.fn(),
@@ -88,13 +89,23 @@ const state = vi.hoisted(() => ({
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: string) => (atom === "environment" ? state.environmentId : state.providers),
 }));
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-router")>();
+  return {
+    ...actual,
+    useNavigate: () => {
+      const router = actual.useRouter({ warn: false });
+      return router ? actual.useNavigate() : state.navigate;
+    },
+  };
+});
 vi.mock("../../state/primaryEnvironment", () => ({ primaryEnvironmentIdAtom: "environment" }));
 vi.mock("../../state/session", () => ({
   usePreparedConnection: () =>
     state.sessionIdentity === null ? Option.none() : Option.some(state.sessionIdentity),
 }));
 vi.mock("../../state/server", () => ({ primaryServerProvidersAtom: "providers" }));
+vi.mock("../../hooks/useNewProject", () => ({ useNewProject: () => state.createProject }));
 vi.mock("../../state/entities", () => ({ useProjects: () => state.projects }));
 vi.mock("../../state/workflow", () => ({
   workflowEnvironment: {
@@ -247,6 +258,13 @@ vi.mock("../ui/select", () => ({
   SelectItem: "option",
 }));
 
+import { CollaborationRoutePage } from "./CollaborationRoutePage";
+import { SetupReturnAction } from "./SetupReturnAction";
+import { validateCollaborationScope } from "./collaborationScope";
+import {
+  validateSettingsRouteSearch,
+  retainSettingsScope,
+} from "../settings/settingsScopeNavigation";
 import { AgentsPage, TasksPage } from "./CollaborationPages";
 import { AgentsTaskCreator } from "./AgentsTaskCreator";
 
@@ -335,6 +353,7 @@ beforeEach(() => {
     }),
   );
   state.navigate.mockReset();
+  state.createProject.mockReset().mockResolvedValue(true);
   state.startStep.mockReset();
   state.reviewRead.mockReset();
   state.reviewDecide.mockReset();
@@ -429,14 +448,30 @@ describe("Agents server conversation recovery", () => {
         .find((node) => node.children.includes("Connect your agent"))!
         .props.onClick(),
     );
-    expect(state.navigate).toHaveBeenCalledWith({ to: "/settings/providers" });
+    expect(state.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "/settings/providers",
+        search: expect.objectContaining({
+          scopeEnvironmentId: "environment-a",
+          scopeProjectId: "project-a",
+        }),
+      }),
+    );
   });
   it("keeps the directory readable without a provider and links to setup", async () => {
     state.providers = [];
     await mount();
     expect(text()).toContain("Saved agent and task records remain readable");
     await creationClick("Set up a provider");
-    expect(state.navigate).toHaveBeenCalledWith({ to: "/settings/providers" });
+    expect(state.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "/settings/providers",
+        search: expect.objectContaining({
+          scopeEnvironmentId: "environment-a",
+          scopeProjectId: "project-a",
+        }),
+      }),
+    );
     expect(state.create).not.toHaveBeenCalled();
   });
 
@@ -450,7 +485,15 @@ describe("Agents server conversation recovery", () => {
     expect(text()).toContain("Codex");
     expect(creationButton("New task")!.props.disabled).toBe(true);
     await creationClick("Set up a provider");
-    expect(state.navigate).toHaveBeenCalledWith({ to: "/settings/providers" });
+    expect(state.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "/settings/providers",
+        search: expect.objectContaining({
+          scopeEnvironmentId: "environment-a",
+          scopeProjectId: "project-a",
+        }),
+      }),
+    );
   });
 
   it("sends only the selected project/provider and navigates to the authoritative recovered thread", async () => {
@@ -778,6 +821,9 @@ describe("Agents saved identity continuity", () => {
         tasks: [],
       }),
     );
+    expect(text()).toContain("Saved setup scope does not match");
+    expect(text()).not.toContain("Environment B Codex");
+    await creationClick("Choose current environment and scope");
     expect(text()).toContain("Environment B Codex");
     expect(text()).not.toContain("Saved Codex");
     expect(state.recover).not.toHaveBeenCalled();
@@ -819,7 +865,15 @@ describe("Tasks loading and conversation access", () => {
     expect(text()).toContain("No executable provider is ready");
     expect(creationButton("Create governed task")!.props.disabled).toBe(true);
     await creationClick("Set up a provider");
-    expect(state.navigate).toHaveBeenCalledWith({ to: "/settings/providers" });
+    expect(state.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "/settings/providers",
+        search: expect.objectContaining({
+          scopeEnvironmentId: "environment-a",
+          scopeProjectId: "project-a",
+        }),
+      }),
+    );
     expect(state.create).not.toHaveBeenCalled();
   });
 
@@ -7422,4 +7476,411 @@ it("governed creation requires explicit exact model and never falls back after w
   await creationClick("Review new task");
   expect(text()).toContain("fake-model");
   expect(state.create).not.toHaveBeenCalled();
+});
+
+describe("mounted setup return scope", () => {
+  it("restores the selected second project after leaving Agents for setup and returning", async () => {
+    const { createRootRoute, createRoute, createRouter, createMemoryHistory, RouterProvider } =
+      await import("@tanstack/react-router");
+    state.projects = [
+      { id: "project-a", title: "A", environmentId: "environment-a" },
+      { id: "project-b", title: "B", environmentId: "environment-a" },
+    ];
+    const root = createRootRoute();
+    const agents = createRoute({
+      getParentRoute: () => root,
+      path: "agents",
+      validateSearch: validateCollaborationScope,
+      component: () => <CollaborationRoutePage page="agents" />,
+    });
+    const settings = createRoute({
+      getParentRoute: () => root,
+      path: "settings/providers",
+      validateSearch: validateSettingsRouteSearch,
+      search: { middlewares: [retainSettingsScope] },
+      component: () => (
+        <div>
+          Provider setup
+          <SetupReturnAction search={router.state.location.search} />
+        </div>
+      ),
+    });
+    const router = createRouter({
+      routeTree: root.addChildren([agents, settings]),
+      history: createMemoryHistory({ initialEntries: ["/agents"] }),
+    });
+    await act(async () => {
+      await router.load();
+      renderer = create(<RouterProvider router={router} />);
+    });
+    await act(async () =>
+      renderer.root.findAllByType("select")[0]!.props.onChange({ target: { value: "project-b" } }),
+    );
+    await act(async () =>
+      renderer.root
+        .findAllByType("button")
+        .find((node) => node.children.includes("Connect your agent"))!
+        .props.onClick(),
+    );
+    expect(router.state.location.pathname).toBe("/settings/providers");
+    await act(async () => {
+      renderer.unmount();
+      renderer = create(<RouterProvider router={router} />);
+    });
+    expect(text()).toContain("Provider setup");
+    await act(async () => {
+      await renderer.root
+        .findAllByType("button")
+        .find((node) => node.children.join("") === "Return to Agents")!
+        .props.onClick();
+      await router.load();
+      renderer.unmount();
+      renderer = create(<RouterProvider router={router} />);
+    });
+    expect(renderer.root.findAllByType("select")[0]!.props.value).toBe("project-b");
+    expect(state.create).not.toHaveBeenCalled();
+    expect(state.startStep).not.toHaveBeenCalled();
+  });
+});
+
+describe("validated setup detours mounted with memory history", () => {
+  async function journey(page: "agents" | "tasks", href = `/${page}`) {
+    const { createRootRoute, createRoute, createRouter, createMemoryHistory, RouterProvider } =
+      await import("@tanstack/react-router");
+    const root = createRootRoute();
+    const agents = createRoute({
+      getParentRoute: () => root,
+      path: "agents",
+      validateSearch: validateCollaborationScope,
+      component: () => <CollaborationRoutePage page="agents" />,
+    });
+    const tasks = createRoute({
+      getParentRoute: () => root,
+      path: "tasks",
+      validateSearch: validateCollaborationScope,
+      component: () => <CollaborationRoutePage page="tasks" />,
+    });
+    const settings = createRoute({
+      getParentRoute: () => root,
+      path: "settings",
+      validateSearch: validateSettingsRouteSearch,
+      search: { middlewares: [retainSettingsScope] },
+    });
+    const providers = createRoute({
+      getParentRoute: () => settings,
+      path: "providers",
+      component: () => (
+        <div>
+          Provider setup
+          <SetupReturnAction search={router.state.location.search} />
+        </div>
+      ),
+    });
+    const router = createRouter({
+      routeTree: root.addChildren([agents, tasks, settings.addChildren([providers])]),
+      history: createMemoryHistory({ initialEntries: [href] }),
+    });
+    const remount = async () =>
+      act(async () => {
+        renderer?.unmount();
+        renderer = create(<RouterProvider router={router} />);
+      });
+    await router.load();
+    if (router.state.redirect) await router.navigate(router.state.redirect.options);
+    await remount();
+    const press = async (label: string, twice = false) =>
+      act(async () => {
+        const node = renderer.root
+          .findAllByType("button")
+          .find((n) => n.children.filter((child) => typeof child === "string").join("") === label)!;
+        expect(node).toBeDefined();
+        const result = node.props.onClick();
+        if (twice) node.props.onClick();
+        await result;
+      });
+    const choose = async (index: number, value: string) =>
+      act(async () => {
+        renderer.root.findAllByType("select")[index]!.props.onChange({ target: { value } });
+      });
+    return { router, remount, press, choose };
+  }
+  function twoScopes() {
+    state.projects = [
+      { id: "project-a", title: "A", environmentId: "environment-a" },
+      { id: "project-b", title: "B", environmentId: "environment-a" },
+    ];
+    state.providers = [
+      ...configuredProviders,
+      { ...configuredProviders[0]!, instanceId: "second", displayName: "Second" },
+    ];
+  }
+  const noProviderWork = () => {
+    expect(state.create).not.toHaveBeenCalled();
+    expect(state.bind).not.toHaveBeenCalled();
+    expect(state.startStep).not.toHaveBeenCalled();
+  };
+  it("returns Tasks to the second project/provider, survives reload and keeps setup repeat clicks side-effect free", async () => {
+    twoScopes();
+    const flow = await journey("tasks");
+    await flow.choose(0, "project-b");
+    await flow.choose(1, "second");
+    await flow.press("Provider setup", true);
+    await flow.router.load();
+    await flow.remount();
+    expect(flow.router.state.location.search).toMatchObject({
+      machine: "environment-a",
+      returnPage: "tasks",
+      scopeProjectId: "project-b",
+      scopeProviderId: "second",
+    });
+    await flow.press("Return to Tasks", true);
+    await flow.router.load();
+    await flow.remount();
+    expect(renderer.root.findAllByType("select").map((n) => n.props.value)).toEqual([
+      "project-b",
+      "second",
+    ]);
+    const href = flow.router.state.location.href;
+    await act(async () => renderer.unmount());
+    await journey("tasks", href);
+    expect(renderer.root.findAllByType("select").map((n) => n.props.value)).toEqual([
+      "project-b",
+      "second",
+    ]);
+    noProviderWork();
+  });
+  it("restores the exact Agents project/provider selection without creating a conversation", async () => {
+    twoScopes();
+    const flow = await journey("agents");
+    await flow.choose(0, "project-b");
+    await flow.press("Create agent");
+    await flow.choose(0, "second");
+    await flow.press("Connect your agent");
+    await flow.router.load();
+    await flow.remount();
+    await flow.press("Return to Agents");
+    await flow.router.load();
+    await flow.remount();
+    await flow.press("Create agent");
+    expect(renderer.root.findAllByType("select").map((node) => node.props.value)).toEqual([
+      "second",
+      "project-b",
+    ]);
+    noProviderWork();
+  });
+  it("blocks malformed retained scope until an explicit current-scope selection", async () => {
+    const flow = await journey("tasks", "/tasks?scopeEnvironmentId=environment-a&scopeProjectId=7");
+    expect(text()).toContain("Saved setup scope does not match");
+    expect(creationButton("Create governed task")!.props.disabled).toBe(true);
+    await flow.press("Choose current environment and scope");
+    expect(creationButton("Create governed task")!.props.disabled).toBe(false);
+    noProviderWork();
+  });
+  it.each(["project", "provider", "environment"] as const)(
+    "fails closed when the retained %s is removed or changed",
+    async (kind) => {
+      twoScopes();
+      const flow = await journey("tasks");
+      await flow.choose(0, "project-b");
+      await flow.choose(1, "second");
+      await flow.press("Provider setup");
+      await flow.router.load();
+      await flow.remount();
+      if (kind === "project") state.projects = state.projects.filter((p) => p.id !== "project-b");
+      if (kind === "provider")
+        state.providers = state.providers.filter((p) => p.instanceId !== "second");
+      if (kind === "environment") {
+        state.environmentId = "environment-b";
+        state.projects = [
+          { id: "project-b", title: "Same ID on B", environmentId: "environment-b" },
+        ];
+      }
+      await flow.press("Return to Tasks");
+      await flow.router.load();
+      await flow.remount();
+      expect(text()).toContain(
+        kind === "project"
+          ? "selected project is no longer available"
+          : kind === "provider"
+            ? "selected provider is no longer ready"
+            : "Saved setup scope does not match",
+      );
+      expect(creationButton("Create governed task")!.props.disabled).toBe(true);
+      noProviderWork();
+    },
+  );
+  it("keeps an unready retained provider selected as unavailable instead of substituting the only ready one", async () => {
+    twoScopes();
+    const flow = await journey("tasks");
+    await flow.choose(0, "project-b");
+    await flow.choose(1, "second");
+    await flow.press("Provider setup");
+    await flow.router.load();
+    await flow.remount();
+    state.providers = state.providers.map((p) =>
+      p.instanceId === "second" ? { ...p, enabled: false } : p,
+    );
+    await flow.press("Return to Tasks");
+    await flow.router.load();
+    await flow.remount();
+    expect(text()).toContain("selected provider is no longer ready");
+    expect(creationButton("Create governed task")!.props.disabled).toBe(true);
+    noProviderWork();
+  });
+  it("uses URL history for Back/Forward and does not overwrite a newer navigation", async () => {
+    twoScopes();
+    const flow = await journey("tasks");
+    await flow.choose(0, "project-b");
+    await flow.choose(1, "second");
+    await flow.router.load();
+    await flow.remount();
+    await flow.press("Provider setup");
+    await flow.router.load();
+    await flow.remount();
+    await act(async () => {
+      flow.router.history.back();
+      await flow.router.load();
+    });
+    await flow.remount();
+    expect(flow.router.state.location.pathname).toBe("/tasks");
+    expect(renderer.root.findAllByType("select").map((n) => n.props.value)).toEqual([
+      "project-b",
+      "second",
+    ]);
+    await act(async () => {
+      flow.router.history.forward();
+      await flow.router.load();
+    });
+    await flow.remount();
+    expect(flow.router.state.location.pathname).toBe("/settings/providers");
+    await flow.press("Return to Tasks");
+    await act(async () => {
+      await flow.router.navigate({ to: "/agents", search: {} });
+    });
+    await flow.remount();
+    expect(flow.router.state.location.pathname).toBe("/agents");
+    noProviderWork();
+  });
+  it.each(["agents", "tasks"] as const)(
+    "offers existing local project creation and cancellation on empty %s",
+    async (page) => {
+      state.projects = [];
+      const flow = await journey(page);
+      expect(creationButton("Create a project")!.props.disabled).toBe(false);
+      await flow.press("Create a project");
+      await flow.press("Cancel project setup");
+      expect(state.createProject).not.toHaveBeenCalled();
+      await flow.press("Create a project");
+      await act(async () =>
+        renderer.root
+          .findByProps({ "aria-label": "New project name" })
+          .props.onChange({ target: { value: "Local fixture" } }),
+      );
+      const pending = deferred<boolean>();
+      state.createProject.mockReturnValue(pending.promise);
+      await act(async () => {
+        const submit = renderer.root.findByType("form").props.onSubmit;
+        submit({ preventDefault() {} });
+        submit({ preventDefault() {} });
+      });
+      expect(state.createProject).toHaveBeenCalledTimes(1);
+      expect(state.createProject).toHaveBeenCalledWith({
+        environmentId: "environment-a",
+        name: "Local fixture",
+        github: null,
+        openDraft: false,
+      });
+      await act(async () => {
+        await flow.router.navigate({ to: page === "tasks" ? "/agents" : "/tasks" });
+      });
+      await flow.remount();
+      await act(async () => pending.resolve(true));
+      expect(flow.router.state.location.pathname).toBe(page === "tasks" ? "/agents" : "/tasks");
+      noProviderWork();
+    },
+  );
+  it("does not offer an executable create action on a disconnected empty environment", async () => {
+    state.projects = [];
+    state.sessionIdentity = null;
+    await journey("tasks");
+    expect(creationButton("Create a project")!.props.disabled).toBe(true);
+    expect(state.createProject).not.toHaveBeenCalled();
+    noProviderWork();
+  });
+  it("drops unrelated search data on a valid return and ignores a stale return callback", async () => {
+    twoScopes();
+    const flow = await journey(
+      "tasks",
+      "/settings/providers?returnPage=tasks&scopeEnvironmentId=environment-a&scopeProjectId=project-b&scopeProviderId=second&taskText=private&token=secret&returnUrl=https%3A%2F%2Fevil.invalid",
+    );
+    const staleReturn = renderer.root
+      .findAllByType("button")
+      .find((node) => node.children.join("") === "Return to Tasks")!.props.onClick;
+    await flow.press("Return to Tasks");
+    await flow.router.load();
+    await flow.remount();
+    expect(flow.router.state.location.search).toEqual({
+      scopeEnvironmentId: "environment-a",
+      scopeProjectId: "project-b",
+      scopeProviderId: "second",
+    });
+    await act(async () => flow.router.navigate({ to: "/agents", search: {} }));
+    await flow.remount();
+    await act(async () => staleReturn());
+    expect(flow.router.state.location.pathname).toBe("/agents");
+    noProviderWork();
+  });
+  it("isolates project setup from an environment change and late completion", async () => {
+    state.projects = [];
+    const flow = await journey("tasks", "/tasks?scopeEnvironmentId=environment-a");
+    await flow.press("Create a project");
+    await act(async () =>
+      renderer.root
+        .findByProps({ "aria-label": "New project name" })
+        .props.onChange({ target: { value: "On A" } }),
+    );
+    const pending = deferred<boolean>();
+    state.createProject.mockReturnValue(pending.promise);
+    const staleSubmit = renderer.root.findByType("form").props.onSubmit;
+    await act(async () => staleSubmit({ preventDefault() {} }));
+    state.environmentId = "environment-b";
+    await flow.remount();
+    await act(async () => {
+      staleSubmit({ preventDefault() {} });
+      pending.resolve(true);
+    });
+    expect(state.createProject).toHaveBeenCalledTimes(1);
+    expect(state.createProject.mock.calls[0]![0].environmentId).toBe("environment-a");
+    expect(text()).toContain("Saved setup scope does not match");
+    expect(creationButton("Create a project")!.props.disabled).toBe(true);
+    expect(flow.router.state.location.pathname).toBe("/tasks");
+    noProviderWork();
+  });
+  it("reports an unconfirmed project command without retrying or starting work", async () => {
+    state.projects = [];
+    const flow = await journey("tasks");
+    await flow.press("Create a project");
+    await act(async () =>
+      renderer.root
+        .findByProps({ "aria-label": "New project name" })
+        .props.onChange({ target: { value: "Local" } }),
+    );
+    state.createProject.mockRejectedValue(new Error("Synthetic disconnect"));
+    await act(async () => {
+      renderer.root.findByType("form").props.onSubmit({ preventDefault() {} });
+      await state.createProject.mock.results[0]!.value.catch(() => {});
+    });
+    expect(text()).toContain("Project creation could not be confirmed");
+    expect(state.createProject).toHaveBeenCalledTimes(1);
+    noProviderWork();
+  });
+  it("ignores arbitrary return URLs and does not persist task text or credentials", async () => {
+    const flow = await journey(
+      "tasks",
+      "/settings/providers?returnPage=https%3A%2F%2Fevil.invalid&taskText=private&token=secret",
+    );
+    expect(validateSettingsRouteSearch(flow.router.state.location.search)).toEqual({});
+    expect(creationButton("Return to Tasks")).toBeUndefined();
+    noProviderWork();
+  });
 });

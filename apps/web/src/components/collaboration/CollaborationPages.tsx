@@ -1,3 +1,7 @@
+import { useSetupDetour } from "./useSetupDetour";
+import { useCollaborationScope, type CollaborationScopeProps } from "./useCollaborationScope";
+import { resolveCollaborationScope } from "./collaborationScope";
+import { ProjectSetupAction } from "./ProjectSetupAction";
 import { TaskCapabilityStepControls } from "./TaskCapabilityStepControls";
 import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
 import { SelectionBasisReadout } from "./SelectionBasisReadout";
@@ -544,7 +548,7 @@ function useCollaboration(environmentId: EnvironmentId | null) {
   };
 }
 
-export function AgentsPage() {
+export function AgentsPage(scopeProps: CollaborationScopeProps = {}) {
   const navigate = useNavigate();
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const providers = useAtomValue(primaryServerProvidersAtom);
@@ -556,8 +560,8 @@ export function AgentsPage() {
     open,
     refresh,
     refreshing,
-    fresh,
-    canOperate,
+    fresh: connectionFresh,
+    canOperate: canOperateConnection,
     captureRead,
     readVersion,
     isCurrent,
@@ -571,14 +575,28 @@ export function AgentsPage() {
   } | null>(null);
   const [creating, setCreating] = useState(false);
   const [showAgentCreation, setShowAgentCreation] = useState(false);
-  const [newAgentChoice, setNewAgentChoice] = useState<{
-    environmentId: typeof environmentId;
-    providerId: string;
-  } | null>(null);
-  const newAgentProviderId =
-    newAgentChoice && newAgentChoice.environmentId === environmentId
-      ? newAgentChoice.providerId
-      : null;
+  const selection = useCollaborationScope(environmentId, scopeProps);
+  const {
+    project: selectedProject,
+    provider: selectedScopeProvider,
+    issue: scopeIssue,
+    invalid: scopeInvalid,
+  } = resolveCollaborationScope(
+    selection.scope,
+    environmentId,
+    projects,
+    providers.filter(providerExecutable),
+  );
+  const fresh = connectionFresh && !scopeInvalid;
+  const canOperate = () => !scopeInvalid && canOperateConnection();
+  const openProviderSetup = useSetupDetour(
+    "agents",
+    selection.scope,
+    environmentId,
+    selectedProject?.id,
+    selectedScopeProvider?.instanceId,
+  );
+  const newAgentProviderId = selection.scope.scopeProviderId ?? null;
   const creationOwner = useRef<string | null>(null);
   const lockCreation = useCallback((owner: string) => {
     creationOwner.current = owner;
@@ -590,7 +608,8 @@ export function AgentsPage() {
     setCreating(false);
     setCreationRequest(null);
   }, []);
-  const [projectId, setProjectId] = useState<string | null>(null);
+  const projectId = selection.scope.scopeProjectId ?? null;
+  const setProjectId = selection.selectProject;
   const [notice, setNotice] = useState<{
     environmentId: EnvironmentId;
     connection: typeof directoryContext;
@@ -600,8 +619,6 @@ export function AgentsPage() {
   const [openingContext, setOpeningContext] = useState<symbol | null>(null);
   const openingRef = useRef<object | null>(null);
   const taskReadOwner = useRef<object | null>(null);
-  const selectedProject =
-    projects.length === 1 ? projects[0] : projects.find((project) => project.id === projectId);
   const selectedProjectId = selectedProject?.id;
   const providerContext = providers
     .map((provider) => `${provider.instanceId}:${providerExecutable(provider)}`)
@@ -905,10 +922,7 @@ export function AgentsPage() {
                   <PlusIcon />
                   Create agent
                 </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => void navigate({ to: "/settings/providers" })}
-                >
+                <Button variant="outline" onClick={openProviderSetup}>
                   <PlugIcon />
                   Connect your agent
                 </Button>
@@ -942,9 +956,7 @@ export function AgentsPage() {
                       label: provider.displayName ?? provider.instanceId,
                     })),
                   ]}
-                  onValueChange={(value) =>
-                    setNewAgentChoice(value ? { environmentId, providerId: value } : null)
-                  }
+                  onValueChange={(value) => selection.selectProvider(value || null)}
                 >
                   <SelectTrigger id="new-agent-provider">
                     <SelectValue />
@@ -1008,13 +1020,13 @@ export function AgentsPage() {
                 Internal providers and external agents. Open a conversation in its project; opening
                 a conversation does not start execution.
               </p>
-              {projects.length > 1 ? (
+              {projects.length > 1 || (projects.length > 0 && !!projectId && !selectedProject) ? (
                 <div className="flex w-full flex-col gap-2 sm:w-64 sm:shrink-0">
                   <label htmlFor="agents-project" className="text-sm font-medium">
                     Project
                   </label>
                   <Select
-                    disabled={opening}
+                    disabled={opening || scopeInvalid}
                     value={projectId ?? ""}
                     items={[
                       { value: "", label: "Select a project" },
@@ -1042,6 +1054,20 @@ export function AgentsPage() {
                 </div>
               ) : null}
             </div>
+            {scopeIssue ? (
+              <Alert variant="warning">
+                <AlertDescription>{scopeIssue}</AlertDescription>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    selection.update(environmentId ? { scopeEnvironmentId: environmentId } : {})
+                  }
+                >
+                  Choose current environment and scope
+                </Button>
+              </Alert>
+            ) : null}
             {error ? (
               <Alert variant="error">
                 <AlertDescription>{error}</AlertDescription>
@@ -1061,6 +1087,11 @@ export function AgentsPage() {
                 <AlertDescription>
                   No project is open on this environment. An agent thread needs a real project.
                 </AlertDescription>
+                <ProjectSetupAction
+                  key={environmentId ?? "disconnected"}
+                  environmentId={environmentId}
+                  enabled={fresh && !error && !scopeInvalid}
+                />
               </Alert>
             ) : !selectedProject ? (
               <Alert variant="info">
@@ -1341,12 +1372,7 @@ export function AgentsPage() {
                     ? "No provider is configured. Saved agent and task records remain readable."
                     : "No provider is ready for task execution. Saved agent and task records remain readable. Check provider setup and authentication."}
                 </p>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void navigate({ to: "/settings/providers" })}
-                >
+                <Button type="button" size="sm" variant="outline" onClick={openProviderSetup}>
                   Set up a provider
                 </Button>
               </div>
@@ -1358,28 +1384,49 @@ export function AgentsPage() {
   );
 }
 
-export function TasksPage() {
+export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
   const navigate = useNavigate();
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const providers = useAtomValue(primaryServerProvidersAtom);
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
-  const { snapshot, error, refresh, refreshing, fresh, canOperate, readVersion, invalidateReads } =
-    useCollaboration(environmentId);
+  const {
+    snapshot,
+    error,
+    refresh,
+    refreshing,
+    fresh: connectionFresh,
+    canOperate: canOperateConnection,
+    readVersion,
+    invalidateReads,
+  } = useCollaboration(environmentId);
   const tasks = snapshot?.tasks ?? [];
-  const [projectId, setProjectId] = useState<string | null>(null);
-  const [providerId, setProviderId] = useState<string | null>(null);
+  const selection = useCollaborationScope(environmentId, scopeProps);
+  const projectId = selection.scope.scopeProjectId ?? null;
+  const providerId = selection.scope.scopeProviderId ?? null;
+  const setProjectId = selection.selectProject;
+  const setProviderId = selection.selectProvider;
   const [creationRequest, setCreationRequest] = useState<{
     providerId: string;
     token: string;
   } | null>(null);
   const creationOwner = useRef<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const selectedProject =
-    projects.length === 1 ? projects[0] : projects.find((project) => project.id === projectId);
   const readyProviders = providers.filter(providerExecutable);
-  const selectedProvider =
-    readyProviders.find((provider) => provider.instanceId === providerId) ??
-    (readyProviders.length === 1 ? readyProviders[0] : undefined);
+  const {
+    project: selectedProject,
+    provider: selectedProvider,
+    issue: scopeIssue,
+    invalid: scopeInvalid,
+  } = resolveCollaborationScope(selection.scope, environmentId, projects, readyProviders);
+  const openProviderSetup = useSetupDetour(
+    "tasks",
+    selection.scope,
+    environmentId,
+    selectedProject?.id,
+    selectedProvider?.instanceId,
+  );
+  const fresh = connectionFresh && !scopeInvalid;
+  const canOperate = () => !scopeInvalid && canOperateConnection();
   const lockCreation = (owner: string) => {
     creationOwner.current = owner;
     setCreating(true);
@@ -1417,10 +1464,32 @@ export function TasksPage() {
               className="space-y-3 rounded-xl border border-border/60 p-4"
             >
               <h2 className="text-base font-medium">Create task</h2>
-              {projects.length > 1 ? (
+              {scopeIssue ? (
+                <Alert variant="warning">
+                  <AlertDescription>{scopeIssue}</AlertDescription>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      selection.update(environmentId ? { scopeEnvironmentId: environmentId } : {})
+                    }
+                  >
+                    Choose current environment and scope
+                  </Button>
+                </Alert>
+              ) : null}
+              {projects.length === 0 ? (
+                <ProjectSetupAction
+                  key={environmentId ?? "disconnected"}
+                  environmentId={environmentId}
+                  enabled={fresh && !error && !scopeInvalid}
+                />
+              ) : null}
+              {projects.length > 1 || (projects.length > 0 && !!projectId && !selectedProject) ? (
                 <label className="block space-y-1 text-sm">
                   <span>Project</span>
                   <Select
+                    disabled={scopeInvalid}
                     value={projectId ?? ""}
                     onValueChange={(value) => setProjectId(value || null)}
                   >
@@ -1439,10 +1508,12 @@ export function TasksPage() {
               ) : selectedProject ? (
                 <p className="text-sm">Project: {selectedProject.title}</p>
               ) : null}
-              {readyProviders.length > 1 ? (
+              {readyProviders.length > 1 ||
+              (readyProviders.length > 0 && !!providerId && !selectedProvider) ? (
                 <label className="block space-y-1 text-sm">
                   <span>Provider</span>
                   <Select
+                    disabled={scopeInvalid}
                     value={providerId ?? ""}
                     onValueChange={(value) => setProviderId(value || null)}
                   >
@@ -1472,16 +1543,9 @@ export function TasksPage() {
                   to create a task. Existing tasks remain readable.
                 </p>
               ) : null}
-              {readyProviders.length === 0 ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void navigate({ to: "/settings/providers" })}
-                >
-                  Set up a provider
-                </Button>
-              ) : null}
+              <Button type="button" size="sm" variant="outline" onClick={openProviderSetup}>
+                {readyProviders.length === 0 ? "Set up a provider" : "Provider setup"}
+              </Button>
               <Button
                 type="button"
                 size="sm"

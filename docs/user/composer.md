@@ -81,8 +81,10 @@ Leaving reasoning level or service tier unset uses the provider's own configurat
 Connect to the environment that owns your project under **Settings → Connections**.
 Check **Settings → Providers** in that environment before starting work. A saved
 provider entry or model choice does not mean its runtime is installed,
-authenticated, or ready. Return to the same environment and project in Agents or
-Tasks after changing provider settings.
+authenticated, or ready. Provider setup opened from Agents or Tasks offers a
+return to your selected environment, project and provider. If that selection is
+no longer available, choose it again before starting work. Empty project lists
+offer local project creation without opening a conversation or starting a turn.
 
 Model routing is in the model picker used to prepare a task or a result revision.
 Choose **Manual** for an exact provider instance and model, or deliberately choose

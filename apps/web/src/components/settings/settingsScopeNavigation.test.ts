@@ -171,6 +171,57 @@ describe("settings scope navigation", () => {
     },
   );
 
+  it("keeps the original setup return scope across categories and scope changes, then replaces it for a newer detour", async () => {
+    const router = createSettingsRouter();
+    const original = {
+      returnPage: "tasks" as const,
+      scopeEnvironmentId: "original-server",
+      scopeProjectId: "project-second",
+      scopeProviderId: "provider-second",
+    };
+    await router.navigate({
+      to: "/settings/providers",
+      search: {
+        ...original,
+        environmentId: EnvironmentId.make("original-server"),
+        instanceId: ProviderInstanceId.make("provider-second"),
+      },
+    });
+    expect(router.state.matches.at(-1)?.search).toEqual({
+      ...original,
+      machine: "original-server",
+      environmentId: "original-server",
+      instanceId: "provider-second",
+    });
+    await router.navigate({ to: "/settings/general" });
+    expect(router.state.matches.at(-1)?.search).toEqual({
+      ...original,
+      machine: "original-server",
+    });
+    await router.navigate({
+      to: "/settings/general",
+      search: () => ({ machine: "different-settings-target" }),
+    });
+    expect(router.state.matches.at(-1)?.search).toEqual({
+      ...original,
+      machine: "different-settings-target",
+    });
+    await router.navigate({
+      to: "/settings/providers",
+      search: {
+        returnPage: "agents",
+        scopeEnvironmentId: "new-server",
+        environmentId: EnvironmentId.make("new-server"),
+      },
+    });
+    expect(router.state.matches.at(-1)?.search).toEqual({
+      returnPage: "agents",
+      scopeEnvironmentId: "new-server",
+      environmentId: "new-server",
+      machine: "new-server",
+    });
+  });
+
   it("honors an explicit provider environment and drops its instance on category navigation", async () => {
     const router = createSettingsRouter();
     await router.navigate({ to: "/settings/general", search: checkoutSearch });

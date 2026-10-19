@@ -1,7 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { TasksPage } from "../components/collaboration/CollaborationPages";
+import { CollaborationRoutePage } from "../components/collaboration/CollaborationRoutePage";
+import { validateCollaborationScope } from "../components/collaboration/collaborationScope";
 
 export const Route = createFileRoute("/_chat/tasks")({
-  component: TasksPage,
+  validateSearch: validateCollaborationScope,
+  component: () => <CollaborationRoutePage page="tasks" />,
 });

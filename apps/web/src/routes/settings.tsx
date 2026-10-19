@@ -1,3 +1,4 @@
+import { validateSetupReturn } from "../components/collaboration/collaborationScope";
 import { Outlet, createFileRoute, redirect, useLocation } from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
 import { RotateCcwIcon } from "lucide-react";
@@ -160,6 +161,7 @@ function SettingsRouteLayout() {
         void navigate({
           to: pathname,
           search: () => ({
+            ...validateSetupReturn(rawSearch),
             project: next.project,
             machine: next.machine,
             checkout: next.checkout,
