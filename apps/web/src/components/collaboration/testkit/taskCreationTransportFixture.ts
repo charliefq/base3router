@@ -48,6 +48,7 @@ type ServerFixture = {
   drain: () => Promise<void>;
   settle: (messageId: string) => Promise<void>;
   alterLatestOutput: (threadId: string, text: string) => Promise<void>;
+  setWorkflowOutput: (text: string) => void;
   alterBackgroundWork: (threadId: string) => Promise<void>;
   runInput: (text: string) => void;
   awaitRunning: () => Promise<void>;
@@ -218,6 +219,8 @@ const makeClientFixture = Effect.fn("TaskTransport.makeClientFixture")(function*
       command(Commands.readConfigurationCatalog(input)),
     configurationStatus: (input: Parameters<typeof Commands.readConfigurationCommandStatus>[0]) =>
       command(Commands.readConfigurationCommandStatus(input)),
+    workflowTemplateStatus: (input: Parameters<typeof Commands.writeConfiguration>[0]) =>
+      command(request("workflow.templateCommandStatus", input)),
     workflowPreview: (input: typeof WorkflowStagePreviewInput.Type) =>
       command(request("workflow.stagePreview", input)),
     workflowDispatch: (input: typeof WorkflowDispatchStageInput.Type) =>

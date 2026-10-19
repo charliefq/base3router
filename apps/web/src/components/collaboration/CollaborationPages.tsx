@@ -22,7 +22,16 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import { buildAgentDirectory, providerExecutable } from "./agentDirectory";
@@ -1387,8 +1396,15 @@ export function AgentsPage(scopeProps: CollaborationScopeProps = {}) {
   );
 }
 
+const ProjectWorkflowDecisions = lazy(() =>
+  import("../governance/GovernanceSurfaces").then((module) => ({
+    default: module.ProjectWorkflowDecisions,
+  })),
+);
+
 export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
   const navigate = useNavigate();
+  const [workflowsOpen, setWorkflowsOpen] = useState(false);
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const providers = useAtomValue(primaryServerProvidersAtom);
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
@@ -1472,6 +1488,37 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
               linked run and result here, or explicitly request Stop for the displayed run. Open
               conversation for the full history. Creating or watching a task starts no work.
             </p>
+            <section
+              aria-label="Reusable supervised workflows"
+              className="space-y-3 rounded-xl border border-border/60 p-4"
+            >
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setWorkflowsOpen((value) => !value)}
+              >
+                Workflow templates
+              </Button>
+              {workflowsOpen ? (
+                environmentId && selectedProject ? (
+                  <Suspense fallback={<p>Loading workflow templates.</p>}>
+                    <ProjectWorkflowDecisions
+                      key={JSON.stringify([environmentId, selectedProject.id])}
+                      environmentId={environmentId}
+                      projectId={selectedProject.id}
+                      projectTitle={selectedProject.title}
+                      refreshTick={0}
+                    />
+                  </Suspense>
+                ) : (
+                  <p>
+                    Choose a project to compose or review a supervised workflow. Provider selection
+                    is reviewed separately before each stage starts.
+                  </p>
+                )
+              ) : null}
+            </section>
             <section
               aria-label="Create governed task"
               className="space-y-3 rounded-xl border border-border/60 p-4"

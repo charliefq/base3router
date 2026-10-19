@@ -1,5 +1,6 @@
 import { WorkflowRevisionFeedback } from "@t3tools/contracts";
 import { workflowArtifactExcerpt } from "@t3tools/shared/workflowRevision";
+import { workflowCompositionIssue } from "@t3tools/shared/workflowComposition";
 import {
   AuthOrchestrationOperateScope,
   WorkflowStageDispatchMutation,
@@ -237,6 +238,7 @@ export const workflowCatalogForProject = Effect.fn("Workflow.catalog")(function*
   const stored = yield* readWorkflowCatalog(projectId);
   return {
     revisionFeedbackVersion: 1 as const,
+    reusableTemplatesVersion: 1 as const,
     profiles: [
       ...BUILTIN_AGENT_PROFILES,
       ...(yield* Effect.filter(stored.profiles, visibleConfiguration)),
@@ -295,6 +297,8 @@ export const makeWorkflowActionMutation = (
     case "profile.restore":
       return { type: "profile.restore", profileId: input.profileId, at };
     case "template.save": {
+      const issue = workflowCompositionIssue(input.draft, BUILTIN_AGENT_PROFILES);
+      if (issue) fail(issue);
       const prior = stored.templates
         .filter((template) => template.id === input.draft.id)
         .toSorted((a, b) => b.version - a.version)[0];
@@ -318,6 +322,21 @@ export const makeWorkflowActionMutation = (
       const template =
         templateVersion(stored, input.projectId, input.templateId, input.templateVersion) ??
         fail("Template version was not found.");
+      const issue =
+        template.origin === "custom"
+          ? workflowCompositionIssue(template, BUILTIN_AGENT_PROFILES)
+          : null;
+      if (issue) fail(issue);
+      if (
+        stored.runs.some(
+          (run) =>
+            run.projectId === input.projectId &&
+            (run.status === "active" || run.status === "paused"),
+        )
+      )
+        fail(
+          "This project already has an open workflow. Finish or cancel it before creating another.",
+        );
       return {
         type: "run.start",
         run: initialWorkflowRun({
@@ -516,6 +535,26 @@ export const readConfigurationCommandStatus = Effect.fn("Workflow.configurationS
     ? ("committed" as const)
     : ("conflict" as const);
 });
+
+/** Read-only recovery for exactly the original template save or ledger creation command. */
+export const readWorkflowTemplateCommandStatus = Effect.fn("Workflow.templateCommandStatus")(
+  function* (input: WorkflowActionInput) {
+    if (input.type !== "template.save" && input.type !== "run.start")
+      return yield* new WorkflowOperationError({
+        message: "An original template save or run creation command is required.",
+      });
+    yield* requireWorkflowProject(input.projectId);
+    const sql = yield* SqlClient.SqlClient;
+    const raw =
+      yield* sql`SELECT mutation_json AS payload FROM base3_workflow_commands WHERE command_id=${input.commandId}`;
+    const rows = yield* decodeActionReceipts(raw);
+    const prior = rows[0]?.payload;
+    if (!prior) return "unknown" as const;
+    return prior.projectId === input.projectId && prior.input && sameAction(prior.input, input)
+      ? ("committed" as const)
+      : ("conflict" as const);
+  },
+);
 
 const stageContext = (catalog: WorkflowCatalog, projectId: ProjectId, runId: string) => {
   const run =

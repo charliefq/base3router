@@ -1252,18 +1252,19 @@ memoryLayer("workflow feedback global identity", (it) => {
       yield* runMigrations();
       yield* insertProject();
       yield* seedBuildGate(undefined, true);
-      yield* performWorkflowAction(
-        {
+      // Legacy projection histories may contain multiple open runs; new UI/service creation does not.
+      yield* projectWorkflowEvent(
+        event(4, {
           type: "run.start",
-          projectId,
-          commandId: "other-run-create",
-          runId: "other-run",
-          templateId: template.id,
-          templateVersion: template.version,
-          originatingThreadId: null,
-          originatingMessageId: null,
-        },
-        noopDispatch,
+          run: initialWorkflowRun({
+            runId: "other-run",
+            projectId,
+            template,
+            originThreadId: null,
+            originMessageId: null,
+            at,
+          }),
+        }),
       );
       yield* projectWorkflowEvent(
         event(5, {

@@ -53,6 +53,7 @@ export const TaskRpcGroup = RpcGroup.make(
       rpc._tag === WS_METHODS.workflowCatalog ||
       rpc._tag === WS_METHODS.workflowAction ||
       rpc._tag === WS_METHODS.workflowConfigurationStatus ||
+      rpc._tag === WS_METHODS.workflowTemplateCommandStatus ||
       rpc._tag === WS_METHODS.workflowReadRun ||
       rpc._tag === WS_METHODS.workflowStagePreview ||
       rpc._tag === WS_METHODS.workflowDispatchStage ||
@@ -255,6 +256,14 @@ export const makeTaskRpcHandlers = Effect.fn("ws.makeTaskRpcHandlers")(function*
           }),
         ),
         { "rpc.aggregate": "workflow" },
+      ),
+    [WS_METHODS.workflowTemplateCommandStatus]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.workflowTemplateCommandStatus,
+        Workflow.readWorkflowTemplateCommandStatus(input).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.catchCause(() => Effect.fail(workflowFailure())),
+        ),
       ),
     [WS_METHODS.workflowConfigurationStatus]: (input) =>
       observeRpcEffect(

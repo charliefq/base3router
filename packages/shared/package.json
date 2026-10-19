@@ -507,6 +507,10 @@
       "types": "./src/taskRevisionRequest.ts",
       "import": "./src/taskRevisionRequest.ts"
     },
+    "./workflowComposition": {
+      "types": "./src/workflowComposition.ts",
+      "import": "./src/workflowComposition.ts"
+    },
     "./workflowRevision": {
       "types": "./src/workflowRevision.ts",
       "import": "./src/workflowRevision.ts"

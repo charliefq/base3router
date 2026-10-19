@@ -23,6 +23,10 @@ export function createWorkflowEnvironmentAtoms<R, E>(
       label: "environment-data:workflow:configuration-action",
       execute: writeConfiguration,
     }),
+    templateCommandStatus: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:workflow:template-command-status",
+      tag: WS_METHODS.workflowTemplateCommandStatus,
+    }),
     configurationStatus: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:workflow:configuration-status",
       tag: WS_METHODS.workflowConfigurationStatus,

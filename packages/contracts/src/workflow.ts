@@ -233,6 +233,7 @@ export const WorkflowRun = Schema.Struct({
 export type WorkflowRun = typeof WorkflowRun.Type;
 
 export const WorkflowCatalog = Schema.Struct({
+  reusableTemplatesVersion: Schema.optionalKey(Schema.Literal(1)),
   revisionFeedbackVersion: Schema.optionalKey(Schema.Literal(1)),
   profiles: Schema.Array(AgentProfile).check(Schema.isMaxLength(WORKFLOW_MAX_RECORDS)),
   templates: Schema.Array(WorkflowTemplate).check(Schema.isMaxLength(WORKFLOW_MAX_RECORDS)),
@@ -263,6 +264,8 @@ export const WorkflowTemplateDraft = Schema.Struct({
   description: WorkflowTemplate.fields.description,
   stages: WorkflowTemplate.fields.stages,
 });
+
+export type WorkflowTemplateDraft = typeof WorkflowTemplateDraft.Type;
 
 const WorkflowActionBase = {
   projectId: ProjectId,

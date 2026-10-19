@@ -568,6 +568,7 @@ export const WS_METHODS = {
 
   governanceSnapshot: "governance.snapshot",
   workflowConfigurationStatus: "workflow.configurationStatus",
+  workflowTemplateCommandStatus: "workflow.templateCommandStatus",
   workflowCatalog: "workflow.catalog",
   workflowReadRun: "workflow.readRun",
   workflowAction: "workflow.action",
@@ -607,6 +608,11 @@ const WsGovernanceSnapshotRpc = Rpc.make(WS_METHODS.governanceSnapshot, {
 });
 
 const WorkflowRpcError = Schema.Union([WorkflowOperationError, EnvironmentAuthorizationError]);
+const WsWorkflowTemplateCommandStatusRpc = Rpc.make(WS_METHODS.workflowTemplateCommandStatus, {
+  payload: WorkflowActionInput,
+  success: Schema.Literals(["unknown", "committed", "conflict"]),
+  error: WorkflowRpcError,
+});
 const WsWorkflowConfigurationStatusRpc = Rpc.make(WS_METHODS.workflowConfigurationStatus, {
   payload: WorkflowActionInput,
   success: Schema.Literals(["unknown", "committed", "conflict"]),
@@ -1867,6 +1873,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsGovernanceSnapshotRpc,
   WsWorkflowConfigurationStatusRpc,
+  WsWorkflowTemplateCommandStatusRpc,
   WsWorkflowCatalogRpc,
   WsWorkflowReadRunRpc,
   WsWorkflowActionRpc,

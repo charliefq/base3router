@@ -91,6 +91,7 @@ export async function withTaskCreationTransportFixture(
     drain: () => Promise<void>;
     settle: (messageId: string) => Promise<void>;
     alterLatestOutput: (threadId: string, text: string) => Promise<void>;
+    setWorkflowOutput: (text: string) => void;
     alterBackgroundWork: (threadId: string) => Promise<void>;
     runInput: (text: string) => void;
     awaitRunning: () => Promise<void>;
@@ -147,6 +148,7 @@ export async function withTaskCreationTransportFixture(
   let runningStarted = Deferred.makeUnsafe<void>();
   const nativeInterrupted = Deferred.makeUnsafe<void>();
   let runningText: string | null = null;
+  let workflowOutput: string | null = null;
   let interrupts = 0;
   let finishRunning: ((status: "completed" | "interrupted") => Effect.Effect<void>) | null = null;
   let heldText: string | null = null;
@@ -443,6 +445,9 @@ export async function withTaskCreationTransportFixture(
                   providers = value;
                   f.setProviders(value);
                 },
+                setWorkflowOutput: (text) => {
+                  workflowOutput = text;
+                },
                 runInput: (text) => {
                   runningText = text;
                   runningStarted = Deferred.makeUnsafe<void>();
@@ -634,7 +639,7 @@ export async function withTaskCreationTransportFixture(
                               ...e,
                               turnItem: {
                                 ...e.turnItem,
-                                text: `Transport answer: ${input.message.text}`,
+                                text: workflowOutput ?? `Transport answer: ${input.message.text}`,
                               },
                             }
                           : e,

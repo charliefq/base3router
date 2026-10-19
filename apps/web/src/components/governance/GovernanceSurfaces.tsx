@@ -15,6 +15,7 @@ import type {
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { WorkflowTemplates } from "./WorkflowTemplates";
 import { WorkflowStagePreview } from "./WorkflowStagePreview";
 import { TaskContractReadout } from "../chat/TaskContractPanel";
 import { randomUUID } from "../../lib/utils";
@@ -198,6 +199,9 @@ export function ProjectWorkflowDecisions(props: {
   return (
     <article className="rounded-md border border-border/60 p-3" data-workflow-surface="">
       <h3 className="text-xs font-medium">Workflow · {props.projectTitle}</h3>
+      <Button type="button" size="sm" variant="outline" onClick={() => catalogQuery.refresh()}>
+        Refresh workflow evidence
+      </Button>
       {catalogQuery.isPending ? (
         <p className="mt-1 text-xs text-muted-foreground">Loading workflow.</p>
       ) : null}
@@ -211,32 +215,25 @@ export function ProjectWorkflowDecisions(props: {
           {catalogQuery.error}
         </p>
       ) : null}
+      {catalog?.reusableTemplatesVersion === 1 ? (
+        <WorkflowTemplates
+          environmentId={props.environmentId}
+          projectId={props.projectId}
+          catalog={catalog}
+          fresh={
+            !busy &&
+            !catalogQuery.isPending &&
+            catalogQuery.isSuccess &&
+            catalogQuery.error === null
+          }
+          refresh={catalogQuery.refresh}
+        />
+      ) : (
+        <p>Reusable workflow templates are unavailable on this server.</p>
+      )}
       {catalog === null ? null : activeRun === null ? (
         <div className="mt-2 flex flex-col gap-2">
           <p className="text-xs text-muted-foreground">No active workflow.</p>
-          <div>
-            <Button
-              disabled={busy || catalogQuery.isPending || !catalogQuery.isSuccess}
-              size="sm"
-              variant="outline"
-              type="button"
-              data-workflow-start=""
-              onClick={() => {
-                void submit({
-                  type: "run.start",
-                  projectId: props.projectId,
-                  commandId: `start${Date.now().toString(36)}`,
-                  runId: `run${Date.now().toString(36)}`,
-                  templateId: "saas-production",
-                  templateVersion: 1,
-                  originatingThreadId: null,
-                  originatingMessageId: null,
-                });
-              }}
-            >
-              Start SaaS Production
-            </Button>
-          </div>
         </div>
       ) : (
         <div className="mt-2 space-y-2">
