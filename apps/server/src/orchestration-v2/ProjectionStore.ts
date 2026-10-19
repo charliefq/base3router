@@ -564,6 +564,19 @@ export function upsertProviderTurn(
   });
 }
 
+/** Adapter acknowledgement is monotonic across later lifecycle snapshots. */
+function preserveInstructionDelivery<
+  T extends {
+    readonly instructionSkillDelivery?: import("@t3tools/contracts").TaskInstructionSkillDelivery;
+  },
+>(current: T | undefined, next: T): T {
+  const previous = current?.instructionSkillDelivery;
+  return previous &&
+    (next.instructionSkillDelivery === undefined || previous.status === "adapter-accepted")
+    ? { ...next, instructionSkillDelivery: previous }
+    : next;
+}
+
 /** A stale run snapshot must not erase fields that other events recorded on the run. */
 function preserveRunRecordedFields(
   current: OrchestrationV2Run | undefined,
@@ -571,7 +584,11 @@ function preserveRunRecordedFields(
 ): OrchestrationV2Run {
   if (current === undefined) return next;
   return {
-    ...next,
+    ...preserveInstructionDelivery(current, next),
+    ...(next.instructionSkillSelection === undefined &&
+    current.instructionSkillSelection !== undefined
+      ? { instructionSkillSelection: current.instructionSkillSelection }
+      : {}),
     ...(next.delegatedCompletion === undefined && current.delegatedCompletion !== undefined
       ? { delegatedCompletion: current.delegatedCompletion }
       : {}),
@@ -700,7 +717,13 @@ export function applyToProjection(
     case "run-attempt.updated":
       return withLocalVisibleTurnItems({
         ...base,
-        attempts: upsertById(base.attempts, event.payload),
+        attempts: upsertById(
+          base.attempts,
+          preserveInstructionDelivery(
+            base.attempts.find((a) => a.id === event.payload.id),
+            event.payload,
+          ),
+        ),
       });
     case "node.updated":
       return {
@@ -1662,6 +1685,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       END
     `;
 
+    const keepInstructionDelivery = (
+      payload: Statement.Fragment,
+      previous: Statement.Fragment,
+    ) => sql`
+      CASE WHEN json_type(${previous}, '$.instructionSkillDelivery') IS NOT NULL AND (
+        json_type(excluded.payload_json,'$.instructionSkillDelivery') IS NULL OR json_extract(${previous},'$.instructionSkillDelivery.status')='adapter-accepted'
+      ) THEN json_set(${payload},'$.instructionSkillDelivery',json_extract(${previous},'$.instructionSkillDelivery')) ELSE ${payload} END
+    `;
+
     const apply: ProjectionStoreV2Shape["apply"] = (event) =>
       Effect.gen(function* () {
         switch (event.type) {
@@ -1784,9 +1816,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 status = excluded.status,
                 requested_at = excluded.requested_at,
                 completed_at = excluded.completed_at,
-                payload_json = ${keepRecordedRunField(
-                  keepRecordedRunField(sql`excluded.payload_json`, "$.delegatedCompletion"),
-                  "$.restartCancelledBackgroundWork",
+                payload_json = ${keepInstructionDelivery(
+                  keepRecordedRunField(
+                    keepRecordedRunField(
+                      keepRecordedRunField(sql`excluded.payload_json`, "$.delegatedCompletion"),
+                      "$.restartCancelledBackgroundWork",
+                    ),
+                    "$.instructionSkillSelection",
+                  ),
+                  sql`orchestration_v2_projection_runs.payload_json`,
                 )}
             `;
             break;
@@ -1848,7 +1886,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 provider_thread_id = excluded.provider_thread_id,
                 provider_turn_id = excluded.provider_turn_id,
                 status = excluded.status,
-                payload_json = excluded.payload_json
+                payload_json = ${keepInstructionDelivery(sql`excluded.payload_json`, sql`orchestration_v2_projection_run_attempts.payload_json`)}
             `;
             break;
           }

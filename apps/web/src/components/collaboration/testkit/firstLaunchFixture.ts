@@ -20,6 +20,9 @@ type Fixture = {
     input: import("@t3tools/contracts").TaskAutoPreviewInput,
   ) => Effect.Effect<import("@t3tools/contracts").TaskAutoPreviewState, Error>;
   projection: (thread?: ThreadId) => Effect.Effect<OrchestrationV2ThreadProjection, Error>;
+  reviewInstructionSkill: (
+    input: import("@t3tools/contracts").TaskInstructionSkillReviewInput,
+  ) => Effect.Effect<import("@t3tools/contracts").TaskInstructionSkillReviewState, Error>;
   readReview: (input: TaskContractReviewInput) => Effect.Effect<TaskContractReviewState, Error>;
   readStatus: (command: Dispatch) => Effect.Effect<TaskFirstLaunchStatus>;
   readCreationStatus: (command: OrchestrationV2Command) => Effect.Effect<{ status: string }, Error>;

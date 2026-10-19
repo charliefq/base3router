@@ -134,6 +134,8 @@ const contractReadout = (row: {
 };
 
 const StoredRunEvidence = Schema.Struct({
+  instructionSkillSelection: OrchestrationV2Run.fields.instructionSkillSelection,
+  instructionSkillDelivery: OrchestrationV2Run.fields.instructionSkillDelivery,
   capabilityEvidence: OrchestrationV2Run.fields.capabilityEvidence,
   id: OrchestrationV2Run.fields.id,
   threadId: OrchestrationV2Run.fields.threadId,
@@ -475,6 +477,12 @@ const readResultEvidence = (
       runId: run.id,
       messageId: run.userMessageId,
       runStatus: run.status,
+      ...(run.instructionSkillSelection
+        ? { instructionSkillSelection: run.instructionSkillSelection }
+        : {}),
+      ...(run.instructionSkillDelivery
+        ? { instructionSkillDelivery: run.instructionSkillDelivery }
+        : {}),
       ...(run.capabilityEvidence === undefined
         ? {}
         : { capabilityEvidence: run.capabilityEvidence }),

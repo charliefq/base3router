@@ -1,7 +1,13 @@
+import {
+  TaskInstructionSkillReview,
+  TaskInstructionSkillDelivery,
+  TaskInstructionSkillReviewState,
+} from "./taskInstructionSkill.ts";
 import { TaskCapabilityStep } from "./taskCapabilityStep.ts";
 import {
   TaskFirstLaunch,
   TaskFirstLaunchStatus,
+  TaskInstructionSkillReviewInput,
   TaskResultContinuation,
 } from "./taskFirstLaunch.ts";
 import { TaskCapabilityPlan, TaskCapabilityEvidence } from "./taskCapabilityPlan.ts";
@@ -558,6 +564,8 @@ export type OrchestrationV2RunBackgroundWorkCancelled =
   typeof OrchestrationV2RunBackgroundWorkCancelled.Type;
 
 export const OrchestrationV2Run = Schema.Struct({
+  instructionSkillSelection: Schema.optionalKey(TaskInstructionSkillReview),
+  instructionSkillDelivery: Schema.optionalKey(TaskInstructionSkillDelivery),
   capabilityDispatchEvidence: Schema.optionalKey(TaskCapabilityEvidence),
   capabilityEvidence: Schema.optionalKey(TaskCapabilityEvidence),
   id: RunId,
@@ -598,6 +606,7 @@ export const OrchestrationV2Run = Schema.Struct({
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
 
 export const OrchestrationV2RunAttempt = Schema.Struct({
+  instructionSkillDelivery: Schema.optionalKey(TaskInstructionSkillDelivery),
   capabilityEvidence: Schema.optionalKey(TaskCapabilityEvidence),
   id: RunAttemptId,
   // Provider-thread rows can be reused after recovery; retain the native input destination.
@@ -3058,6 +3067,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getTaskUsage: "orchestration.getTaskUsage",
   getTaskReview: "orchestration.getTaskReview",
   getTaskFirstLaunchStatus: "orchestration.getTaskFirstLaunchStatus",
+  getTaskInstructionSkillReview: "orchestration.getTaskInstructionSkillReview",
   getTaskResultContinuationStatus: "orchestration.getTaskResultContinuationStatus",
   getTaskAutoPreview: "orchestration.getTaskAutoPreview",
   getAgentsCreationStatus: "orchestration.getAgentsCreationStatus",
@@ -3428,6 +3438,10 @@ export const OrchestrationV2RpcSchemas = {
     output: OrchestrationV2ThreadProjection,
   },
   getTaskReview: { input: TaskContractReviewInput, output: TaskContractReviewState },
+  getTaskInstructionSkillReview: {
+    input: TaskInstructionSkillReviewInput,
+    output: TaskInstructionSkillReviewState,
+  },
   getTaskFirstLaunchStatus: {
     input: Schema.Struct({ command: OrchestrationV2Command }),
     output: TaskFirstLaunchStatus,

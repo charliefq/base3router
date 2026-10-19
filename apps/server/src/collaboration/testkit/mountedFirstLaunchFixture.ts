@@ -55,6 +55,7 @@ function bridge(f: Fixture, defaultThread: ThreadId, completion: Effect.Effect<v
         creationSource: "web",
       }),
     readStatus: f.readFirstLaunchStatus,
+    reviewInstructionSkill: f.reviewInstructionSkill,
     changeAutoCandidate: () =>
       f.setProviders([
         {

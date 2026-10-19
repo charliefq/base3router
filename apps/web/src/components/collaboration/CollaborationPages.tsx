@@ -1,3 +1,4 @@
+import { TaskInstructionSkillReadout } from "./TaskInstructionSkillReadout";
 import { useSetupDetour } from "./useSetupDetour";
 import { useCollaborationScope, type CollaborationScopeProps } from "./useCollaborationScope";
 import { resolveCollaborationScope } from "./collaborationScope";
@@ -294,6 +295,10 @@ function TaskResultReadout({ readout }: { readout: CollaborationTaskResultReadou
       {readout?.status === "available" ? (
         <>
           <TaskCapabilityReadout evidence={readout.capabilityEvidence} historical />
+          <TaskInstructionSkillReadout
+            selection={readout.instructionSkillSelection}
+            delivery={readout.instructionSkillDelivery}
+          />
           <p className="text-sm">Latest persisted run status: {readout.runStatus}</p>
           <p className="text-sm">
             Correlated provider-turn status: {readout.providerTurnStatus ?? "Unknown"}

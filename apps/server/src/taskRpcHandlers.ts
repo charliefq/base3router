@@ -1,3 +1,4 @@
+import { reviewTaskInstructionSkill } from "./collaboration/FirstTaskLaunch.ts";
 import { RpcGroup } from "effect/unstable/rpc";
 import {
   ORCHESTRATION_V2_WS_METHODS,
@@ -47,6 +48,7 @@ export const TaskRpcGroup = RpcGroup.make(
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getThreadProjection ||
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getAgentsCreationStatus ||
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskFirstLaunchStatus ||
+      rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskInstructionSkillReview ||
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskResultContinuationStatus ||
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskAutoPreview ||
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskReview ||
@@ -399,6 +401,14 @@ export const makeTaskRpcHandlers = Effect.fn("ws.makeTaskRpcHandlers")(function*
             Effect.provideService(ServerEnvironment.ServerEnvironment, serverEnvironment),
             Effect.provideService(SqlClient.SqlClient, sql),
           ),
+      ),
+    [ORCHESTRATION_V2_WS_METHODS.getTaskInstructionSkillReview]: (input) =>
+      observeRpcEffect(
+        ORCHESTRATION_V2_WS_METHODS.getTaskInstructionSkillReview,
+        reviewTaskInstructionSkill(sql, input).pipe(
+          Effect.provideService(ServerEnvironment.ServerEnvironment, serverEnvironment),
+          Effect.provideService(ProviderRegistry, providerRegistry),
+        ),
       ),
     [ORCHESTRATION_V2_WS_METHODS.getTaskFirstLaunchStatus]: (input) =>
       observeRpcEffect(

@@ -84,6 +84,7 @@ import {
   readThreadProjection,
   readAgentsCreationStatus,
   readTaskFirstLaunchStatus,
+  readTaskInstructionSkillReview,
   readTaskResultContinuationStatus,
   readTaskUsage,
   startThreadTurn,
@@ -167,6 +168,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     readResultContinuationStatus: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:read-result-continuation-status",
       execute: readTaskResultContinuationStatus,
+      scheduler,
+      concurrency: { mode: "parallel" },
+    }),
+    readTaskInstructionSkillReview: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:read-task-instruction-skill-review",
+      execute: readTaskInstructionSkillReview,
       scheduler,
       concurrency: { mode: "parallel" },
     }),

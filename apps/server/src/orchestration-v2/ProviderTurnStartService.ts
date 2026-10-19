@@ -1,3 +1,12 @@
+import {
+  verifyTaskInstructionSkillReview,
+  taskInstructionSkillText,
+} from "@t3tools/shared/taskInstructionSkills";
+import { sha256Hex } from "@t3tools/shared/actionCanonical";
+import {
+  type TaskInstructionSkillModule,
+  type TaskInstructionSkillDelivery,
+} from "@t3tools/contracts";
 import { argumentHash } from "../policy/grantArguments.ts";
 import {
   executeCapabilityStep,
@@ -676,6 +685,76 @@ export const layer: Layer.Layer<
         }
         savedCapabilityContext = capability.success;
       }
+      let instructionModule: TaskInstructionSkillModule | null = null;
+      let instructionContext = "";
+      const selectedInstruction = message.taskFirstLaunch?.instructionSkill;
+      if (selectedInstruction) {
+        const prepared = yield* Effect.result(
+          Effect.gen(function* () {
+            if (
+              Option.isNone(capabilitySql) ||
+              Option.isNone(capabilityEnvironment) ||
+              !message.taskFirstLaunch ||
+              run.instructionSkillDelivery
+            )
+              return yield* new ProviderTurnStartError({
+                runId,
+                cause:
+                  "Instruction delivery is unavailable or already attempted; never resend an uncertain input.",
+              });
+            const launch = message.taskFirstLaunch;
+            const grants = yield* capabilitySql.value<{
+              actor_id: string;
+            }>`SELECT actor_id FROM base3_execution_grants WHERE grant_id=${`grant:message:${input.threadId}:${message.id}`}`;
+            if (
+              grants[0]?.actor_id !== selectedInstruction.actorId ||
+              (yield* capabilityEnvironment.value.getEnvironmentId) !==
+                launch.reference.environmentId ||
+              projection.thread.projectId !== launch.reference.projectId ||
+              launch.threadId !== input.threadId ||
+              launch.messageId !== message.id ||
+              projection.thread.taskContractPhase !== "active" ||
+              projection.thread.taskAcceptedRevision !== null ||
+              argumentHash(projection.thread.taskContract) !== argumentHash(launch.contract) ||
+              !run.instructionSkillSelection ||
+              argumentHash(run.instructionSkillSelection) !== argumentHash(selectedInstruction) ||
+              argumentHash(run.modelSelection) !== argumentHash(launch.modelSelection) ||
+              resolvedRuntimePolicy.runtimeMode !== launch.runtimeMode ||
+              resolvedRuntimePolicy.interactionMode !== launch.interactionMode
+            )
+              return yield* new ProviderTurnStartError({
+                runId,
+                cause: "Reviewed instruction skill scope, contract or native target changed.",
+              });
+            const nowIso = DateTime.formatIso(yield* DateTime.now);
+            return yield* Effect.try({
+              try: () => verifyTaskInstructionSkillReview(launch, grants[0]!.actor_id, nowIso),
+              catch: (cause) => new ProviderTurnStartError({ runId, cause }),
+            });
+          }),
+        );
+        if (prepared._tag === "Failure") {
+          yield* settleRunBeforeStart({
+            signal: "instruction-skill-blocked",
+            status: "failed",
+            now: yield* DateTime.now,
+            providerInstanceId: run.providerInstanceId,
+            itemProviderThreadId: providerThread.id,
+            item: {
+              type: "error",
+              title: "Reviewed instruction module blocked",
+              failure: makeProviderFailure({
+                message:
+                  "Instruction module facts changed or an earlier delivery is uncertain. No module input was resent; inspect the original identity.",
+                class: "provider_error",
+              }),
+            },
+          });
+          return;
+        }
+        instructionModule = prepared.success;
+        instructionContext = taskInstructionSkillText(instructionModule);
+      }
       const sessionResult = yield* Effect.result(
         providerSessions.open({
           threadId: projection.thread.id,
@@ -1101,7 +1180,9 @@ export const layer: Layer.Layer<
         projectComposerContextForProvider({
           text: message.text,
           records: message.context?.records ?? [],
-        }) + savedCapabilityContext;
+        }) +
+        savedCapabilityContext +
+        instructionContext;
       // Delivered once: this run's provider turn marks the work as told. A
       // restart continuation is prompted by its own text or resumes natively.
       const noteContinuation = isRestartNoteContinuation(
@@ -1345,10 +1426,109 @@ export const layer: Layer.Layer<
               runId,
               cause: "Persisted capability context changed before native delivery.",
             });
+          let pendingInstruction: TaskInstructionSkillDelivery | null = null;
+          const recordInstructionDelivery = (evidence: TaskInstructionSkillDelivery) =>
+            Effect.gen(function* () {
+              const fresh = yield* projectionStore.getTurnStartContext(input.threadId, run.id);
+              const currentRun = fresh.runs.find((r) => r.id === run.id);
+              const currentAttempt = fresh.attempts.find((a) => a.id === attempt.id);
+              if (!currentRun || !currentAttempt || currentRun.activeAttemptId !== attempt.id)
+                return false;
+              const occurredAt = yield* DateTime.now;
+              const updates: OrchestrationV2DomainEvent[] = [];
+              for (const event of [
+                {
+                  type: "run.updated",
+                  payload: { ...currentRun, instructionSkillDelivery: evidence },
+                },
+                {
+                  type: "run-attempt.updated",
+                  payload: { ...currentAttempt, instructionSkillDelivery: evidence },
+                },
+              ] as const)
+                updates.push({
+                  ...event,
+                  id: yield* idAllocator.allocate.event({ threadId: input.threadId }),
+                  threadId: input.threadId,
+                  runId: run.id,
+                  providerInstanceId: run.providerInstanceId,
+                  occurredAt,
+                });
+              return (yield* eventSink.writeIfRunCurrent({
+                threadId: input.threadId,
+                runId: run.id,
+                activeAttemptId: attempt.id,
+                expectedStatus: currentRun.status,
+                events: updates,
+              })).committed;
+            });
+          if (instructionModule && selectedInstruction && message.taskFirstLaunch) {
+            const nowIso = DateTime.formatIso(yield* DateTime.now);
+            const current = yield* Effect.try({
+              try: () =>
+                verifyTaskInstructionSkillReview(
+                  message.taskFirstLaunch!,
+                  selectedInstruction.actorId,
+                  nowIso,
+                ),
+              catch: (cause) => new ProviderTurnStartError({ runId, cause }),
+            });
+            if (
+              taskInstructionSkillText(current) !== instructionContext ||
+              !turnInput.message.text.endsWith(instructionContext) ||
+              turnInput.runId !== run.id ||
+              turnInput.attemptId !== attempt.id ||
+              turnInput.message.messageId !== message.id ||
+              argumentHash(turnInput.modelSelection) !==
+                argumentHash(message.taskFirstLaunch.modelSelection)
+            )
+              return yield* new ProviderTurnStartError({
+                runId,
+                cause:
+                  "Actual instruction module input differs from its reviewed body or native identity.",
+              });
+            const fresh = yield* projectionStore.getTurnStartContext(input.threadId, run.id);
+            if (
+              argumentHash(fresh.thread.taskContract) !==
+                argumentHash(message.taskFirstLaunch.contract) ||
+              fresh.thread.taskContractPhase !== "active" ||
+              fresh.thread.projectId !== message.taskFirstLaunch.reference.projectId ||
+              fresh.runs.find((r) => r.id === run.id)?.instructionSkillDelivery
+            )
+              return yield* new ProviderTurnStartError({
+                runId,
+                cause: "Original instruction input was already attempted; no resend.",
+              });
+            pendingInstruction = {
+              status: "unknown",
+              module: selectedInstruction.module,
+              runId: run.id,
+              attemptId: attempt.id,
+              messageId: message.id,
+              modelSelection: turnInput.modelSelection,
+              inputSha256: sha256Hex(turnInput.message.text),
+              observedAt: nowIso,
+            };
+            if (!(yield* recordInstructionDelivery(pendingInstruction)))
+              return yield* new ProviderTurnStartError({
+                runId,
+                cause: "Instruction delivery identity could not be retained; nothing sent.",
+              });
+          }
           yield* deliver({
             ...turnInput,
             ...(conversationHistory === undefined ? {} : { conversationHistory }),
           });
+          if (pendingInstruction) {
+            const accepted = {
+              ...pendingInstruction,
+              status: "adapter-accepted" as const,
+              observedAt: DateTime.formatIso(yield* DateTime.now),
+            };
+            yield* recordInstructionDelivery(accepted).pipe(
+              Effect.catchCause(() => Effect.succeed(false)),
+            );
+          }
         }).pipe(
           Effect.mapError(
             (cause) =>

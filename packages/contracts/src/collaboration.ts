@@ -1,3 +1,7 @@
+import {
+  TaskInstructionSkillReview,
+  TaskInstructionSkillDelivery,
+} from "./taskInstructionSkill.ts";
 import { TaskCapabilityEvidence } from "./taskCapabilityPlan.ts";
 /**
  * Chat-hub identities and cross-agent tasks.
@@ -147,6 +151,8 @@ export const CollaborationTaskResultReadout = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("available"),
     capabilityEvidence: Schema.optionalKey(TaskCapabilityEvidence),
+    instructionSkillSelection: Schema.optionalKey(TaskInstructionSkillReview),
+    instructionSkillDelivery: Schema.optionalKey(TaskInstructionSkillDelivery),
     runId: TrimmedNonEmptyString,
     messageId: TrimmedNonEmptyString,
     runStatus: OrchestrationV2RunStatus,

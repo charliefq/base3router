@@ -4803,6 +4803,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           checkpointId: null,
           contextHandoffId: null,
           ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+          ...(command.taskFirstLaunch?.instructionSkill
+            ? { instructionSkillSelection: command.taskFirstLaunch.instructionSkill }
+            : {}),
           ...(capabilityEvidence === undefined ? {} : { capabilityEvidence }),
           ...(command.restartContinuationOfRunId === undefined
             ? {}
@@ -5153,6 +5156,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           checkpointId: null,
           contextHandoffId: legacyImportHandoff?.id ?? null,
           ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+          ...(command.taskFirstLaunch?.instructionSkill
+            ? { instructionSkillSelection: command.taskFirstLaunch.instructionSkill }
+            : {}),
           ...(capabilityEvidence === undefined ? {} : { capabilityEvidence }),
           ...(command.restartContinuationOfRunId === undefined
             ? {}
@@ -5856,6 +5862,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           legacyImportRecoveryHandoff?.id ??
           null,
         ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+        ...(command.taskFirstLaunch?.instructionSkill
+          ? { instructionSkillSelection: command.taskFirstLaunch.instructionSkill }
+          : {}),
         ...(capabilityEvidence === undefined ? {} : { capabilityEvidence }),
         ...(command.restartContinuationOfRunId === undefined
           ? {}

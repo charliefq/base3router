@@ -1,4 +1,13 @@
 import {
+  TaskInstructionSkillReviewInput,
+  type TaskInstructionSkillReviewState,
+} from "@t3tools/contracts";
+import {
+  taskInstructionSkillBinding,
+  resolveTaskInstructionSkill,
+  verifyTaskInstructionSkillReview as verifyInstructionSkillReview,
+} from "@t3tools/shared/taskInstructionSkills";
+import {
   AuthOrchestrationOperateScope,
   TaskFirstLaunch,
   TaskResultContinuation,
@@ -46,6 +55,10 @@ const decodeAttempt = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2RunAttemptJson),
 );
 const sameMarker = Schema.toEquivalence(TaskFirstLaunch);
+const decodeSkillReviewInput = Schema.decodeUnknownOption(TaskInstructionSkillReviewInput);
+const decodeStrictLaunch = Schema.decodeUnknownOption(TaskFirstLaunch);
+const validLaunch = (raw: unknown) =>
+  Option.isSome(decodeStrictLaunch(raw, { onExcessProperty: "error" }));
 const validContinuation = Schema.is(TaskResultContinuation);
 const sameContinuation = Schema.toEquivalence(TaskResultContinuation);
 type Kind = "first" | "continuation";
@@ -122,9 +135,17 @@ export const validateFirstTaskLaunch = Effect.fn("FirstTaskLaunch.validate")(fun
   authorized = false,
 ) {
   if (!c.taskFirstLaunch) return;
-  yield* reviewedTaskPrincipal;
+  const principal = yield* reviewedTaskPrincipal;
   if (!reviewedDispatchMatches(c, authorized)) return yield* deny();
   const m = c.taskFirstLaunch;
+  if (!validLaunch(m)) return yield* deny();
+  if (m.instructionSkill) {
+    const skillNow = DateTime.formatIso(yield* DateTime.now);
+    yield* Effect.try({
+      try: () => verifyInstructionSkillReview(m, principal.actorId, skillNow),
+      catch: () => deny(),
+    });
+  }
   if (authorized || m.routingMode === "manual") {
     const registry = yield* Effect.serviceOption(ProviderRegistry);
     const provider = Option.isSome(registry)
@@ -200,6 +221,62 @@ export const validateFirstTaskLaunch = Effect.fn("FirstTaskLaunch.validate")(fun
   }
 });
 
+export const reviewTaskInstructionSkill = Effect.fn("TaskInstructionSkill.review")(
+  function* (
+    sql: SqlClient.SqlClient,
+    input: TaskInstructionSkillReviewInput,
+  ): Effect.fn.Return<TaskInstructionSkillReviewState, unknown> {
+    if (Option.isNone(decodeSkillReviewInput(input, { onExcessProperty: "error" })))
+      return { status: "unavailable", reason: "Invalid or expanded instruction module review." };
+    const launch = input.launch;
+    if (launch.instructionSkill || launch.routingMode !== "manual")
+      return {
+        status: "unavailable",
+        reason:
+          "Select an exact Manual model and review a first launch without an existing skill proof.",
+      };
+    const actor = yield* reviewedTaskPrincipal;
+    const module = yield* Effect.try({
+      try: () => resolveTaskInstructionSkill(input.module),
+      catch: () => deny(),
+    });
+    const command: Dispatch = {
+      type: "message.dispatch",
+      commandId: launch.commandId,
+      messageId: launch.messageId,
+      threadId: launch.threadId,
+      text: launch.text,
+      attachments: [],
+      routingMode: launch.routingMode,
+      modelSelection: launch.modelSelection,
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "user",
+      creationSource: "web",
+      taskFirstLaunch: launch,
+    };
+    yield* validateFirstTaskLaunch(sql, command);
+    const now = yield* DateTime.now;
+    const binding = {
+      module: input.module,
+      actorId: actor.actorId,
+      reviewedAt: DateTime.formatIso(now),
+      expiresAt: DateTime.formatIso(DateTime.add(now, { minutes: 5 })),
+    };
+    return {
+      status: "available",
+      module,
+      review: { ...binding, bindingSha256: taskInstructionSkillBinding(launch, binding) },
+    };
+  },
+  Effect.catchCause(() =>
+    Effect.succeed({
+      status: "unavailable" as const,
+      reason:
+        "Owned first-launch facts, exact model or instruction module changed. Refresh and review.",
+    }),
+  ),
+);
+
 export const commitFirstTaskLaunch = Effect.fn("FirstTaskLaunch.commit")(function* (
   sql: SqlClient.SqlClient,
   c: Dispatch,
@@ -217,6 +294,7 @@ export const commitReviewedTaskDispatch = Effect.fn("ReviewedTaskDispatch.commit
   kind: Kind,
 ) {
   const m = marker(c, kind)!;
+  const selectedInstruction = kind === "first" ? c.taskFirstLaunch?.instructionSkill : undefined;
   const message = events.find((e) => e.type === "message.updated" && e.payload.id === c.messageId);
   const run = events.find(
     (e) => e.type === "run.created" && e.payload.userMessageId === c.messageId,
@@ -233,6 +311,10 @@ export const commitReviewedTaskDispatch = Effect.fn("ReviewedTaskDispatch.commit
     message.payload.text !== m.text ||
     run?.type !== "run.created" ||
     message.payload.runId !== run.payload.id ||
+    (selectedInstruction
+      ? !run.payload.instructionSkillSelection ||
+        argumentHash(selectedInstruction) !== argumentHash(run.payload.instructionSkillSelection)
+      : run.payload.instructionSkillSelection !== undefined) ||
     attempt?.type !== "run-attempt.created" ||
     attempt.payload.runId !== run.payload.id ||
     argumentHash(run.payload.modelSelection) !== argumentHash(c.modelSelection) ||
@@ -354,6 +436,12 @@ export const readFirstTaskLaunchStatus = Effect.fn("FirstTaskLaunch.status")(
       runId: run.id,
       attemptId: run.activeAttemptId,
       actualModelSelection: run.modelSelection,
+      ...(run.instructionSkillSelection
+        ? { instructionSkillSelection: run.instructionSkillSelection }
+        : {}),
+      ...(run.instructionSkillDelivery
+        ? { instructionSkillDelivery: run.instructionSkillDelivery }
+        : {}),
       runStatus: run.status,
       resultPreview: preview,
     };

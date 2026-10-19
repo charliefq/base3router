@@ -1,3 +1,7 @@
+import {
+  taskInstructionSkillModules,
+  taskInstructionSkillRef,
+} from "@t3tools/shared/taskInstructionSkills";
 import { assert, it, vi } from "@effect/vitest";
 import {
   EnvironmentId,
@@ -306,6 +310,93 @@ const restartCancelledWorkSurvivesStaleRunUpdate = Effect.gen(function* () {
   assert.deepEqual(updated?.restartCancelledBackgroundWork, work);
 });
 
+const instructionDeliverySurvivesStaleUpdate = Effect.gen(function* () {
+  const store = yield* ProjectionStore.ProjectionStoreV2;
+  const threadId = yield* addRolledBackRecoveryCandidate("instruction-evidence-stale-update");
+  const run = (yield* store.getThreadProjection(threadId)).runs[0]!;
+  const now = yield* DateTime.now;
+  const module = taskInstructionSkillRef(taskInstructionSkillModules()[0]!);
+  const selection = {
+    module,
+    actorId: "owner",
+    reviewedAt: "2026-10-19T00:00:00.000Z",
+    expiresAt: "2026-10-19T00:05:00.000Z",
+    bindingSha256: "a".repeat(64),
+  };
+  const delivery = {
+    status: "adapter-accepted" as const,
+    module,
+    runId: run.id,
+    attemptId: RunAttemptId.make("instruction-attempt"),
+    messageId: run.userMessageId,
+    modelSelection,
+    inputSha256: "b".repeat(64),
+    observedAt: "2026-10-19T00:00:01.000Z",
+  };
+  for (const [index, payload] of [
+    { ...run, instructionSkillSelection: selection, instructionSkillDelivery: delivery },
+    { ...run, status: "completed" as const, completedAt: now },
+    {
+      ...run,
+      status: "completed" as const,
+      instructionSkillDelivery: { ...delivery, status: "unknown" as const },
+    },
+  ].entries()) {
+    yield* store.apply({
+      id: EventId.make(`event:instruction-evidence:${index}`),
+      type: "run.updated",
+      threadId,
+      runId: run.id,
+      providerInstanceId,
+      occurredAt: now,
+      payload,
+    });
+  }
+  if (!run.rootNodeId) throw new Error("Fixture run is missing its root node.");
+  const attempt = {
+    id: delivery.attemptId,
+    runId: run.id,
+    attemptOrdinal: 1,
+    rootNodeId: run.rootNodeId,
+    providerInstanceId,
+    providerThreadId: ProviderThreadId.make("instruction-provider-thread"),
+    providerTurnId: null,
+    reason: "initial" as const,
+    status: "running" as const,
+    startedAt: now,
+    completedAt: null,
+  };
+  for (const [index, payload] of [
+    { ...attempt, instructionSkillDelivery: delivery },
+    { ...attempt, status: "completed" as const, completedAt: now },
+    {
+      ...attempt,
+      status: "completed" as const,
+      instructionSkillDelivery: { ...delivery, status: "unknown" as const },
+    },
+  ].entries())
+    yield* store.apply({
+      id: EventId.make(`event:instruction-attempt-evidence:${index}`),
+      type: "run-attempt.updated",
+      threadId,
+      runId: run.id,
+      providerInstanceId,
+      occurredAt: now,
+      payload,
+    });
+  assert.deepEqual(
+    (yield* store.getThreadProjection(threadId)).attempts[0]?.instructionSkillDelivery,
+    delivery,
+  );
+  const updated = (yield* store.getThreadProjection(threadId)).runs[0]!;
+  assert.equal(updated.status, "completed");
+  assert.deepEqual(updated.instructionSkillSelection, selection);
+  assert.deepEqual(updated.instructionSkillDelivery, delivery);
+});
+it.effect("memory keeps instruction input evidence through stale lifecycle snapshots", () =>
+  instructionDeliverySurvivesStaleUpdate.pipe(Effect.provide(ProjectionStore.layerMemory)),
+);
+
 it.effect("memory projection keeps restart-cancelled work through a stale run.updated", () =>
   restartCancelledWorkSurvivesStaleRunUpdate.pipe(Effect.provide(ProjectionStore.layerMemory)),
 );
@@ -329,6 +420,10 @@ it.effect("memory recovery selection includes unfinished items from missing runs
 );
 
 it.layer(TestLayer)("ProjectionStoreV2", (it) => {
+  it.effect(
+    "keeps instruction input evidence through stale lifecycle snapshots",
+    () => instructionDeliverySurvivesStaleUpdate,
+  );
   it.effect(
     "keeps restart-cancelled work through a stale run.updated",
     () => restartCancelledWorkSurvivesStaleRunUpdate,

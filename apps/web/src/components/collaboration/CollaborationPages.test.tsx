@@ -1,3 +1,8 @@
+import {
+  taskInstructionSkillModules,
+  taskInstructionSkillRef,
+  taskInstructionSkillText,
+} from "@t3tools/shared/taskInstructionSkills";
 import { TaskCapabilityStepControls } from "./TaskCapabilityStepControls";
 import {
   withCapabilityReviewFixture,
@@ -81,6 +86,7 @@ const state = vi.hoisted(() => ({
   startStep: vi.fn(),
   firstLaunchRead: vi.fn(),
   reviewRead: vi.fn(),
+  skillReview: vi.fn(),
   reviewDecide: vi.fn(),
   readProjection: vi.fn(),
   readCreationStatus: vi.fn(),
@@ -147,6 +153,7 @@ vi.mock("../../state/threads", () => ({
     interruptTurn: "interrupt",
     readFirstLaunchStatus: "first-launch-status",
     readTaskReview: "review-read",
+    readTaskInstructionSkillReview: "skill-review",
     decideTaskContract: "review-decide",
     readProjection: "read-projection",
     readCreationStatus: "read-creation-status",
@@ -155,23 +162,25 @@ vi.mock("../../state/threads", () => ({
 }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
-    command === "interrupt"
-      ? state.interrupt
-      : command === "first-launch-status"
-        ? state.firstLaunchRead
-        : command === "capability-start"
-          ? state.startStep
-          : command === "auto-preview"
-            ? state.autoPreview
-            : command === "read-creation-status"
-              ? state.readCreationStatus
-              : command === "review-read"
-                ? state.reviewRead
-                : command === "review-decide"
-                  ? state.reviewDecide
-                  : command === "read-projection"
-                    ? state.readProjection
-                    : state.create,
+    command === "skill-review"
+      ? state.skillReview
+      : command === "interrupt"
+        ? state.interrupt
+        : command === "first-launch-status"
+          ? state.firstLaunchRead
+          : command === "capability-start"
+            ? state.startStep
+            : command === "auto-preview"
+              ? state.autoPreview
+              : command === "read-creation-status"
+                ? state.readCreationStatus
+                : command === "review-read"
+                  ? state.reviewRead
+                  : command === "review-decide"
+                    ? state.reviewDecide
+                    : command === "read-projection"
+                      ? state.readProjection
+                      : state.create,
 }));
 vi.mock("../chat/ProviderModelPicker", () => ({
   ProviderModelPicker: (props: {
@@ -386,6 +395,7 @@ beforeEach(() => {
   state.startStep.mockReset();
   state.interrupt.mockReset().mockResolvedValue({ _tag: "Success", value: { sequence: 1 } });
   state.reviewRead.mockReset();
+  state.skillReview.mockReset();
   state.reviewDecide.mockReset();
   state.readProjection.mockReset();
   state.readCreationStatus.mockReset();
@@ -7194,6 +7204,12 @@ it.each([
 
 type GenericFixture = Parameters<Parameters<typeof withFirstLaunchFixture>[0]>[0];
 const wireGenericLaunch = (f: GenericFixture) => {
+  state.skillReview.mockImplementation(
+    async ({ input }: { input: Parameters<typeof f.reviewInstructionSkill>[0] }) => ({
+      _tag: "Success",
+      value: await EffectForFixture.runPromise(f.reviewInstructionSkill(input)),
+    }),
+  );
   state.providers = f.providers.map((p) => ({
     ...p,
     displayName: p.displayName ?? p.driver,
@@ -8690,3 +8706,189 @@ it("isolates retained result drafts across environment A-B-A without restoring o
     );
   });
 });
+
+const chooseInstructionModule = async (id: string) => {
+  const selection = renderer.root.findByProps({
+    "aria-label": "First-party instruction module selection",
+  });
+  await act(async () => selection.findByType("select").props.onChange({ target: { value: id } }));
+};
+it.each(taskInstructionSkillModules())(
+  "mounted explicit $id review shows exact body and delivers once through ordinary Start",
+  async (module) => {
+    await withFirstLaunchFixture(async (f) => {
+      wireGenericLaunch(f);
+      const props = genericProps(f);
+      await act(async () => {
+        renderer = create(<TaskFirstInstructions {...props} />);
+      });
+      await prepareGeneric("Use supplied evidence only.", "manual");
+      expect(state.skillReview).not.toHaveBeenCalled();
+      await chooseInstructionModule(module.id);
+      expect(state.skillReview).not.toHaveBeenCalled();
+      expect(creationButton("Choose Auto")!.props.disabled).toBe(true);
+      await creationClick("Review ordinary task launch");
+      await act(async () => {
+        await state.skillReview.mock.results.at(-1)!.value;
+      });
+      const body = renderer.root.findByProps({ "aria-label": "Exact reviewed instruction module" });
+      expect(body.findByType("pre").children).toEqual([module.body]);
+      expect(text()).toContain(taskInstructionSkillRef(module).contentSha256);
+      expect(text()).toContain("Goal:");
+      expect((await EffectForFixture.runPromise(f.inspect())).starts).toHaveLength(0);
+      await creationClick("Start reviewed ordinary task", true);
+      await act(async () => {
+        await state.startStep.mock.results[0]!.value;
+        await state.firstLaunchRead.mock.results.at(-1)!.value;
+      });
+      await EffectForFixture.runPromise(f.drain());
+      const actual = await EffectForFixture.runPromise(f.inspect());
+      expect(actual.starts).toHaveLength(1);
+      expect(actual.executions[0]!.message.text).toBe(
+        "Use supplied evidence only." + taskInstructionSkillText(module),
+      );
+      await act(async () => {
+        renderer.unmount();
+        renderer = create(<TaskFirstInstructions {...props} />);
+      });
+      await creationClick("Read original launch status");
+      await act(async () => {
+        await state.firstLaunchRead.mock.results.at(-1)!.value;
+      });
+      expect(text()).toContain("adapter-accepted");
+      expect(text()).toContain("Selected instruction module:");
+      expect(state.startStep).toHaveBeenCalledTimes(1);
+    });
+  },
+  30000,
+);
+it.each(["selection", "text", "model", "session", "scope", "contract"] as const)(
+  "mounted %s A-B-A retires instruction review and stale Start callback",
+  async (change) => {
+    await withFirstLaunchFixture(async (f) => {
+      wireGenericLaunch(f);
+      const props = genericProps(f);
+      await act(async () => {
+        renderer = create(<TaskFirstInstructions {...props} />);
+      });
+      await prepareGeneric("Original supplied evidence.", "manual");
+      await chooseInstructionModule("evidence-summary");
+      await creationClick("Review ordinary task launch");
+      await act(async () => {
+        await state.skillReview.mock.results.at(-1)!.value;
+      });
+      const staleStart = creationButton("Start reviewed ordinary task")!.props.onClick;
+      if (change === "selection") {
+        await chooseInstructionModule("structured-comparison");
+        await chooseInstructionModule("evidence-summary");
+      }
+      if (change === "text")
+        for (const value of ["Changed evidence.", "Original supplied evidence."])
+          await act(async () =>
+            renderer.root
+              .findByProps({ "aria-label": "Initial instructions" })
+              .props.onChange({ target: { value } }),
+          );
+      if (change === "model") {
+        await creationClick("Choose fixture Manual model");
+        await creationClick("Select fixture exact model");
+      }
+      if (change === "session") {
+        const original = state.sessionIdentity;
+        for (const identity of [{}, original])
+          await act(async () => {
+            state.sessionIdentity = identity;
+            renderer.update(<TaskFirstInstructions {...props} />);
+          });
+      }
+      if (change === "contract")
+        for (const readVersion of [2, 1])
+          await act(async () =>
+            renderer.update(<TaskFirstInstructions {...props} readVersion={readVersion} />),
+          );
+      if (change === "scope")
+        for (const environmentId of [EnvironmentId.make("environment-b"), props.environmentId])
+          await act(async () =>
+            renderer.update(<TaskFirstInstructions {...props} environmentId={environmentId} />),
+          );
+      expect(creationButton("Start reviewed ordinary task")).toBeUndefined();
+      await act(async () => {
+        await staleStart();
+      });
+      expect(state.startStep).not.toHaveBeenCalled();
+      expect((await EffectForFixture.runPromise(f.inspect())).starts).toHaveLength(0);
+    });
+  },
+  30000,
+);
+it("mounted expired instruction review removes Start and rejects its retained callback", async () => {
+  await withFirstLaunchFixture(async (f) => {
+    wireGenericLaunch(f);
+    const props = genericProps(f);
+    await act(async () => {
+      renderer = create(<TaskFirstInstructions {...props} />);
+    });
+    await prepareGeneric("Supplied evidence.", "manual");
+    await chooseInstructionModule("evidence-summary");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      await creationClick("Review ordinary task launch");
+      await act(async () => {
+        await state.skillReview.mock.results.at(-1)!.value;
+      });
+      const staleStart = creationButton("Start reviewed ordinary task")!.props.onClick;
+      await act(async () => {
+        vi.advanceTimersByTime(300001);
+      });
+      expect(creationButton("Start reviewed ordinary task")).toBeUndefined();
+      expect(text()).toContain("Instruction module review expired");
+      await act(async () => {
+        await staleStart();
+      });
+      expect(state.startStep).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+    expect((await EffectForFixture.runPromise(f.inspect())).starts).toHaveLength(0);
+  });
+}, 30000);
+
+it("pending module review from an old session cannot revive after session A-B-A", async () => {
+  await withFirstLaunchFixture(async (f) => {
+    wireGenericLaunch(f);
+    const props = genericProps(f);
+    await act(async () => {
+      renderer = create(<TaskFirstInstructions {...props} />);
+    });
+    await prepareGeneric("Supplied evidence.", "manual");
+    await chooseInstructionModule("evidence-summary");
+    const reply = deferred<unknown>();
+    const ready = deferred<void>();
+    let reviewed: unknown;
+    state.skillReview.mockImplementation(
+      async ({ input }: { input: Parameters<typeof f.reviewInstructionSkill>[0] }) => {
+        reviewed = {
+          _tag: "Success",
+          value: await EffectForFixture.runPromise(f.reviewInstructionSkill(input)),
+        };
+        ready.resolve();
+        return reply.promise;
+      },
+    );
+    await creationClick("Review ordinary task launch");
+    await ready.promise;
+    const original = state.sessionIdentity;
+    for (const identity of [{}, original])
+      await act(async () => {
+        state.sessionIdentity = identity;
+        renderer.update(<TaskFirstInstructions {...props} />);
+      });
+    await act(async () => {
+      reply.resolve(reviewed);
+      await state.skillReview.mock.results.at(-1)!.value;
+    });
+    expect(creationButton("Start reviewed ordinary task")).toBeUndefined();
+    expect(state.startStep).not.toHaveBeenCalled();
+    expect((await EffectForFixture.runPromise(f.inspect())).starts).toHaveLength(0);
+  });
+}, 30000);

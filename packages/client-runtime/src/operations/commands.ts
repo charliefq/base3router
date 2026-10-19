@@ -7,6 +7,8 @@ import {
   type TaskContractBrake,
   type TaskContractFields,
   type AgentsTaskCreationReview,
+  TaskFirstLaunch,
+  TaskInstructionSkillReviewInput,
   CommandId,
   CheckpointId,
   CheckpointScopeId,
@@ -39,6 +41,7 @@ import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Crypto from "effect/Crypto";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Effect from "effect/Effect";
@@ -788,10 +791,23 @@ export const setThreadInteractionMode = Effect.fn("EnvironmentCommands.setThread
   },
 );
 
+const decodeFirstLaunch = Schema.decodeUnknownOption(TaskFirstLaunch);
+const decodeInstructionSkillReview = Schema.decodeUnknownOption(TaskInstructionSkillReviewInput);
+
 export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(function* (
   input: StartThreadTurnInput,
 ) {
   const commandId = yield* allocateCommandId(input);
+  if (
+    input.taskFirstLaunch &&
+    Option.isNone(decodeFirstLaunch(input.taskFirstLaunch, { onExcessProperty: "error" }))
+  ) {
+    return yield* new OrchestrationV2DispatchCommandError({
+      commandId,
+      commandType: "message.dispatch",
+      message: "First launch contains unsupported review fields. No provider was started.",
+    });
+  }
   if (input.taskResultContinuation) {
     const m = input.taskResultContinuation;
     const refuse = () =>
@@ -1286,6 +1302,28 @@ export const unlinkThreadPullRequest = Effect.fn("EnvironmentCommands.unlinkThre
     });
   },
 );
+
+export const readTaskInstructionSkillReview = Effect.fn(
+  "EnvironmentCommands.readTaskInstructionSkillReview",
+)(function* (input: TaskInstructionSkillReviewInput) {
+  // Validate before the RPC encoder can discard unknown instruction or grant fields.
+  if (Option.isNone(decodeInstructionSkillReview(input, { onExcessProperty: "error" }))) {
+    return {
+      status: "unavailable" as const,
+      reason: "Instruction module review contains unsupported fields.",
+    };
+  }
+  const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+  const before = yield* SubscriptionRef.get(supervisor.session);
+  const result = yield* request(ORCHESTRATION_V2_WS_METHODS.getTaskInstructionSkillReview, input);
+  const after = yield* SubscriptionRef.get(supervisor.session);
+  return Option.isNone(before) || Option.isNone(after) || before.value !== after.value
+    ? {
+        status: "unavailable" as const,
+        reason: "Authenticated session changed while reviewing module.",
+      }
+    : result;
+});
 
 export const readTaskReview = Effect.fn("EnvironmentCommands.readTaskReview")(function* (
   input: TaskContractReviewInput,

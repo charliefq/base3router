@@ -1,4 +1,10 @@
 import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
+import {
+  TaskInstructionSkillReview,
+  TaskInstructionSkillRef,
+  TaskInstructionSkillDelivery,
+} from "./taskInstructionSkill.ts";
 import {
   CommandId,
   MessageId,
@@ -12,7 +18,7 @@ import { ModelSelection } from "./modelSelection.ts";
 import { RuntimeMode, ProviderInteractionMode } from "./providerPolicy.ts";
 
 /** Reviewed input plus a current-task precondition, never a grant or an Auto target lock. */
-export const TaskFirstLaunch = Schema.Struct({
+const LaunchFields = {
   commandId: CommandId,
   messageId: MessageId,
   threadId: ThreadId,
@@ -23,7 +29,26 @@ export const TaskFirstLaunch = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+};
+const LaunchSchema = Schema.Struct({
+  ...LaunchFields,
+  instructionSkill: Schema.optionalKey(TaskInstructionSkillReview),
 });
+const decodeStrictLaunch = Schema.decodeUnknownOption(LaunchSchema);
+export const TaskFirstLaunch = Schema.Unknown.check(
+  Schema.makeFilter((raw) => Option.isSome(decodeStrictLaunch(raw, { onExcessProperty: "error" }))),
+).pipe(Schema.decodeTo(LaunchSchema));
+const ReviewInputSchema = Schema.Struct({
+  launch: TaskFirstLaunch,
+  module: TaskInstructionSkillRef,
+});
+const decodeStrictReviewInput = Schema.decodeUnknownOption(ReviewInputSchema);
+export const TaskInstructionSkillReviewInput = Schema.Unknown.check(
+  Schema.makeFilter((raw) =>
+    Option.isSome(decodeStrictReviewInput(raw, { onExcessProperty: "error" })),
+  ),
+).pipe(Schema.decodeTo(ReviewInputSchema));
+export type TaskInstructionSkillReviewInput = typeof TaskInstructionSkillReviewInput.Type;
 export type TaskFirstLaunch = typeof TaskFirstLaunch.Type;
 /** Complete attributed output identity; digest covers the full text, never its preview. */
 export const TaskContinuationResult = Schema.Struct({
@@ -39,7 +64,7 @@ export const TaskContinuationResult = Schema.Struct({
 });
 export type TaskContinuationResult = typeof TaskContinuationResult.Type;
 export const TaskResultContinuation = Schema.Struct({
-  ...TaskFirstLaunch.fields,
+  ...LaunchFields,
   priorResult: TaskContinuationResult,
 });
 export type TaskResultContinuation = typeof TaskResultContinuation.Type;
@@ -53,6 +78,8 @@ export const TaskFirstLaunchStatus = Schema.Union([
     runId: RunId,
     attemptId: RunAttemptId,
     actualModelSelection: ModelSelection,
+    instructionSkillSelection: Schema.optionalKey(TaskInstructionSkillReview),
+    instructionSkillDelivery: Schema.optionalKey(TaskInstructionSkillDelivery),
     runStatus: Schema.String,
     resultPreview: Schema.NullOr(Schema.String),
   }),

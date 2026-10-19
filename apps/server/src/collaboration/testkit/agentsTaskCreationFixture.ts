@@ -1,3 +1,4 @@
+import { reviewTaskInstructionSkill } from "../FirstTaskLaunch.ts";
 import type { SavedPrRead } from "../TaskCapabilityStep.ts";
 import * as ActionGate from "../../actionGate/ActionGateService.ts";
 import * as ProviderSessions from "../../orchestration-v2/ProviderSessionManager.ts";
@@ -147,6 +148,9 @@ type Fixture = {
   readReview: (
     input: TaskContractReviewInput,
   ) => ReturnType<Orchestrator.OrchestratorV2["Service"]["getTaskReview"]>;
+  reviewInstructionSkill: (
+    input: import("@t3tools/contracts").TaskInstructionSkillReviewInput,
+  ) => ReturnType<typeof reviewTaskInstructionSkill>;
   readFirstLaunchStatus: (
     command: OrchestrationV2Command,
   ) => ReturnType<Orchestrator.OrchestratorV2["Service"]["getTaskFirstLaunchStatus"]>;
@@ -308,6 +312,8 @@ export const withAgentsTaskCreationFixture = <E>(
           }).pipe(actorContext, Effect.provide(context)),
         readReview: (input) =>
           service.getTaskReview(input).pipe(actorContext, Effect.provide(context)),
+        reviewInstructionSkill: (input) =>
+          reviewTaskInstructionSkill(sql, input).pipe(actorContext, Effect.provide(context)),
         readFirstLaunchStatus: (command) =>
           service.getTaskFirstLaunchStatus({ command }).pipe(actorContext, Effect.provide(context)),
         openCanonical: () =>

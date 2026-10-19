@@ -251,6 +251,9 @@ const makeClientFixture = Effect.fn("TaskTransport.makeClientFixture")(function*
       command(Commands.readTaskResultContinuationStatus(input)),
     dispatch: (input: OrchestrationV2Command) =>
       command(request("orchestration.dispatchCommand", input)),
+    reviewInstructionSkill: (
+      input: Parameters<typeof Commands.readTaskInstructionSkillReview>[0],
+    ) => command(Commands.readTaskInstructionSkillReview(input)),
     launchStatus: (input: Parameters<typeof Commands.readTaskFirstLaunchStatus>[0]) =>
       command(Commands.readTaskFirstLaunchStatus(input)),
     revokeCurrent: () =>

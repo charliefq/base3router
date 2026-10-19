@@ -1,3 +1,10 @@
+import {
+  taskInstructionSkillModules,
+  taskInstructionSkillRef,
+} from "@t3tools/shared/taskInstructionSkills";
+import { type TaskInstructionSkillModule } from "@t3tools/contracts";
+import { Select, SelectTrigger, SelectValue, SelectPopup, SelectItem } from "../ui/select";
+import { TaskInstructionSkillReadout } from "./TaskInstructionSkillReadout";
 import { useLayoutEffect, useRef, useState, useMemo } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
@@ -47,6 +54,9 @@ export function useTaskFirstLaunch(props: {
   resultBound?: boolean;
   priorResult?: TaskContinuationResult | null;
 }) {
+  const readSkillReview = useAtomCommand(threadEnvironment.readTaskInstructionSkillReview, {
+    reportFailure: false,
+  });
   const start = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const readStatus = useAtomCommand(
     props.resultBound
@@ -65,11 +75,26 @@ export function useTaskFirstLaunch(props: {
     props.task.threadId ?? "missing",
   );
   const [saved, setSaved] = useState(() => readFirstLaunchAttempt(key));
+  const [skillChoices, setSkillChoices] = useState<ReadonlyMap<string, string>>(new Map());
+  const skillChoice = props.resultBound ? "" : (skillChoices.get(key) ?? "");
+  const skillCatalog = taskInstructionSkillModules();
+  const selectedModule = skillCatalog.find((module) => module.id === skillChoice);
+  const selectedSkill = selectedModule ? taskInstructionSkillRef(selectedModule) : null;
+  const invalidSkill = !!skillChoice && !selectedModule;
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const preparing = useRef(false);
   const [mode, setMode] = useState<"manual" | "auto" | null>(null);
   const [manualChoice, setManual] = useState<ModelSelection | null>(null);
   const manual = manualChoice ?? props.thread?.modelSelection ?? null;
   type LaunchReview = TaskFirstLaunch & { readonly priorResult?: TaskContinuationResult };
-  const [reviewed, setReviewed] = useState<{ key: string; value: LaunchReview } | null>(null);
+  type PreparedReview = {
+    key: string;
+    token: symbol;
+    value: LaunchReview;
+    module: TaskInstructionSkillModule | null;
+  };
+  const [reviewed, setReviewed] = useState<PreparedReview | null>(null);
+  const activeReview = useRef<PreparedReview | null>(null);
   const [status, setStatus] = useState<TaskFirstLaunchStatus | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -126,10 +151,58 @@ export function useTaskFirstLaunch(props: {
     props.facts?.contract,
     props.stale,
     props.priorResult,
+    props.thread?.runtimeMode,
+    props.thread?.interactionMode,
+    selectedSkill,
+    invalidSkill,
   ]);
-  const review = reviewed?.key === reviewKey ? reviewed.value : null;
-  const setReview = (value: LaunchReview | null) =>
-    setReviewed(value === null ? null : { key: reviewKey, value });
+  // A-B-A invalidates authority even if the same inert selection is restored.
+  const reviewToken = useMemo(
+    () => Symbol(`${session === null ? "disconnected" : "connected"}:${reviewKey}`),
+    // Session identity intentionally retires authority even when the visible review key is unchanged.
+    // eslint-disable-next-line react/preserve-manual-memoization
+    [reviewKey, session],
+  );
+  const reviewOwner = useRef<symbol | null>(reviewToken);
+  useLayoutEffect(() => {
+    reviewOwner.current = reviewToken;
+    activeReview.current = null;
+    preparing.current = false;
+    // External launch facts retire executable review without changing saved original identity.
+    // eslint-disable-next-line react/set-state-in-effect
+    setReviewed(null);
+    setReviewBusy(false);
+    return () => {
+      reviewOwner.current = null;
+      activeReview.current = null;
+    };
+  }, [reviewToken]);
+  const review =
+    reviewed?.token === reviewToken && reviewed.key === reviewKey ? reviewed.value : null;
+  const reviewModule = review ? reviewed?.module : null;
+  const setReview = (
+    value: LaunchReview | null,
+    module: TaskInstructionSkillModule | null = null,
+  ) => {
+    const next = value ? { key: reviewKey, token: reviewToken, value, module } : null;
+    activeReview.current = next;
+    setReviewed(next);
+  };
+  useLayoutEffect(() => {
+    const proof = review?.instructionSkill;
+    if (!proof) return;
+    const timer = setTimeout(
+      () => {
+        if (reviewOwner.current === reviewToken) {
+          activeReview.current = null;
+          setReviewed(null);
+          setNotice("Instruction module review expired. Review again before Start.");
+        }
+      },
+      Math.max(0, Date.parse(proof.expiresAt) - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [review?.instructionSkill, reviewToken]);
   const current = (generation: number) =>
     mounted.current &&
     epoch.current === generation &&
@@ -174,6 +247,9 @@ export function useTaskFirstLaunch(props: {
   const submit = async () => {
     if (
       !review ||
+      activeReview.current?.value !== review ||
+      reviewOwner.current !== reviewToken ||
+      (review.instructionSkill && Date.parse(review.instructionSkill.expiresAt) <= Date.now()) ||
       pending.current ||
       session === null ||
       props.stale ||
@@ -322,6 +398,12 @@ export function useTaskFirstLaunch(props: {
             Open original conversation and results
           </Button>
           {status?.status === "admitted" ? (
+            <TaskInstructionSkillReadout
+              selection={status.instructionSkillSelection}
+              delivery={status.instructionSkillDelivery}
+            />
+          ) : null}
+          {status?.status === "admitted" ? (
             <p>
               Run {status.runId}; attempt {status.attemptId}; model{" "}
               {status.actualModelSelection.instanceId} / {status.actualModelSelection.model}; run
@@ -390,6 +472,42 @@ export function useTaskFirstLaunch(props: {
           ? "Ordinary requested changes on the exact completed result. No contract, acceptance, configuration or capability mutation."
           : "Ordinary model turn — choose and review separately from the saved-PR operation below. Unsupported saved-PR suggestions never start this path automatically."}
       </p>
+      {!props.resultBound ? (
+        <section aria-label="First-party instruction module selection">
+          <label>
+            Instruction-only task skill
+            <Select
+              value={skillChoice || "none"}
+              disabled={!available || busy || reviewBusy}
+              onValueChange={(value) => {
+                if (!available || busy || preparing.current || reviewOwner.current !== reviewToken)
+                  return;
+                setSkillChoices((previous) =>
+                  new Map(previous).set(key, value === "none" ? "" : (value ?? "")),
+                );
+                setReview(null);
+              }}
+            >
+              <SelectTrigger aria-label="First-party task instruction skill">
+                <SelectValue placeholder="No skill selected" />
+              </SelectTrigger>
+              <SelectPopup>
+                <SelectItem value="none">No skill selected</SelectItem>
+                {skillCatalog.map((module) => (
+                  <SelectItem key={module.id} value={module.id}>
+                    {module.name} v{module.version}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          </label>
+          <p>
+            Explicit code-owned instruction text only. No tools, permissions, access or budget
+            granted. Choose Manual and review the exact body before Start.
+          </p>
+          {invalidSkill ? <p>Selected instruction module unavailable; no fallback.</p> : null}
+        </section>
+      ) : null}
       <div className="flex gap-2">
         <Button
           size="sm"
@@ -402,8 +520,10 @@ export function useTaskFirstLaunch(props: {
         <Button
           size="sm"
           variant="outline"
-          disabled={!available || busy}
-          onClick={() => setMode("auto")}
+          disabled={!available || busy || reviewBusy || !!skillChoice}
+          onClick={() => {
+            if (!skillChoice) setMode("auto");
+          }}
         >
           Choose Auto
         </Button>
@@ -416,7 +536,13 @@ export function useTaskFirstLaunch(props: {
           instanceEntries={entries}
           modelOptionsByInstance={options}
           routingMode={mode}
-          onRoutingModeChange={setMode}
+          onRoutingModeChange={(value) => {
+            if (skillChoice && value !== "manual") {
+              setNotice("Instruction modules require an exact Manual model review.");
+              return;
+            }
+            setMode(value);
+          }}
           disabled={!available || busy}
           onInstanceModelChange={(instanceId, model) => {
             setManual((previous) =>
@@ -434,18 +560,30 @@ export function useTaskFirstLaunch(props: {
         disabled={
           !available ||
           busy ||
+          reviewBusy ||
+          invalidSkill ||
+          (skillChoice !== "" && mode !== "manual") ||
           !mode ||
           !manual ||
           !props.text.trim() ||
           (mode === "manual" && !manualReady)
         }
         onClick={() => {
-          if (!available || !props.facts || !props.thread || !mode || !manual) return;
-          const commandId = CommandId.make(randomUUID());
-          const messageId = MessageId.make(randomUUID());
-          setReview({
-            commandId,
-            messageId,
+          if (
+            !available ||
+            !props.facts ||
+            !props.thread ||
+            !mode ||
+            !manual ||
+            preparing.current ||
+            reviewOwner.current !== reviewToken ||
+            invalidSkill ||
+            (skillChoice && mode !== "manual")
+          )
+            return;
+          const value: LaunchReview = {
+            commandId: CommandId.make(randomUUID()),
+            messageId: MessageId.make(randomUUID()),
             threadId: props.thread.id,
             reference: props.facts.reference,
             contract: props.facts.contract,
@@ -455,7 +593,47 @@ export function useTaskFirstLaunch(props: {
             runtimeMode: props.thread.runtimeMode,
             interactionMode: props.thread.interactionMode,
             ...(props.resultBound && props.priorResult ? { priorResult: props.priorResult } : {}),
-          });
+          };
+          if (!selectedSkill) {
+            setReview(value);
+            return;
+          }
+          const token = reviewToken;
+          preparing.current = true;
+          setReviewBusy(true);
+          setReview(null);
+          setNotice(null);
+          void (async () => {
+            try {
+              const result = await readSkillReview({
+                environmentId: props.environmentId,
+                input: { launch: value, module: selectedSkill },
+              });
+              if (reviewOwner.current !== token) return;
+              if (result._tag !== "Success" || result.value.status !== "available") {
+                setNotice(
+                  "Instruction module or launch facts changed; no Start is available. Review again.",
+                );
+                return;
+              }
+              if (
+                JSON.stringify(taskInstructionSkillRef(result.value.module)) !==
+                JSON.stringify(selectedSkill)
+              ) {
+                setNotice("Server module differs from the selected content. No substitution.");
+                return;
+              }
+              setReview({ ...value, instructionSkill: result.value.review }, result.value.module);
+            } catch {
+              if (reviewOwner.current === token)
+                setNotice("Instruction module review unavailable. Nothing was started.");
+            } finally {
+              if (reviewOwner.current === token) {
+                preparing.current = false;
+                setReviewBusy(false);
+              }
+            }
+          })();
         }}
       >
         {props.resultBound ? "Review result continuation" : "Review ordinary task launch"}
@@ -463,6 +641,26 @@ export function useTaskFirstLaunch(props: {
       {review ? (
         <div aria-label="Reviewed ordinary task launch">
           <p>Exact instructions: {review.text}</p>
+          {reviewModule && review.instructionSkill ? (
+            <section aria-label="Exact reviewed instruction module">
+              <p>
+                {reviewModule.name} · {reviewModule.id} v{reviewModule.version}
+              </p>
+              <p>
+                Body SHA256 {review.instructionSkill.module.contentSha256}; module SHA256{" "}
+                {review.instructionSkill.module.moduleSha256}
+              </p>
+              <p>Input: {reviewModule.inputExpectation}</p>
+              <p>Output: {reviewModule.outputExpectation}</p>
+              <pre className="whitespace-pre-wrap break-all">{reviewModule.body}</pre>
+              <p>
+                Instruction-only; grantsAccess false; tools none; permissions none. Review expires{" "}
+                {review.instructionSkill.expiresAt}. Command {review.commandId}; message{" "}
+                {review.messageId}. Adapter delivery will be recorded separately; this is no
+                completion or acceptance claim.
+              </p>
+            </section>
+          ) : null}
           <p>
             Task {review.reference.taskId}; project {review.reference.projectId}; environment{" "}
             {review.reference.environmentId}; contract revision {review.contract.revision}. Goal:{" "}
