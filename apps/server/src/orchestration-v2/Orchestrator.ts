@@ -8213,6 +8213,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                         expectedTarget: {
                           runId: command.runId,
                           attemptId: command.expectedAttemptId,
+                          retiredAttemptId: retired.runAttemptId!,
                         },
                       }),
                   providerSessionId: restart.providerSessionId,

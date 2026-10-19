@@ -410,7 +410,15 @@ it.effect(
         rollbackThread: unused,
         forkThread: unused,
       };
-      let race: "same" | "completed" | "replacement" | "newer" = "same";
+      let race:
+        | "same"
+        | "completed"
+        | "replacement"
+        | "newer"
+        | "cleanup"
+        | "cleanup-newer"
+        | "cleanup-replaced"
+        | "cleanup-wrong-retired" = "same";
       const layer = ProviderTurnControlService.layer.pipe(
         Layer.provide(
           Layer.mergeAll(
@@ -426,9 +434,12 @@ it.effect(
               getThreadShell: () =>
                 Ref.get(current).pipe(Effect.map(ProjectionStore.threadShellFromProjection)),
               getThreadRecords: (_thread, _collections, filter) => {
-                assert.deepEqual(filter?.runIds, [runId]);
+                assert.deepEqual(filter?.runIds, race.startsWith("cleanup") ? undefined : [runId]);
                 return Ref.get(current).pipe(
-                  Effect.map((p) => ({ ...p, runs: p.runs.filter((r) => r.id === runId) })),
+                  Effect.map((p) => ({
+                    ...p,
+                    runs: filter?.runIds ? p.runs.filter((r) => r.id === runId) : p.runs,
+                  })),
                 );
               },
             }),
@@ -436,6 +447,42 @@ it.effect(
               get: () =>
                 Effect.gen(function* () {
                   // Simulate settlement while loading the previously persisted effect's recorded runtime.
+                  if (race.startsWith("cleanup")) {
+                    const replacementId = RunAttemptId.make("replacement");
+                    const stoppedRun: OrchestrationV2ThreadProjection["runs"][number] = {
+                      ...run,
+                      status: "interrupted",
+                      activeAttemptId:
+                        race === "cleanup-replaced"
+                          ? RunAttemptId.make("another-replacement")
+                          : replacementId,
+                    };
+                    yield* Ref.set(current, {
+                      ...initial,
+                      runs:
+                        race === "cleanup-newer"
+                          ? [
+                              stoppedRun,
+                              {
+                                ...run,
+                                id: RunId.make("newer-completed"),
+                                ordinal: 2,
+                                status: "completed",
+                              },
+                            ]
+                          : [stoppedRun],
+                      attempts: [
+                        ...initial.attempts,
+                        {
+                          ...initial.attempts[0]!,
+                          id: replacementId,
+                          attemptOrdinal: 2,
+                          status: "interrupted",
+                        },
+                      ],
+                    });
+                    return Option.some(runtime);
+                  }
                   yield* Ref.set(current, {
                     ...initial,
                     runs:
@@ -465,7 +512,16 @@ it.effect(
       );
       yield* Effect.gen(function* () {
         const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
-        for (const scenario of ["same", "completed", "replacement", "newer"] as const) {
+        for (const scenario of [
+          "same",
+          "completed",
+          "replacement",
+          "newer",
+          "cleanup",
+          "cleanup-newer",
+          "cleanup-replaced",
+          "cleanup-wrong-retired",
+        ] as const) {
           race = scenario;
           const result = yield* Effect.exit(
             control.interrupt({
@@ -473,12 +529,21 @@ it.effect(
               providerSessionId: sessionId,
               providerThreadId,
               providerTurnId,
-              expectedTarget: { runId, attemptId },
+              expectedTarget: scenario.startsWith("cleanup")
+                ? {
+                    runId,
+                    attemptId: RunAttemptId.make("replacement"),
+                    retiredAttemptId:
+                      scenario === "cleanup-wrong-retired"
+                        ? RunAttemptId.make("wrong-retired")
+                        : attemptId,
+                  }
+                : { runId, attemptId },
             }),
           );
-          assert.equal(Exit.isSuccess(result), scenario === "same");
+          assert.equal(Exit.isSuccess(result), scenario === "same" || scenario === "cleanup");
         }
-        assert.equal(yield* Ref.get(nativeCalls), 1);
+        assert.equal(yield* Ref.get(nativeCalls), 2);
       }).pipe(Effect.provide(layer));
     }),
 );

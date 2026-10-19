@@ -343,3 +343,34 @@ it.effect("keeps capacity until the fake provider confirms a matching terminal",
     expect(yield* occupied(sql)).toBe(1);
   }).pipe(Effect.provide(TestLayer)),
 );
+
+it.effect("guarded outbox interrupt revalidation never flags a newer or unbound lease", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const eventSink = yield* EventSink.EventSinkV2;
+    const now = yield* DateTime.now;
+    yield* eventSink.write({
+      events: [
+        threadCreated(now),
+        messageUpdated(messageA, runA, now),
+        runUpdated(runA, messageA, now, 1),
+      ],
+    });
+    yield* dispatch(messageA, "guarded-outbox-lease");
+    yield* bindStart(runA, messageA);
+    yield* sql`INSERT INTO base3_capacity_leases (lease_id,environment_id,thread_id,message_id,run_id,workload_class,status,interrupt_requested,disconnect_unconfirmed,created_at)
+      VALUES ('future-unbound','local',${threadId},'future-message',NULL,'independent_task','active',0,0,'2026-10-19T00:00:00.000Z')`;
+    yield* revalidateOutboxEffect({
+      threadId,
+      request: {
+        type: "provider-turn.interrupt",
+        runId: runA,
+        expectedTarget: { runId: runA, attemptId: "original-attempt" },
+      },
+    }).pipe(Effect.provideService(PolicyExecutionContext, session), Effect.exit);
+    const flags = yield* sql<{
+      interrupt_requested: number;
+    }>`SELECT interrupt_requested FROM base3_capacity_leases WHERE thread_id=${threadId}`;
+    expect(flags.every((row) => row.interrupt_requested === 0)).toBe(true);
+  }).pipe(Effect.provide(TestLayer)),
+);

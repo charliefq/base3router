@@ -89,6 +89,7 @@ const state = vi.hoisted(() => ({
   detailWatches: [] as Array<string | null>,
   streamLive: true,
   liveProjection: null as OrchestrationV2ThreadProjection | null,
+  liveProjections: new Map<string, OrchestrationV2ThreadProjection>(),
   feedbackRead: vi.fn(),
   feedbackSubmit: vi.fn(),
 }));
@@ -132,7 +133,11 @@ vi.mock("../../state/threads", () => ({
     state.detailWatches.push(threadId);
     return {
       status: state.streamLive ? "live" : "cached",
-      data: state.liveProjection ? Option.some(state.liveProjection) : Option.none(),
+      data: state.liveProjections.get(threadId ?? "")
+        ? Option.some(state.liveProjections.get(threadId ?? "")!)
+        : state.liveProjection
+          ? Option.some(state.liveProjection)
+          : Option.none(),
       error: Option.none(),
     };
   },
@@ -393,6 +398,7 @@ beforeEach(() => {
   state.streamLive = true;
   state.detailWatches = [];
   state.liveProjection = null;
+  state.liveProjections.clear();
 });
 afterEach(async () => {
   await act(async () => renderer?.unmount());
@@ -8445,3 +8451,242 @@ it.each(["unavailable", "corrupt", "discarded writes"] as const)(
     });
   },
 );
+
+it.each(["late response", "retained notice"] as const)(
+  "keeps Stop reconciliation UNKNOWN across disconnect with %s",
+  async (timing) => {
+    await withTaskRevisionRequestFixture(async (f) => {
+      const fixture = await mountRunningSupervision(f);
+      await creationClick("Stop task run");
+      const terminal = {
+        ...fixture.projection,
+        runs: fixture.projection.runs.map((run) => ({ ...run, status: "interrupted" as const })),
+        providerTurns: fixture.projection.providerTurns.map((turn) => ({
+          ...turn,
+          status: "interrupted" as const,
+          terminationConfirmed: true,
+        })),
+      };
+      const read = deferred<{ _tag: "Success"; value: OrchestrationV2ThreadProjection }>();
+      state.readProjection.mockReturnValueOnce(read.promise);
+      await creationClick("Reconcile original Stop");
+      if (timing === "late response") await fixture.render({ live: false });
+      await act(async () => read.resolve({ _tag: "Success", value: terminal }));
+      if (timing === "retained notice") {
+        expect(text()).toContain("Matching target interruption confirmed");
+        await fixture.render({ live: false });
+      }
+      expect(text()).toContain("UNKNOWN");
+      expect(text()).not.toContain("Matching target interruption confirmed");
+      expect(state.interrupt).toHaveBeenCalledTimes(1);
+    });
+  },
+);
+it.each(["unrelated refresh", "authoritative contract change"] as const)(
+  "retains requested result changes across %s without retaining execution authority",
+  async (change) => {
+    await withTaskRevisionRequestFixture(async (f) => {
+      state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+      state.reviewRead.mockImplementation(async ({ input }) => ({
+        _tag: "Success",
+        value: await EffectForFixture.runPromise(f.readReview(input)),
+      }));
+      state.readProjection.mockImplementation(async () => ({
+        _tag: "Success",
+        value: await EffectForFixture.runPromise(
+          f.orchestrator.getThreadProjection(f.command.threadId),
+        ),
+      }));
+      await act(async () => {
+        renderer = create(<TasksPage />);
+      });
+      await creationClick("Prepare revision request");
+      await act(async () =>
+        renderer.root
+          .findByProps({ "aria-label": "Requested changes" })
+          .props.onChange({ target: { value: "Keep my unsaved result revision" } }),
+      );
+      const oldApply = creationButton("Fill empty draft and open")!.props.onClick;
+      if (change === "authoritative contract change")
+        await EffectForFixture.runPromise(
+          f.sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.taskContract.goal','New owner goal','$.taskContract.revision',2) WHERE thread_id=${f.command.threadId}`,
+        );
+      await creationClick("Refresh tasks");
+      await act(async () => oldApply());
+      expect(state.navigate).not.toHaveBeenCalled();
+      await creationClick("Prepare revision request");
+      expect(renderer.root.findByProps({ "aria-label": "Requested changes" }).props.value).toBe(
+        "Keep my unsaved result revision",
+      );
+      expect(state.startStep).not.toHaveBeenCalled();
+    });
+  },
+);
+it.each(["contract", "phase", "acceptance"] as const)(
+  "streamed idle %s changes refresh authoritative facts and retire an executable review",
+  async (change) => {
+    await withTaskRevisionRequestFixture(async (f) => {
+      state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+      state.reviewRead.mockImplementation(async ({ input }) => ({
+        _tag: "Success",
+        value: await EffectForFixture.runPromise(f.readReview(input)),
+      }));
+      state.liveProjection = await EffectForFixture.runPromise(
+        f.orchestrator.getThreadProjection(f.command.threadId),
+      );
+      await act(async () => {
+        renderer = create(<TasksPage />);
+      });
+      await act(async () =>
+        renderer.root
+          .findAllByType("button")
+          .find((button) => button.props["data-task-contract-accept"] !== undefined)!
+          .props.onClick(),
+      );
+      expect(creationButton("Confirm decision")).toBeDefined();
+      const reads = state.load.mock.calls.length;
+      if (change === "contract")
+        await EffectForFixture.runPromise(
+          f.sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.taskContract.goal','Streamed new owner goal','$.taskContract.revision',2) WHERE thread_id=${f.command.threadId}`,
+        );
+      if (change === "phase")
+        await EffectForFixture.runPromise(
+          f.sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.taskContractPhase','redirected') WHERE thread_id=${f.command.threadId}`,
+        );
+      if (change === "acceptance")
+        await EffectForFixture.runPromise(
+          f.sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.taskAcceptedRevision',1) WHERE thread_id=${f.command.threadId}`,
+        );
+      state.liveProjection = await EffectForFixture.runPromise(
+        f.orchestrator.getThreadProjection(f.command.threadId),
+      );
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        await act(async () => renderer.update(<TasksPage />));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(150);
+        });
+        expect(state.load.mock.calls.length).toBeGreaterThan(reads);
+        expect(creationButton("Confirm decision")).toBeUndefined();
+        if (change === "contract") expect(text()).toContain("Streamed new owner goal");
+        expect(state.reviewDecide).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  },
+);
+
+it("retains task A's requested changes when task B's stream refreshes the catalog", async () => {
+  await withTaskRevisionRequestFixture(async (f) => {
+    const b = {
+      ...f.command,
+      threadId: ThreadId.make("unrelated-live-task"),
+      commandId: CommandId.make("create-unrelated-live-task"),
+      title: "Unrelated live task",
+    };
+    await EffectForFixture.runPromise(f.dispatch(b));
+    state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+    state.reviewRead.mockImplementation(async ({ input }) => ({
+      _tag: "Success",
+      value: await EffectForFixture.runPromise(f.readReview(input)),
+    }));
+    state.readProjection.mockImplementation(async ({ input }) => ({
+      _tag: "Success",
+      value: await EffectForFixture.runPromise(f.orchestrator.getThreadProjection(input.threadId)),
+    }));
+    state.liveProjections.set(
+      f.command.threadId,
+      await EffectForFixture.runPromise(f.orchestrator.getThreadProjection(f.command.threadId)),
+    );
+    state.liveProjections.set(
+      b.threadId,
+      await EffectForFixture.runPromise(f.orchestrator.getThreadProjection(b.threadId)),
+    );
+    await act(async () => {
+      renderer = create(<TasksPage />);
+    });
+    await creationClick("Prepare revision request");
+    await act(async () =>
+      renderer.root
+        .findByProps({ "aria-label": "Requested changes" })
+        .props.onChange({ target: { value: "Task A unsaved result changes" } }),
+    );
+    const reads = state.load.mock.calls.length;
+    await EffectForFixture.runPromise(
+      f.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("unrelated-task-start"),
+        threadId: b.threadId,
+        messageId: MessageId.make("unrelated-task-input"),
+        text: "Disposable setup work",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      }),
+    );
+    state.liveProjections.set(
+      b.threadId,
+      await EffectForFixture.runPromise(f.orchestrator.getThreadProjection(b.threadId)),
+    );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await act(async () => renderer.update(<TasksPage />));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      expect(state.load.mock.calls.length).toBeGreaterThan(reads);
+      expect(text()).toContain("Requested changes draft retained");
+      await creationClick("Prepare revision request");
+      expect(renderer.root.findByProps({ "aria-label": "Requested changes" }).props.value).toBe(
+        "Task A unsaved result changes",
+      );
+      expect(state.startStep).not.toHaveBeenCalled();
+      expect(state.interrupt).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+it("isolates retained result drafts across environment A-B-A without restoring old review authority", async () => {
+  await withTaskRevisionRequestFixture(async (f) => {
+    state.reviewRead.mockImplementation(async ({ input }) => ({
+      _tag: "Success",
+      value: await EffectForFixture.runPromise(f.readReview(input)),
+    }));
+    state.readProjection.mockImplementation(async () => ({ _tag: "Success", value: f.projection }));
+    const { TaskRevisionRequest } = await import("./TaskRevisionRequest");
+    const props = {
+      task: f.snapshot.tasks[0]!,
+      environmentId: EnvironmentId.make("environment-a"),
+      stale: false,
+      readVersion: 1,
+      readCollaboration: () => EffectForFixture.runPromise(f.readSnapshot()),
+      onOpen: vi.fn(),
+    };
+    await act(async () => {
+      renderer = create(<TaskRevisionRequest {...props} />);
+    });
+    await creationClick("Prepare revision request");
+    await act(async () =>
+      renderer.root
+        .findByProps({ "aria-label": "Requested changes" })
+        .props.onChange({ target: { value: "Environment A private draft" } }),
+    );
+    const oldApply = creationButton("Fill empty draft and open")!.props.onClick;
+    await act(async () =>
+      renderer.update(
+        <TaskRevisionRequest {...props} environmentId={EnvironmentId.make("environment-b")} />,
+      ),
+    );
+    expect(text()).not.toContain("Environment A private draft");
+    await act(async () => renderer.update(<TaskRevisionRequest {...props} />));
+    await act(async () => oldApply());
+    expect(props.onOpen).not.toHaveBeenCalled();
+    await creationClick("Prepare revision request");
+    expect(renderer.root.findByProps({ "aria-label": "Requested changes" }).props.value).toBe(
+      "Environment A private draft",
+    );
+  });
+});

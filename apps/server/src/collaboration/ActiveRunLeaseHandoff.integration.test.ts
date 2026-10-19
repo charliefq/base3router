@@ -1130,9 +1130,9 @@ it.live("a new queued command cannot replace a pending active control's original
   ),
 );
 
-it.live(
-  "changed-session cancellation interrupts the original native session before freeing capacity",
-  () =>
+it.live.each(["legacy", "guarded"] as const)(
+  "changed-session %s cancellation interrupts the original native session before freeing capacity",
+  (mode) =>
     withHeld(
       ({ f, first, interruptCount }) =>
         Effect.gen(function* () {
@@ -1173,6 +1173,9 @@ it.live(
               commandId: CommandId.make("cancel-session-restart"),
               threadId: first.threadId,
               runId: first.id,
+              ...(mode === "guarded"
+                ? { expectedAttemptId: pending.runs[0]!.activeAttemptId! }
+                : {}),
             },
             agentsCreationActor,
           );
@@ -1211,4 +1214,126 @@ it.live(
         }),
       { restartSession: true },
     ),
+);
+
+it.live("a stale guarded Stop cannot flag the replacement attempt's occupied lease", () =>
+  withHeld(({ f, first }) =>
+    Effect.gen(function* () {
+      yield* f.dispatch(
+        send(first.threadId, "guarded-replacement", {
+          type: "restart_active",
+          targetRunId: first.id,
+          targetAttemptId: first.activeAttemptId!,
+        }),
+        agentsCreationActor,
+      );
+      const replacement = (yield* f.orchestrator.getThreadProjection(first.threadId)).runs[0]!;
+      assert.notEqual(replacement.activeAttemptId, first.activeAttemptId);
+      const rejected = yield* Effect.exit(
+        f.dispatch(
+          {
+            type: "run.interrupt",
+            commandId: CommandId.make("stale-guarded-stop"),
+            threadId: first.threadId,
+            runId: first.id,
+            expectedAttemptId: first.activeAttemptId!,
+          },
+          agentsCreationActor,
+        ),
+      );
+      const rows = yield* f.sql<{
+        interrupt_requested: number;
+      }>`SELECT interrupt_requested FROM base3_capacity_leases WHERE released_at IS NULL AND thread_id=${first.threadId}`;
+      assert.deepEqual(
+        rows.map((row) => row.interrupt_requested),
+        [0],
+      );
+      assert.equal(rejected._tag, "Failure");
+      yield* f.worker.drain();
+      assert.equal((yield* Ref.get(f.started)).length, 2);
+    }),
+  ),
+);
+it.live("guarded pre-start Stop cleans up only the committed retired native attempt", () =>
+  withHeld(({ f, first, interruptCount }) =>
+    Effect.gen(function* () {
+      yield* f.dispatch(
+        send(first.threadId, "guarded-prestart-replacement", {
+          type: "restart_active",
+          targetRunId: first.id,
+          targetAttemptId: first.activeAttemptId!,
+        }),
+        agentsCreationActor,
+      );
+      const replacement = (yield* f.orchestrator.getThreadProjection(first.threadId)).runs[0]!;
+      const stop = {
+        type: "run.interrupt" as const,
+        commandId: CommandId.make("guarded-prestart-stop"),
+        threadId: first.threadId,
+        runId: first.id,
+        expectedAttemptId: replacement.activeAttemptId!,
+        holdQueue: true,
+      };
+      yield* f.dispatch(stop, agentsCreationActor);
+      const terminal = yield* f.orchestrator.streamDomainEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "provider-turn.updated" &&
+            event.payload.runAttemptId === first.activeAttemptId &&
+            event.payload.terminationConfirmed === true,
+        ),
+        Stream.take(1),
+        Stream.runDrain,
+        Effect.forkScoped,
+      );
+      yield* f.worker.drain();
+      assert.equal(interruptCount(), 1);
+      yield* Fiber.join(terminal);
+      yield* f.worker.drain();
+      yield* f.dispatch(stop, agentsCreationActor);
+      yield* f.worker.drain();
+      assert.equal(interruptCount(), 1);
+      const projection = yield* f.orchestrator.getThreadProjection(first.threadId);
+      assert.equal(projection.runs[0]!.status, "interrupted");
+      assert.equal(projection.runs[0]!.activeAttemptId, replacement.activeAttemptId);
+      assert.equal((yield* Ref.get(f.started)).length, 1);
+    }),
+  ),
+);
+
+it.live("a matching guarded Stop flags only its own bound or matching-message lease", () =>
+  withHeld(({ f, first, interruptCount }) =>
+    Effect.gen(function* () {
+      yield* f.sql`INSERT INTO base3_capacity_leases (lease_id,environment_id,thread_id,message_id,run_id,workload_class,status,interrupt_requested,disconnect_unconfirmed,created_at)
+      VALUES ('unrelated-unbound','environment-a',${first.threadId},'unrelated-message',NULL,'foreground-turn','active',0,0,'2026-10-19T00:00:00.000Z')`;
+      yield* f.dispatch(
+        {
+          type: "run.interrupt",
+          commandId: CommandId.make("matching-lease-stop"),
+          threadId: first.threadId,
+          runId: first.id,
+          expectedAttemptId: first.activeAttemptId!,
+          holdQueue: true,
+        },
+        agentsCreationActor,
+      );
+      const before = yield* f.sql<{
+        lease_id: string;
+        interrupt_requested: number;
+      }>`SELECT lease_id, interrupt_requested FROM base3_capacity_leases WHERE thread_id=${first.threadId}`;
+      assert.equal(
+        before.find((row) => row.lease_id === "unrelated-unbound")!.interrupt_requested,
+        0,
+      );
+      assert.isTrue(
+        before.some((row) => row.lease_id !== "unrelated-unbound" && row.interrupt_requested === 1),
+      );
+      yield* f.worker.drain();
+      assert.equal(interruptCount(), 1);
+      const after = yield* f.sql<{
+        interrupt_requested: number;
+      }>`SELECT interrupt_requested FROM base3_capacity_leases WHERE lease_id='unrelated-unbound'`;
+      assert.equal(after[0]!.interrupt_requested, 0);
+    }),
+  ),
 );

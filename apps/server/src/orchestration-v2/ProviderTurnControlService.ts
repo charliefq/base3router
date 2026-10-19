@@ -56,7 +56,11 @@ const isProviderTurnControlError = Schema.is(ProviderTurnControlError);
 export interface ProviderTurnControlServiceV2Shape {
   readonly interrupt: (input: {
     readonly threadId: ThreadId;
-    readonly expectedTarget?: { readonly runId: RunId; readonly attemptId: RunAttemptId };
+    readonly expectedTarget?: {
+      readonly runId: RunId;
+      readonly attemptId: RunAttemptId;
+      readonly retiredAttemptId?: RunAttemptId;
+    };
     readonly providerSessionId: ProviderSessionId;
     readonly replacementProviderSessionId?: ProviderSessionId;
     readonly providerThreadId: ProviderThreadId;
@@ -210,19 +214,51 @@ export const layer: Layer.Layer<
             return;
           }
           if (input.expectedTarget) {
+            const target = input.expectedTarget;
             const [shell, records] = yield* Effect.all([
               projections.getThreadShell(input.threadId),
-              projections.getThreadRecords(input.threadId, ["runs"], {
-                runIds: [input.expectedTarget.runId],
-              }),
+              projections.getThreadRecords(
+                input.threadId,
+                ["runs", "attempts"],
+                target.retiredAttemptId === undefined ? { runIds: [target.runId] } : undefined,
+              ),
             ]);
-            const run = records.runs[0];
+            const run = records.runs.find((candidate) => candidate.id === target.runId);
+            const retired = target.retiredAttemptId;
+            const expectedAttempt = records.attempts.find(
+              (a) => a.id === target.attemptId && a.runId === target.runId,
+            );
+            const retiredAttempt = records.attempts.find(
+              (a) => a.id === retired && a.runId === target.runId,
+            );
+            const matchesCurrent = run?.activeAttemptId === target.attemptId;
+            const matchesNative =
+              loaded.providerTurn.runAttemptId === (retired ?? target.attemptId);
+            const currentActive =
+              shell?.activeRunId === target.runId &&
+              run &&
+              ["starting", "running"].includes(run.status) &&
+              loaded.providerTurn.status === "running";
+            // Pre-start Stop terminalizes the replacement before its native start. Its sealed
+            // cleanup may stop the committed retired attempt, only while no later run owns work.
+            const retiredCleanup =
+              retired !== undefined &&
+              retired !== target.attemptId &&
+              shell?.activeRunId === null &&
+              !records.runs.some(
+                (candidate) =>
+                  candidate.ordinal > (run?.ordinal ?? -1) && candidate.status !== "queued",
+              ) &&
+              run?.status === "interrupted" &&
+              expectedAttempt?.status === "interrupted" &&
+              retiredAttempt !== undefined &&
+              retiredAttempt.attemptOrdinal < expectedAttempt.attemptOrdinal &&
+              (loaded.providerTurn.status === "running" ||
+                loaded.providerTurn.terminationConfirmed === false);
             if (
-              shell?.activeRunId !== input.expectedTarget.runId ||
-              run?.activeAttemptId !== input.expectedTarget.attemptId ||
-              !["starting", "running"].includes(run.status) ||
-              loaded.providerTurn.runAttemptId !== input.expectedTarget.attemptId ||
-              loaded.providerTurn.status !== "running"
+              !matchesCurrent ||
+              !matchesNative ||
+              !(retired === undefined ? currentActive : retiredCleanup)
             )
               return yield* new ProviderTurnControlError({
                 threadId: input.threadId,

@@ -47,7 +47,15 @@ export function TaskRevisionRequest(props: {
   const readProjection = useAtomCommand(threadEnvironment.readProjection, { reportFailure: false });
   const session = Option.getOrNull(usePreparedConnection(props.environmentId));
   const [review, setReview] = useState<RevisionRequestFacts | null>(null);
-  const [changes, setChanges] = useState("");
+  const draftScope = JSON.stringify([
+    props.environmentId,
+    props.task.projectId,
+    props.task.id,
+    props.task.threadId,
+  ]);
+  const [drafts, setDrafts] = useState<ReadonlyMap<string, string>>(new Map());
+  const changes = drafts.get(draftScope) ?? "";
+  const currentDraftScope = useRef(draftScope);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const latest = useRef(props),
@@ -60,7 +68,14 @@ export function TaskRevisionRequest(props: {
   const context = useRef({ key, session });
   useLayoutEffect(() => {
     latest.current = props;
-  }, [props]);
+    currentDraftScope.current = draftScope;
+    changesRef.current = changes;
+  }, [props, draftScope, changes]);
+  const updateChanges = (value: string) => {
+    if (currentDraftScope.current !== draftScope) return;
+    changesRef.current = value;
+    setDrafts((previous) => new Map(previous).set(draftScope, value));
+  };
   const retire = useCallback(() => {
     epoch.current++;
     owner.current = null;
@@ -157,8 +172,6 @@ export function TaskRevisionRequest(props: {
       }
       reviewRef.current = facts;
       setReview(facts);
-      changesRef.current = "";
-      setChanges("");
     } catch {
       if (current(generation, token))
         setNotice(
@@ -232,9 +245,33 @@ export function TaskRevisionRequest(props: {
       }
     }
   };
-  if (!hasRevisionOutput(props.task)) return <>{continuation.recovery}</>;
+  const retainedDraft =
+    review === null && changes ? (
+      <section aria-label="Retained revision draft">
+        <p>Requested changes draft retained. Review fresh task and result facts before using it.</p>
+        <pre className="whitespace-pre-wrap break-all text-sm">{changes}</pre>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={busy || continuation.busy}
+          onClick={() => {
+            updateChanges("");
+          }}
+        >
+          Discard requested changes
+        </Button>
+      </section>
+    ) : null;
+  if (!hasRevisionOutput(props.task))
+    return (
+      <>
+        {retainedDraft}
+        {continuation.recovery}
+      </>
+    );
   return (
     <div>
+      {retainedDraft}
       {review === null ? continuation.recovery : null}
       <Button
         type="button"
@@ -290,8 +327,7 @@ export function TaskRevisionRequest(props: {
                 value={changes}
                 disabled={busy || continuation.busy}
                 onChange={(e) => {
-                  changesRef.current = e.target.value;
-                  setChanges(e.target.value);
+                  updateChanges(e.target.value);
                 }}
               />
               {continuation.recovery}

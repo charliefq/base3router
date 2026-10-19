@@ -44,6 +44,17 @@ function evidenceKey(projection: OrchestrationV2ThreadProjection | null) {
     projection.thread.id,
     projection.thread.projectId,
     projection.thread.deletedAt,
+    projection.thread.taskGovernance,
+    projection.thread.providerInstanceId,
+    projection.thread.modelSelection,
+    projection.thread.runtimeMode,
+    projection.thread.interactionMode,
+    projection.thread.archivedAt,
+    projection.thread.branch,
+    projection.thread.worktreePath,
+    projection.thread.taskContract,
+    projection.thread.taskContractPhase,
+    projection.thread.taskAcceptedRevision,
     run?.id,
     run?.activeAttemptId,
     run?.status,
@@ -105,7 +116,8 @@ function targetOutcome(
   projection: OrchestrationV2ThreadProjection | null,
   live: boolean,
 ) {
-  if (!live || !projection) return "Stop outcome UNKNOWN while the shared projection is stale.";
+  if (!live || !projection || projection.thread.id !== record.command.threadId)
+    return "Stop outcome UNKNOWN while the shared projection is stale.";
   const command = record.command;
   const run = projection.runs.find((run) => run.id === command.runId);
   const attempt = projection.attempts.find(
@@ -225,6 +237,16 @@ export function TaskRunSupervision(props: {
       current.epoch++;
     };
   }, [key, scope, session, recoveryKey]);
+  const fresh = detailLive && !props.stale;
+  useLayoutEffect(() => {
+    if (fresh) return;
+    operation.current.epoch++;
+    operation.current.pending = false;
+    // Retire in-flight responses and visible proof when the external stream loses freshness.
+    // eslint-disable-next-line react/set-state-in-effect
+    setBusy(false);
+    setNotice(null);
+  }, [fresh]);
   const writable =
     props.task.review?.reference.environmentId === props.environmentId &&
     props.task.review.supportsExpectedRunInterrupt === true;
@@ -264,7 +286,10 @@ export function TaskRunSupervision(props: {
   const owns = (epoch: number) =>
     operation.current.epoch === epoch &&
     operation.current.key === key &&
-    operation.current.session === session;
+    operation.current.session === session &&
+    latest.current.detailLive &&
+    !latest.current.props.stale &&
+    latest.current.props.live;
   const stop = async () => {
     if (
       latest.current.token !== token ||
@@ -345,7 +370,11 @@ export function TaskRunSupervision(props: {
       if (!owns(epoch)) return;
       setNotice(
         result._tag === "Success"
-          ? targetOutcome(last, result.value, true)
+          ? targetOutcome(
+              last,
+              result.value,
+              latest.current.detailLive && !latest.current.props.stale,
+            )
           : "Stop outcome UNKNOWN. Projection read failed; no resend.",
       );
       props.changed();

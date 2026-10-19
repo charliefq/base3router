@@ -87,6 +87,7 @@ export interface DispatchPolicyCommand {
   readonly parentThreadId?: string;
   readonly parentRunId?: string;
   readonly runId?: string;
+  readonly expectedAttemptId?: string;
   readonly messageId?: string;
   readonly text?: string;
   readonly modelSelection?: ModelSelection;
@@ -374,9 +375,50 @@ const admitLease = (input: {
 export const noteInterrupt = (input: {
   readonly threadId: string;
   readonly runId?: string | undefined;
+  readonly expectedAttemptId?: string | undefined;
 }) =>
   Effect.gen(function* () {
     const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+    if (input.expectedAttemptId !== undefined) {
+      if (Option.isNone(sql) || input.runId === undefined)
+        return yield* deny("run.interrupt", "policy-store-unavailable");
+      // The lease mutation is part of admission, so validate and flag in one transaction.
+      // A null run_id is only this run's reservation when its message identity matches.
+      return yield* sql.value.withTransaction(
+        Effect.gen(function* () {
+          const rows = yield* sql.value<{ message_id: string }>`
+          SELECT json_extract(run.payload_json,'$.userMessageId') AS message_id
+          FROM orchestration_v2_projection_runs AS run
+          JOIN orchestration_v2_projection_run_attempts AS attempt
+            ON attempt.attempt_id=json_extract(run.payload_json,'$.activeAttemptId')
+            AND attempt.run_id=run.run_id AND attempt.thread_id=run.thread_id
+          WHERE run.thread_id=${input.threadId} AND run.run_id=${input.runId}
+            AND json_extract(run.payload_json,'$.id')=run.run_id
+            AND json_extract(run.payload_json,'$.threadId')=run.thread_id
+            AND json_extract(run.payload_json,'$.status')=run.status
+            AND json_extract(attempt.payload_json,'$.id')=attempt.attempt_id
+            AND json_extract(attempt.payload_json,'$.runId')=run.run_id
+            AND json_extract(attempt.payload_json,'$.status')=attempt.status
+            AND json_extract(run.payload_json,'$.activeAttemptId')=${input.expectedAttemptId}
+            AND run.status IN ('preparing','starting','running')
+            AND attempt.status IN ('pending','running')
+            AND NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_runs AS newer
+              WHERE newer.thread_id=run.thread_id AND newer.ordinal>run.ordinal
+                AND newer.status IN ('preparing','starting','running'))
+        `;
+          const row = rows[0];
+          if (rows.length !== 1 || !row || typeof row.message_id !== "string" || !row.message_id)
+            return yield* deny(
+              "run.interrupt",
+              "stale-interrupt-target",
+              "The displayed run/attempt is no longer the interrupt target.",
+            );
+          yield* sql.value`UPDATE base3_capacity_leases SET interrupt_requested=1
+          WHERE released_at IS NULL AND thread_id=${input.threadId}
+            AND (run_id=${input.runId} OR (run_id IS NULL AND message_id=${row.message_id}))`;
+        }),
+      );
+    }
     if (Option.isNone(sql)) return;
     if (input.runId === undefined) {
       yield* sql.value`
@@ -853,7 +895,11 @@ export const authorizeDispatch = <
     }
     if (context.kind === "kernel-test") {
       if (command.type === "run.interrupt") {
-        yield* noteInterrupt({ threadId: command.threadId ?? "", runId: command.runId });
+        yield* noteInterrupt({
+          threadId: command.threadId ?? "",
+          runId: command.runId,
+          expectedAttemptId: command.expectedAttemptId,
+        });
       }
       return;
     }
@@ -929,7 +975,11 @@ export const authorizeDispatch = <
       return;
     }
     if (operation.kind === "interrupt") {
-      yield* noteInterrupt({ threadId: command.threadId ?? "", runId: command.runId });
+      yield* noteInterrupt({
+        threadId: command.threadId ?? "",
+        runId: command.runId,
+        expectedAttemptId: command.expectedAttemptId,
+      });
       return;
     }
     const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
@@ -1296,12 +1346,16 @@ export const revalidateOutboxEffect = (effect: {
     readonly runId?: string | undefined;
     readonly messageId?: string | undefined;
     readonly replacementAttemptId?: string | undefined;
+    readonly expectedTarget?: { readonly runId: string; readonly attemptId: string };
   };
 }) =>
   Effect.gen(function* () {
     const context = yield* PolicyExecutionContext;
     if (context.kind === "kernel-test") return;
     if (effect.request.type === "provider-turn.interrupt") {
+      // A guarded Stop already sealed its exact lease mutation at admission. Outbox replay
+      // must not flag replacement/current leases; the control service revalidates native identity.
+      if (effect.request.expectedTarget !== undefined) return;
       yield* noteInterrupt({ threadId: effect.threadId, runId: effect.request.runId });
       return;
     }

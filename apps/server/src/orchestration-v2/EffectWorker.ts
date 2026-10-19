@@ -192,7 +192,15 @@ export const executorLayer: Layer.Layer<
           case "provider-turn.interrupt":
             return revalidateOutboxEffect({
               threadId: effect.threadId,
-              request: { type: effect.request.type },
+              request: {
+                type: effect.request.type,
+                ...(effect.request.expectedTarget
+                  ? {
+                      runId: effect.request.expectedTarget.runId,
+                      expectedTarget: effect.request.expectedTarget,
+                    }
+                  : {}),
+              },
             }).pipe(
               Effect.mapError(
                 (cause) =>
