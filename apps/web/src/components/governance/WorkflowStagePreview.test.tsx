@@ -487,3 +487,30 @@ it("shows actual artifact sections, provenance, Unknown and redactions before hu
   await click("Request revision");
   expect(mocks.action.mock.calls[0]![0].input.value).toBe("request_revision");
 });
+
+it("keeps the native Stop conversation link after workflow ledger cancellation", async () => {
+  catalog = {
+    ...catalog,
+    runs: [
+      {
+        ...run,
+        status: "cancelled",
+        currentStageId: null,
+        attempts: [
+          {
+            ...run.attempts[0]!,
+            status: "dispatched",
+            destinationThreadId: "linked-stage-thread" as import("@t3tools/contracts").ThreadId,
+          },
+        ],
+      },
+    ],
+  };
+  await update();
+  expect(
+    renderer.root
+      .findAllByType("a")
+      .some((link) => link.props.href === `/${environmentId}/linked-stage-thread`),
+  ).toBe(true);
+  expect(mocks.action).not.toHaveBeenCalled();
+});

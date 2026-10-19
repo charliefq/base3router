@@ -435,6 +435,17 @@ export function ProjectWorkflowDecisions(props: {
             <p className="text-xs">
               {run.attempts.length} attempts · {run.decisions.length} decisions
             </p>
+            {run.attempts
+              .filter((entry) => entry.destinationThreadId !== null)
+              .map((entry) => (
+                <p key={`${entry.stageId}:${entry.attempt}`} className="text-xs">
+                  <a
+                    href={`/${encodeURIComponent(props.environmentId)}/${encodeURIComponent(entry.destinationThreadId!)}`}
+                  >
+                    Open {entry.stageId} attempt {entry.attempt} conversation and native Stop
+                  </a>
+                </p>
+              ))}
             {run.artifacts.map((artifact) => (
               <ArtifactReview key={artifact.id} artifact={artifact} />
             ))}
