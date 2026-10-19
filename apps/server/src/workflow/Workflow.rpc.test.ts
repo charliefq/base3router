@@ -585,3 +585,124 @@ it.effect("workflow decisions survive a file-backed server restart", () => {
     assert.equal(second.runs[0]?.decisions.at(-1)?.value, "approve");
   });
 });
+
+it.effect(
+  "revisits the human gate with a fresh occurrence after explicit revision, preserving decisions across reload and replay",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      yield* insertProject();
+      yield* seedBuildGate();
+      const sql = yield* SqlClient.SqlClient;
+      let launches = 0;
+      const decision = (
+        stageId: string,
+        attempt: number,
+        value: "approve" | "request_revision",
+        artifactId: string | null,
+      ) => ({
+        type: "decision.record" as const,
+        projectId,
+        commandId: `cmdrun-1${stageId}${attempt}${value}`,
+        decisionId: `drun-1${stageId}${attempt}`,
+        runId: "run-1",
+        stageId,
+        attempt,
+        artifactId,
+        value,
+      });
+      const revise = decision("build_gate", 1, "request_revision", null);
+      const revised = yield* performWorkflowAction(revise, noopDispatch);
+      assert.equal(revised.runs[0]?.attempts.at(-1)?.attempt, 2);
+      assert.equal(revised.runs[0]?.attempts.at(-1)?.status, "pending");
+      assert.equal(launches, 0);
+      const reviewed = yield* previewWorkflowStage(
+        {
+          environmentId,
+          projectId,
+          runId: "run-1",
+          preferredRoute: route.target,
+          taskContract: {
+            goal: "Revised Discovery",
+            redirect: "One occurrence",
+            acceptance: "Human gate reviews again",
+            brake: {
+              maxProviderStarts: 1,
+              maxTokens: 4000,
+              deadlineAt: DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 10 })),
+              stopConditions: "Stop before gate",
+            },
+          },
+        },
+        { environmentId, providers: [provider(true)], environmentDefaultModelSelection: null },
+      );
+      if (!reviewed.review) return yield* Effect.die("missing revision review");
+      assert.equal(launches, 0);
+      yield* dispatchWorkflowStage(
+        {
+          environmentId,
+          projectId,
+          runId: "run-1",
+          stageId: "discovery",
+          attempt: 2,
+          dispatchId: "revision-start-2",
+          target: route.target,
+          additionalInstruction: "",
+          review: reviewed.review,
+        },
+        {
+          environmentId,
+          providers: [provider(true)],
+          environmentDefaultModelSelection: null,
+          launch: () =>
+            Effect.sync(() => {
+              launches++;
+              return { sequence: 1 };
+            }),
+        },
+      );
+      const cursor = yield* sql<{
+        sequence: number;
+      }>`SELECT last_sequence AS sequence FROM projection_workflow_cursors WHERE project_id=${projectId}`;
+      yield* projectWorkflowEvent(
+        event(cursor[0]!.sequence + 1, {
+          type: "artifact.propose",
+          artifact: {
+            ...discoveryArtifact(),
+            id: "artifact-2",
+            attempt: 2,
+            sourceOutcome: "completed",
+            sourceTurnId: TurnId.make("revision-turn-2"),
+          },
+        }),
+      );
+      const gated = yield* performWorkflowAction(
+        decision("discovery", 2, "approve", "artifact-2"),
+        noopDispatch,
+      );
+      assert.equal(gated.runs[0]?.currentStageId, "build_gate");
+      assert.equal(gated.runs[0]?.attempts.at(-1)?.attempt, 2);
+      assert.equal(gated.runs[0]?.attempts.at(-1)?.status, "pending");
+      assert.equal(launches, 1);
+      const reloaded = yield* workflowCatalogForProject(projectId);
+      assert.deepEqual(reloaded.runs, gated.runs);
+      const oldReplay = yield* performWorkflowAction(revise, noopDispatch);
+      assert.deepEqual(oldReplay.runs, gated.runs);
+      const approve = decision("build_gate", 2, "approve", null);
+      const approved = yield* performWorkflowAction(approve, noopDispatch);
+      assert.equal(approved.runs[0]?.currentStageId, "architecture");
+      assert.equal(approved.runs[0]?.attempts.at(-1)?.status, "pending");
+      assert.equal(approved.runs[0]?.attempts.at(-1)?.destinationThreadId, null);
+      assert.deepEqual(
+        approved.runs[0]?.artifacts.map((a) => [a.id, a.status]),
+        [
+          ["artifact-1", "accepted"],
+          ["artifact-2", "accepted"],
+        ],
+      );
+      assert.equal(approved.runs[0]?.decisions.filter((d) => d.stageId === "build_gate").length, 2);
+      assert.deepEqual((yield* performWorkflowAction(approve, noopDispatch)).runs, approved.runs);
+      assert.deepEqual((yield* workflowCatalogForProject(projectId)).runs, approved.runs);
+      assert.equal(launches, 1);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);

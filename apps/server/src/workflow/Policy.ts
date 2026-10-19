@@ -492,6 +492,8 @@ export function applyWorkflowMutation(
           (stage.type === "human_gate"
             ? template.stages[template.stages.findIndex((entry) => entry.id === stage.id) - 1]
             : stage) ?? reject("There is no preceding stage to revise.");
+        if (stage.type === "human_gate" && attempt.attempt >= stage.maxAttempts)
+          reject("The gate attempt limit has been reached.");
         const previous = run.attempts.findLast((entry) => entry.stageId === target.id);
         const number = (previous?.attempt ?? 0) + 1;
         if (number > target.maxAttempts) reject("The stage attempt limit has been reached.");
@@ -511,6 +513,13 @@ export function applyWorkflowMutation(
         decision.value === "approve"
           ? template.stages.find((entry) => entry.id === stage.nextStageId)
           : undefined;
+      // A revised upstream stage re-enters its gate as a new occurrence. Reusing
+      // attempt 1 would alias its old decision and command receipts.
+      const nextNumber = next
+        ? (run.attempts.findLast((entry) => entry.stageId === next.id)?.attempt ?? 0) + 1
+        : 0;
+      if (next && nextNumber > next.maxAttempts)
+        reject("The next stage attempt limit has been reached.");
       const updated: WorkflowRun = {
         ...run,
         status: decision.value === "reject" ? "rejected" : next ? "active" : "completed",
@@ -532,7 +541,7 @@ export function applyWorkflowMutation(
                 } as typeof entry)
               : entry,
           ),
-          ...(next ? [nextAttempt(next, 1, decision.createdAt, attempt)] : []),
+          ...(next ? [nextAttempt(next, nextNumber, decision.createdAt, attempt)] : []),
         ],
       };
       return { ...catalog, runs: catalog.runs.map((entry) => (entry === run ? updated : entry)) };

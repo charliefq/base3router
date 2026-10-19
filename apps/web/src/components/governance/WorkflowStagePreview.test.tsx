@@ -514,3 +514,53 @@ it("keeps the native Stop conversation link after workflow ledger cancellation",
   ).toBe(true);
   expect(mocks.action).not.toHaveBeenCalled();
 });
+
+it("uses a fresh gate occurrence in deterministic decision IDs after a revision", async () => {
+  const gate = {
+    ...template.stages[0]!,
+    id: "test-gate",
+    label: "Build Gate",
+    type: "human_gate" as const,
+    profileId: null,
+    profileVersion: null,
+    requiredOutputSections: [],
+  };
+  const gateAttempt = { ...run.attempts[0]!, stageId: gate.id };
+  catalog = {
+    ...catalog,
+    templates: [{ ...template, stages: [...template.stages, gate] }],
+    runs: [
+      {
+        ...run,
+        currentStageId: gate.id,
+        attempts: [
+          ...run.attempts,
+          gateAttempt,
+          { ...run.attempts[0]!, attempt: 2, status: "accepted" },
+          { ...gateAttempt, attempt: 2 },
+        ],
+        decisions: [
+          {
+            id: `d${run.id}${gate.id}1`,
+            runId: run.id,
+            stageId: gate.id,
+            attempt: 1,
+            artifactId: null,
+            value: "request_revision",
+            createdAt: run.createdAt,
+          },
+        ],
+      },
+    ],
+  };
+  await update();
+  mocks.action.mockResolvedValueOnce({ _tag: "Success", value: catalog });
+  await click("Approve");
+  expect(mocks.action.mock.calls[0]![0].input).toMatchObject({
+    attempt: 2,
+    commandId: `cmd${run.id}${gate.id}2approve`,
+    decisionId: `d${run.id}${gate.id}2`,
+    value: "approve",
+  });
+  expect(mocks.read).not.toHaveBeenCalled();
+});
