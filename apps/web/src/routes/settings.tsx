@@ -1,4 +1,5 @@
 import { validateSetupReturn } from "../components/collaboration/collaborationScope";
+import { SetupReturnAction } from "../components/collaboration/SetupReturnAction";
 import { Outlet, createFileRoute, redirect, useLocation } from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
 import { RotateCcwIcon } from "lucide-react";
@@ -113,6 +114,7 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
 
 function SettingsContentLayout() {
   const location = useLocation();
+  const returnSearch = Route.useSearch();
   const navigateToMainApp = useNavigateToMainApp();
   useEscapeToGoBack(navigateToMainApp);
   const { search } = useSettingsScope();
@@ -138,6 +140,11 @@ function SettingsContentLayout() {
           key={`${JSON.stringify(search)}:${restoreSignal}`}
           className="min-h-0 flex flex-1 flex-col"
         >
+          {returnSearch.returnPage ? (
+            <div className="px-6 pt-4">
+              <SetupReturnAction search={returnSearch} />
+            </div>
+          ) : null}
           <SettingsScopeBoundary pathname={location.pathname}>
             <Outlet />
           </SettingsScopeBoundary>
