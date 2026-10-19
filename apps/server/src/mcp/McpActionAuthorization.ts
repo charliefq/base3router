@@ -79,6 +79,8 @@ const revalidateAfterQueue = (
         ["REPLAY_REJECTED"],
       );
     }
+    if (stored.value.expiresAt <= DateTime.formatIso(yield* DateTime.now))
+      return yield* blocked(toolName, "Queued approval expired.");
     if (stored.value.status !== "consumed" && stored.value.status !== "granted") {
       return yield* blocked(toolName, `Queued approval is ${stored.value.status} and cannot run.`, [
         "ACTION_DENIED",
@@ -228,20 +230,25 @@ export const requireAllowedMcpTool = (toolName: string, args: unknown) =>
     requireAllowedScoped(scope, toolName, args),
   );
 
-/** Only the server-owned saved PR read uses this path; no native MCP session is fabricated. */
-export const withAllowedSavedPrRead = <A, E, R>(scope: ActionScope, run: Effect.Effect<A, E, R>) =>
+/** Only the two explicit server-owned reads use this path; no MCP session is fabricated. */
+export const withAllowedSavedPrRead = <A, E, R>(
+  scope: ActionScope,
+  run: Effect.Effect<A, E, R>,
+  toolName: "list_thread_pull_requests" | "t3_worktree_status" = "list_thread_pull_requests",
+  onAuthorized: (decision: ActionGateDecision) => Effect.Effect<void> = () => Effect.void,
+) =>
   Effect.gen(function* () {
     const available = yield* Effect.serviceOption(ActionGateService);
-    if (Option.isNone(available))
-      return yield* blocked("list_thread_pull_requests", "ActionGate unavailable.");
+    if (Option.isNone(available)) return yield* blocked(toolName, "ActionGate unavailable.");
     const gate = available.value;
-    const decision = yield* requireAllowedScoped(scope, "list_thread_pull_requests", {}).pipe(
+    const decision = yield* requireAllowedScoped(scope, toolName, {}).pipe(
       Effect.provideService(ActionGateService, gate),
     );
     return yield* withMcpAdmission(
       scope,
-      "list_thread_pull_requests",
-      revalidateAfterQueue(gate, "list_thread_pull_requests", {}, decision, scope).pipe(
+      toolName,
+      revalidateAfterQueue(gate, toolName, {}, decision, scope).pipe(
+        Effect.andThen(onAuthorized(decision)),
         Effect.andThen(run),
       ),
     );

@@ -174,7 +174,7 @@ it.live(
 );
 
 type Fixture = Parameters<Parameters<typeof withTaskResultLinkageFixture>[0]>[0];
-const prepare = (f: Fixture, key: string) =>
+const prepare = (f: Fixture, key: string, workspace = false) =>
   Effect.gen(function* () {
     const creation = yield* f.createTask(`root-${key}`);
     const task = (yield* f.readSnapshot()).tasks.find((t) => t.threadId === creation.threadId)!;
@@ -187,7 +187,12 @@ const prepare = (f: Fixture, key: string) =>
     };
     const result = yield* f.readReview({
       ...input,
-      capabilityStep: { commandId: key, messageId: key, text: key },
+      capabilityStep: {
+        commandId: key,
+        messageId: key,
+        text: key,
+        ...(workspace ? { capability: "recorded-workspace" as const } : {}),
+      },
     });
     if (result.status !== "available" || !result.capabilityStep)
       throw new Error("Missing capability proposal");
@@ -244,10 +249,9 @@ it.live.each([
                 command.capabilityStep = { ...p.review, schemaDigest: "other-schema" };
                 break;
               case "tool":
-                command.capabilityStep = {
-                  ...p.review,
-                  toolId: "t3-preview/device_screenshot" as typeof p.review.toolId,
-                };
+                command.capabilityStep = Object.assign({}, p.review, {
+                  toolId: "t3-preview/device_screenshot",
+                });
                 break;
               case "arguments":
                 command.capabilityStep = {
@@ -700,9 +704,9 @@ it.live(
   30_000,
 );
 
-it.live(
-  "closes and reopens the disposable database, then actual startup recovery retains UNKNOWN without resending operation or model",
-  () =>
+it.live.each(["saved-pr", "recorded-workspace"] as const)(
+  "%s closes and reopens the disposable database, then actual startup recovery retains UNKNOWN without resending operation or model",
+  (capability) =>
     Effect.scoped(
       Effect.gen(function* () {
         let reads = 0;
@@ -713,7 +717,11 @@ it.live(
         yield* withTaskResultLinkageFixture(
           (f) =>
             Effect.gen(function* () {
-              const p = yield* prepare(f, "restart-uncertain-step");
+              const p = yield* prepare(
+                f,
+                "restart-uncertain-step",
+                capability === "recorded-workspace",
+              );
               yield* f.dispatch(p.command);
               const invocation = yield* f
                 .governWorker(executeCapabilityStep(f.sql, p.review))
@@ -733,15 +741,21 @@ it.live(
             governedWorker: true,
             useProjectRuntimePolicy: true,
             startWorker: false,
-            decorateSavedPrRead: (service) => ({
-              ...service,
-              read: () =>
+            decorateSavedPrRead: (service) => {
+              const read = () =>
                 Effect.gen(function* () {
                   reads++;
                   yield* Deferred.succeed(entered, undefined);
                   return yield* Effect.never;
-                }),
-            }),
+                });
+              return {
+                ...service,
+                read,
+                ...(capability === "recorded-workspace"
+                  ? { recordedWorkspace: { ...service.recordedWorkspace!, read } }
+                  : {}),
+              };
+            },
           },
         );
         yield* withAgentsTaskCreationFixture(

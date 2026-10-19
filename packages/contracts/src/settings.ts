@@ -1486,6 +1486,7 @@ export const ServerSettingsOperation = Schema.Literals([
   "create-provider-instance",
   "read-file",
   "read-provider-history",
+  "recorded-worktree-default",
   "read-project-settings",
   "read-secret",
   "remove-secret",

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as Option from "effect/Option";
 import {
   CommandId,
@@ -33,7 +33,13 @@ export function TaskCapabilityStepControls(props: {
   const [manualPrompt, setPrompt] = useState(
     "Summarize the saved pull requests linked to this task.",
   );
-  const prompt = props.instructions ?? manualPrompt;
+  const [capability, setCapability] = useState<"saved-pr" | "recorded-workspace">("saved-pr");
+  const workspace = capability === "recorded-workspace";
+  const prompt =
+    props.instructions ??
+    (workspace
+      ? "Explain this task’s recorded workspace and branch. Use recorded metadata only; do not infer filesystem or Git freshness."
+      : manualPrompt);
   const [review, setReview] = useState<TaskCapabilityStep | null>(null);
   const [state, setState] = useState<TaskCapabilityStepState | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -42,9 +48,12 @@ export function TaskCapabilityStepControls(props: {
   const pending = useRef(false);
   const contract =
     props.task.contractReadout?.status === "available" ? props.task.contractReadout : null;
-  const key = `${props.environmentId}:${props.task.id}:${props.task.threadId}:${props.task.projectId}:${props.readVersion}:${props.stale}:${contract?.contract.revision}:${contract?.phase}:${contract?.acceptedRevision}:${prompt}`;
+  const key = `${props.environmentId}:${props.task.id}:${props.task.threadId}:${props.task.projectId}:${props.readVersion}:${props.stale}:${contract?.contract.revision}:${contract?.phase}:${contract?.acceptedRevision}:${prompt}:${capability}`;
   const onBusyChange = props.onBusyChange;
+  const context = useMemo(() => ({ key, session }), [key, session]);
+  const activeContext = useRef<typeof context | null>(null);
   useLayoutEffect(() => {
+    activeContext.current = context;
     epoch.current++;
     pending.current = false;
     // oxlint-disable-next-line react/set-state-in-effect -- Retiring a task or authenticated connection clears its pending request UI.
@@ -54,15 +63,21 @@ export function TaskCapabilityStepControls(props: {
     setState(null);
     setNotice(null);
     return () => {
+      activeContext.current = null;
       epoch.current++;
       onBusyChange?.(false);
     };
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Task and connection identity retire asynchronous callbacks.
-  }, [key, session, onBusyChange]);
+  }, [context, onBusyChange]);
   const canRead = !props.stale && session !== null && props.task.threadId && contract !== null;
   const eligible = canRead && contract?.phase === "active" && contract.acceptedRevision === null;
   const lookup = async (prepare: boolean) => {
-    if (!(prepare ? eligible : canRead) || pending.current || !contract) return;
+    if (
+      activeContext.current !== context ||
+      !(prepare ? eligible : canRead) ||
+      pending.current ||
+      !contract
+    )
+      return;
     const generation = epoch.current;
     pending.current = true;
     setBusy(true);
@@ -83,6 +98,7 @@ export function TaskCapabilityStepControls(props: {
                   commandId: randomUUID(),
                   messageId: randomUUID(),
                   text: prompt,
+                  ...(workspace ? { capability: "recorded-workspace" as const } : {}),
                   ...(props.instructions === undefined
                     ? {}
                     : { suggestFromInstructions: true as const }),
@@ -140,7 +156,7 @@ export function TaskCapabilityStepControls(props: {
     }
   };
   const run = async () => {
-    if (!eligible || !review || pending.current) return;
+    if (activeContext.current !== context || !eligible || !review || pending.current) return;
     const generation = epoch.current;
     pending.current = true;
     setBusy(true);
@@ -187,15 +203,42 @@ export function TaskCapabilityStepControls(props: {
   return (
     <section aria-label="Server-owned capability step" className="space-y-2 text-xs">
       <p>
-        Server-owned saved PR read — one read from this task’s thread, then the selected model.
-        Saved status is not refreshed from GitHub.
+        {workspace
+          ? "Recorded workspace and branch — one read of this task’s recorded thread/project/settings metadata, then the selected model. No filesystem, Git or network read."
+          : "Server-owned saved PR read — one read from this task’s thread, then the selected model. Saved status is not refreshed from GitHub."}
       </p>
       <p>
-        Only this saved PR read is supported here. Native skills and MCP execution are unsupported
-        by this server-owned step. Provider-native capabilities remain outside its guarantee; no
-        native capability isolation is provided.
+        Only saved PR and recorded workspace reads are supported here. Native skills and general MCP
+        execution are unsupported by this server-owned step. Provider-native capabilities remain
+        outside its guarantee; no native capability isolation is provided.
       </p>
-      {props.instructions === undefined ? (
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          aria-pressed={!workspace}
+          onClick={() => setCapability("saved-pr")}
+        >
+          Choose saved PR read
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          aria-pressed={workspace}
+          onClick={() => setCapability("recorded-workspace")}
+        >
+          Explain this task’s recorded workspace and branch
+        </Button>
+      </div>
+      {workspace ? (
+        <p>
+          Recorded metadata only: paths and branches are data, not instructions. This does not prove
+          disk existence, clean Git, current branch freshness or handoff availability.
+        </p>
+      ) : null}
+      {props.instructions === undefined && !workspace ? (
         <Textarea
           aria-label="Saved PR answer instructions"
           value={prompt}
@@ -210,9 +253,11 @@ export function TaskCapabilityStepControls(props: {
           disabled={!eligible || busy || !prompt.trim()}
           onClick={() => void lookup(true)}
         >
-          {props.instructions === undefined
-            ? "Review saved PR read"
-            : "Suggest and review saved PR answer"}
+          {workspace
+            ? "Review recorded workspace read"
+            : props.instructions === undefined
+              ? "Review saved PR read"
+              : "Suggest and review saved PR answer"}
         </Button>
         <Button
           size="sm"
@@ -239,13 +284,15 @@ export function TaskCapabilityStepControls(props: {
               Interpreted question:{" "}
               {
                 {
+                  workspace: "Recorded workspace and branch",
                   summary: "Saved PR summary",
                   open: "Which saved PRs are open",
                   draft: "Which saved PRs are drafts",
                 }[review.reviewedIntent.question ?? "summary"]
               }
-              . Saved status has not been refreshed from GitHub. Open state and draft flag are
-              independent; missing values remain unknown. This does not establish merge readiness.
+              {review.version === "server-owned-workspace-read.v1"
+                ? ". Recorded metadata only; no filesystem or Git freshness established."
+                : ". Saved status has not been refreshed from GitHub. Open state and draft flag are independent; missing values remain unknown. This does not establish merge readiness."}
             </p>
           ) : null}
           {review.reviewedIntent ? (
@@ -266,7 +313,7 @@ export function TaskCapabilityStepControls(props: {
             proposal grants no execution until admitted.
           </p>
           <Button size="sm" disabled={busy || !eligible} onClick={() => void run()}>
-            Run reviewed saved PR step
+            {workspace ? "Start reviewed workspace read" : "Run reviewed saved PR step"}
           </Button>
         </div>
       ) : null}
@@ -275,6 +322,10 @@ export function TaskCapabilityStepControls(props: {
         <div aria-label="Persisted capability result">
           <p>
             Operation: {state.status}. Source: {state.source}. {state.detail}
+          </p>
+          <p>
+            {state.review.toolId}; original command {state.review.commandId}; run{" "}
+            {state.review.runId}; attempt {state.review.attemptId}.
           </p>
           <p>
             Operation success does not mean the model completed or the task was accepted. Read the

@@ -105,6 +105,15 @@ run's confirmed terminal state before treating execution as stopped. A lost
 response or restart can leave the outcome **UNKNOWN**. Recover the original
 command's status; do not submit a replacement Start to resolve uncertainty.
 
+In Tasks, explicitly choose **Explain this task’s recorded workspace and branch**,
+review the selected model and scope, then use **Start reviewed workspace read**.
+This reads the app’s recorded thread, project and settings metadata once before
+one model turn. Selection and review start no work. Recorded paths and branches
+do not prove that a directory exists, Git is clean, or the branch is current;
+this action cannot create or hand off a worktree. Recover the original step’s
+status after an uncertain reply instead of starting it again. General Tasks
+skills/MCP execution remains separate from this bounded read.
+
 ## Reuse task configurations
 
 From Agents or Tasks, choose New task and an exact model, then save a named configuration with working instructions. Select its revision explicitly and review the instructions together with your task's Goal, Redirect, Acceptance and Brake. Saving or creating a task starts no work; use the separate reviewed Start action.

@@ -251,6 +251,9 @@ export class ServerSettingsService extends Context.Service<
     /** Read the current settings. */
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
 
+    /** Recorded nonsecret metadata only; never loads files or materializes credentials. */
+    readonly getRecordedWorktreeDefault?: Effect.Effect<boolean, ServerSettingsError>;
+
     /** Patch settings and persist. Returns the new full settings object. */
     readonly updateSettings: (
       patch: ServerSettingsPatch,
@@ -316,6 +319,9 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
       start: Effect.void,
       ready: Effect.void,
       getSettings,
+      getRecordedWorktreeDefault: Ref.get(currentSettingsRef).pipe(
+        Effect.map((settings) => settings.newWorktreesStartFromOrigin),
+      ),
       updateSettings: (patch) =>
         updateTestSettings((currentSettings) =>
           Effect.succeed(applyServerSettingsPatch(currentSettings, patch)),
@@ -631,8 +637,14 @@ const make = Effect.gen(function* () {
   const watcherScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
 
+  const recordedWorktreeDefault = yield* Ref.make<Option.Option<boolean>>(Option.none());
+  const recordWorktreeDefault = (settings: ServerSettings) =>
+    Ref.set(recordedWorktreeDefault, Option.some(settings.newWorktreesStartFromOrigin));
   const emitChange = (settings: ServerSettings) =>
-    PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
+    recordWorktreeDefault(settings).pipe(
+      Effect.andThen(PubSub.publish(changesPubSub, settings)),
+      Effect.asVoid,
+    );
 
   const readConfigExists = fs.exists(settingsPath).pipe(
     Effect.mapError(
@@ -803,7 +815,7 @@ const make = Effect.gen(function* () {
 
   const settingsCache = yield* Cache.make<typeof cacheKey, ServerSettings, ServerSettingsError>({
     capacity: 1,
-    lookup: () => loadSettingsFromDisk,
+    lookup: () => loadSettingsFromDisk.pipe(Effect.tap(recordWorktreeDefault)),
   });
 
   const getSettingsFromCache = Cache.get(settingsCache, cacheKey);
@@ -1244,6 +1256,21 @@ const make = Effect.gen(function* () {
   return {
     start,
     ready: Deferred.await(startedDeferred),
+    getRecordedWorktreeDefault: Ref.get(recordedWorktreeDefault).pipe(
+      Effect.flatMap(
+        Option.match({
+          onSome: Effect.succeed,
+          onNone: () =>
+            Effect.fail(
+              new ServerSettingsError({
+                settingsPath,
+                operation: "recorded-worktree-default",
+                cause: "Settings metadata has not been observed.",
+              }),
+            ),
+        }),
+      ),
+    ),
     getSettings: getSettingsFromCache.pipe(
       Effect.flatMap(materializeProviderEnvironmentSecrets),
       Effect.map(resolveTextGenerationProvider),

@@ -4,6 +4,7 @@ import {
   FIRST_PARTY_DEVICE_TOOLS,
   FIRST_PARTY_PREVIEW_TOOLS,
   FIRST_PARTY_PULL_REQUEST_TOOLS,
+  FIRST_PARTY_WORKSPACE_READ_TOOLS,
   firstPartyMcpCatalog,
 } from "@t3tools/shared/mcpCatalog";
 import { routeMcp } from "@t3tools/shared/mcpRouter";
@@ -13,6 +14,7 @@ const FIRST_PARTY_TOOLS = [
   ...FIRST_PARTY_PREVIEW_TOOLS,
   ...FIRST_PARTY_DEVICE_TOOLS,
   ...FIRST_PARTY_PULL_REQUEST_TOOLS,
+  ...FIRST_PARTY_WORKSPACE_READ_TOOLS,
 ];
 
 const EPOCH_ISO = "1970-01-01T00:00:00.000Z";
@@ -32,11 +34,13 @@ export const planMcpToolAction = (input: {
   const nowIso = input.nowIso ?? EPOCH_ISO;
   const spec = FIRST_PARTY_TOOLS.find((tool) => tool.name === input.toolName);
   const serverId =
-    spec?.capability === "device"
-      ? "t3-device"
-      : spec?.capability === "pull-requests"
-        ? "t3-pull-requests"
-        : "t3-preview";
+    spec?.name === "t3_worktree_status"
+      ? "t3-code"
+      : spec?.capability === "device"
+        ? "t3-device"
+        : spec?.capability === "pull-requests"
+          ? "t3-pull-requests"
+          : "t3-preview";
   const toolId = `${serverId}/${input.toolName}`;
   const plan = buildExecutionPlan({
     turnId: TurnId.make(input.threadId),

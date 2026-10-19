@@ -1,3 +1,4 @@
+import { readRecordedWorktreeStatus } from "./toolkits/worktree/read.ts";
 import {
   CommandId,
   MessageId,
@@ -459,19 +460,14 @@ const make = Effect.gen(function* () {
   const status: WorktreeMcpService["Service"]["status"] = Effect.fn("WorktreeMcpService.status")(
     function* (scope) {
       yield* requireCapability(scope);
-      const projection = yield* loadThread(scope);
-      const project = yield* loadProject(scope, projection.thread.projectId);
-
-      const defaultStartFromOrigin = yield* readDefaultStartFromOrigin;
-
-      const result: WorktreeMcpStatusResult = {
-        attached: projection.thread.worktreePath !== null,
-        worktreePath: projection.thread.worktreePath,
-        branch: projection.thread.branch,
-        projectWorkspaceRoot: project.workspaceRoot,
-        defaultStartFromOrigin,
-      };
-      return result;
+      return yield* readRecordedWorktreeStatus(scope.threadId, {
+        thread: () => loadThread(scope).pipe(Effect.map((projection) => projection.thread)),
+        project: (id) => loadProject(scope, id),
+        defaultStartFromOrigin:
+          serverSettings.getRecordedWorktreeDefault?.pipe(
+            asOperationFailed("Unable to read recorded server settings"),
+          ) ?? readDefaultStartFromOrigin,
+      });
     },
   );
 

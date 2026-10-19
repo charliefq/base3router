@@ -1,12 +1,13 @@
+import { WorktreeMcpStatusResult } from "./worktreeMcp.ts";
 import { RuntimeMode, ProviderInteractionMode } from "./providerPolicy.ts";
 import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
 import { IsoDateTime, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { DispatcherTaskRouteBinding } from "./dispatcher.ts";
 
 /** A server-prepared proposal; only the matching authenticated command can admit it. */
-export const TaskCapabilityStep = Schema.Struct({
-  version: Schema.Literal("server-owned-pr-read.v1"),
+const StepFields = {
   reviewId: TrimmedNonEmptyString,
   actorId: TrimmedNonEmptyString,
   environmentId: TrimmedNonEmptyString,
@@ -27,13 +28,12 @@ export const TaskCapabilityStep = Schema.Struct({
     Schema.Struct({
       text: TrimmedNonEmptyString,
       /** Absent on earlier saved-summary reviews, which retain summary meaning. */
-      question: Schema.optional(Schema.Literals(["summary", "open", "draft"])),
+      question: Schema.optional(Schema.Literals(["summary", "open", "draft", "workspace"])),
       configuredModelSelection: ModelSelection,
       route: DispatcherTaskRouteBinding,
       routingBasisDigest: TrimmedNonEmptyString,
     }),
   ),
-  toolId: Schema.Literal("t3-pull-requests/list_thread_pull_requests"),
   schemaDigest: TrimmedNonEmptyString,
   argumentsJson: Schema.Literal("{}"),
   commandId: TrimmedNonEmptyString,
@@ -45,14 +45,42 @@ export const TaskCapabilityStep = Schema.Struct({
   maxResultBytes: Schema.Literal(32768),
   expiresAt: IsoDateTime,
   fingerprint: TrimmedNonEmptyString,
-});
+};
+const StepSchema = Schema.Union([
+  Schema.Struct({
+    ...StepFields,
+    version: Schema.Literal("server-owned-pr-read.v1"),
+    toolId: Schema.Literal("t3-pull-requests/list_thread_pull_requests"),
+  }),
+  Schema.Struct({
+    ...StepFields,
+    version: Schema.Literal("server-owned-workspace-read.v1"),
+    toolId: Schema.Literal("t3-code/t3_worktree_status"),
+    recordedBranch: Schema.NullOr(Schema.String),
+    recordedWorktreePath: Schema.NullOr(Schema.String),
+  }),
+]);
+const decodeStrictStep = Schema.decodeUnknownOption(StepSchema);
+export const TaskCapabilityStep = Schema.Unknown.check(
+  Schema.makeFilter((raw) => Option.isSome(decodeStrictStep(raw, { onExcessProperty: "error" })), {
+    message: "Invalid or expanded capability review.",
+  }),
+).pipe(Schema.decodeTo(StepSchema));
 export type TaskCapabilityStep = typeof TaskCapabilityStep.Type;
-export const TaskCapabilityStepRequest = Schema.Struct({
+const RequestSchema = Schema.Struct({
   commandId: TrimmedNonEmptyString,
   messageId: TrimmedNonEmptyString,
   text: TrimmedNonEmptyString,
+  capability: Schema.optional(Schema.Literal("recorded-workspace")),
   suggestFromInstructions: Schema.optional(Schema.Literal(true)),
 });
+const decodeStrictRequest = Schema.decodeUnknownOption(RequestSchema);
+export const TaskCapabilityStepRequest = Schema.Unknown.check(
+  Schema.makeFilter(
+    (raw) => Option.isSome(decodeStrictRequest(raw, { onExcessProperty: "error" })),
+    { message: "Invalid or expanded capability request." },
+  ),
+).pipe(Schema.decodeTo(RequestSchema));
 export const TaskCapabilityStepState = Schema.Struct({
   review: TaskCapabilityStep,
   status: Schema.Literals(["reviewed", "admitted", "unknown", "succeeded", "failed"]),
@@ -60,6 +88,15 @@ export const TaskCapabilityStepState = Schema.Struct({
   observedAt: Schema.NullOr(IsoDateTime),
   resultJson: Schema.NullOr(Schema.String),
   resultDigest: Schema.NullOr(Schema.String),
-  source: Schema.Literal("persisted-thread-pr-state"),
+  source: Schema.Literals(["persisted-thread-pr-state", "recorded-thread-project-settings"]),
 });
 export type TaskCapabilityStepState = typeof TaskCapabilityStepState.Type;
+
+/** Operation provenance is persisted with the bounded metadata, independently of model success. */
+export const TaskRecordedWorkspaceResult = Schema.Struct({
+  ...WorktreeMcpStatusResult.fields,
+  readAuthorization: Schema.Struct({
+    fingerprint: TrimmedNonEmptyString,
+    approvalId: Schema.NullOr(TrimmedNonEmptyString),
+  }),
+});

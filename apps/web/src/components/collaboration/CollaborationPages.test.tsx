@@ -7884,3 +7884,82 @@ describe("validated setup detours mounted with memory history", () => {
     noProviderWork();
   });
 });
+
+it("explicitly selects and reviews recorded workspace, starts nothing until confirmation, and retires a stale Start after choice changes", async () => {
+  await withCapabilityReviewFixture(async (f) => {
+    state.reviewRead.mockImplementation(async ({ input }: { input: TaskContractReviewInput }) => ({
+      _tag: "Success",
+      value: await EffectForFixture.runPromise(f.readReview(input)),
+    }));
+    state.startStep.mockImplementation(
+      async ({
+        input,
+      }: {
+        input: {
+          commandId: string;
+          threadId: string;
+          message: { messageId: string; text: string };
+          modelSelection: import("@t3tools/contracts").ModelSelection;
+          capabilityStep: import("@t3tools/contracts").TaskCapabilityStep;
+        };
+      }) => ({
+        _tag: "Success",
+        value: await EffectForFixture.runPromise(
+          f.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(input.commandId),
+            threadId: ThreadId.make(input.threadId),
+            messageId: MessageId.make(input.message.messageId),
+            text: input.message.text,
+            attachments: [],
+            modelSelection: input.modelSelection,
+            routingMode: "manual",
+            dispatchMode: { type: "queue_after_active" },
+            capabilityStep: input.capabilityStep,
+            createdBy: "user",
+            creationSource: "web",
+          }),
+        ),
+      }),
+    );
+    const props = {
+      task: f.task,
+      environmentId: EnvironmentId.make("environment-a"),
+      stale: false,
+      readVersion: 1,
+    };
+    await act(async () => {
+      renderer = create(<TaskCapabilityStepControls {...props} />);
+    });
+    await creationClick("Explain this task’s recorded workspace and branch");
+    expect(state.reviewRead).not.toHaveBeenCalled();
+    expect(state.startStep).not.toHaveBeenCalled();
+    await creationClick("Review recorded workspace read");
+    expect(state.reviewRead.mock.calls[0]![0].input.capabilityStep.capability).toBe(
+      "recorded-workspace",
+    );
+    expect(text()).toContain("t3-code/t3_worktree_status");
+    expect(text()).toContain("No filesystem, Git or network read");
+    expect(await EffectForFixture.runPromise(f.noExecution())).toEqual({
+      runs: 0,
+      grants: 0,
+      outbox: 0,
+      messages: 0,
+    });
+    const staleStart = creationButton("Start reviewed workspace read")!.props.onClick;
+    await creationClick("Choose saved PR read");
+    await act(async () => staleStart());
+    expect(state.startStep).not.toHaveBeenCalled();
+    await creationClick("Explain this task’s recorded workspace and branch");
+    await creationClick("Review recorded workspace read");
+    await creationClick("Start reviewed workspace read");
+    await act(async () => {
+      await state.startStep.mock.results[0]!.value;
+    });
+    expect(state.startStep).toHaveBeenCalledTimes(1);
+    expect((await EffectForFixture.runPromise(f.noExecution())).runs).toBe(1);
+    await creationClick("Read step status");
+    expect(text()).toContain("recorded-thread-project-settings");
+    expect(text()).toContain("Operation: ");
+  });
+}, 30000);

@@ -89,7 +89,9 @@ const storesLayer = Layer.mergeAll(
   turnItemPositionStoreLayer,
 );
 
-const savedReadProvided = savedPrReadLayer.pipe(Layer.provide(projectionStoreLayer));
+const savedReadProvided = savedPrReadLayer.pipe(
+  Layer.provide(Layer.mergeAll(projectionStoreLayer, ProjectStore.layer)),
+);
 const capabilityRuntimeServices = Layer.mergeAll(
   Layer.unwrap(
     Effect.serviceOption(RouterEvaluationService).pipe(

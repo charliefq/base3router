@@ -144,7 +144,9 @@ export const validateReviewedCapabilityRoute = Effect.fn("validateReviewedCapabi
     const intent = review.reviewedIntent;
     if (!intent) return;
     if (
-      parseSavedPrQuestion(intent.text) !== (intent.question ?? "summary") ||
+      (review.version === "server-owned-workspace-read.v1"
+        ? intent.question !== "workspace"
+        : parseSavedPrQuestion(intent.text) !== (intent.question ?? "summary")) ||
       argumentHash(intent.text) !== review.promptDigest
     )
       return yield* denied();

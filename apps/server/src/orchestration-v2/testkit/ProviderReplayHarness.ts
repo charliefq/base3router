@@ -354,7 +354,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
       : Layer.effect(SavedPrRead, Effect.map(SavedPrRead, options.decorateSavedPrRead)).pipe(
           Layer.provide(savedPrReadLayer),
         )
-  ).pipe(Layer.provide(storesLayer));
+  ).pipe(Layer.provide(storesLayer), Layer.provide(serverSettingsLayer));
   const eventSinkProvided = sinkLayer.pipe(
     Layer.provide(Layer.mergeAll(storesLayer, databaseLayer)),
   );
@@ -434,6 +434,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     Layer.provide(
       Layer.mergeAll(
         savedReadProvided,
+        serverSettingsLayer,
         databaseLayer,
         CapabilityActionGate.layer.pipe(Layer.provide(databaseLayer)),
         options.capabilityContextLayer ?? Layer.empty,

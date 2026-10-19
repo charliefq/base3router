@@ -95,6 +95,50 @@ const recordProviderUsage = (provider: string, instanceId: string | null = provi
   });
 
 it.layer(NodeServices.layer)("server settings", (it) => {
+  it.effect(
+    "recorded worktree metadata never cold-loads settings or materializes provider secrets",
+    () => {
+      const cause = new ServerSecretStore.SecretStoreReadError({
+        resource: "synthetic credential",
+        cause: "unavailable",
+      });
+      const configLayer = Layer.fresh(
+        ServerConfig.layerTest(process.cwd(), { prefix: "recorded-worktree-settings-" }),
+      );
+      const settingsLayer = ServerSettingsModule.layer.pipe(
+        Layer.provide(makeFailingSecretStoreLayer(cause)),
+        Layer.provideMerge(Layer.fresh(SqlitePersistenceMemory)),
+        Layer.provideMerge(configLayer),
+      );
+      return Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const settings = yield* ServerSettingsModule.ServerSettingsService;
+        if (!settings.getRecordedWorktreeDefault) throw new Error("No recorded metadata accessor");
+        yield* fs.writeFileString(
+          config.settingsPath,
+          '{"newWorktreesStartFromOrigin":true,"providerInstances":{"codex_personal":{"driver":"codex","environment":[{"name":"OPENROUTER_API_KEY","value":"","sensitive":true,"valueRedacted":true}],"config":{}}}}',
+        );
+        const cold = yield* Effect.flip(settings.getRecordedWorktreeDefault);
+        assert.equal(cold.operation, "recorded-worktree-default");
+        const full = yield* Effect.flip(settings.getSettings);
+        assert.equal(full.operation, "read-secret");
+        yield* fs.remove(config.settingsPath);
+        assert.isTrue(yield* settings.getRecordedWorktreeDefault);
+        assert.isFalse(yield* fs.exists(config.settingsPath));
+      }).pipe(Effect.provide(settingsLayer));
+    },
+  );
+  it.effect("recorded worktree default follows committed in-memory settings changes", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      if (!settings.getRecordedWorktreeDefault) throw new Error("No recorded metadata accessor");
+      assert.isFalse(yield* settings.getRecordedWorktreeDefault);
+      yield* settings.updateSettings({ newWorktreesStartFromOrigin: true });
+      assert.isTrue(yield* settings.getRecordedWorktreeDefault);
+    }).pipe(Effect.provide(ServerSettingsModule.layerTest({ newWorktreesStartFromOrigin: false }))),
+  );
+
   it.effect("migrates saved token delivery to paragraph buffering without resetting settings", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
