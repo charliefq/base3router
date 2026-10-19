@@ -1,3 +1,11 @@
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
+import { PolicyExecutionContext } from "../policy/executionContext.ts";
+import {
+  agentsCreationActor,
+  agentsCreationProvider,
+} from "../collaboration/testkit/agentsTaskCreationFixture.ts";
+import { EnvironmentId } from "@t3tools/contracts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -421,6 +429,93 @@ const SharedApplicationDataPlaneTestLayer = Layer.mergeAll(
 );
 
 it.layer(TestLayer)("OrchestrationV2LayerLive", (it) => {
+  it.effect(
+    "production runtime wiring registers explicit workspace review without opening a provider",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const projectId = ProjectId.make("runtime-workspace-project");
+        const threadId = ThreadId.make("runtime-workspace-task");
+        yield* seedProject({
+          projectId,
+          title: "Recorded workspace",
+          workspaceRoot: "/recorded/not-inspected",
+          defaultModelSelection: null,
+          createdAt: "2026-10-19T00:00:00.000Z",
+        });
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("runtime-workspace-create"),
+          threadId,
+          projectId,
+          title: "Recorded workspace",
+          modelSelection,
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+          taskGovernance: "required",
+          taskContract: {
+            goal: "Explain recorded workspace",
+            redirect: "Keep metadata only",
+            acceptance: "Read recorded evidence",
+            brake: { maxProviderStarts: 2, stopConditions: "Scope changed" },
+          },
+          taskCreationReview: {
+            environmentId: EnvironmentId.make("environment-a"),
+            projectId,
+            modelSelection,
+          },
+        });
+        const review = yield* orchestrator.getTaskReview({
+          environmentId: "environment-a",
+          taskId: `task:governed:thread:${threadId}`,
+          projectId,
+          threadId,
+          revision: 1,
+          capabilityStep: {
+            commandId: "runtime-workspace-read",
+            messageId: "runtime-workspace-read",
+            text: "Explain recorded workspace",
+            capability: "recorded-workspace",
+          },
+        });
+        assert.equal(review.status, "available");
+        if (review.status !== "available" || !review.capabilityStep)
+          throw new Error("Production capability registration unavailable");
+        assert.equal(review.capabilityStep.toolId, "t3-code/t3_worktree_status");
+        assert.equal(review.capabilityStep.workspace, "/recorded/not-inspected");
+        const p = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(p.runs, []);
+        assert.deepEqual(p.messages, []);
+      }).pipe(
+        Effect.provideService(PolicyExecutionContext, agentsCreationActor),
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(ServerEnvironment)({
+              getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-a")),
+            }),
+            Layer.mock(ProviderRegistry)({
+              getProviders: Effect.succeed([
+                {
+                  ...agentsCreationProvider,
+                  models: [
+                    {
+                      ...agentsCreationProvider.models[0]!,
+                      slug: modelSelection.model,
+                      name: "Fake runtime model",
+                    },
+                  ],
+                },
+              ]),
+            }),
+          ),
+        ),
+      ),
+  );
+
   it.effect("emits model updates separately from provider switches", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
