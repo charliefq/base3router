@@ -230,6 +230,28 @@ memoryLayer("workflow human decisions", (it) => {
       yield* sql`CREATE TEMP TRIGGER reject_stage_receipt BEFORE INSERT ON base3_workflow_commands
         WHEN NEW.command_id = 'workflow-dispatch-atomic'
         BEGIN SELECT RAISE(ABORT, 'injected-ledger-failure'); END`;
+      const preview = yield* previewWorkflowStage(
+        {
+          environmentId,
+          projectId,
+          runId: "run-1",
+          preferredRoute: route.target,
+          taskContract: {
+            goal: "Atomic architecture start",
+            redirect: "One stage",
+            acceptance: "Human reviews actual output",
+            brake: {
+              maxProviderStarts: 1,
+              maxTokens: 4000,
+              deadlineAt: DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 10 })),
+              stopConditions: "Stop before successor",
+            },
+          },
+        },
+        { environmentId, providers: [provider(true)], environmentDefaultModelSelection: null },
+      );
+      if (!preview.review) return yield* Effect.die("Missing atomic review");
+      let launches = 0;
       const result = yield* Effect.exit(
         dispatchWorkflowStage(
           {
@@ -241,16 +263,26 @@ memoryLayer("workflow human decisions", (it) => {
             dispatchId: "atomic",
             target: route.target,
             additionalInstruction: "",
+            review: preview.review,
           },
           {
             environmentId,
             providers: [provider(true)],
             environmentDefaultModelSelection: null,
-            launch: () => Effect.succeed({ sequence: 1 }),
+            launch: () =>
+              Effect.sync(() => {
+                launches++;
+                return { sequence: 1 };
+              }),
           },
         ),
       );
       assert.equal(result._tag, "Failure");
+      assert.equal(launches, 1);
+      assert.equal(
+        (yield* sql`SELECT * FROM base3_workflow_dispatches WHERE dispatch_id='atomic'`).length,
+        1,
+      );
       const catalog = yield* workflowCatalogForProject(projectId);
       assert.equal(
         catalog.runs[0]?.attempts.find((attempt) => attempt.stageId === "architecture")
