@@ -16,7 +16,7 @@ import {
   resolveFffNativeDependencies,
 } from "./build-desktop-artifact.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
-import { createPortableNodeManifest } from "./lib/node-package.ts";
+import { createPortableNodeManifest, resolvePortableNodeTarget } from "./lib/node-package.ts";
 
 const Workspace = Schema.Struct({
   catalog: Schema.Record(Schema.String, Schema.String),
@@ -37,6 +37,11 @@ const Stage = Schema.Struct({
   nodeLinker: Schema.Literal("hoisted"),
 });
 const encodeStage = Schema.encodeEffect(fromYaml(Stage));
+const target = resolvePortableNodeTarget(
+  Effect.runSync(HostProcessPlatform),
+  Effect.runSync(HostProcessArchitecture),
+);
+const { platform, arch } = target;
 const repo = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 const index = process.argv.indexOf("--output-dir");
 if (index < 0 || !process.argv[index + 1]) throw Error("Use --output-dir <new artifact directory>");
@@ -46,18 +51,6 @@ const workspace = await Effect.runPromise(
   decodeWorkspace(NodeFS.readFileSync(NodePath.join(repo, "pnpm-workspace.yaml"), "utf8")),
 );
 const manifest = createPortableNodeManifest(source, workspace.catalog);
-const hostPlatform = Effect.runSync(HostProcessPlatform);
-const hostArch = Effect.runSync(HostProcessArchitecture);
-const platform =
-  hostPlatform === "darwin"
-    ? "mac"
-    : hostPlatform === "win32"
-      ? "win"
-      : hostPlatform === "linux"
-        ? "linux"
-        : null;
-const arch = hostArch === "x64" || hostArch === "arm64" ? hostArch : null;
-if (!platform || !arch) throw Error("Unsupported local Node package build target");
 const native = resolveFffNativeDependencies(
   platform,
   arch,
@@ -104,9 +97,7 @@ for (const relative of Object.values(patches)) {
 NodeFS.writeFileSync(
   NodePath.join(stage, "README.md"),
   "# Local Node package\n\nRegistry-dependent build for " +
-    hostPlatform +
-    "-" +
-    arch +
+    target.label +
     ". Requires Node matching package.json and pnpm 11. Extract the tarball, then run `pnpm install --prod` inside package/. Its pnpm-workspace.yaml retains the reviewed native-build, patch and override policy. Start with `node dist/bin.mjs serve --base-dir <explicit-disposable-data-directory> --no-browser`. This artifact is not offline/self-contained, a desktop/mobile installer, or real-provider verification.\n",
 );
 const packed = NodeChildProcess.spawnSync(
@@ -127,7 +118,7 @@ process.stdout.write(
     output,
     stage,
     package: NodePath.join(output, `${manifest.name}-${manifest.version}.tgz`),
-    target: `${hostPlatform}-${arch}`,
+    target: target.label,
     runtimeDependencies: manifest.dependencies,
     installation: "Registry-dependent; reviewed policy included; no dependencies bundled",
   }) + "\n",

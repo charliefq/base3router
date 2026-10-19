@@ -159,11 +159,10 @@ For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 
 ## Local Node package
 
-Use a Node tarball built from the version you intend to run, matching its README's
-OS/CPU target. The locally built Linux artifact targets glibc; other OS/CPU/libc
-combinations need their own artifact and verification. This path requires Node
-matching `package.json`, pnpm 11, and
-registry access to download runtime and native dependencies. It is not an offline
+This local Node delivery supports Linux x64/glibc only. Use a tarball built
+from the version you intend to run, matching its README's target. Windows,
+macOS, ARM and other libc targets are not included or verified. This path
+requires Node matching `package.json`, pnpm 11, and registry access to download runtime and native dependencies. It is not an offline
 or self-contained installer, and installing provider SDK dependencies does not
 activate a provider or make it ready.
 

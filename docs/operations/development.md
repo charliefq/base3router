@@ -158,10 +158,11 @@ node scripts/build-node-package.ts --output-dir /tmp/t3-node-artifact
 
 The tarball contains the built server/client, registry-resolvable runtime
 externals, and the existing native-build, patch and override policy. It omits
-repository scripts and workspace dependencies. The artifact targets the build
-host's OS/CPU and records that target in its README. Linux uses the existing
-glibc staging policy; other libc targets are not verified here. It requires registry access
-and pnpm 11; it does not include Node or installed dependencies.
+repository scripts and workspace dependencies. This delivery builds Linux
+x64/glibc only; the builder rejects Windows, macOS and ARM hosts before staging
+or invoking npm. It records the target in the artifact README. Registry access
+and pnpm 11 are required; the artifact includes neither Node nor installed
+dependencies.
 
 Use the [local Node package instructions](../user/install.md#local-node-package)
 to extract and install into a fresh directory. Keep `NODE_PATH` unset. To verify

@@ -108,3 +108,12 @@ export function inspectInstalledNodePackage(root: string) {
     inspection: "resolution only; no provider SDK operation",
   };
 }
+
+/** This bounded delivery emits only the target verified by its clean-install journey. */
+export function resolvePortableNodeTarget(hostPlatform: string, hostArch: string) {
+  if (hostPlatform !== "linux" || hostArch !== "x64")
+    throw Error(
+      "Portable Node delivery supports Linux x64/glibc only; no Windows, macOS or ARM artifact is verified",
+    );
+  return { platform: "linux" as const, arch: "x64" as const, label: "linux-x64-glibc" };
+}

@@ -107,3 +107,22 @@ it("rejects Node's parent-directory fallback when a required dependency is absen
     NodeFS.rmSync(base, { recursive: true });
   }
 });
+
+import { resolvePortableNodeTarget } from "./node-package.ts";
+it.each([
+  ["win32", "x64"],
+  ["win32", "arm64"],
+  ["darwin", "x64"],
+  ["darwin", "arm64"],
+  ["linux", "arm64"],
+])("rejects unverified Node artifact host %s/%s before staging", (platform, arch) => {
+  assert.throws(() => resolvePortableNodeTarget(platform, arch), /Linux x64\/glibc only/);
+});
+
+it("selects only the verified Linux x64/glibc artifact before staging", () => {
+  assert.deepStrictEqual(resolvePortableNodeTarget("linux", "x64"), {
+    platform: "linux",
+    arch: "x64",
+    label: "linux-x64-glibc",
+  });
+});
