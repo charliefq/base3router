@@ -1,3 +1,5 @@
+import { WorkflowRevisionFeedbackForm, WorkflowDecisionHistory } from "./WorkflowRevisionFeedback";
+import { workflowRevisionArtifact } from "@t3tools/shared/workflowRevision";
 import type {
   ActionApprovalId,
   EnvironmentId,
@@ -128,6 +130,30 @@ export function ProjectWorkflowDecisions(props: {
     catalog !== null && activeRun !== null ? pendingDecision(catalog, activeRun) : null;
   const stage = catalog !== null && activeRun !== null ? currentStage(catalog, activeRun) : null;
   const attempt = activeRun?.attempts.findLast((entry) => entry.stageId === stage?.id);
+  const revisionTemplate = catalog?.templates.find(
+    (t) => t.id === activeRun?.templateId && t.version === activeRun?.templateVersion,
+  );
+  const revisionTarget =
+    decision?.stage.type === "human_gate"
+      ? revisionTemplate?.stages[
+          revisionTemplate.stages.findIndex((s) => s.id === decision.stage.id) - 1
+        ]
+      : decision?.stage;
+  const revisionSource =
+    activeRun && decision && revisionTemplate
+      ? workflowRevisionArtifact(
+          activeRun,
+          revisionTemplate,
+          decision.stage.id,
+          decision.attempt.attempt,
+        )
+      : null;
+  const revisionExhausted =
+    !revisionTarget ||
+    (decision?.stage.type === "human_gate" &&
+      decision.attempt.attempt >= decision.stage.maxAttempts) ||
+    (activeRun?.attempts.findLast((a) => a.stageId === revisionTarget.id)?.attempt ?? 0) >=
+      revisionTarget.maxAttempts;
   const operationContext = JSON.stringify([
     props.environmentId,
     props.projectId,
@@ -314,6 +340,13 @@ export function ProjectWorkflowDecisions(props: {
               Cancel workflow ledger
             </Button>
           </div>
+          <WorkflowDecisionHistory decisions={activeRun.decisions} />
+          {attempt?.revisionDecisionId ? (
+            <p>
+              Current revision attempt is bound to decision {attempt.revisionDecisionId}. Review its
+              saved feedback before explicit Start.
+            </p>
+          ) : null}
           {decision === null ? (
             <p className="text-xs text-muted-foreground">
               {stage?.type === "agent" &&
@@ -331,6 +364,9 @@ export function ProjectWorkflowDecisions(props: {
               <p className="text-xs">
                 {decision.stage.label} needs a decision on attempt {decision.attempt.attempt}.
               </p>
+              {catalog?.revisionFeedbackVersion !== 1 ? (
+                <p>Revision feedback is unavailable on this server.</p>
+              ) : null}
               <div className="flex flex-wrap gap-2">
                 <Button
                   size="sm"
@@ -382,27 +418,23 @@ export function ProjectWorkflowDecisions(props: {
                 >
                   Reject
                 </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  type="button"
-                  disabled={busy || catalogQuery.isPending || !catalogQuery.isSuccess}
-                  onClick={() =>
-                    void submit({
-                      type: "decision.record",
-                      projectId: props.projectId,
-                      commandId: `cmd${activeRun.id}${decision.stage.id}${decision.attempt.attempt}revision`,
-                      decisionId: `d${activeRun.id}${decision.stage.id}${decision.attempt.attempt}`,
-                      runId: activeRun.id,
-                      stageId: decision.stage.id,
-                      attempt: decision.attempt.attempt,
-                      artifactId: decision.artifactId,
-                      value: "request_revision",
-                    })
+                <WorkflowRevisionFeedbackForm
+                  environmentId={props.environmentId}
+                  projectId={props.projectId}
+                  run={activeRun}
+                  stage={decision.stage}
+                  attempt={decision.attempt.attempt}
+                  source={revisionSource}
+                  fresh={
+                    catalog?.revisionFeedbackVersion === 1 &&
+                    !busy &&
+                    !catalogQuery.isPending &&
+                    catalogQuery.isSuccess &&
+                    catalogQuery.error === null
                   }
-                >
-                  Request revision
-                </Button>
+                  exhausted={revisionExhausted}
+                  submit={submit}
+                />
                 <Button
                   size="sm"
                   variant="ghost"
@@ -446,6 +478,7 @@ export function ProjectWorkflowDecisions(props: {
                   </a>
                 </p>
               ))}
+            <WorkflowDecisionHistory decisions={run.decisions} />
             {run.artifacts.map((artifact) => (
               <ArtifactReview key={artifact.id} artifact={artifact} />
             ))}

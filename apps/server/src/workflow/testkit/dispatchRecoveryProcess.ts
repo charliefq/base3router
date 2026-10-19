@@ -397,6 +397,15 @@ const program = Effect.gen(function* () {
         attempt: 1,
         artifactId: "revision-artifact",
         value: "request_revision",
+        revisionFeedback: {
+          text: "Persisted process revision request",
+          source: {
+            runId: "recovery-run",
+            stageId: "discovery",
+            attempt: 1,
+            artifactId: "revision-artifact",
+          },
+        },
       },
       () => Effect.succeed({ sequence: 1 }),
     );

@@ -26,6 +26,7 @@ const WORKFLOW_MAX_STAGES = 12;
 const WORKFLOW_MAX_ATTEMPTS = 5;
 export const WORKFLOW_MAX_ARTIFACT_CHARS = 12_000;
 export const WORKFLOW_MAX_RECORDS = 1_024;
+export const WORKFLOW_REVISION_FEEDBACK_MAX_CHARS = 2_000;
 
 const Id = TrimmedNonEmptyString.check(
   Schema.isMaxLength(80),
@@ -49,6 +50,22 @@ const RecordId = TrimmedNonEmptyString.check(
 export const WorkflowRunId = RecordId;
 export const WorkflowArtifactId = RecordId;
 export const WorkflowDecisionId = RecordId;
+
+export const WorkflowRevisionSource = Schema.Struct({
+  runId: WorkflowRunId,
+  stageId: WorkflowStageId,
+  attempt: Attempt,
+  artifactId: WorkflowArtifactId,
+});
+export type WorkflowRevisionSource = typeof WorkflowRevisionSource.Type;
+export const WorkflowRevisionFeedback = Schema.Struct({
+  text: Schema.String.check(
+    Schema.isMaxLength(WORKFLOW_REVISION_FEEDBACK_MAX_CHARS),
+    Schema.makeFilter((text) => text.trim().length > 0),
+  ),
+  source: WorkflowRevisionSource,
+});
+export type WorkflowRevisionFeedback = typeof WorkflowRevisionFeedback.Type;
 
 export const WorkflowCapabilityPreference = Schema.Literals([
   "web-research",
@@ -135,6 +152,7 @@ export const WorkflowTemplate = Schema.Struct({
 export type WorkflowTemplate = typeof WorkflowTemplate.Type;
 
 export const WorkflowStageAttempt = Schema.Struct({
+  revisionDecisionId: Schema.optionalKey(WorkflowDecisionId),
   stageId: WorkflowStageId,
   attempt: Attempt,
   profileId: Schema.NullOr(AgentProfileId),
@@ -184,6 +202,7 @@ export const WorkflowArtifact = Schema.Struct({
 export type WorkflowArtifact = typeof WorkflowArtifact.Type;
 
 export const WorkflowDecision = Schema.Struct({
+  revisionFeedback: Schema.optionalKey(WorkflowRevisionFeedback),
   id: WorkflowDecisionId,
   runId: WorkflowRunId,
   stageId: WorkflowStageId,
@@ -214,6 +233,7 @@ export const WorkflowRun = Schema.Struct({
 export type WorkflowRun = typeof WorkflowRun.Type;
 
 export const WorkflowCatalog = Schema.Struct({
+  revisionFeedbackVersion: Schema.optionalKey(Schema.Literal(1)),
   profiles: Schema.Array(AgentProfile).check(Schema.isMaxLength(WORKFLOW_MAX_RECORDS)),
   templates: Schema.Array(WorkflowTemplate).check(Schema.isMaxLength(WORKFLOW_MAX_RECORDS)),
   runs: Schema.Array(WorkflowRun).check(Schema.isMaxLength(WORKFLOW_MAX_RECORDS)),
@@ -302,6 +322,7 @@ export const WorkflowActionInput = Schema.Union([
     attempt: Attempt,
     artifactId: Schema.NullOr(WorkflowArtifactId),
     value: WorkflowDecision.fields.value,
+    revisionFeedback: Schema.optionalKey(WorkflowRevisionFeedback),
   }),
   Schema.Struct({
     ...WorkflowActionBase,

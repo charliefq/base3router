@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeSqlite from "node:sqlite";
+import type { WorkflowRun } from "@t3tools/contracts";
 import { afterEach, assert, it } from "vite-plus/test";
 
 const directories: string[] = [];
@@ -177,6 +178,20 @@ it("rejects a superseded attempt after a revision is persisted by another proces
   await run(directory, "recover");
   const revision = await run(directory, "revise");
   assert.equal(report(directory, "revise").latestAttempt, 2);
+  await run(directory, "journey-read");
+  const reloadedFeedback = JSON.parse(
+    NodeFS.readFileSync(NodePath.join(directory, "journey-read.json"), "utf8"),
+  ) as { runs: Array<WorkflowRun> };
+  assert.deepEqual(reloadedFeedback.runs[0]!.decisions.at(-1)!.revisionFeedback, {
+    text: "Persisted process revision request",
+    source: {
+      runId: "recovery-run",
+      stageId: "discovery",
+      attempt: 1,
+      artifactId: "revision-artifact",
+    },
+  });
+  assert.equal(reloadedFeedback.runs[0]!.attempts.at(-1)!.revisionDecisionId, "revision");
   const before = inspect(directory);
   assert.deepEqual(
     before.attempts.map((row) => row.attempt),

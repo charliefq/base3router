@@ -7,9 +7,19 @@ import {
   WorkflowArtifact,
   WorkflowDispatchStageInput,
   WorkflowRun,
+  WorkflowDecision,
+  WorkflowRevisionFeedback,
   WorkflowTemplate,
 } from "./workflow.ts";
 
+const decodeAgentProfile = Schema.decodeUnknownSync(AgentProfile);
+const decodeWorkflowTemplate = Schema.decodeUnknownSync(WorkflowTemplate);
+const decodeWorkflowRun = Schema.decodeUnknownSync(WorkflowRun);
+const decodeWorkflowArtifact = Schema.decodeUnknownSync(WorkflowArtifact);
+const decodeWorkflowActionInput = Schema.decodeUnknownSync(WorkflowActionInput);
+const decodeWorkflowDispatchStageInput = Schema.decodeUnknownSync(WorkflowDispatchStageInput);
+const decodeWorkflowDecision = Schema.decodeUnknownSync(WorkflowDecision);
+const decodeWorkflowRevisionFeedback = Schema.decodeUnknownSync(WorkflowRevisionFeedback);
 const at = "2026-09-28T00:00:00.000Z";
 const profile = {
   id: "researcher",
@@ -91,14 +101,12 @@ const artifact = {
 };
 describe("workflow contracts", () => {
   it("decodes versioned generic profiles, templates, runs, artifacts and actions", () => {
-    expect(Schema.decodeUnknownSync(AgentProfile)(profile).version).toBe(1);
-    expect(Schema.decodeUnknownSync(WorkflowTemplate)(template).stages).toHaveLength(1);
-    expect(Schema.decodeUnknownSync(WorkflowRun)(run).status).toBe("active");
-    expect(Schema.decodeUnknownSync(WorkflowArtifact)(artifact).missingSections).toEqual([
-      "Findings",
-    ]);
+    expect(decodeAgentProfile(profile).version).toBe(1);
+    expect(decodeWorkflowTemplate(template).stages).toHaveLength(1);
+    expect(decodeWorkflowRun(run).status).toBe("active");
+    expect(decodeWorkflowArtifact(artifact).missingSections).toEqual(["Findings"]);
     expect(
-      Schema.decodeUnknownSync(WorkflowActionInput)({
+      decodeWorkflowActionInput({
         type: "run.start",
         projectId: "project-1",
         commandId: "command-1",
@@ -112,23 +120,17 @@ describe("workflow contracts", () => {
   });
 
   it("rejects oversized role instructions and collections", () => {
+    expect(() => decodeAgentProfile({ ...profile, instructions: "x".repeat(8_001) })).toThrow();
     expect(() =>
-      Schema.decodeUnknownSync(AgentProfile)({ ...profile, instructions: "x".repeat(8_001) }),
-    ).toThrow();
-    expect(() =>
-      Schema.decodeUnknownSync(AgentProfile)({
+      decodeAgentProfile({
         ...profile,
         requiredOutputSections: Array(21).fill("Section"),
       }),
     ).toThrow();
+    expect(() => decodeWorkflowTemplate({ ...template, stages: Array(13).fill(stage) })).toThrow();
+    expect(() => decodeWorkflowRun({ ...run, attempts: Array(61).fill({}) })).toThrow();
     expect(() =>
-      Schema.decodeUnknownSync(WorkflowTemplate)({ ...template, stages: Array(13).fill(stage) }),
-    ).toThrow();
-    expect(() =>
-      Schema.decodeUnknownSync(WorkflowRun)({ ...run, attempts: Array(61).fill({}) }),
-    ).toThrow();
-    expect(() =>
-      Schema.decodeUnknownSync(WorkflowArtifact)({
+      decodeWorkflowArtifact({
         ...artifact,
         sections: [{ label: "Findings", content: "x".repeat(2_001), missing: false }],
       }),
@@ -136,18 +138,16 @@ describe("workflow contracts", () => {
   });
 
   it("rejects unsupported types, invalid versions and malformed IDs", () => {
-    expect(() => Schema.decodeUnknownSync(AgentProfile)({ ...profile, version: 0 })).toThrow();
+    expect(() => decodeAgentProfile({ ...profile, version: 0 })).toThrow();
     expect(() =>
-      Schema.decodeUnknownSync(WorkflowTemplate)({
+      decodeWorkflowTemplate({
         ...template,
         stages: [{ ...stage, type: "shell" }],
       }),
     ).toThrow();
+    expect(() => decodeWorkflowTemplate({ ...template, id: "../../escape" })).toThrow();
     expect(() =>
-      Schema.decodeUnknownSync(WorkflowTemplate)({ ...template, id: "../../escape" }),
-    ).toThrow();
-    expect(() =>
-      Schema.decodeUnknownSync(WorkflowActionInput)({
+      decodeWorkflowActionInput({
         type: "approve-all",
         projectId: "project-1",
         commandId: "command-1",
@@ -156,7 +156,7 @@ describe("workflow contracts", () => {
   });
 
   it("decodes a Phase 5 dispatch payload without cursor-cloud runner fields", () => {
-    const decoded = Schema.decodeUnknownSync(WorkflowDispatchStageInput)({
+    const decoded = decodeWorkflowDispatchStageInput({
       environmentId: "environment-1",
       projectId: "project-1",
       runId: "run-1",
@@ -169,4 +169,33 @@ describe("workflow contracts", () => {
     expect(decoded.runnerKind).toBeUndefined();
     expect(decoded.cursorCloudTarget).toBeUndefined();
   });
+});
+
+it("preserves exact bounded feedback and provenance while decoding legacy decisions without inventions", () => {
+  const feedback = {
+    text: "  Keep these exact requested changes.\n",
+    source: { runId: "run-1", stageId: "research", attempt: 1, artifactId: "artifact-1" },
+  };
+  expect(decodeWorkflowRevisionFeedback(feedback)).toEqual(feedback);
+  const decision = {
+    id: "legacy-decision",
+    runId: "run-1",
+    stageId: "research",
+    attempt: 1,
+    artifactId: "artifact-1",
+    value: "request_revision",
+    createdAt: at,
+  };
+  expect(decodeWorkflowDecision(decision).revisionFeedback).toBeUndefined();
+  expect(
+    decodeWorkflowDecision({ ...decision, revisionFeedback: feedback }).revisionFeedback,
+  ).toEqual(feedback);
+});
+it.each(["", " \n\t", "x".repeat(2001)])("rejects blank or oversized saved feedback", (text) => {
+  expect(() =>
+    decodeWorkflowRevisionFeedback({
+      text,
+      source: { runId: "run-1", stageId: "research", attempt: 1, artifactId: "artifact-1" },
+    }),
+  ).toThrow();
 });

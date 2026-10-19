@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   WorkflowOperationError,
+  WorkflowRun,
   MessageId,
   ProjectId,
   ProviderDriverKind,
@@ -101,7 +102,10 @@ const insertProject = Effect.fn("workflow.rpc.insertProject")(function* () {
   yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at) VALUES (${projectId}, 'Project', '/tmp/workflow-rpc', '[]', ${at}, ${at})`;
 });
 
-const seedBuildGate = Effect.fn("workflow.rpc.seedBuildGate")(function* (dispatchId?: string) {
+const seedBuildGate = Effect.fn("workflow.rpc.seedBuildGate")(function* (
+  dispatchId?: string,
+  proposedOnly = false,
+) {
   yield* projectWorkflowEvent(
     event(1, {
       type: "run.start",
@@ -133,6 +137,7 @@ const seedBuildGate = Effect.fn("workflow.rpc.seedBuildGate")(function* (dispatc
       artifact: discoveryArtifact(),
     }),
   );
+  if (proposedOnly) return;
   yield* projectWorkflowEvent(
     event(4, {
       type: "decision.record",
@@ -170,6 +175,15 @@ memoryLayer("workflow human decisions", (it) => {
             attempt: 1,
             artifactId: null,
             value: "request_revision",
+            revisionFeedback: {
+              text: "Revise the saved discovery output",
+              source: {
+                runId: "run-1",
+                stageId: "discovery",
+                attempt: 1,
+                artifactId: "artifact-1",
+              },
+            },
           },
           noopDispatch,
         );
@@ -642,6 +656,19 @@ it.effect(
         attempt,
         artifactId,
         value,
+        ...(value === "request_revision"
+          ? {
+              revisionFeedback: {
+                text: "Revise discovery before the gate",
+                source: {
+                  runId: "run-1",
+                  stageId: "discovery",
+                  attempt: 1,
+                  artifactId: "artifact-1",
+                },
+              },
+            }
+          : {}),
       });
       const revise = decision("build_gate", 1, "request_revision", null);
       const revised = yield* performWorkflowAction(revise, noopDispatch);
@@ -738,3 +765,548 @@ it.effect(
       assert.equal(launches, 1);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
+
+memoryLayer("saved workflow revision feedback", (it) => {
+  it.effect.each(["discovery", "build_gate"] as const)(
+    "persists %s feedback and includes the exact source in its direct revision packet",
+    (stageId) =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        yield* insertProject();
+        yield* seedBuildGate(undefined, stageId === "discovery");
+        let starts = 0;
+        const feedback = {
+          text: "Keep the market evidence; add the missing parser constraint.",
+          source: { runId: "run-1", stageId: "discovery", attempt: 1, artifactId: "artifact-1" },
+        };
+        const input = {
+          type: "decision.record" as const,
+          projectId,
+          commandId: "saved-feedback",
+          decisionId: "saved-feedback-decision",
+          runId: "run-1",
+          stageId,
+          attempt: 1,
+          artifactId: stageId === "discovery" ? "artifact-1" : null,
+          value: "request_revision" as const,
+          revisionFeedback: feedback,
+        };
+        const saved = yield* performWorkflowAction(input, noopDispatch);
+        expect(saved.runs[0]!.decisions.at(-1)).toMatchObject({ revisionFeedback: feedback });
+        expect(saved.runs[0]!.attempts.at(-1)).toMatchObject({
+          stageId: "discovery",
+          attempt: 2,
+          status: "pending",
+          revisionDecisionId: input.decisionId,
+        });
+        yield* performWorkflowAction(input, noopDispatch);
+        expect(
+          (yield* workflowCatalogForProject(projectId)).runs[0]!.attempts.filter(
+            (a) => a.stageId === "discovery",
+          ),
+        ).toHaveLength(2);
+        const taskContract = {
+          goal: "Revision fixture",
+          redirect: "Current stage",
+          acceptance: "Owner inspects revised output",
+          brake: {
+            maxProviderStarts: 1,
+            maxTokens: 1000,
+            deadlineAt: DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 10 })),
+            stopConditions: "No successor",
+          },
+        };
+        const deps = {
+          environmentId,
+          providers: [provider(true)],
+          environmentDefaultModelSelection: null,
+        };
+        const preview = yield* previewWorkflowStage(
+          {
+            environmentId,
+            projectId,
+            runId: "run-1",
+            preferredRoute: route.target,
+            taskContract,
+            additionalInstruction: "Separate operator instruction",
+          },
+          deps,
+        );
+        expect(preview.packetText).toContain(feedback.text);
+        expect(preview.packetText).toContain("artifact-1");
+        expect(starts).toBe(0);
+        let packet = "";
+        yield* dispatchWorkflowStage(
+          {
+            environmentId,
+            projectId,
+            runId: "run-1",
+            stageId: "discovery",
+            attempt: 2,
+            dispatchId: "feedback-explicit-start",
+            target: route.target,
+            additionalInstruction: "Separate operator instruction",
+            review: preview.review!,
+          },
+          {
+            ...deps,
+            launch: (input) =>
+              Effect.sync(() => {
+                starts++;
+                packet = input.prompt;
+                return { sequence: 1 };
+              }),
+          },
+        );
+        expect(starts).toBe(1);
+        expect(packet).toContain(feedback.text);
+        expect(packet).toContain("Separate operator instruction");
+      }),
+  );
+});
+
+const feedbackSource = {
+  runId: "run-1",
+  stageId: "discovery",
+  attempt: 1,
+  artifactId: "artifact-1",
+};
+const feedbackAction = () => ({
+  type: "decision.record" as const,
+  projectId,
+  commandId: "revision-feedback-command",
+  decisionId: "revision-feedback-decision",
+  runId: "run-1",
+  stageId: "discovery",
+  attempt: 1,
+  artifactId: "artifact-1",
+  value: "request_revision" as const,
+  revisionFeedback: {
+    text: "Preserve the observations and revise the missing constraint.",
+    source: feedbackSource,
+  },
+});
+const encodeRevisionRun = Schema.encodeEffect(Schema.fromJsonString(WorkflowRun));
+memoryLayer("workflow revision feedback safety", (it) => {
+  it.effect.each([
+    "missing",
+    "blank",
+    "oversized",
+    "wrong-source-run",
+    "wrong-source-stage",
+    "wrong-source-attempt",
+    "wrong-artifact",
+    "wrong-run",
+    "wrong-stage",
+    "wrong-attempt",
+    "wrong-project",
+  ] as const)("rejects %s feedback without mutating the workflow", (change) =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      yield* insertProject();
+      yield* seedBuildGate(undefined, true);
+      const before = yield* workflowCatalogForProject(projectId);
+      let input: Parameters<typeof performWorkflowAction>[0] = feedbackAction();
+      if (input.type !== "decision.record") throw new Error("Fixture command");
+      if (change === "missing") {
+        const { revisionFeedback: _feedback, ...rest } = input;
+        input = rest;
+      }
+      if (change === "blank")
+        input = {
+          ...input,
+          revisionFeedback: { ...feedbackAction().revisionFeedback, text: " \n\t " },
+        };
+      if (change === "oversized")
+        input = {
+          ...input,
+          revisionFeedback: { ...feedbackAction().revisionFeedback, text: "x".repeat(2001) },
+        };
+      if (change.startsWith("wrong-source") || change === "wrong-artifact")
+        input = {
+          ...input,
+          revisionFeedback: {
+            ...feedbackAction().revisionFeedback,
+            source: {
+              ...feedbackSource,
+              ...(change === "wrong-source-run"
+                ? { runId: "other-run" }
+                : change === "wrong-source-stage"
+                  ? { stageId: "architecture" }
+                  : change === "wrong-source-attempt"
+                    ? { attempt: 2 }
+                    : { artifactId: "other-artifact" }),
+            },
+          },
+        };
+      if (change === "wrong-run") input = { ...input, runId: "wrong-run" };
+      if (change === "wrong-stage") input = { ...input, stageId: "architecture" };
+      if (change === "wrong-attempt") input = { ...input, attempt: 2 };
+      if (change === "wrong-project")
+        input = { ...input, projectId: ProjectId.make("other-project") };
+      expect((yield* Effect.exit(performWorkflowAction(input, noopDispatch)))._tag).toBe("Failure");
+      expect(yield* workflowCatalogForProject(projectId)).toEqual(before);
+    }),
+  );
+  it.effect(
+    "seals identical decision aliases and rejects changed feedback or provenance under reused identities",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        yield* insertProject();
+        yield* seedBuildGate(undefined, true);
+        const input = feedbackAction();
+        yield* performWorkflowAction(input, noopDispatch);
+        yield* performWorkflowAction({ ...input, commandId: "revision-alias" }, noopDispatch);
+        for (const changed of [
+          {
+            ...input,
+            revisionFeedback: { ...input.revisionFeedback, text: "Changed requested changes" },
+          },
+          {
+            ...input,
+            commandId: "revision-alias",
+            revisionFeedback: { ...input.revisionFeedback, text: "Changed alias payload" },
+          },
+          {
+            ...input,
+            commandId: "new-command-old-decision",
+            revisionFeedback: { ...input.revisionFeedback, text: "Changed decision payload" },
+          },
+          {
+            ...input,
+            revisionFeedback: {
+              ...input.revisionFeedback,
+              source: { ...feedbackSource, artifactId: "other-artifact" },
+            },
+          },
+        ])
+          expect((yield* Effect.exit(performWorkflowAction(changed, noopDispatch)))._tag).toBe(
+            "Failure",
+          );
+        expect((yield* workflowCatalogForProject(projectId)).runs[0]!.attempts).toHaveLength(2);
+      }),
+  );
+  it.effect("review digest binds full feedback source beyond the bounded excerpt", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      yield* insertProject();
+      yield* seedBuildGate(undefined, true);
+      const sql = yield* SqlClient.SqlClient;
+      const original = (yield* workflowCatalogForProject(projectId)).runs[0]!;
+      const expanded = {
+        ...original,
+        artifacts: original.artifacts.map((a) => ({
+          ...a,
+          sections: a.sections.map((s, i) => ({
+            ...s,
+            content: i === 0 ? "a".repeat(2000) : "Exact tail evidence",
+            missing: false,
+          })),
+        })),
+      };
+      yield* sql`UPDATE projection_workflow_runs SET run_json=${yield* encodeRevisionRun(expanded)} WHERE run_id='run-1'`;
+      yield* performWorkflowAction(feedbackAction(), noopDispatch);
+      const taskContract = {
+        goal: "Revision",
+        redirect: "Current stage",
+        acceptance: "Owner",
+        brake: {
+          maxProviderStarts: 1,
+          maxTokens: 1000,
+          deadlineAt: DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 10 })),
+          stopConditions: "Scope",
+        },
+      };
+      const deps = {
+        environmentId,
+        providers: [provider(true)],
+        environmentDefaultModelSelection: null,
+      };
+      const preview = yield* previewWorkflowStage(
+        { environmentId, projectId, runId: "run-1", preferredRoute: route.target, taskContract },
+        deps,
+      );
+      expect(preview.packetText).toContain("excerpt truncated");
+      const saved = (yield* workflowCatalogForProject(projectId)).runs[0]!;
+      const altered = {
+        ...saved,
+        artifacts: saved.artifacts.map((a) => ({
+          ...a,
+          sections: a.sections.map((s, i) =>
+            i === a.sections.length - 1 ? { ...s, content: "CHANGED TAIL" } : s,
+          ),
+        })),
+      };
+      yield* sql`UPDATE projection_workflow_runs SET run_json=${yield* encodeRevisionRun(altered)} WHERE run_id='run-1'`;
+      const next = yield* previewWorkflowStage(
+        { environmentId, projectId, runId: "run-1", preferredRoute: route.target, taskContract },
+        deps,
+      );
+      expect(next.packetText).toBe(preview.packetText);
+      let starts = 0;
+      const result = yield* Effect.exit(
+        dispatchWorkflowStage(
+          {
+            environmentId,
+            projectId,
+            runId: "run-1",
+            stageId: "discovery",
+            attempt: 2,
+            dispatchId: "stale-source-review",
+            target: route.target,
+            additionalInstruction: "",
+            review: preview.review!,
+          },
+          {
+            ...deps,
+            launch: () =>
+              Effect.sync(() => {
+                starts++;
+                return { sequence: 1 };
+              }),
+          },
+        ),
+      );
+      expect(result._tag).toBe("Failure");
+      expect(starts).toBe(0);
+    }),
+  );
+});
+
+memoryLayer("workflow feedback legacy and bounds", (it) => {
+  it.effect(
+    "replays missing historical feedback honestly and never invents requested changes",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        yield* insertProject();
+        yield* seedBuildGate(undefined, true);
+        const legacy: WorkflowMutation = {
+          type: "decision.record",
+          decision: {
+            id: "legacy-revision",
+            runId: "run-1",
+            stageId: "discovery",
+            attempt: 1,
+            artifactId: "artifact-1",
+            value: "request_revision",
+            createdAt: at,
+          },
+        };
+        yield* projectWorkflowEvent(event(4, legacy));
+        yield* projectWorkflowEvent(event(4, legacy));
+        const before = (yield* workflowCatalogForProject(projectId)).runs[0]!;
+        expect(before.attempts).toHaveLength(2);
+        expect(before.decisions[0]!.revisionFeedback).toBeUndefined();
+        const deps = {
+          environmentId,
+          providers: [provider(true)],
+          environmentDefaultModelSelection: null,
+        };
+        const preview = yield* previewWorkflowStage(
+          { environmentId, projectId, runId: "run-1", preferredRoute: route.target },
+          deps,
+        );
+        expect(preview.packetText).toContain("Historical revision feedback unavailable");
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE projection_workflow_runs SET run_json=json_remove(run_json,'$.attempts[1].revisionDecisionId') WHERE run_id='run-1'`;
+        const oldProjection = yield* previewWorkflowStage(
+          { environmentId, projectId, runId: "run-1", preferredRoute: route.target },
+          deps,
+        );
+        expect(oldProjection.packetText).toContain("Historical revision feedback unavailable");
+      }),
+  );
+  it.effect("rolls back feedback and the pending revision when ledger persistence fails", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      yield* insertProject();
+      yield* seedBuildGate(undefined, true);
+      const before = yield* workflowCatalogForProject(projectId);
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`CREATE TEMP TRIGGER fail_feedback_ledger BEFORE INSERT ON base3_workflow_commands BEGIN SELECT RAISE(ABORT,'fixture-feedback-ledger-failure'); END`;
+      expect((yield* Effect.exit(performWorkflowAction(feedbackAction(), noopDispatch)))._tag).toBe(
+        "Failure",
+      );
+      expect(yield* workflowCatalogForProject(projectId)).toEqual(before);
+      yield* sql`DROP TRIGGER fail_feedback_ledger`;
+    }),
+  );
+  it.effect("rejects exhausted revision limits and a gate which was already decided", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      yield* insertProject();
+      yield* seedBuildGate(undefined, true);
+      const sql = yield* SqlClient.SqlClient;
+      const original = (yield* workflowCatalogForProject(projectId)).runs[0]!;
+      const limit = template.stages[0]!.maxAttempts;
+      const exhausted = {
+        ...original,
+        attempts: original.attempts.map((a) => ({ ...a, attempt: limit })),
+        artifacts: original.artifacts.map((a) => ({ ...a, attempt: limit })),
+      };
+      yield* sql`UPDATE projection_workflow_runs SET run_json=${yield* encodeRevisionRun(exhausted)} WHERE run_id='run-1'`;
+      const input = feedbackAction();
+      expect(
+        (yield* Effect.exit(
+          performWorkflowAction(
+            {
+              ...input,
+              attempt: limit,
+              revisionFeedback: {
+                ...input.revisionFeedback,
+                source: { ...feedbackSource, attempt: limit },
+              },
+            },
+            noopDispatch,
+          ),
+        ))._tag,
+      ).toBe("Failure");
+      yield* insertProject();
+      yield* seedBuildGate();
+      yield* performWorkflowAction(
+        {
+          type: "decision.record",
+          projectId,
+          commandId: "decide-gate",
+          decisionId: "decided-gate",
+          runId: "run-1",
+          stageId: "build_gate",
+          attempt: 1,
+          artifactId: null,
+          value: "approve",
+        },
+        noopDispatch,
+      );
+      expect(
+        (yield* Effect.exit(
+          performWorkflowAction(
+            { ...input, stageId: "build_gate", artifactId: null },
+            noopDispatch,
+          ),
+        ))._tag,
+      ).toBe("Failure");
+    }),
+  );
+  it.effect(
+    "a Build Gate revision excludes a globally later unrelated artifact and unrelated feedback",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        yield* insertProject();
+        yield* seedBuildGate();
+        const sql = yield* SqlClient.SqlClient;
+        const original = (yield* workflowCatalogForProject(projectId)).runs[0]!;
+        const extra = {
+          ...original.artifacts[0]!,
+          id: "unrelated-artifact",
+          stageId: "architecture",
+          status: "accepted" as const,
+          sections: [{ label: "Other", content: "UNRELATED ARTIFACT TEXT", missing: false }],
+        };
+        const altered = {
+          ...original,
+          artifacts: [...original.artifacts, extra],
+          decisions: [
+            ...original.decisions,
+            {
+              id: "unrelated-feedback",
+              runId: "run-1",
+              stageId: "architecture",
+              attempt: 1,
+              artifactId: "unrelated-artifact",
+              value: "request_revision" as const,
+              createdAt: at,
+              revisionFeedback: {
+                text: "UNRELATED FEEDBACK TEXT",
+                source: {
+                  runId: "run-1",
+                  stageId: "architecture",
+                  attempt: 1,
+                  artifactId: "unrelated-artifact",
+                },
+              },
+            },
+          ],
+        };
+        yield* sql`UPDATE projection_workflow_runs SET run_json=${yield* encodeRevisionRun(altered)} WHERE run_id='run-1'`;
+        yield* performWorkflowAction(
+          { ...feedbackAction(), stageId: "build_gate", artifactId: null },
+          noopDispatch,
+        );
+        const preview = yield* previewWorkflowStage(
+          { environmentId, projectId, runId: "run-1", preferredRoute: route.target },
+          { environmentId, providers: [provider(true)], environmentDefaultModelSelection: null },
+        );
+        expect(preview.packetText).toContain(feedbackAction().revisionFeedback.text);
+        expect(preview.packetText).toContain("artifact-1");
+        expect(preview.packetText).not.toContain("UNRELATED");
+      }),
+  );
+});
+
+memoryLayer("workflow feedback global identity", (it) => {
+  it.effect("rejects a decision ID already sealed to another workflow run", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      yield* insertProject();
+      yield* seedBuildGate(undefined, true);
+      yield* performWorkflowAction(
+        {
+          type: "run.start",
+          projectId,
+          commandId: "other-run-create",
+          runId: "other-run",
+          templateId: template.id,
+          templateVersion: template.version,
+          originatingThreadId: null,
+          originatingMessageId: null,
+        },
+        noopDispatch,
+      );
+      yield* projectWorkflowEvent(
+        event(5, {
+          type: "stage.dispatch",
+          runId: "other-run",
+          stageId: "discovery",
+          attempt: 1,
+          threadId: ThreadId.make("other-thread"),
+          messageId: MessageId.make("other-message"),
+          routeBinding: route,
+          at,
+        }),
+      );
+      yield* projectWorkflowEvent(
+        event(6, {
+          type: "artifact.propose",
+          artifact: { ...discoveryArtifact(), id: "other-source", runId: "other-run" },
+        }),
+      );
+      yield* projectWorkflowEvent(
+        event(7, {
+          type: "decision.record",
+          decision: {
+            id: "foreign-decision",
+            runId: "other-run",
+            stageId: "discovery",
+            attempt: 1,
+            artifactId: "other-source",
+            value: "approve",
+            createdAt: at,
+          },
+        }),
+      );
+      const before = yield* workflowCatalogForProject(projectId);
+      expect(
+        (yield* Effect.exit(
+          performWorkflowAction(
+            { ...feedbackAction(), decisionId: "foreign-decision" },
+            noopDispatch,
+          ),
+        ))._tag,
+      ).toBe("Failure");
+      expect(yield* workflowCatalogForProject(projectId)).toEqual(before);
+    }),
+  );
+});

@@ -118,7 +118,7 @@ const click = async (name = "Preview stage") => {
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   props = { environmentId, projectId, projectTitle: "Project A", refreshTick: 0 };
-  catalog = { profiles: [profile], templates: [template], runs: [run] };
+  catalog = { revisionFeedbackVersion: 1, profiles: [profile], templates: [template], runs: [run] };
   revision = 1;
   isPending = false;
   const storage = new Map<string, string>();
@@ -485,6 +485,13 @@ it("shows actual artifact sections, provenance, Unknown and redactions before hu
   expect(mocks.action).not.toHaveBeenCalled();
   mocks.action.mockResolvedValueOnce({ _tag: "Success", value: catalog });
   await click("Request revision");
+  expect(mocks.action).not.toHaveBeenCalled();
+  await act(async () =>
+    renderer.root
+      .findByProps({ "aria-label": "Workflow requested changes" })
+      .props.onChange({ target: { value: "Revise the observed failed output" } }),
+  );
+  await click("Record requested revision");
   expect(mocks.action.mock.calls[0]![0].input.value).toBe("request_revision");
 });
 
@@ -563,4 +570,215 @@ it("uses a fresh gate occurrence in deterministic decision IDs after a revision"
     value: "approve",
   });
   expect(mocks.read).not.toHaveBeenCalled();
+});
+
+function feedbackCatalog(): WorkflowCatalog {
+  return {
+    revisionFeedbackVersion: 1,
+    profiles: [profile],
+    templates: [template],
+    runs: [
+      {
+        ...run,
+        attempts: [{ ...run.attempts[0]!, status: "proposed" }],
+        artifacts: [
+          {
+            id: "feedback-artifact",
+            runId: run.id,
+            stageId: "test-stage",
+            attempt: 1,
+            kind: "result",
+            sourceTurnId: null,
+            sourceOutcome: "completed",
+            profileId: profile.id,
+            profileVersion: 1,
+            sections: [
+              {
+                label: "Result",
+                content: "Original exact source " + "x".repeat(2100),
+                missing: false,
+              },
+            ],
+            missingSections: [],
+            extractionVersion: 1,
+            redacted: false,
+            status: "proposed",
+            createdAt: run.createdAt,
+            acceptedAt: null,
+          },
+        ],
+      },
+    ],
+  };
+}
+it("reviews bounded exact source before recording saved changes, without preview or Start", async () => {
+  catalog = feedbackCatalog();
+  await update();
+  await click("Request revision");
+  expect(mocks.action).not.toHaveBeenCalled();
+  expect(mocks.read).not.toHaveBeenCalled();
+  expect(text()).toContain("feedback-artifact");
+  expect(text()).toContain("excerpt truncated");
+  expect(button("Record requested revision").props.disabled).toBe(true);
+  await act(async () =>
+    renderer.root
+      .findByProps({ "aria-label": "Workflow requested changes" })
+      .props.onChange({ target: { value: "Preserve my exact saved revision instruction" } }),
+  );
+  mocks.action.mockResolvedValueOnce({ _tag: "Success", value: catalog });
+  await act(async () => {
+    const record = button("Record requested revision").props.onClick;
+    record();
+    record();
+  });
+  expect(mocks.action).toHaveBeenCalledTimes(1);
+  expect(mocks.action.mock.calls[0]![0].input).toMatchObject({
+    value: "request_revision",
+    revisionFeedback: {
+      text: "Preserve my exact saved revision instruction",
+      source: { runId: run.id, stageId: "test-stage", attempt: 1, artifactId: "feedback-artifact" },
+    },
+  });
+  expect(mocks.read).not.toHaveBeenCalled();
+});
+it.each(["blank", "oversized"] as const)("disables recording %s feedback", async (failure) => {
+  catalog = feedbackCatalog();
+  await update();
+  await click("Request revision");
+  await act(async () =>
+    renderer.root
+      .findByProps({ "aria-label": "Workflow requested changes" })
+      .props.onChange({ target: { value: failure === "blank" ? " \n " : "x".repeat(2001) } }),
+  );
+  expect(button("Record requested revision").props.disabled).toBe(true);
+  expect(mocks.action).not.toHaveBeenCalled();
+});
+it.each(["environment", "project", "A-B-A", "workflow facts", "source tail", "stale"] as const)(
+  "retires old revision form on %s while retaining safely scoped text",
+  async (change) => {
+    catalog = feedbackCatalog();
+    await update();
+    await click("Request revision");
+    await act(async () =>
+      renderer.root
+        .findByProps({ "aria-label": "Workflow requested changes" })
+        .props.onChange({ target: { value: "Keep draft through safe refresh" } }),
+    );
+    const oldConfirm = button("Record requested revision").props.onClick;
+    if (change === "environment" || change === "A-B-A")
+      props = { ...props, environmentId: EnvironmentId.make("environment-b") };
+    if (change === "project") props = { ...props, projectId: ProjectId.make("project-b") };
+    if (change === "workflow facts")
+      catalog = { ...catalog, runs: [{ ...catalog.runs[0]!, updatedAt: "2026-10-19T01:00:00Z" }] };
+    if (change === "source tail")
+      catalog = {
+        ...catalog,
+        runs: [
+          {
+            ...catalog.runs[0]!,
+            artifacts: catalog.runs[0]!.artifacts.map((a) => ({
+              ...a,
+              sections: a.sections.map((s) => ({ ...s, content: s.content + "changed tail" })),
+            })),
+          },
+        ],
+      };
+    if (change === "stale") isPending = true;
+    await update();
+    if (change === "A-B-A") {
+      props = { ...props, environmentId };
+      await update();
+    }
+    await act(async () => oldConfirm());
+    expect(mocks.action).not.toHaveBeenCalled();
+    if (["workflow facts", "source tail", "A-B-A"].includes(change)) {
+      await click("Request revision");
+      expect(
+        renderer.root.findByProps({ "aria-label": "Workflow requested changes" }).props.value,
+      ).toBe("Keep draft through safe refresh");
+    } else expect(text()).not.toContain('"value":"Keep draft through safe refresh"');
+  },
+);
+it("shows saved revision provenance and honestly unavailable historical feedback after reload", async () => {
+  catalog = feedbackCatalog();
+  catalog = {
+    ...catalog,
+    runs: [
+      {
+        ...catalog.runs[0]!,
+        decisions: [
+          {
+            id: "saved-decision",
+            runId: run.id,
+            stageId: "test-stage",
+            attempt: 1,
+            artifactId: "feedback-artifact",
+            value: "request_revision",
+            createdAt: run.createdAt,
+            revisionFeedback: {
+              text: "Persisted feedback from the ledger",
+              source: {
+                runId: run.id,
+                stageId: "test-stage",
+                attempt: 1,
+                artifactId: "feedback-artifact",
+              },
+            },
+          },
+          {
+            id: "legacy-decision",
+            runId: run.id,
+            stageId: "test-stage",
+            attempt: 1,
+            artifactId: "feedback-artifact",
+            value: "request_revision",
+            createdAt: run.createdAt,
+          },
+        ],
+      },
+    ],
+  };
+  await update();
+  expect(text()).toContain("Persisted feedback from the ledger");
+  expect(text()).toContain("Historical revision feedback and source provenance unavailable");
+  await act(async () => {
+    renderer.unmount();
+    renderer = create(<ProjectWorkflowDecisions {...props} />);
+  });
+  expect(text()).toContain("Persisted feedback from the ledger");
+  expect(mocks.action).not.toHaveBeenCalled();
+});
+it("requires server feedback support instead of silently sending fields an old server could ignore", async () => {
+  catalog = feedbackCatalog();
+  const { revisionFeedbackVersion: _version, ...legacy } = catalog;
+  catalog = legacy;
+  await update();
+  expect(button("Request revision").props.disabled).toBe(true);
+  expect(mocks.action).not.toHaveBeenCalled();
+});
+
+it("does not offer a revision beyond the stage limit or for a decided gate", async () => {
+  catalog = feedbackCatalog();
+  catalog = {
+    ...catalog,
+    runs: [
+      {
+        ...catalog.runs[0]!,
+        attempts: [{ ...catalog.runs[0]!.attempts[0]!, attempt: 3 }],
+        artifacts: catalog.runs[0]!.artifacts.map((a) => ({ ...a, attempt: 3 })),
+      },
+    ],
+  };
+  await update();
+  expect(button("Request revision").props.disabled).toBe(true);
+  expect(text()).toContain("Revision attempt limit reached");
+  catalog = {
+    ...catalog,
+    runs: [{ ...catalog.runs[0]!, status: "completed", currentStageId: null }],
+  };
+  await update();
+  expect(
+    renderer.root.findAllByType("button").some((b) => b.children.includes("Request revision")),
+  ).toBe(false);
+  expect(mocks.action).not.toHaveBeenCalled();
 });

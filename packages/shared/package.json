@@ -506,6 +506,10 @@
     "./taskRevisionRequest": {
       "types": "./src/taskRevisionRequest.ts",
       "import": "./src/taskRevisionRequest.ts"
+    },
+    "./workflowRevision": {
+      "types": "./src/workflowRevision.ts",
+      "import": "./src/workflowRevision.ts"
     }
   },
   "scripts": {

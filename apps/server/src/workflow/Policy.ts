@@ -14,6 +14,10 @@ import {
   shouldAcceptCursorCloudRunnerUpdate,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { WorkflowRevisionFeedback } from "@t3tools/contracts";
+import { workflowRevisionArtifact, workflowRevisionSource } from "@t3tools/shared/workflowRevision";
+const validRevisionFeedback = Schema.is(WorkflowRevisionFeedback);
+const sameRevisionSource = Schema.toEquivalence(WorkflowRevisionFeedback.fields.source);
 
 import { BUILTIN_AGENT_PROFILES, BUILTIN_WORKFLOW_TEMPLATES } from "./Builtins.ts";
 
@@ -487,6 +491,19 @@ export function applyWorkflowMutation(
         reject("A human gate cannot claim a provider artifact.");
       if (stage.type === "human_gate" && attempt.status !== "pending")
         reject("Human gate has already been decided.");
+      if (decision.revisionFeedback !== undefined) {
+        if (
+          decision.value !== "request_revision" ||
+          !validRevisionFeedback(decision.revisionFeedback)
+        )
+          reject("Invalid revision feedback.");
+        const source = workflowRevisionArtifact(run, template, stage.id, attempt.attempt);
+        if (
+          !source ||
+          !sameRevisionSource(decision.revisionFeedback.source, workflowRevisionSource(source))
+        )
+          reject("Revision source is stale or belongs to another occurrence.");
+      }
       if (decision.value === "request_revision") {
         const target =
           (stage.type === "human_gate"
@@ -504,7 +521,10 @@ export function applyWorkflowMutation(
           decisions: [...run.decisions, decision],
           attempts: [
             ...run.attempts,
-            nextAttempt(target, number, decision.createdAt, previous ?? null),
+            {
+              ...nextAttempt(target, number, decision.createdAt, previous ?? null),
+              revisionDecisionId: decision.id,
+            },
           ],
         };
         return { ...catalog, runs: catalog.runs.map((entry) => (entry === run ? updated : entry)) };
