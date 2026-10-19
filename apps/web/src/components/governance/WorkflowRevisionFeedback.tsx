@@ -14,6 +14,16 @@ import { randomUUID } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 
+const draftStorageKey = (scope: string) => `t3:workflow-revision-draft:v1:${scope}`;
+function readDraft(scope: string) {
+  try {
+    const value = globalThis.sessionStorage?.getItem(draftStorageKey(scope));
+    return value && value.length <= WORKFLOW_REVISION_FEEDBACK_MAX_CHARS ? value : "";
+  } catch {
+    return "";
+  }
+}
+
 export function WorkflowDecisionHistory({ decisions }: { decisions: WorkflowRun["decisions"] }) {
   return (
     <section aria-label="Workflow decision history" className="space-y-2">
@@ -62,6 +72,7 @@ export function WorkflowRevisionFeedbackForm(props: {
     props.projectId,
     props.run.id,
     props.stage.id,
+    props.attempt,
   ]);
   const facts = JSON.stringify([
     scope,
@@ -84,7 +95,9 @@ export function WorkflowRevisionFeedbackForm(props: {
     latest.current = { props, token };
   });
   const [drafts, setDrafts] = useState<ReadonlyMap<string, string>>(new Map());
-  const text = drafts.get(scope) ?? "";
+  // Only inert text is retained across navigation; confirmation identities are mount-local.
+  const text = drafts.get(scope) ?? readDraft(scope);
+  const [draftStorageError, setDraftStorageError] = useState<string | null>(null);
   type Prepared = { token: symbol; commandId: string; decisionId: string };
   const [prepared, setPrepared] = useState<Prepared | null>(null);
   const current = useRef<Prepared | null>(null);
@@ -178,6 +191,7 @@ export function WorkflowRevisionFeedbackForm(props: {
       {!prepared && text ? (
         <p>Requested changes draft retained. Review the current source again before recording.</p>
       ) : null}
+      {draftStorageError ? <p>{draftStorageError}</p> : null}
       {prepared ? (
         <>
           <p>
@@ -211,8 +225,20 @@ export function WorkflowRevisionFeedbackForm(props: {
                 latest.current.token === token &&
                 current.current === prepared &&
                 !pending.current
-              )
-                setDrafts((prior) => new Map(prior).set(scope, event.target.value));
+              ) {
+                const value = event.target.value;
+                setDrafts((prior) => new Map(prior).set(scope, value));
+                try {
+                  if (!globalThis.sessionStorage) throw new Error("No session storage");
+                  if (value.length <= WORKFLOW_REVISION_FEEDBACK_MAX_CHARS)
+                    globalThis.sessionStorage.setItem(draftStorageKey(scope), value);
+                  setDraftStorageError(null);
+                } catch {
+                  setDraftStorageError(
+                    "Draft kept in this view only; browser session storage is unavailable.",
+                  );
+                }
+              }
             }}
           />
           <p>

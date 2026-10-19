@@ -126,6 +126,11 @@ beforeEach(async () => {
     getItem: (key: string) => storage.get(key) ?? null,
     setItem: (key: string, value: string) => storage.set(key, value),
   });
+  const sessionDrafts = new Map<string, string>();
+  vi.stubGlobal("sessionStorage", {
+    getItem: (key: string) => sessionDrafts.get(key) ?? null,
+    setItem: (key: string, value: string) => sessionDrafts.set(key, value),
+  });
   mocks.read.mockReset().mockImplementation(async (target) => ({
     _tag: "Success",
     value: {
@@ -699,6 +704,57 @@ it.each(["environment", "project", "A-B-A", "workflow facts", "source tail", "st
     } else expect(text()).not.toContain('"value":"Keep draft through safe refresh"');
   },
 );
+it("retains only scoped revision text across navigation unmounts, never an executable confirmation", async () => {
+  catalog = feedbackCatalog();
+  await update();
+  await click("Request revision");
+  await act(async () =>
+    renderer.root.findByProps({ "aria-label": "Workflow requested changes" }).props.onChange({
+      target: { value: "Keep my draft across real environment navigation" },
+    }),
+  );
+  const oldConfirm = button("Record requested revision").props.onClick;
+  await act(async () => renderer.update(<></>));
+  props = { ...props, environmentId: EnvironmentId.make("environment-b") };
+  await update();
+  await click("Request revision");
+  expect(
+    renderer.root.findByProps({ "aria-label": "Workflow requested changes" }).props.value,
+  ).toBe("");
+  await act(async () => renderer.update(<></>));
+  props = { ...props, environmentId };
+  await update();
+  await act(async () => oldConfirm());
+  expect(mocks.action).not.toHaveBeenCalled();
+  expect(button("Record requested revision")).toBeUndefined();
+  await click("Request revision");
+  expect(
+    renderer.root.findByProps({ "aria-label": "Workflow requested changes" }).props.value,
+  ).toBe("Keep my draft across real environment navigation");
+});
+
+it("keeps typed changes visible with an honest notice when session draft retention fails", async () => {
+  vi.stubGlobal("sessionStorage", {
+    getItem: () => null,
+    setItem: () => {
+      throw new Error("fixture storage unavailable");
+    },
+  });
+  catalog = feedbackCatalog();
+  await update();
+  await click("Request revision");
+  await act(async () =>
+    renderer.root
+      .findByProps({ "aria-label": "Workflow requested changes" })
+      .props.onChange({ target: { value: "Keep visible despite storage failure" } }),
+  );
+  expect(
+    renderer.root.findByProps({ "aria-label": "Workflow requested changes" }).props.value,
+  ).toBe("Keep visible despite storage failure");
+  expect(text()).toContain("Draft kept in this view only");
+  expect(mocks.action).not.toHaveBeenCalled();
+});
+
 it("shows saved revision provenance and honestly unavailable historical feedback after reload", async () => {
   catalog = feedbackCatalog();
   catalog = {
