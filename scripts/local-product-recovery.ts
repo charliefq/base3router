@@ -121,33 +121,49 @@ export function assertRecovery(checkpoint: RecoveryCheckpoint, after: RecoveryOb
     const observed = after.tasks.find((t) => t.id === expected.id);
     NodeAssert.ok(observed, "Original task disappeared");
     if (held && expected.threadId === held.threadId && held.proof.status === "admitted") {
-      NodeAssert.deepStrictEqual(
-        {
-          threadId: observed.threadId,
-          projectId: observed.projectId,
-          revision: observed.revision,
-          contract: observed.contractReadout,
-        },
-        {
-          threadId: expected.threadId,
-          projectId: expected.projectId,
-          revision: expected.revision,
-          contract: expected.contractReadout,
-        },
-        "Crash recovery changed the reviewed contract",
+      const runningResult = expected.resultReadout;
+      const runningRoute = expected.routingReadout;
+      NodeAssert.ok(
+        runningResult?.status === "available" &&
+          runningResult.runStatus === "running" &&
+          runningResult.providerTurnStatus === "running",
+        "Checkpoint must retain the running native result linkage",
       );
-      const result = observed.resultReadout;
-      NodeAssert.ok(result?.status === "available", "Crash original result identity disappeared");
-      NodeAssert.equal(result.runId, held.proof.runId);
-      NodeAssert.equal(result.attemptId, held.proof.attemptId);
-      NodeAssert.equal(result.runStatus, "cancelled");
-      NodeAssert.deepStrictEqual(result.content, {
+      NodeAssert.ok(
+        runningRoute?.status === "available" &&
+          runningRoute.execution.status === "observed" &&
+          runningRoute.execution.providerStatus === "running",
+        "Checkpoint must retain observed running route linkage",
+      );
+      NodeAssert.equal(runningResult.runId, held.proof.runId);
+      NodeAssert.equal(runningResult.attemptId, held.proof.attemptId);
+      NodeAssert.equal(runningRoute.runId, runningResult.runId);
+      NodeAssert.equal(runningRoute.messageId, runningResult.messageId);
+      NodeAssert.equal(runningRoute.execution.providerTurnId, runningResult.providerTurnId);
+      NodeAssert.deepStrictEqual(runningRoute.selected, held.proof.actualModelSelection);
+      NodeAssert.deepStrictEqual(runningResult.content, {
         status: "unknown",
         reason: "no_completed_result",
       });
-      const route = observed.routingReadout;
-      NodeAssert.ok(route?.status === "available");
-      NodeAssert.deepStrictEqual(route.selected, held.proof.actualModelSelection);
+      // Startup cancellation changes only these terminal statuses. Preserve every
+      // original message/native-turn/model/result/route field and all task state.
+      const cancelled = {
+        ...expected,
+        resultReadout: {
+          ...runningResult,
+          runStatus: "cancelled" as const,
+          providerTurnStatus: "cancelled" as const,
+        },
+        routingReadout: {
+          ...runningRoute,
+          execution: { ...runningRoute.execution, providerStatus: "cancelled" as const },
+        },
+      };
+      NodeAssert.deepStrictEqual(
+        stableTask(observed),
+        stableTask(cancelled),
+        "Crash-held task/result/route/native linkage changed",
+      );
     } else {
       NodeAssert.deepStrictEqual(
         stableTask(observed),

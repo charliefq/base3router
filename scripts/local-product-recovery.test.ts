@@ -251,11 +251,27 @@ function crashFixture() {
       resultPreview: null,
     },
   };
+  if (
+    task.routingReadout?.status !== "available" ||
+    task.routingReadout.execution.status !== "observed"
+  )
+    throw Error("Missing fixture route");
   const heldTask = {
     ...task,
     id: "held",
     threadId: "held",
     state: "running",
+    routingReadout: {
+      ...task.routingReadout,
+      threadId: "held",
+      messageId: "held-message",
+      runId: "held-run",
+      execution: {
+        ...task.routingReadout.execution,
+        providerTurnId: "provider-turn-2",
+        providerStatus: "running",
+      },
+    },
     resultReadout: {
       status: "available",
       runId: "held-run",
@@ -264,6 +280,7 @@ function crashFixture() {
       attemptId: "attempt-1",
       providerTurnId: "provider-turn-2",
       providerTurnStatus: "running",
+      modelIdentity: { requested: "fixture-manual", resolved: "fixture-manual" },
       content: { status: "unknown", reason: "no_completed_result" },
     },
   };
@@ -281,9 +298,16 @@ function crashFixture() {
         : p,
     ),
     tasks: captured.tasks.map((t) =>
-      t.id === "held" && t.resultReadout?.status === "available"
+      t.id === "held" &&
+      t.resultReadout?.status === "available" &&
+      t.routingReadout?.status === "available" &&
+      t.routingReadout.execution.status === "observed"
         ? {
             ...t,
+            routingReadout: {
+              ...t.routingReadout,
+              execution: { ...t.routingReadout.execution, providerStatus: "cancelled" },
+            },
             resultReadout: {
               ...t.resultReadout,
               runStatus: "cancelled",
@@ -338,4 +362,66 @@ it("rejects a fabricated completed output after crash cancellation", () => {
       ),
     }),
   );
+});
+
+it.each([
+  ["message", { messageId: "wrong-message" }],
+  ["native turn", { providerTurnId: "wrong-native-turn" }],
+  ["native terminal status", { providerTurnStatus: "failed" }],
+  [
+    "native model identity",
+    { modelIdentity: { requested: "wrong-model", resolved: "wrong-model" } },
+  ],
+] as const)("rejects corrupted held result %s", (_name, patch) => {
+  const { checkpoint, after } = crashFixture();
+  const corrupt = decodeObservation({
+    ...after,
+    tasks: after.tasks.map((t) =>
+      t.id === "held" && t.resultReadout?.status === "available"
+        ? { ...t, resultReadout: { ...t.resultReadout, ...patch } }
+        : t,
+    ),
+  });
+  assert.throws(() => assertRecovery(checkpoint, corrupt));
+});
+it.each([
+  ["run", { runId: "wrong-run" }],
+  ["message", { messageId: "wrong-message" }],
+  ["thread", { threadId: "wrong-thread" }],
+  ["configured model", { configuredModel: { instanceId: "codex", model: "wrong-configured" } }],
+] as const)("rejects corrupted held route %s", (_name, patch) => {
+  const { checkpoint, after } = crashFixture();
+  const corrupt = decodeObservation({
+    ...after,
+    tasks: after.tasks.map((t) =>
+      t.id === "held" && t.routingReadout?.status === "available"
+        ? { ...t, routingReadout: { ...t.routingReadout, ...patch } }
+        : t,
+    ),
+  });
+  assert.throws(() => assertRecovery(checkpoint, corrupt));
+});
+it.each([
+  ["native turn", { providerTurnId: "wrong-native-turn" }],
+  ["terminal status", { providerStatus: "completed" }],
+  ["native start time", { startedAt: "2026-10-19T01:00:00.000Z" }],
+] as const)("rejects corrupted held execution %s", (_name, patch) => {
+  const { checkpoint, after } = crashFixture();
+  const corrupt = decodeObservation({
+    ...after,
+    tasks: after.tasks.map((t) =>
+      t.id === "held" &&
+      t.routingReadout?.status === "available" &&
+      t.routingReadout.execution.status === "observed"
+        ? {
+            ...t,
+            routingReadout: {
+              ...t.routingReadout,
+              execution: { ...t.routingReadout.execution, ...patch },
+            },
+          }
+        : t,
+    ),
+  });
+  assert.throws(() => assertRecovery(checkpoint, corrupt));
 });
