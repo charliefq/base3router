@@ -47,6 +47,8 @@ type Props = {
   disabled: boolean;
   onSelect: (value: AgentConfigurationSnapshot | null) => void;
   onBlocked: (value: boolean) => void;
+  onInvalidate?: () => void;
+  onCatalogRead?: (profiles: ReadonlyArray<AgentProfile>) => void;
 };
 export function TaskConfigurations(props: Props) {
   const session = Option.getOrNull(usePreparedConnection(props.environmentId));
@@ -111,8 +113,10 @@ function ConfigurationEditor(
         input: { projectId: ProjectId.make(props.projectId) },
       });
       if (generation.current !== epoch) return;
-      if (result._tag === "Success") setProfiles(result.value.profiles);
-      else setNotice("Saved configurations are unavailable. No selection was substituted.");
+      if (result._tag === "Success") {
+        props.onCatalogRead?.(result.value.profiles);
+        setProfiles(result.value.profiles);
+      } else setNotice("Saved configurations are unavailable. No selection was substituted.");
     } finally {
       if (owner.current === token) {
         owner.current = null;
@@ -144,6 +148,9 @@ function ConfigurationEditor(
     setAttempt(original);
     props.onBlocked(true);
     props.onSelect(null);
+    // A retained write may commit even when its reply is lost. Retire unsent
+    // library selections before submission; recovery keeps the original command.
+    props.onInvalidate?.();
     const token = {};
     owner.current = token;
     const epoch = generation.current;
@@ -194,6 +201,7 @@ function ConfigurationEditor(
       const result = await status({ environmentId: props.environmentId, input: original.command });
       if (generation.current !== epoch || attemptRef.current !== original) return;
       if (result._tag === "Success" && result.value === "committed") {
+        props.onInvalidate?.();
         sessionStorage.removeItem(key);
         attemptRef.current = null;
         setAttempt(null);

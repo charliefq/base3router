@@ -87,6 +87,7 @@ const state = vi.hoisted(() => ({
   } as CollaborationSnapshot,
   catalog: vi.fn(),
   configurationWrite: vi.fn(),
+  configurationStatus: vi.fn(),
   operate: true,
   load: vi.fn(),
   create: vi.fn(),
@@ -220,29 +221,31 @@ vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
     command === "configuration-catalog"
       ? state.catalog
-      : command === "configuration-action" || command === "configuration-status"
-        ? state.configurationWrite
-        : command === "file-review"
-          ? state.fileReview
-          : command === "skill-review"
-            ? state.skillReview
-            : command === "interrupt"
-              ? state.interrupt
-              : command === "first-launch-status"
-                ? state.firstLaunchRead
-                : command === "capability-start"
-                  ? state.startStep
-                  : command === "auto-preview"
-                    ? state.autoPreview
-                    : command === "read-creation-status"
-                      ? state.readCreationStatus
-                      : command === "review-read"
-                        ? state.reviewRead
-                        : command === "review-decide"
-                          ? state.reviewDecide
-                          : command === "read-projection"
-                            ? state.readProjection
-                            : state.create,
+      : command === "configuration-status"
+        ? state.configurationStatus
+        : command === "configuration-action"
+          ? state.configurationWrite
+          : command === "file-review"
+            ? state.fileReview
+            : command === "skill-review"
+              ? state.skillReview
+              : command === "interrupt"
+                ? state.interrupt
+                : command === "first-launch-status"
+                  ? state.firstLaunchRead
+                  : command === "capability-start"
+                    ? state.startStep
+                    : command === "auto-preview"
+                      ? state.autoPreview
+                      : command === "read-creation-status"
+                        ? state.readCreationStatus
+                        : command === "review-read"
+                          ? state.reviewRead
+                          : command === "review-decide"
+                            ? state.reviewDecide
+                            : command === "read-projection"
+                              ? state.readProjection
+                              : state.create,
 }));
 vi.mock("../chat/ProviderModelPicker", () => ({
   ProviderModelPicker: (props: {
@@ -463,6 +466,7 @@ beforeEach(() => {
   });
   state.catalog.mockReset().mockResolvedValue({ _tag: "Success", value: { profiles: [] } });
   state.configurationWrite.mockReset();
+  state.configurationStatus.mockReset();
   state.operate = true;
   state.firstLaunchRead.mockReset();
   state.providers = [...configuredProviders];
@@ -2258,6 +2262,7 @@ const creationStorage = () => {
   vi.stubGlobal("sessionStorage", {
     getItem: (key: string) => records.get(key) ?? null,
     setItem: (key: string, value: string) => records.set(key, value),
+    removeItem: (key: string) => records.delete(key),
   });
   return records;
 };
@@ -11178,6 +11183,192 @@ it("saved configuration library never-sent creation stays UNKNOWN after reconnec
     expect(readAgentsCreationAttempt().attempt).toEqual({ status: "uncertain", command: original });
     expect(text()).toContain("unknown");
     expect(state.create).toHaveBeenCalledTimes(1);
+    expect((await f.snapshot()).tasks).toHaveLength(0);
+    expect((await f.inspect()).starts).toHaveLength(0);
+  });
+}, 30000);
+
+it.each(["save", "archive"] as const)(
+  "saved configuration library actual editor %s retires selected revision and captured review/create callbacks",
+  async (action) => {
+    await withLibraryFixture(async (f) => {
+      await prepareLibrary(f);
+      await useLibrary();
+      await fillCreation("Library editor invalidation", false);
+      await creationClick("Review new task");
+      const capturedSubmit = creationButton("Create task")!.props.onClick;
+      await creationClick("Back to task draft");
+      const capturedPreview = creationButton("Review new task")!.props.onClick;
+      await creationClick("Load saved configurations");
+      await act(async () => {
+        await state.catalog.mock.results.at(-1)!.value;
+      });
+      state.configurationWrite.mockImplementation(({ input }) => f.configuration(input));
+      if (action === "save") {
+        const editor = renderer.root.findByProps({ "aria-label": "Saved task configurations" });
+        const edits = editor
+          .findAllByType("button")
+          .filter((b) => b.children.join("") === "Edit saved configuration Careful reviewer");
+        await act(async () => {
+          edits.at(-1)!.props.onClick();
+        });
+        await act(async () =>
+          renderer.root
+            .findByProps({ "aria-label": "Working instructions" })
+            .props.onChange({ target: { value: "Authoritative edited second revision." } }),
+        );
+        await creationClick("Save configuration revision");
+      } else {
+        const editor = renderer.root.findByProps({ "aria-label": "Saved task configurations" });
+        const archive = editor
+          .findAllByType("button")
+          .filter((b) => b.children.join("") === "Archive saved configuration Careful reviewer");
+        await act(async () => {
+          archive.at(-1)!.props.onClick();
+        });
+      }
+      await act(async () => {
+        const result = await state.configurationWrite.mock.results.at(-1)!.value;
+        expect(result._tag).toBe("Success");
+      });
+      const mutation = state.configurationWrite.mock.calls.at(-1)![0].input;
+      expect(action === "save" ? mutation.draft.id : mutation.profileId).toBe("careful-b");
+      const changed = await f.catalog({ projectId: ProjectId.make("project-a") });
+      expect(changed._tag).toBe("Success");
+      if (changed._tag !== "Success") throw new Error("missing authoritative catalog");
+      expect(
+        changed.value.profiles.find(
+          (p) => p.id === "careful-b" && p.version === (action === "save" ? 2 : 1),
+        )?.status,
+      ).toBe(action === "save" ? "active" : "archived");
+      await act(async () => {
+        await capturedPreview();
+        await capturedSubmit();
+      });
+      const staleSubmit = creationButton("Create task")?.props.onClick;
+      if (staleSubmit)
+        await act(async () => {
+          await staleSubmit();
+        });
+      expect(state.create).not.toHaveBeenCalled();
+      expect(text().includes("selection retired")).toBe(true);
+      expect(creationButton("Review new task")!.props.disabled).toBe(true);
+      expect((await f.snapshot()).tasks).toHaveLength(0);
+      expect((await f.inspect()).starts).toHaveLength(0);
+    });
+  },
+  30000,
+);
+
+it("saved configuration library editor catalog loading preserves an ordinary provider-first review", async () => {
+  await mount();
+  await creationClick("New task");
+  await fillCreation();
+  const preview = creationButton("Review new task")!.props.onClick;
+  await creationClick("Load saved configurations");
+  await act(async () => {
+    await state.catalog.mock.results.at(-1)!.value;
+    await preview();
+  });
+  expect(creationButton("Create task")).toBeDefined();
+  expect(text()).not.toContain("selection retired");
+  expect(state.configurationWrite).not.toHaveBeenCalled();
+  expect(state.create).not.toHaveBeenCalled();
+});
+
+it("saved configuration library editor invalidation preserves a lost original archive command and reconciles without resend", async () => {
+  await withLibraryFixture(async (f) => {
+    await prepareLibrary(f);
+    await useLibrary();
+    await fillCreation("Library editor recovery", false);
+    const preview = creationButton("Review new task")!.props.onClick;
+    await creationClick("Load saved configurations");
+    await act(async () => {
+      await state.catalog.mock.results.at(-1)!.value;
+    });
+    state.configurationWrite.mockImplementation(({ input }) => f.configuration(input));
+    state.configurationStatus.mockImplementation(({ input }) => f.configurationStatus(input));
+    f.dropNextReply();
+    await act(async () => {
+      const editor = renderer.root.findByProps({ "aria-label": "Saved task configurations" });
+      editor
+        .findAllByType("button")
+        .filter((b) => b.children.join("") === "Archive saved configuration Careful reviewer")
+        .at(-1)!
+        .props.onClick();
+      await preview();
+    });
+    await Promise.race([
+      f.awaitDroppedReply(),
+      state.configurationWrite.mock.results[0]!.value.then(() => {
+        throw new Error("Expected committed archive reply drop");
+      }),
+    ]);
+    const key = "t3:saved-task-configuration-command:v1";
+    const original = sessionStorage.getItem(key);
+    expect(original).not.toBeNull();
+    expect(creationButton("Create task")).toBeUndefined();
+    await act(async () => {
+      await f.disconnect();
+      await state.configurationWrite.mock.results[0]!.value;
+      renderer.unmount();
+    });
+    expect(sessionStorage.getItem(key)).toBe(original);
+    await f.connect();
+    state.sessionIdentity = {};
+    await act(async () => {
+      renderer = create(<AgentsPage scope={libraryScope} />);
+    });
+    await act(async () => {
+      await state.load.mock.results.at(-1)!.value;
+    });
+    await creationClick("Recover saved configuration");
+    await act(async () => {
+      await state.configurationStatus.mock.results[0]!.value;
+    });
+    expect(sessionStorage.getItem(key)).toBeNull();
+    expect(text()).toContain("Original configuration command is committed");
+    expect(state.configurationWrite).toHaveBeenCalledTimes(1);
+    expect(state.create).not.toHaveBeenCalled();
+    expect((await f.snapshot()).tasks).toHaveLength(0);
+    expect((await f.inspect()).starts).toHaveLength(0);
+  });
+}, 30000);
+
+it("saved configuration library editor read preserves an unchanged selection and retires an authoritatively changed revision", async () => {
+  await withLibraryFixture(async (f) => {
+    const inputs = await prepareLibrary(f);
+    await useLibrary();
+    await fillCreation("Library editor read", false);
+    const preview = creationButton("Review new task")!.props.onClick;
+    await creationClick("Load saved configurations");
+    await act(async () => {
+      await state.catalog.mock.results.at(-1)!.value;
+      await preview();
+    });
+    expect(creationButton("Create task")).toBeDefined();
+    expect(text()).not.toContain("selection retired");
+    await creationClick("Back to task draft");
+    const capturedPreview = creationButton("Review new task")!.props.onClick;
+    expect(
+      (
+        await f.configuration({
+          ...inputs[1]!,
+          commandId: "external-editor-read-edit",
+          expectedVersion: 1,
+          draft: { ...inputs[1]!.draft, instructions: "Authoritative external edit." },
+        })
+      )._tag,
+    ).toBe("Success");
+    await creationClick("Load saved configurations");
+    await act(async () => {
+      await state.catalog.mock.results.at(-1)!.value;
+      await capturedPreview();
+    });
+    expect(creationButton("Create task")).toBeUndefined();
+    expect(creationButton("Review new task")!.props.disabled).toBe(true);
+    expect(text()).toContain("selection retired");
+    expect(state.create).not.toHaveBeenCalled();
     expect((await f.snapshot()).tasks).toHaveLength(0);
     expect((await f.inspect()).starts).toHaveLength(0);
   });

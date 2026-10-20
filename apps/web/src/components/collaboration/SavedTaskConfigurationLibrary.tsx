@@ -21,6 +21,7 @@ export type SavedConfigurationSelection = {
   readonly configuration: AgentConfigurationSnapshot;
   // This capability is local UI freshness, never execution authority.
   readonly isCurrent: () => boolean;
+  readonly invalidate: () => void;
 };
 const same = Schema.toEquivalence(AgentConfigurationSnapshot);
 const validProfile = Schema.is(AgentProfile);
@@ -265,7 +266,20 @@ function ScopedConfigurationLibrary(props: Props & { environmentId: EnvironmentI
         accessRef.current &&
         latest.current.canOperate() &&
         !unavailable(exact, latest.current.providers);
-      if (isCurrent()) latest.current.onUse({ configuration: snapshot, isCurrent });
+      if (isCurrent())
+        latest.current.onUse({
+          configuration: snapshot,
+          isCurrent,
+          invalidate: () => {
+            if (!accepts(scope, epoch) || inspectionRef.current !== profile) return;
+            retire();
+            catalogIdentity.current = null;
+            setLoaded(null);
+            setNotice(
+              "A configuration editor command invalidated this catalog. Refresh and inspect an exact revision before reuse.",
+            );
+          },
+        });
     } catch {
       if (accepts(scope, epoch)) {
         retire();

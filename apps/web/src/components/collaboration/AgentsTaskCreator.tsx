@@ -1,8 +1,8 @@
 import { TaskResultHandoffReadout } from "./TaskResultHandoff";
 import type { TaskResultHandoff } from "@t3tools/contracts";
 import { TaskConfigurations } from "./TaskConfigurations";
-import { configurationInput } from "@t3tools/shared/agentConfiguration";
-import type { AgentConfigurationSnapshot } from "@t3tools/contracts";
+import { configurationInput, configurationSnapshot } from "@t3tools/shared/agentConfiguration";
+import { AgentConfigurationSnapshot } from "@t3tools/contracts";
 import { planTaskCapabilities } from "@t3tools/shared/taskCapabilityPlan";
 import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
 import { TaskFirstInstructions } from "./TaskFirstInstructions";
@@ -59,6 +59,7 @@ type Create = Extract<OrchestrationV2Command, { type: "thread.create" }>;
 const sameCommand = Schema.toEquivalence(OrchestrationV2Command.members[0]);
 const sameContract = Schema.toEquivalence(TaskContractFields);
 const sameReview = Schema.toEquivalence(AgentsTaskCreationReview);
+const sameConfiguration = Schema.toEquivalence(AgentConfigurationSnapshot);
 const sameSelection = Schema.toEquivalence(ModelSelection);
 const decodeContract = Schema.decodeUnknownOption(TaskContractFields);
 const blank = {
@@ -658,6 +659,27 @@ export function AgentsTaskCreator(props: {
         open={editing !== null}
         disabled={review !== null || pending}
         onBlocked={onConfigurationBlocked}
+        onCatalogRead={(profiles) => {
+          const selected = latest.current.request?.savedConfiguration;
+          if (!selected) return;
+          const profile = profiles
+            .filter((p) => p.id === selected.configuration.id)
+            .toSorted((a, b) => b.version - a.version)[0];
+          const snapshot = profile && configurationSnapshot(profile);
+          if (
+            !profile ||
+            profile.status !== "active" ||
+            !snapshot ||
+            !sameConfiguration(snapshot, selected.configuration)
+          ) {
+            selected.invalidate();
+            closeReview();
+          }
+        }}
+        onInvalidate={() => {
+          latest.current.request?.savedConfiguration?.invalidate();
+          closeReview();
+        }}
         onSelect={(value) => {
           if (!editing || reviewRef.current) return;
           if (value !== null) setConfiguration(value);
