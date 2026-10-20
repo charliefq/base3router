@@ -230,11 +230,14 @@ explicitly start. This opens the same task conversation without another Send. Au
 chooses its actual route when starting; a preview does not lock that choice.
 
 For a first task message, you can optionally select **Evidence-grounded summary** or
-**Structured comparison** as an instruction-only task skill. Choose Manual, then review
-its exact instructions and version alongside the model and task contract. Selection and
+**Structured comparison** as an instruction-only task skill. Choose Manual or Auto, then review
+its exact instructions, version and content hash alongside the routing choice and task contract.
+Auto chooses an eligible model at Start; its preview remains advisory. If that actual model
+cannot receive the instructions, the launch is blocked without dropping the skill or switching
+to Manual. Selection and
 review start nothing; only your explicit Start includes those instructions. The review
-expires after five minutes and must be repeated if the instructions, model, authenticated
-session or task facts change. These skills grant no tools, permissions or extra budget. Result provenance shows
+expires after five minutes and must be repeated if the instructions, routing choice, preferred
+model, authenticated session or task facts change. These skills grant no tools, permissions or extra budget. Result provenance shows
 selection and input delivery separately; adapter acceptance means input delivery, not
 successful work or task acceptance.
 

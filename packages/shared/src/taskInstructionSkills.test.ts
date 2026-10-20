@@ -7,6 +7,9 @@ import {
   MessageId,
   ThreadId,
   type TaskInstructionSkillModule,
+  type ServerProvider,
+  ProviderInstanceId,
+  ProviderDriverKind,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import {
@@ -16,6 +19,7 @@ import {
   taskInstructionSkillBinding,
   verifyTaskInstructionSkillReview,
   taskInstructionSkillText,
+  taskInstructionSkillTargetAvailable,
 } from "./taskInstructionSkills.ts";
 const decodeProof = Schema.decodeUnknownSync(TaskInstructionSkillReview);
 const decodeLaunch = Schema.decodeUnknownSync(TaskFirstLaunch);
@@ -79,79 +83,125 @@ it.each([
   expect(() => decodeProof({ ...proof, ...extra })).toThrow();
   expect(() => decodeProof({ ...proof, module: { ...proof.module, ...extra } })).toThrow();
 });
-it("legacy launch remains valid without selecting a module", () => {
-  const legacy = {
-    commandId: CommandId.make("legacy"),
-    messageId: MessageId.make("legacy"),
-    threadId: ThreadId.make("legacy"),
-    reference: {
-      environmentId: "env",
-      projectId: "project",
-      taskId: "task",
-      threadUpdatedAt: "2026-10-19T00:00:00.000Z",
-      threadSequence: 0,
-    },
-    contract: {
-      revision: 1,
-      goal: "Original goal",
-      redirect: "Bounded",
-      acceptance: "Human review",
-      brake: { maxProviderStarts: 1, stopConditions: "Stop" },
-    },
-    text: "Original goal",
-    routingMode: "manual",
-    modelSelection: { instanceId: "codex", model: "exact" },
-    runtimeMode: "approval-required",
-    interactionMode: "default",
-  };
-  const launch = decodeLaunch(legacy);
-  expect(launch.instructionSkill).toBeUndefined();
-  const binding = {
-    module: taskInstructionSkillRef(taskInstructionSkillModules()[0]!),
-    reviewId: "fixture-issued-review",
-    actorId: "actor",
-    reviewedAt: "2026-10-19T00:00:00.000Z",
-    expiresAt: "2026-10-19T00:05:00.000Z",
-  };
-  const reviewed = {
-    ...launch,
-    instructionSkill: { ...binding, bindingSha256: taskInstructionSkillBinding(launch, binding) },
-  };
-  expect(verifyTaskInstructionSkillReview(reviewed, "actor", "2026-10-19T00:01:00.000Z").id).toBe(
-    binding.module.id,
-  );
-  expect(() =>
-    verifyTaskInstructionSkillReview(reviewed, "actor", "2026-10-19T00:05:00.000Z"),
-  ).toThrow();
-  for (const field of ["reviewedAt", "expiresAt"] as const) {
-    const malformed = { ...binding, [field]: "not-a-date" };
-    const invalid = {
-      ...launch,
-      instructionSkill: {
-        ...malformed,
-        bindingSha256: taskInstructionSkillBinding(launch, malformed),
+it.each(["manual", "auto"] as const)(
+  "%s launch proof retains strict input bindings",
+  (routingMode) => {
+    const legacy = {
+      commandId: CommandId.make("legacy"),
+      messageId: MessageId.make("legacy"),
+      threadId: ThreadId.make("legacy"),
+      reference: {
+        environmentId: "env",
+        projectId: "project",
+        taskId: "task",
+        threadUpdatedAt: "2026-10-19T00:00:00.000Z",
+        threadSequence: 0,
       },
+      contract: {
+        revision: 1,
+        goal: "Original goal",
+        redirect: "Bounded",
+        acceptance: "Human review",
+        brake: { maxProviderStarts: 1, stopConditions: "Stop" },
+      },
+      text: "Original goal",
+      routingMode,
+      modelSelection: { instanceId: "codex", model: "exact" },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
     };
+    const launch = decodeLaunch(legacy);
+    expect(launch.instructionSkill).toBeUndefined();
+    const binding = {
+      module: taskInstructionSkillRef(taskInstructionSkillModules()[0]!),
+      reviewId: "fixture-issued-review",
+      actorId: "actor",
+      reviewedAt: "2026-10-19T00:00:00.000Z",
+      expiresAt: "2026-10-19T00:05:00.000Z",
+    };
+    const reviewed = {
+      ...launch,
+      instructionSkill: { ...binding, bindingSha256: taskInstructionSkillBinding(launch, binding) },
+    };
+    expect(verifyTaskInstructionSkillReview(reviewed, "actor", "2026-10-19T00:01:00.000Z").id).toBe(
+      binding.module.id,
+    );
     expect(() =>
-      verifyTaskInstructionSkillReview(invalid, "actor", "2026-10-19T00:01:00.000Z"),
+      verifyTaskInstructionSkillReview(reviewed, "actor", "2026-10-19T00:05:00.000Z"),
     ).toThrow();
-  }
+    for (const field of ["reviewedAt", "expiresAt"] as const) {
+      const malformed = { ...binding, [field]: "not-a-date" };
+      const invalid = {
+        ...launch,
+        instructionSkill: {
+          ...malformed,
+          bindingSha256: taskInstructionSkillBinding(launch, malformed),
+        },
+      };
+      expect(() =>
+        verifyTaskInstructionSkillReview(invalid, "actor", "2026-10-19T00:01:00.000Z"),
+      ).toThrow();
+    }
 
-  expect(() =>
-    verifyTaskInstructionSkillReview(
-      { ...reviewed, text: "Changed" },
-      "actor",
-      "2026-10-19T00:01:00.000Z",
+    expect(() =>
+      verifyTaskInstructionSkillReview(
+        { ...reviewed, routingMode: routingMode === "auto" ? "manual" : "auto" },
+        "actor",
+        "2026-10-19T00:01:00.000Z",
+      ),
+    ).toThrow();
+    expect(() =>
+      verifyTaskInstructionSkillReview(
+        { ...reviewed, text: "Changed" },
+        "actor",
+        "2026-10-19T00:01:00.000Z",
+      ),
+    ).toThrow();
+    expect(() =>
+      verifyTaskInstructionSkillReview(
+        { ...reviewed, modelSelection: { ...launch.modelSelection, model: "other" } },
+        "actor",
+        "2026-10-19T00:01:00.000Z",
+      ),
+    ).toThrow();
+    expect(() =>
+      verifyTaskInstructionSkillReview(reviewed, "other-actor", "2026-10-19T00:01:00.000Z"),
+    ).toThrow();
+  },
+);
+
+it("instruction applicability uses actual text-task target and explicit model input declarations", () => {
+  const module = taskInstructionSkillModules()[0]!;
+  const provider: ServerProvider = {
+    instanceId: ProviderInstanceId.make("codex"),
+    driver: ProviderDriverKind.make("codex"),
+    enabled: true,
+    installed: true,
+    version: null,
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-10-19T00:00:00Z",
+    models: [{ slug: "fixture", name: "Fixture", isCustom: false, capabilities: null }],
+    slashCommands: [],
+    skills: [],
+  };
+  const target = { instanceId: provider.instanceId, model: provider.models[0]!.slug };
+  expect(taskInstructionSkillTargetAvailable(module, provider, target)).toBe(true);
+  expect(taskInstructionSkillTargetAvailable(module, undefined, target)).toBe(false);
+  for (const changed of [
+    { ...provider, enabled: false },
+    { ...provider, installed: false },
+    { ...provider, supportsTextGeneration: false, supportsTextTasks: false },
+    { ...provider, models: [] },
+    { ...provider, models: [{ ...provider.models[0]!, inputModalities: ["image"] }] },
+    { ...provider, models: [{ ...provider.models[0]!, inputModalities: [] }] },
+  ])
+    expect(taskInstructionSkillTargetAvailable(module, changed, target)).toBe(false);
+  expect(
+    taskInstructionSkillTargetAvailable(
+      module,
+      { ...provider, models: [{ ...provider.models[0]!, inputModalities: ["text"] }] },
+      target,
     ),
-  ).toThrow();
-  expect(() =>
-    verifyTaskInstructionSkillReview(
-      { ...reviewed, modelSelection: { ...launch.modelSelection, model: "other" } },
-      "actor",
-      "2026-10-19T00:01:00.000Z",
-    ),
-  ).toThrow();
-  expect(() =>
-    verifyTaskInstructionSkillReview(reviewed, "other-actor", "2026-10-19T00:01:00.000Z"),
-  ).toThrow();
+  ).toBe(true);
 });

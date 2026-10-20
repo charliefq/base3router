@@ -4,6 +4,7 @@ import {
 } from "@t3tools/shared/taskInstructionSkills";
 import { type TaskInstructionSkillModule } from "@t3tools/contracts";
 import { Select, SelectTrigger, SelectValue, SelectPopup, SelectItem } from "../ui/select";
+import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
 import { TaskInstructionSkillReadout } from "./TaskInstructionSkillReadout";
 import { useLayoutEffect, useRef, useState, useMemo } from "react";
 import { useAtomValue } from "@effect/atom-react";
@@ -180,6 +181,13 @@ export function useTaskFirstLaunch(props: {
   const review =
     reviewed?.token === reviewToken && reviewed.key === reviewKey ? reviewed.value : null;
   const reviewModule = review ? reviewed?.module : null;
+  const autoIntent = useMemo(
+    () =>
+      review?.instructionSkill && review.routingMode === "auto"
+        ? classifyLocalTask(review.text)
+        : null,
+    [review],
+  );
   const setReview = (
     value: LaunchReview | null,
     module: TaskInstructionSkillModule | null = null,
@@ -503,7 +511,7 @@ export function useTaskFirstLaunch(props: {
           </label>
           <p>
             Explicit code-owned instruction text only. No tools, permissions, access or budget
-            granted. Choose Manual and review the exact body before Start.
+            granted. Choose Manual or Auto and review the exact body before Start.
           </p>
           {invalidSkill ? <p>Selected instruction module unavailable; no fallback.</p> : null}
         </section>
@@ -520,10 +528,8 @@ export function useTaskFirstLaunch(props: {
         <Button
           size="sm"
           variant="outline"
-          disabled={!available || busy || reviewBusy || !!skillChoice}
-          onClick={() => {
-            if (!skillChoice) setMode("auto");
-          }}
+          disabled={!available || busy || reviewBusy}
+          onClick={() => setMode("auto")}
         >
           Choose Auto
         </Button>
@@ -537,10 +543,6 @@ export function useTaskFirstLaunch(props: {
           modelOptionsByInstance={options}
           routingMode={mode}
           onRoutingModeChange={(value) => {
-            if (skillChoice && value !== "manual") {
-              setNotice("Instruction modules require an exact Manual model review.");
-              return;
-            }
             setMode(value);
           }}
           disabled={!available || busy}
@@ -562,7 +564,6 @@ export function useTaskFirstLaunch(props: {
           busy ||
           reviewBusy ||
           invalidSkill ||
-          (skillChoice !== "" && mode !== "manual") ||
           !mode ||
           !manual ||
           !props.text.trim() ||
@@ -577,8 +578,7 @@ export function useTaskFirstLaunch(props: {
             !manual ||
             preparing.current ||
             reviewOwner.current !== reviewToken ||
-            invalidSkill ||
-            (skillChoice && mode !== "manual")
+            invalidSkill
           )
             return;
           const value: LaunchReview = {
@@ -673,6 +673,13 @@ export function useTaskFirstLaunch(props: {
               ? `Explicit provider/model: ${review.modelSelection.instanceId} / ${review.modelSelection.model}`
               : "Auto recalculates its authoritative route at dispatch; any preview is advisory, not a locked target or optimality guarantee."}
           </p>
+          {autoIntent ? (
+            <p>
+              Advisory local Auto intent: {autoIntent.category} ({autoIntent.classifierVersion}).
+              Dispatch reevaluates the current policy and eligible targets; this classification
+              grants no capability or locked model.
+            </p>
+          ) : null}
           <p>
             Provider start cap {review.contract.brake.maxProviderStarts}; token cap{" "}
             {review.contract.brake.maxTokens ?? "not declared"}; cost cap{" "}

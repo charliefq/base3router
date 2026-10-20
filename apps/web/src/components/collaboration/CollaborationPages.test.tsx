@@ -8923,6 +8923,83 @@ const chooseInstructionModule = async (id: string) => {
   });
   await act(async () => selection.findByType("select").props.onChange({ target: { value: id } }));
 };
+it("mounted Auto instruction skill reviews without starting and delivers exact bytes to the changed actual target once", async () => {
+  await withFirstLaunchFixture(async (f) => {
+    wireGenericLaunch(f);
+    const module = taskInstructionSkillModules()[0]!;
+    const props = genericProps(f);
+    await act(async () => {
+      renderer = create(<TaskFirstInstructions {...props} />);
+    });
+    await prepareGeneric("Summarize the supplied evidence and mark unknowns.", "manual");
+    await chooseInstructionModule(module.id);
+    expect(creationButton("Choose Auto")!.props.disabled).toBe(false);
+    await creationClick("Choose Auto");
+    await creationClick("Preview Auto");
+    await act(async () => {
+      await state.autoPreview.mock.results.at(-1)!.value;
+    });
+    const preview = (await state.autoPreview.mock.results.at(-1)!.value).value;
+    expect(preview.status).toBe("available");
+    await creationClick("Review ordinary task launch");
+    await act(async () => {
+      await state.skillReview.mock.results.at(-1)!.value;
+    });
+    expect(
+      renderer.root
+        .findByProps({ "aria-label": "Reviewed ordinary task launch" })
+        .findAllByType("p")
+        .map((p) => p.children.filter((c) => typeof c === "string").join(""))
+        .join("\n"),
+    ).toContain("Mode: auto");
+    expect(text()).toContain("Auto recalculates its authoritative route at dispatch");
+    expect(text()).toContain("Advisory local Auto intent:");
+    expect(text()).toContain("local-task.heuristic.v2.0.0");
+    expect(text()).toContain("summarization");
+    expect(text()).toContain(taskInstructionSkillRef(module).contentSha256);
+    expect(
+      renderer.root
+        .findByProps({ "aria-label": "Exact reviewed instruction module" })
+        .findByType("pre").children,
+    ).toEqual([module.body]);
+    expect((await EffectForFixture.runPromise(f.inspect())).starts).toHaveLength(0);
+    f.changeAutoCandidate();
+    const start = creationButton("Start reviewed ordinary task")!.props.onClick;
+    await act(async () => {
+      start();
+      start();
+    });
+    await act(async () => {
+      await state.startStep.mock.results[0]!.value;
+    });
+    await EffectForFixture.runPromise(f.drain());
+    expect(state.startStep).toHaveBeenCalledTimes(1);
+    const actual = await EffectForFixture.runPromise(f.inspect());
+    expect(actual.starts).toEqual([{ instanceId: "codex", model: "aaa-after-review" }]);
+    expect(actual.starts[0]).not.toEqual(preview.decision.selected.target);
+    expect(actual.executions[0]!.message.text).toBe(
+      "Summarize the supplied evidence and mark unknowns." + taskInstructionSkillText(module),
+    );
+    await act(async () => {
+      renderer.unmount();
+      renderer = create(<TaskFirstInstructions {...props} />);
+    });
+    await creationClick("Read original launch status");
+    await act(async () => {
+      await state.firstLaunchRead.mock.results.at(-1)!.value;
+    });
+    expect(text()).toContain("adapter-accepted");
+    expect(text()).toContain("aaa-after-review");
+    expect(
+      renderer.root
+        .findAllByType("p")
+        .map((p) => p.children.filter((c) => typeof c === "string").join(""))
+        .join("\n"),
+    ).toContain("run status completed");
+    expect(state.startStep).toHaveBeenCalledTimes(1);
+  });
+}, 30000);
+
 it.each(taskInstructionSkillModules())(
   "mounted explicit $id review shows exact body and delivers once through ordinary Start",
   async (module) => {
@@ -8936,7 +9013,7 @@ it.each(taskInstructionSkillModules())(
       expect(state.skillReview).not.toHaveBeenCalled();
       await chooseInstructionModule(module.id);
       expect(state.skillReview).not.toHaveBeenCalled();
-      expect(creationButton("Choose Auto")!.props.disabled).toBe(true);
+      expect(creationButton("Choose Auto")!.props.disabled).toBe(false);
       await creationClick("Review ordinary task launch");
       await act(async () => {
         await state.skillReview.mock.results.at(-1)!.value;
@@ -8972,22 +9049,32 @@ it.each(taskInstructionSkillModules())(
   },
   30000,
 );
-it.each(["selection", "text", "model", "session", "scope", "contract"] as const)(
-  "mounted %s A-B-A retires instruction review and stale Start callback",
-  async (change) => {
+it.each(
+  (["manual", "auto"] as const).flatMap((mode) =>
+    (["selection", "text", "model", "session", "scope", "contract", "mode"] as const).map(
+      (change) => ({ mode, change }),
+    ),
+  ),
+)(
+  "mounted $mode $change A-B-A retires instruction review and stale Start callback",
+  async ({ mode, change }) => {
     await withFirstLaunchFixture(async (f) => {
       wireGenericLaunch(f);
       const props = genericProps(f);
       await act(async () => {
         renderer = create(<TaskFirstInstructions {...props} />);
       });
-      await prepareGeneric("Original supplied evidence.", "manual");
+      await prepareGeneric("Original supplied evidence.", mode);
       await chooseInstructionModule("evidence-summary");
       await creationClick("Review ordinary task launch");
       await act(async () => {
         await state.skillReview.mock.results.at(-1)!.value;
       });
       const staleStart = creationButton("Start reviewed ordinary task")!.props.onClick;
+      if (change === "mode") {
+        await creationClick(mode === "auto" ? "Choose Manual" : "Choose Auto");
+        await creationClick(mode === "auto" ? "Choose Auto" : "Choose Manual");
+      }
       if (change === "selection") {
         await chooseInstructionModule("structured-comparison");
         await chooseInstructionModule("evidence-summary");
@@ -9031,77 +9118,85 @@ it.each(["selection", "text", "model", "session", "scope", "contract"] as const)
   },
   30000,
 );
-it("mounted expired instruction review removes Start and rejects its retained callback", async () => {
-  await withFirstLaunchFixture(async (f) => {
-    wireGenericLaunch(f);
-    const props = genericProps(f);
-    await act(async () => {
-      renderer = create(<TaskFirstInstructions {...props} />);
-    });
-    await prepareGeneric("Supplied evidence.", "manual");
-    await chooseInstructionModule("evidence-summary");
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    try {
-      await creationClick("Review ordinary task launch");
+it.each(["manual", "auto"] as const)(
+  "mounted %s expired instruction review removes Start and rejects its retained callback",
+  async (mode) => {
+    await withFirstLaunchFixture(async (f) => {
+      wireGenericLaunch(f);
+      const props = genericProps(f);
       await act(async () => {
+        renderer = create(<TaskFirstInstructions {...props} />);
+      });
+      await prepareGeneric("Supplied evidence.", mode);
+      await chooseInstructionModule("evidence-summary");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      try {
+        await creationClick("Review ordinary task launch");
+        await act(async () => {
+          await state.skillReview.mock.results.at(-1)!.value;
+        });
+        const staleStart = creationButton("Start reviewed ordinary task")!.props.onClick;
+        await act(async () => {
+          vi.advanceTimersByTime(300001);
+        });
+        expect(creationButton("Start reviewed ordinary task")).toBeUndefined();
+        expect(text()).toContain("Instruction module review expired");
+        await act(async () => {
+          await staleStart();
+        });
+        expect(state.startStep).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+      expect((await EffectForFixture.runPromise(f.inspect())).starts).toHaveLength(0);
+    });
+  },
+  30000,
+);
+
+it.each(["manual", "auto"] as const)(
+  "pending %s module review from an old session cannot revive after session A-B-A",
+  async (mode) => {
+    await withFirstLaunchFixture(async (f) => {
+      wireGenericLaunch(f);
+      const props = genericProps(f);
+      await act(async () => {
+        renderer = create(<TaskFirstInstructions {...props} />);
+      });
+      await prepareGeneric("Supplied evidence.", mode);
+      await chooseInstructionModule("evidence-summary");
+      const reply = deferred<unknown>();
+      const ready = deferred<void>();
+      let reviewed: unknown;
+      state.skillReview.mockImplementation(
+        async ({ input }: { input: Parameters<typeof f.reviewInstructionSkill>[0] }) => {
+          reviewed = {
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(f.reviewInstructionSkill(input)),
+          };
+          ready.resolve();
+          return reply.promise;
+        },
+      );
+      await creationClick("Review ordinary task launch");
+      await ready.promise;
+      const original = state.sessionIdentity;
+      for (const identity of [{}, original])
+        await act(async () => {
+          state.sessionIdentity = identity;
+          renderer.update(<TaskFirstInstructions {...props} />);
+        });
+      await act(async () => {
+        reply.resolve(reviewed);
         await state.skillReview.mock.results.at(-1)!.value;
       });
-      const staleStart = creationButton("Start reviewed ordinary task")!.props.onClick;
-      await act(async () => {
-        vi.advanceTimersByTime(300001);
-      });
       expect(creationButton("Start reviewed ordinary task")).toBeUndefined();
-      expect(text()).toContain("Instruction module review expired");
-      await act(async () => {
-        await staleStart();
-      });
       expect(state.startStep).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-    expect((await EffectForFixture.runPromise(f.inspect())).starts).toHaveLength(0);
-  });
-}, 30000);
-
-it("pending module review from an old session cannot revive after session A-B-A", async () => {
-  await withFirstLaunchFixture(async (f) => {
-    wireGenericLaunch(f);
-    const props = genericProps(f);
-    await act(async () => {
-      renderer = create(<TaskFirstInstructions {...props} />);
+      expect((await EffectForFixture.runPromise(f.inspect())).starts).toHaveLength(0);
     });
-    await prepareGeneric("Supplied evidence.", "manual");
-    await chooseInstructionModule("evidence-summary");
-    const reply = deferred<unknown>();
-    const ready = deferred<void>();
-    let reviewed: unknown;
-    state.skillReview.mockImplementation(
-      async ({ input }: { input: Parameters<typeof f.reviewInstructionSkill>[0] }) => {
-        reviewed = {
-          _tag: "Success",
-          value: await EffectForFixture.runPromise(f.reviewInstructionSkill(input)),
-        };
-        ready.resolve();
-        return reply.promise;
-      },
-    );
-    await creationClick("Review ordinary task launch");
-    await ready.promise;
-    const original = state.sessionIdentity;
-    for (const identity of [{}, original])
-      await act(async () => {
-        state.sessionIdentity = identity;
-        renderer.update(<TaskFirstInstructions {...props} />);
-      });
-    await act(async () => {
-      reply.resolve(reviewed);
-      await state.skillReview.mock.results.at(-1)!.value;
-    });
-    expect(creationButton("Start reviewed ordinary task")).toBeUndefined();
-    expect(state.startStep).not.toHaveBeenCalled();
-    expect((await EffectForFixture.runPromise(f.inspect())).starts).toHaveLength(0);
-  });
-}, 30000);
+  },
+  30000,
+);
 
 it("Task inbox list/filter/focus/return/reload reads never mutate tasks or start providers", async () => {
   const a = agentTaskFixture("project-a");

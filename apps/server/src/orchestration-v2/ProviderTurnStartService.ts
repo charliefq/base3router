@@ -1,5 +1,6 @@
 import {
   verifyTaskInstructionSkillReview,
+  taskInstructionSkillTargetAvailable,
   taskInstructionSkillText,
 } from "@t3tools/shared/taskInstructionSkills";
 import { sha256Hex } from "@t3tools/shared/actionCanonical";
@@ -718,7 +719,8 @@ export const layer: Layer.Layer<
               argumentHash(projection.thread.taskContract) !== argumentHash(launch.contract) ||
               !run.instructionSkillSelection ||
               argumentHash(run.instructionSkillSelection) !== argumentHash(selectedInstruction) ||
-              argumentHash(run.modelSelection) !== argumentHash(launch.modelSelection) ||
+              (launch.routingMode === "manual" &&
+                argumentHash(run.modelSelection) !== argumentHash(launch.modelSelection)) ||
               resolvedRuntimePolicy.runtimeMode !== launch.runtimeMode ||
               resolvedRuntimePolicy.interactionMode !== launch.interactionMode
             )
@@ -727,10 +729,21 @@ export const layer: Layer.Layer<
                 cause: "Reviewed instruction skill scope, contract or native target changed.",
               });
             const nowIso = DateTime.formatIso(yield* DateTime.now);
-            return yield* Effect.try({
+            const module = yield* Effect.try({
               try: () => verifyTaskInstructionSkillReview(launch, grants[0]!.actor_id, nowIso),
               catch: (cause) => new ProviderTurnStartError({ runId, cause }),
             });
+            const provider = Option.isSome(capabilityProvider)
+              ? (yield* capabilityProvider.value.getProviders).find(
+                  (p) => p.instanceId === run.modelSelection.instanceId,
+                )
+              : undefined;
+            if (!taskInstructionSkillTargetAvailable(module, provider, run.modelSelection))
+              return yield* new ProviderTurnStartError({
+                runId,
+                cause: "Actual model cannot receive the reviewed instruction module.",
+              });
+            return module;
           }),
         );
         if (prepared._tag === "Failure") {
@@ -1479,13 +1492,31 @@ export const layer: Layer.Layer<
               turnInput.runId !== run.id ||
               turnInput.attemptId !== attempt.id ||
               turnInput.message.messageId !== message.id ||
-              argumentHash(turnInput.modelSelection) !==
-                argumentHash(message.taskFirstLaunch.modelSelection)
+              argumentHash(turnInput.modelSelection) !== argumentHash(run.modelSelection) ||
+              (message.taskFirstLaunch.routingMode === "manual" &&
+                argumentHash(turnInput.modelSelection) !==
+                  argumentHash(message.taskFirstLaunch.modelSelection))
             )
               return yield* new ProviderTurnStartError({
                 runId,
                 cause:
                   "Actual instruction module input differs from its reviewed body or native identity.",
+              });
+            const actualProvider = Option.isSome(capabilityProvider)
+              ? (yield* capabilityProvider.value.getProviders).find(
+                  (p) => p.instanceId === turnInput.modelSelection.instanceId,
+                )
+              : undefined;
+            if (
+              !taskInstructionSkillTargetAvailable(
+                current,
+                actualProvider,
+                turnInput.modelSelection,
+              )
+            )
+              return yield* new ProviderTurnStartError({
+                runId,
+                cause: "Actual instruction target is no longer eligible.",
               });
             const fresh = yield* projectionStore.getTurnStartContext(input.threadId, run.id);
             if (

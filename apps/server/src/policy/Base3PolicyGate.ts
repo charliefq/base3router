@@ -1,3 +1,7 @@
+import {
+  resolveTaskInstructionSkill,
+  taskInstructionSkillTargetAvailable,
+} from "@t3tools/shared/taskInstructionSkills";
 import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
 // Argument hashes are canonical JSON. A schema codec would change the bytes
 // a grant is compared against after a queue delay.
@@ -25,6 +29,7 @@ import {
   TaskContractReviewReference,
   TaskAutoPreviewInput,
   type TaskCapabilityStep,
+  type TaskFirstLaunch,
   type TaskAutoPreviewState,
   type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
@@ -92,6 +97,7 @@ export interface DispatchPolicyCommand {
   readonly text?: string;
   readonly modelSelection?: ModelSelection;
   readonly capabilityStep?: TaskCapabilityStep;
+  readonly taskFirstLaunch?: TaskFirstLaunch;
   readonly routingMode?: "auto" | "manual";
   readonly modelRouteConstraints?: ModelRouterConstraints;
   readonly scheduledTaskId?: string;
@@ -800,6 +806,35 @@ const bindRoute = (input: {
     }
     if (binding === undefined) {
       return yield* deny(input.command.type, "binding", "No immutable route binding was produced.");
+    }
+    // Check the actual route before reserving starts or issuing grants. Never drop a
+    // selected module or reroute it silently to a different/Manual request.
+    const instruction = input.command.taskFirstLaunch?.instructionSkill;
+    if (instruction) {
+      const module = yield* Effect.try({
+        try: () => resolveTaskInstructionSkill(instruction.module),
+        catch: () =>
+          new Base3PolicyDeniedError({
+            reason: "instruction-module",
+            commandType: input.command.type,
+          }),
+      });
+      const actual = bound.modelSelection ?? {
+        instanceId: binding.target.instanceId,
+        model: binding.target.model,
+      };
+      if (
+        !taskInstructionSkillTargetAvailable(
+          module,
+          input.providers.find((p) => p.instanceId === actual.instanceId),
+          actual,
+        )
+      )
+        return yield* deny(
+          input.command.type,
+          "instruction-module-target",
+          "The actual routed model cannot receive the selected instruction module. No fallback was sent.",
+        );
     }
     binding = { ...binding, localTaskProfile };
     const now = yield* Effect.map(DateTime.now, DateTime.formatIso);

@@ -2,6 +2,10 @@ import {
   TaskInstructionSkillModule,
   TaskInstructionSkillRef,
   TaskFirstLaunch,
+  type ServerProvider,
+  type ModelSelection,
+  isProviderAvailable,
+  isProviderTaskExecutionCapable,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
@@ -91,12 +95,7 @@ export function verifyTaskInstructionSkillReview(
   nowIso: string,
 ) {
   const proof = launch.instructionSkill;
-  if (
-    !proof ||
-    !validLaunch(launch) ||
-    launch.routingMode !== "manual" ||
-    proof.actorId !== actorId
-  )
+  if (!proof || !validLaunch(launch) || proof.actorId !== actorId)
     throw new Error("Instruction skill review binding unavailable.");
   const now = Date.parse(nowIso),
     at = Date.parse(proof.reviewedAt),
@@ -116,4 +115,29 @@ export function verifyTaskInstructionSkillReview(
   if (taskInstructionSkillBinding(launch, binding) !== bindingSha256)
     throw new Error("Instruction skill launch facts changed.");
   return module;
+}
+
+/** Applicability only; code-owned source and server issuance must be verified separately.
+ * Existing text-task transports accept these plain instructions. Explicit non-text
+ * model declarations fail closed; absent legacy metadata retains the text transport contract.
+ */
+export function taskInstructionSkillTargetAvailable(
+  module: TaskInstructionSkillModule,
+  provider: ServerProvider | undefined,
+  target: ModelSelection,
+): boolean {
+  const model = provider?.models.find((candidate) => candidate.slug === target.model);
+  return (
+    validModule(module) &&
+    provider !== undefined &&
+    provider.instanceId === target.instanceId &&
+    provider.enabled &&
+    provider.installed &&
+    provider.status === "ready" &&
+    provider.auth.status !== "unauthenticated" &&
+    isProviderAvailable(provider) &&
+    isProviderTaskExecutionCapable(provider) &&
+    model !== undefined &&
+    (model.inputModalities === undefined || model.inputModalities.includes("text"))
+  );
 }

@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 import {
   taskInstructionSkillBinding,
+  taskInstructionSkillTargetAvailable,
   resolveTaskInstructionSkill,
   verifyTaskInstructionSkillReview as verifyInstructionSkillReview,
 } from "@t3tools/shared/taskInstructionSkills";
@@ -152,6 +153,7 @@ export const validateFirstTaskLaunch = Effect.fn("FirstTaskLaunch.validate")(fun
   if (!reviewedDispatchMatches(c, authorized)) return yield* deny();
   const m = c.taskFirstLaunch;
   if (!validLaunch(m)) return yield* deny();
+  let reviewedModule: ReturnType<typeof verifyInstructionSkillReview> | undefined;
   if (m.instructionSkill) {
     const rows = yield* sql<{
       issued_json: string | null;
@@ -168,7 +170,7 @@ export const validateFirstTaskLaunch = Effect.fn("FirstTaskLaunch.validate")(fun
     )
       return yield* deny();
     const skillNow = DateTime.formatIso(yield* DateTime.now);
-    yield* Effect.try({
+    reviewedModule = yield* Effect.try({
       try: () => verifyInstructionSkillReview(m, principal.actorId, skillNow),
       catch: () => deny(),
     });
@@ -188,7 +190,11 @@ export const validateFirstTaskLaunch = Effect.fn("FirstTaskLaunch.validate")(fun
       provider.auth.status === "unauthenticated" ||
       !isProviderAvailable(provider) ||
       !isProviderTaskExecutionCapable(provider) ||
-      !provider.models.some((p) => p.slug === c.modelSelection?.model)
+      !provider.models.some((p) => p.slug === c.modelSelection?.model) ||
+      // Auto proof binds intent/preference; the atomic admission checks the actual routed target.
+      (reviewedModule !== undefined &&
+        (!c.modelSelection ||
+          !taskInstructionSkillTargetAvailable(reviewedModule, provider, c.modelSelection)))
     )
       return yield* deny();
   }
@@ -256,11 +262,10 @@ export const reviewTaskInstructionSkill = Effect.fn("TaskInstructionSkill.review
     if (Option.isNone(decodeSkillReviewInput(input, { onExcessProperty: "error" })))
       return { status: "unavailable", reason: "Invalid or expanded instruction module review." };
     const launch = input.launch;
-    if (launch.instructionSkill || launch.routingMode !== "manual")
+    if (launch.instructionSkill)
       return {
         status: "unavailable",
-        reason:
-          "Select an exact Manual model and review a first launch without an existing skill proof.",
+        reason: "Choose Manual or Auto and review a first launch without an existing skill proof.",
       };
     const actor = yield* reviewedTaskPrincipal;
     const module = yield* Effect.try({
