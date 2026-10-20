@@ -52,6 +52,8 @@ function unavailable(profile: AgentProfile, providers: ReadonlyArray<ServerProvi
   if (profile.status !== "active")
     return "Archived configuration. Restore it in the configuration editor before reuse.";
   const selection = profile.taskConfiguration!.modelSelection;
+  if (selection.options !== undefined)
+    return "This configuration uses model options unsupported by the saved-configuration workflow. No options will be removed or substituted.";
   const provider = providers.find((p) => p.instanceId === selection.instanceId);
   if (!provider || !providerExecutable(provider))
     return `Provider ${selection.instanceId} is unavailable. No provider will be substituted.`;
@@ -354,6 +356,14 @@ function ScopedConfigurationLibrary(props: Props & { environmentId: EnvironmentI
             {inspection.taskConfiguration!.modelSelection.instanceId}. Exact model:{" "}
             {inspection.taskConfiguration!.modelSelection.model}.
           </p>
+          {inspection.taskConfiguration!.modelSelection.options !== undefined ? (
+            <>
+              <p>Stored model options</p>
+              <pre>
+                {JSON.stringify(inspection.taskConfiguration!.modelSelection.options, null, 2)}
+              </pre>
+            </>
+          ) : null}
           <p>Complete stored instructions</p>
           <pre className="whitespace-pre-wrap break-words">{inspection.instructions}</pre>
           {reuseReason ? <p role="status">{reuseReason}</p> : null}

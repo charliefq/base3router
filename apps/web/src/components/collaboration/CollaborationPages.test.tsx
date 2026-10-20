@@ -10992,7 +10992,11 @@ it.each(["creation", "launch"] as const)(
       if (stage === "launch") {
         await f.drain();
         await f.settle(originalLaunch!.messageId);
-        // The original task is already nonempty: recovery stays in its existing task/conversation path.
+        expect(text()).toContain("UNKNOWN until reconciled");
+        await creationClick("Read original launch status");
+        await act(async () => {
+          await state.firstLaunchRead.mock.results.at(-1)!.value;
+        });
         expect(readFirstLaunchAttempt(launchKey).attempt!.command).toEqual(originalLaunch);
       }
       expect(state.create).toHaveBeenCalledTimes(1);
@@ -11102,3 +11106,78 @@ it("saved configuration library refresh preserves an unrelated provider-first cr
   expect(creationButton("Create task")).toBeDefined();
   expect(state.create).not.toHaveBeenCalled();
 });
+
+it("saved configuration library keeps unsupported model options inspectable without stripping the exact selection", async () => {
+  await withLibraryFixture(async (f) => {
+    const inputs = await prepareLibrary(f);
+    const catalog = await f.catalog({ projectId: ProjectId.make("project-a") });
+    if (catalog._tag !== "Success") throw new Error("missing catalog");
+    const unsupported = {
+      ...catalog,
+      value: {
+        ...catalog.value,
+        profiles: catalog.value.profiles.map((p) =>
+          p.id !== "careful-b" || !p.taskConfiguration
+            ? p
+            : {
+                ...p,
+                taskConfiguration: {
+                  ...p.taskConfiguration,
+                  modelSelection: { ...p.taskConfiguration.modelSelection, options: [] },
+                },
+              },
+        ),
+      },
+    };
+    state.catalog.mockResolvedValue(unsupported);
+    await act(async () => {
+      await creationButton("Refresh saved task configurations")!.props.onClick();
+    });
+    await act(async () => inspectLibrary().props.onClick());
+    expect(text()).toContain("model options unsupported");
+    expect(creationButton("Use configuration")!.props.disabled).toBe(true);
+    await act(async () => {
+      await creationButton("Use configuration")!.props.onClick();
+    });
+    expect(
+      renderer.root
+        .findAllByType("pre")
+        .some((n) => n.children.join("") === inputs[1]!.draft.instructions),
+    ).toBe(true);
+    expect(state.create).not.toHaveBeenCalled();
+    expect((await f.inspect()).starts).toHaveLength(0);
+  });
+}, 30000);
+
+it("saved configuration library never-sent creation stays UNKNOWN after reconnect and does not allocate a replacement", async () => {
+  await withLibraryFixture(async (f) => {
+    await prepareLibrary(f);
+    await useLibrary();
+    await fillCreation("Library unknown admission", false);
+    await creationClick("Review new task");
+    await f.disconnect();
+    await act(async () => {
+      await creationButton("Create task")!.props.onClick();
+    });
+    const original = readAgentsCreationAttempt().attempt!.command;
+    expect((await f.inspect()).commands.filter((c) => c.type === "thread.create")).toHaveLength(0);
+    await act(async () => renderer.unmount());
+    await f.connect();
+    state.sessionIdentity = {};
+    await act(async () => {
+      renderer = create(<AgentsPage scope={libraryScope} />);
+    });
+    await act(async () => {
+      await state.load.mock.results.at(-1)!.value;
+    });
+    await creationClick("Recover task creation");
+    await act(async () => {
+      await state.readCreationStatus.mock.results.at(-1)!.value;
+    });
+    expect(readAgentsCreationAttempt().attempt).toEqual({ status: "uncertain", command: original });
+    expect(text()).toContain("unknown");
+    expect(state.create).toHaveBeenCalledTimes(1);
+    expect((await f.snapshot()).tasks).toHaveLength(0);
+    expect((await f.inspect()).starts).toHaveLength(0);
+  });
+}, 30000);

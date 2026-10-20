@@ -835,6 +835,8 @@ export function AgentsTaskCreator(props: {
             type="button"
             disabled={
               configurationBlocked ||
+              (props.request?.savedConfiguration !== undefined &&
+                !props.request.savedConfiguration.isCurrent()) ||
               !parseDraft(draft) ||
               review !== null ||
               !modelAvailable ||
