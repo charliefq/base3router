@@ -10116,7 +10116,11 @@ it.each(["manual", "auto"] as const)(
   "mounted accepted source creates, reviews and starts one independent %s destination",
   async (mode) => {
     await withTaskTransportFixture(async (f) => {
-      const source = await acceptedHandoffSource(f, `mounted-handoff-${mode}`);
+      const source = await acceptedHandoffSource(
+        f,
+        `mounted-handoff-${mode}`,
+        mode === "manual" ? "x".repeat(2047) + "😀" : undefined,
+      );
       creationStorage();
       state.providers = f.providers.map((p) => ({
         ...p,
@@ -10194,22 +10198,8 @@ it.each(["manual", "auto"] as const)(
       expect(created.taskCreationReview.resultHandoff).toEqual(source.source);
       expect((await f.inspect()).starts).toHaveLength(1);
       expect(creationButton("Prepare created task for review/start")).toBeDefined();
-      const createdTask = (await f.snapshot()).tasks.find((t) => t.threadId === created.threadId)!;
-      await act(async () => renderer.unmount());
-      state.reviewRead.mockReset().mockImplementation(({ input }) => f.review(input));
       await act(async () => {
-        renderer = create(
-          <TaskFirstInstructions
-            task={createdTask}
-            environmentId={EnvironmentId.make("environment-a")}
-            stale={false}
-            readVersion={1}
-            onOpen={vi.fn()}
-          />,
-        );
-      });
-      await act(async () => {
-        await creationButton("Prepare first instructions")!.props.onClick();
+        await creationButton("Prepare created task for review/start")!.props.onClick();
       });
       await act(async () =>
         renderer.root
@@ -10349,6 +10339,147 @@ it.each(["environment", "session", "read-version"] as const)(
       expect(state.create).not.toHaveBeenCalled();
       expect(state.startStep).not.toHaveBeenCalled();
       expect((await f.inspect()).starts).toHaveLength(1);
+    });
+  },
+  30000,
+);
+
+it("handoff creation review retires through source read-version A-to-B-to-A", async () => {
+  await withTaskTransportFixture(async (f) => {
+    const s = await acceptedHandoffSource(f, "creator-source-version"),
+      before = await f.executionCounts();
+    creationStorage();
+    state.providers = f.providers.map((p) => ({
+      ...p,
+      displayName: p.driver,
+      models: p.models.map((m) => ({ ...m, isDefault: false })),
+    }));
+    state.create.mockImplementation(({ input }) => f.create(input));
+    const props = {
+      environmentId: EnvironmentId.make("environment-a"),
+      project: { id: "project-a", title: "A" },
+      providers: f.providers,
+      request: { providerId: "codex", token: "source-version-creation", source: s.source },
+      sourceVersion: "a",
+      onLock: vi.fn(),
+      onRelease: vi.fn(),
+      onOpen: vi.fn(),
+      refresh: () => f.snapshot(),
+    };
+    await act(async () => {
+      renderer = create(<AgentsTaskCreator {...props} />);
+    });
+    await fillCreation("Independent source-version task", false);
+    await creationClick("Select exact model: exact-second");
+    await creationClick("Review new task");
+    const retired = creationButton("Create task")!.props.onClick;
+    await act(async () => renderer.update(<AgentsTaskCreator {...props} sourceVersion="b" />));
+    await act(async () => renderer.update(<AgentsTaskCreator {...props} />));
+    await act(async () => {
+      await retired();
+    });
+    expect(creationButton("Create task")).toBeUndefined();
+    expect(state.create).not.toHaveBeenCalled();
+    expect(await f.executionCounts()).toEqual(before);
+  });
+}, 30000);
+
+it.each(["source-observation", "destination-observation", "stale-aba"] as const)(
+  "actual handoff convenience Start retires through %s A-to-B-to-A",
+  async (change) => {
+    await withTaskTransportFixture(async (f) => {
+      const source = await acceptedHandoffSource(f, `convenience-${change}`);
+      creationStorage();
+      state.providers = f.providers.map((p) => ({
+        ...p,
+        displayName: p.driver,
+        models: p.models.map((m) => ({ ...m, isDefault: false })),
+      }));
+      state.create.mockImplementation(({ input }) => f.create(input));
+      state.readCreationStatus.mockImplementation(({ input }) => f.creationStatus(input));
+      state.readProjection.mockImplementation(({ input }) => f.projection(input));
+      state.reviewRead.mockImplementation(({ input }) => f.review(input));
+      state.startStep.mockImplementation(({ input }) => f.start(input));
+      state.firstLaunchRead.mockImplementation(({ input }) => f.launchStatus(input));
+      state.load.mockImplementation(() => f.snapshot());
+      let observation = { stale: false, readVersion: 1, tasks: (await f.snapshot()).tasks };
+      const props = {
+        environmentId: EnvironmentId.make("environment-a"),
+        project: { id: "project-a", title: "A" },
+        providers: f.providers,
+        request: {
+          providerId: "codex",
+          token: `convenience-create-${change}`,
+          source: source.source,
+        },
+        sourceVersion: "a",
+        onLock: vi.fn(),
+        onRelease: vi.fn(),
+        onOpen: vi.fn(),
+        refresh: async () => {
+          const snapshot = await f.snapshot();
+          observation = {
+            stale: false,
+            readVersion: observation.readVersion + 1,
+            tasks: snapshot.tasks,
+          };
+          renderer.update(render());
+          return snapshot;
+        },
+      };
+      const render = () => <AgentsTaskCreator {...props} launchObservation={observation} />;
+      await act(async () => {
+        renderer = create(render());
+      });
+      await fillCreation("Independent convenience task", false);
+      await creationClick("Select exact model: exact-second");
+      for (const label of [
+        "Optional token cap",
+        "Optional reported cost cap (USD)",
+        "Optional UTC deadline",
+      ])
+        await act(async () =>
+          renderer.root
+            .findByProps({ "aria-label": label })
+            .props.onChange({ target: { value: "" } }),
+        );
+      await creationClick("Review new task");
+      await act(async () => {
+        await creationButton("Create task")!.props.onClick();
+      });
+      await act(async () => {
+        await creationButton("Prepare created task for review/start")!.props.onClick();
+      });
+      await creationClick("Choose Manual");
+      await act(async () => {
+        await creationButton("Review ordinary task launch")!.props.onClick();
+      });
+      const retired = creationButton("Start reviewed ordinary task")!.props.onClick,
+        before = await f.executionCounts(),
+        a = observation;
+      if (change === "stale-aba") observation = { ...a, stale: true };
+      else
+        observation = {
+          ...a,
+          readVersion: a.readVersion + 1,
+          tasks: a.tasks.map((t) =>
+            t.threadId ===
+            (change === "source-observation"
+              ? source.c.threadId
+              : state.create.mock.calls[0]![0].input.threadId)
+              ? { ...t, title: "Observed changed task" }
+              : t,
+          ),
+        };
+      await act(async () => renderer.update(render()));
+      observation = a;
+      await act(async () => renderer.update(render()));
+      await act(async () => {
+        await retired();
+      });
+      expect(state.startStep).not.toHaveBeenCalled();
+      expect(await f.executionCounts()).toEqual(before);
+      expect(creationButton("Start reviewed ordinary task")).toBeUndefined();
     });
   },
   30000,

@@ -151,7 +151,6 @@ it.live.each(["adapter-accepted", "unknown"] as const)(
             serverConfigLayer: configLayer,
             governedWorker: true,
             useProjectRuntimePolicy: true,
-            resultText: "Full source output " + "x".repeat(2200),
             ...(outcome === "unknown"
               ? {
                   terminalOnly: true,

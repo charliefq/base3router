@@ -60,6 +60,13 @@ export function revisionSnapshotTask(
     : null;
 }
 
+/** One canonical, surrogate-safe bounded preview; the full text remains the identity authority. */
+export function taskResultPreview(text: string) {
+  let end = COLLABORATION_RESULT_PREVIEW_MAX_CHARS;
+  if (text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff) end--;
+  return { preview: text.slice(0, end), truncated: text.length > end };
+}
+
 /** Server resultReadout validates attribution; these reads must agree on the same latest result. */
 function outputFacts(
   task: CollaborationTask,
@@ -246,8 +253,8 @@ function outputFacts(
     !item.startedAt ||
     !item.completedAt ||
     !item.text.trim() ||
-    item.text.slice(0, COLLABORATION_RESULT_PREVIEW_MAX_CHARS) !== r.content.preview ||
-    item.text.length > COLLABORATION_RESULT_PREVIEW_MAX_CHARS !== r.content.truncated
+    taskResultPreview(item.text).preview !== r.content.preview ||
+    taskResultPreview(item.text).truncated !== r.content.truncated
   )
     return null;
   const root = projection.nodes.find((v) => v.id === run.rootNodeId),

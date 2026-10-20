@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as Option from "effect/Option";
 import * as Effect from "effect/Effect";
 import {
+  TASK_RESULT_HANDOFF_MAX_CHARS,
+  TASK_RESULT_HANDOFF_MAX_BYTES,
   ThreadId,
   type CollaborationTask,
   type EnvironmentId,
@@ -246,7 +248,8 @@ export function TaskResultHandoffReadout({
       {complete ? (
         <>
           <p>
-            Complete source text (maximum 16,000 UTF-16 code units and 64 KiB UTF-8; oversize
+            Complete source text (maximum {TASK_RESULT_HANDOFF_MAX_CHARS.toLocaleString("en-US")}{" "}
+            UTF-16 code units and {TASK_RESULT_HANDOFF_MAX_BYTES / 1024} KiB UTF-8; oversize
             rejects):
           </p>
           <pre className="whitespace-pre-wrap">{source.text}</pre>

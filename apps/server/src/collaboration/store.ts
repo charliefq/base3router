@@ -1,3 +1,4 @@
+import { taskResultPreview as resultPreview } from "@t3tools/shared/taskRevisionRequest";
 import { resultHandoffDeliveryMatches } from "@t3tools/shared/taskResultHandoff";
 import { taskInstructionDeliveryMatches } from "@t3tools/shared/taskInstructionSkills";
 import { taskReferenceDeliveryMatches } from "@t3tools/shared/taskReferenceFile";
@@ -30,7 +31,6 @@ import {
   type TaskContractReviewAction,
   RawEventId,
   OrchestrationV2AppThreadJson,
-  COLLABORATION_RESULT_PREVIEW_MAX_CHARS,
   type CollaborationTaskResultReadout,
   OrchestrationV2ProviderFailure,
   OrchestrationV2ExecutionNode,
@@ -438,11 +438,6 @@ const decodeResultThread = Schema.decodeUnknownOption(Schema.fromJsonString(Stor
 const decodeResultTurn = Schema.decodeUnknownOption(Schema.fromJsonString(StoredResultTurn));
 const decodeResultItem = Schema.decodeUnknownOption(Schema.fromJsonString(StoredResultItem));
 const unknownResult = (reason: string) => ({ status: "unknown" as const, reason });
-const resultPreview = (text: string) => {
-  let end = COLLABORATION_RESULT_PREVIEW_MAX_CHARS;
-  if (text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff) end--;
-  return { preview: text.slice(0, end), truncated: text.length > end };
-};
 
 /** Revalidate the latest run against the already checked execution chain before reading items. */
 const readResultEvidence = (

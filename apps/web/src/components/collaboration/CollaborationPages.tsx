@@ -1751,13 +1751,18 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
                 project={selectedProject}
                 providers={providers}
                 request={creationRequest}
+                launchObservation={{
+                  stale: !connectionFresh || !supervision.live || error !== null || refreshing,
+                  readVersion,
+                  tasks,
+                }}
                 sourceVersion={
                   creationRequest?.source
                     ? (() => {
                         const task = tasks.find(
                           (t) => t.id === creationRequest.source!.reference.taskId,
                         );
-                        return task ? revisionTaskKey(task) : "missing-source";
+                        return task ? `${readVersion}:${revisionTaskKey(task)}` : "missing-source";
                       })()
                     : undefined
                 }
@@ -1778,9 +1783,7 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
                 size="sm"
                 variant="outline"
                 disabled={!environmentId || refreshing}
-                onClick={() => {
-                  void refresh();
-                }}
+                onClick={() => refresh()}
               >
                 {refreshing ? "Refreshing tasks…" : "Refresh tasks"}
               </Button>

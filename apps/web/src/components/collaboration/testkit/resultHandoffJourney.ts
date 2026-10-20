@@ -15,8 +15,12 @@ export function value<A>(
   if (r._tag !== "Success") throw new Error(String(r.cause));
   return r.value;
 }
-export async function acceptedHandoffSource(f: Fixture, key: string) {
-  f.setWorkflowOutput("  Complete source output café\n" + "x".repeat(2200) + "\n  ");
+export async function acceptedHandoffSource(
+  f: Fixture,
+  key: string,
+  output = "  Complete source output café\n" + "x".repeat(2200) + "\n  ",
+) {
+  f.setWorkflowOutput(output);
   const c = await completed(f, key);
   const task = (await f.snapshot()).tasks.find((t) => t.threadId === c.threadId)!;
   const input = {

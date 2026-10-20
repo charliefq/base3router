@@ -12,7 +12,11 @@ it.each(["manual", "auto"] as const)(
   "%s hands off full accepted output once into an independent root",
   async (mode) => {
     await withTaskTransportFixture(async (f) => {
-      const s = await source(f, `source-${mode}`),
+      const s = await source(
+          f,
+          `source-${mode}`,
+          mode === "manual" ? "x".repeat(2047) + "😀" : undefined,
+        ),
         before = await f.executionCounts();
       const d = await destination(f, s.source, `destination-${mode}`, mode);
       expect(await f.executionCounts()).toEqual(before);

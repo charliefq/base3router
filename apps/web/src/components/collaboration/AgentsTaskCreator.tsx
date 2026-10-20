@@ -108,6 +108,11 @@ export function AgentsTaskCreator(props: {
     readonly source?: TaskResultHandoff;
   } | null;
   readonly sourceVersion?: string | undefined;
+  readonly launchObservation?: {
+    readonly stale: boolean;
+    readonly readVersion: number;
+    readonly tasks: ReadonlyArray<CollaborationTask>;
+  };
   readonly onLock: (owner: string) => void;
   readonly onRelease: (owner: string) => void;
   readonly onOpen: (environmentId: EnvironmentId, threadId: ThreadId) => void;
@@ -600,6 +605,15 @@ export function AgentsTaskCreator(props: {
     attempt !== null &&
     props.environmentId === attempt.command.taskCreationReview?.environmentId &&
     props.project?.id === attempt.command.projectId;
+  const handoffAttempt = attempt?.command.taskCreationReview?.resultHandoff !== undefined;
+  const observedTask = handoffAttempt
+    ? props.launchObservation?.tasks.find(
+        (t) =>
+          t.id === createdTask?.id &&
+          t.threadId === attempt?.command.threadId &&
+          t.projectId === attempt?.command.projectId,
+      )
+    : createdTask;
   return (
     <section aria-label="Governed task creation">
       <TaskConfigurations
@@ -650,12 +664,16 @@ export function AgentsTaskCreator(props: {
       ) : null}
       {attempt?.status === "confirmed" && displaysAttempt ? (
         <>
-          {createdTask && createdTask.threadId === attempt.command.threadId ? (
+          {observedTask && observedTask.threadId === attempt.command.threadId ? (
             <TaskFirstInstructions
-              task={createdTask}
+              task={observedTask}
               environmentId={attempt.command.taskCreationReview!.environmentId}
-              stale={false}
-              readVersion={createdTask.review?.reference.threadSequence ?? 0}
+              stale={handoffAttempt ? (props.launchObservation?.stale ?? true) : false}
+              readVersion={
+                handoffAttempt
+                  ? (props.launchObservation?.readVersion ?? 0)
+                  : (observedTask.review?.reference.threadSequence ?? 0)
+              }
               prepareLabel="Prepare created task for review/start"
               onOpen={() =>
                 props.onOpen(
