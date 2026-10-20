@@ -116,7 +116,7 @@ export function TaskReviewControls(props: {
       setBlocked(false);
       setNotice(null);
     }
-  }, [identity, factKey, props.readVersion]);
+  }, [identity, factKey, props.readVersion, setConfirmation, setEditor]);
   useLayoutEffect(() => {
     mounted.current = true;
     return () => {

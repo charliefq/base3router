@@ -12087,14 +12087,9 @@ it.each(["save", "cancel", "dialog", "editor-cancel", "editor-preview"] as const
       );
       const old = mode.startsWith("editor-")
         ? editorOld
-        : mode === "change"
-          ? () =>
-              renderer.root
-                .findByProps({ "aria-label": "Requested changes" })
-                .props.onChange({ target: { value: "Stale A edit" } })
-          : mode === "dialog"
-            ? renderer.root.findByType("dialog").props.onClose
-            : creationButton(mode === "save" ? "Save new revision" : "Cancel")!.props.onClick;
+        : mode === "dialog"
+          ? renderer.root.findByType("dialog").props.onClose
+          : creationButton(mode === "save" ? "Save new revision" : "Cancel")!.props.onClick;
       await creationClick("Close complete output");
       await openFullReview();
       await edit("Proposed goal B");
