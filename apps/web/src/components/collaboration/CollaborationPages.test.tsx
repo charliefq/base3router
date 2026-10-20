@@ -10811,7 +10811,8 @@ it.each([
         });
       if (kind === "directory refresh")
         await act(async () => {
-          await creationButton("Refresh agent directory")!.props.onClick();
+          creationButton("Refresh agent directory")!.props.onClick();
+          await state.load.mock.results.at(-1)!.value;
         });
       if (kind === "scope ABA") {
         await act(async () =>

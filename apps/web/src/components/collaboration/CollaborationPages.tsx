@@ -1234,7 +1234,9 @@ export function AgentsPage(scopeProps: CollaborationScopeProps = {}) {
               size="sm"
               variant="outline"
               disabled={!connected || refreshing}
-              onClick={() => refresh()}
+              onClick={() => {
+                void refresh();
+              }}
             >
               {refreshing
                 ? "Reading agent directory…"
