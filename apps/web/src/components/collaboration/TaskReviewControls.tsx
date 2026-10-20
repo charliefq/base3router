@@ -169,7 +169,10 @@ export function TaskReviewControls(props: {
     };
     const isCurrent = () => mounted.current && currentIdentity.current === initialIdentity;
     const unchanged = () =>
-      isCurrent() && currentFacts.current === initialFacts && !latest.current.stale;
+      isCurrent() &&
+      currentFacts.current === initialFacts &&
+      !latest.current.stale &&
+      (!resultReview || resultReview.isCurrent());
     pendingRef.current = true;
     setNoticeRevision(revision);
     setPending(true);

@@ -12028,7 +12028,15 @@ it.each(["confirm", "cancel", "dialog"] as const)(
   30000,
 );
 
-it.each(["save", "cancel", "dialog", "editor-cancel", "editor-preview"] as const)(
+it.each([
+  "save",
+  "cancel",
+  "dialog",
+  "editor-cancel",
+  "editor-preview",
+  "sync-close-save",
+  "sync-reload-save",
+] as const)(
   "complete result review revision confirmation ABA rejects captured %s A and saves B's own text",
   async (mode) => {
     await withLibraryFixture(async (f) => {
@@ -12090,6 +12098,24 @@ it.each(["save", "cancel", "dialog", "editor-cancel", "editor-preview"] as const
         : mode === "dialog"
           ? renderer.root.findByType("dialog").props.onClose
           : creationButton(mode === "save" ? "Save new revision" : "Cancel")!.props.onClick;
+      if (mode === "sync-close-save" || mode === "sync-reload-save") {
+        const retire = creationButton(
+          mode === "sync-close-save" ? "Close complete output" : "Reload complete output",
+        )!.props.onClick;
+        const save = creationButton("Save new revision")!.props.onClick;
+        await act(async () => {
+          const pending = retire();
+          save();
+          await pending;
+          await f.flush();
+        });
+        expect(state.reviewDecide).not.toHaveBeenCalled();
+        const p = await f.projection({ threadId: c.threadId });
+        if (p._tag !== "Success") throw new Error("missing projection");
+        expect(p.value.thread.taskContract?.revision).toBe(1);
+        expect((await f.inspect()).starts).toHaveLength(1);
+        return;
+      }
       await creationClick("Close complete output");
       await openFullReview();
       await edit("Proposed goal B");
