@@ -172,7 +172,7 @@ export function TaskReviewControls(props: {
       isCurrent() &&
       currentFacts.current === initialFacts &&
       !latest.current.stale &&
-      (!resultReview || resultReview.isCurrent());
+      (!resultReview || resultReview.isViewCurrent());
     pendingRef.current = true;
     setNoticeRevision(revision);
     setPending(true);

@@ -35,6 +35,8 @@ type View = {
 };
 const Context = createContext<{
   version: number;
+  isViewCurrent: () => boolean;
+  // Result-bound actions also require evidence when the result view is open.
   isCurrent: () => boolean;
   validate: () => Promise<boolean>;
   matches: (facts: RevisionRequestFacts) => boolean;
@@ -252,6 +254,7 @@ export function TaskResultReviewScope(props: {
     <Context.Provider
       value={{
         version: view.version,
+        isViewCurrent: current,
         isCurrent: () => current() && (!view.open || view.facts !== null),
         validate,
         matches,

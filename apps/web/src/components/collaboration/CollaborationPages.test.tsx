@@ -11388,10 +11388,19 @@ const fullReviewText =
   "Beginning of persisted output\n" +
   "x".repeat(2300) +
   "\n<iframe src=evil></iframe> 😀 café\nEXACT ENDING\n  ";
-async function setupFullReview(f: LibraryFixture, key = "full-review", output = fullReviewText) {
+async function setupFullReview(
+  f: LibraryFixture,
+  key = "full-review",
+  output = fullReviewText,
+  running = false,
+) {
   creationStorage();
   f.setWorkflowOutput(output);
-  const c = await completedForFullReview(f, key);
+  if (running) f.runInput("First attributable output");
+  const c = await completedForFullReview(
+    running ? { ...f, settle: async () => f.awaitRunning() } : f,
+    key,
+  );
   state.providers = f.providers.map((p) => ({
     ...p,
     displayName: p.driver,
@@ -12252,6 +12261,150 @@ it.each(["cancel", "dialog", "draft", "conversation", "change"] as const)(
       expect(state.startStep).not.toHaveBeenCalled();
       await creationClick("Cancel revision preparation");
       expect(creationButton("Cancel revision preparation")).toBeUndefined();
+    });
+  },
+  30000,
+);
+
+it.each(
+  (["unavailable", "loading"] as const).flatMap((inspection) =>
+    (["pause", "resume", "edit"] as const).map((action) => ({ inspection, action })),
+  ),
+)(
+  "complete result review $inspection inspection preserves authorized non-result $action",
+  async ({ inspection, action }) => {
+    await withLibraryFixture(async (f) => {
+      const key = `full-non-result-${inspection}-${action}`;
+      const c = await setupFullReview(
+        f,
+        key,
+        action === "pause" ? fullReviewText : "",
+        action === "pause",
+      );
+      const task = (await f.snapshot()).tasks.find((t) => t.threadId === c.threadId)!;
+      const input = {
+        environmentId: "environment-a",
+        taskId: task.id,
+        projectId: task.projectId,
+        threadId: c.threadId,
+        revision: 1,
+      };
+      if (action !== "pause") {
+        const r = await f.review(input);
+        if (r._tag !== "Success" || r.value.status !== "available")
+          throw new Error("missing review");
+        expect(
+          (
+            await f.dispatch({
+              type: "thread.task-contract.redirect",
+              commandId: CommandId.make(`pause-${key}`),
+              threadId: c.threadId,
+              revision: 1,
+              reviewTask: r.value.reference,
+            })
+          )._tag,
+        ).toBe("Success");
+        await act(async () => {
+          creationButton("Refresh tasks")!.props.onClick();
+          await state.load.mock.results.at(-1)!.value;
+        });
+      } else {
+        expect(task.resultReadout).toMatchObject({ status: "available", runStatus: "running" });
+      }
+      const authoritative = await f.review(input);
+      if (authoritative._tag !== "Success" || authoritative.value.status !== "available")
+        throw new Error("missing authority");
+      expect(
+        action === "edit"
+          ? authoritative.value.canEditInstructions
+          : authoritative.value.actions.includes(action === "pause" ? "redirect" : "resume"),
+      ).toBe(true);
+      state.reviewDecide.mockImplementation(({ input }) =>
+        f.dispatch(
+          decodeCreationReviewCommand({
+            ...input,
+            type: `thread.task-contract.${input.action}`,
+            commandId: CommandId.make(`decide-${key}`),
+          }),
+        ),
+      );
+      const entered = deferred<void>(),
+        release = deferred<void>();
+      state.readProjection.mockImplementation(async ({ input }) => {
+        entered.resolve();
+        if (inspection === "loading") await release.promise;
+        return f.projection(input);
+      });
+      let pending: Promise<void> | undefined;
+      try {
+        if (inspection === "loading") {
+          await act(async () => {
+            pending = creationButton("Open complete output")!.props.onClick();
+            await entered.promise;
+          });
+          expect(text()).toContain("Reading complete persisted output");
+        } else {
+          await openFullReview();
+          expect(text()).toContain("Complete persisted output is unavailable");
+        }
+        expect(completeText()).toEqual([]);
+        expect(state.reviewDecide).not.toHaveBeenCalled();
+        expect(state.startStep).not.toHaveBeenCalled();
+        await awaitReviewReads(
+          () =>
+            creationButton(
+              action === "pause"
+                ? "Pause for redirect"
+                : action === "resume"
+                  ? "Resume under this contract"
+                  : "Revise paused instructions",
+            )!.props.onClick(),
+          1,
+          f,
+        );
+        if (action === "edit") {
+          expect(renderer.root.findByProps({ "aria-label": "goal instruction" })).toBeDefined();
+          await act(async () =>
+            renderer.root
+              .findByProps({ "aria-label": "goal instruction" })
+              .props.onChange({ target: { value: "Explicitly reviewed revised criteria" } }),
+          );
+          await awaitReviewReads(
+            () => creationButton("Preview instruction changes")!.props.onClick(),
+            1,
+            f,
+          );
+        }
+        const confirm = creationButton(
+          action === "edit" ? "Save new revision" : "Confirm decision",
+        );
+        expect(confirm).toBeDefined();
+        expect(state.reviewDecide).not.toHaveBeenCalled();
+        await act(async () => {
+          confirm!.props.onClick();
+          await f.flush();
+        });
+        expect(state.reviewDecide).toHaveBeenCalledTimes(1);
+        await act(async () => {
+          await state.reviewDecide.mock.results[0]!.value;
+        });
+        const p = await f.projection({ threadId: c.threadId });
+        if (p._tag !== "Success") throw new Error("missing projection");
+        expect(p.value.thread.taskContractPhase).toBe(
+          action === "resume" ? "active" : "redirected",
+        );
+        expect(p.value.thread.taskContract?.revision).toBe(action === "edit" ? 2 : 1);
+        if (action === "edit")
+          expect(p.value.thread.taskContract?.goal).toBe("Explicitly reviewed revised criteria");
+        expect(state.startStep).not.toHaveBeenCalled();
+        expect((await f.inspect()).starts).toHaveLength(1);
+      } finally {
+        release.resolve();
+        await act(async () => {
+          await pending;
+        });
+      }
+      expect(completeText()).toEqual([]);
     });
   },
   30000,
