@@ -1,3 +1,4 @@
+import { useTaskResultReview } from "./TaskResultReview";
 import { useTaskInboxDraft } from "./TaskInboxDrafts";
 import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
 import * as Schema from "effect/Schema";
@@ -48,6 +49,7 @@ export function TaskReviewControls(props: {
   readonly invalidateReads: () => void;
   readonly refresh: () => Promise<CollaborationSnapshot | undefined>;
 }) {
+  const resultReview = useTaskResultReview();
   const readReview = useAtomCommand(threadEnvironment.readTaskReview, { reportFailure: false });
   const decide = useAtomCommand(threadEnvironment.decideTaskContract, { reportFailure: false });
   const [confirmation, setConfirmation] = useState<{
@@ -78,7 +80,7 @@ export function TaskReviewControls(props: {
   const resolveConfirmation = useRef<((confirmed: boolean) => void) | null>(null);
   const identity = `${props.environmentId}:${props.task.projectId}:${props.task.id}:${props.task.threadId}`;
   const currentIdentity = useRef(identity);
-  const factKey = `${props.readVersion}:${props.task.review?.reference.threadUpdatedAt}:${props.task.review?.reference.threadSequence}:${props.task.contractReadout?.status === "available" ? props.task.contractReadout.contract.revision : "missing"}:${props.stale}`;
+  const factKey = `${props.readVersion}:${props.task.review?.reference.threadUpdatedAt}:${props.task.review?.reference.threadSequence}:${props.task.contractReadout?.status === "available" ? props.task.contractReadout.contract.revision : "missing"}:${props.stale}:${resultReview?.version ?? 0}`;
   const currentFacts = useRef(factKey);
   const uncertainReadVersion = useRef<number | null>(null);
   const [noticeRevision, setNoticeRevision] = useState<number | null>(null);
@@ -216,6 +218,14 @@ export function TaskReviewControls(props: {
       const proposed = typeof selection === "object" ? selection : null;
       const confirmed = action === "set" ? proposed !== null : selection === true;
       if (!confirmed || !unchanged()) return;
+      if (action === "accept" && resultReview && !(await resultReview.validate())) {
+        if (isCurrent())
+          setNotice(
+            "The complete persisted output changed or is unavailable. Reload and review before accepting.",
+          );
+        return;
+      }
+      if (!unchanged()) return;
       props.invalidateReads();
       mutationSent = true;
       const result = await decide({

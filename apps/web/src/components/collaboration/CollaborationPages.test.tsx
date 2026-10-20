@@ -1,3 +1,4 @@
+import { completed as completedForFullReview } from "./testkit/resultContinuationJourney";
 import { readAgentsCreationAttempt } from "./agentsTaskCreationAttempt";
 import { TaskOutputHandoff } from "./TaskResultHandoff";
 import { acceptedHandoffSource } from "./testkit/resultHandoffJourney";
@@ -98,6 +99,7 @@ const state = vi.hoisted(() => ({
   interrupt: vi.fn(),
   startStep: vi.fn(),
   firstLaunchRead: vi.fn(),
+  continuationRead: vi.fn(),
   reviewRead: vi.fn(),
   fileReview: vi.fn(),
   fileUpload: vi.fn(),
@@ -202,6 +204,7 @@ vi.mock("../../state/threads", () => ({
     startTurn: "capability-start",
     interruptTurn: "interrupt",
     readFirstLaunchStatus: "first-launch-status",
+    readResultContinuationStatus: "continuation-status",
     readTaskReview: "review-read",
     readTaskInstructionSkillReview: "skill-review",
     readTaskReferenceFileReview: "file-review",
@@ -219,33 +222,35 @@ vi.mock("../../lib/attachmentUploadQueue", () => ({
 }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
-    command === "configuration-catalog"
-      ? state.catalog
-      : command === "configuration-status"
-        ? state.configurationStatus
-        : command === "configuration-action"
-          ? state.configurationWrite
-          : command === "file-review"
-            ? state.fileReview
-            : command === "skill-review"
-              ? state.skillReview
-              : command === "interrupt"
-                ? state.interrupt
-                : command === "first-launch-status"
-                  ? state.firstLaunchRead
-                  : command === "capability-start"
-                    ? state.startStep
-                    : command === "auto-preview"
-                      ? state.autoPreview
-                      : command === "read-creation-status"
-                        ? state.readCreationStatus
-                        : command === "review-read"
-                          ? state.reviewRead
-                          : command === "review-decide"
-                            ? state.reviewDecide
-                            : command === "read-projection"
-                              ? state.readProjection
-                              : state.create,
+    command === "continuation-status"
+      ? state.continuationRead
+      : command === "configuration-catalog"
+        ? state.catalog
+        : command === "configuration-status"
+          ? state.configurationStatus
+          : command === "configuration-action"
+            ? state.configurationWrite
+            : command === "file-review"
+              ? state.fileReview
+              : command === "skill-review"
+                ? state.skillReview
+                : command === "interrupt"
+                  ? state.interrupt
+                  : command === "first-launch-status"
+                    ? state.firstLaunchRead
+                    : command === "capability-start"
+                      ? state.startStep
+                      : command === "auto-preview"
+                        ? state.autoPreview
+                        : command === "read-creation-status"
+                          ? state.readCreationStatus
+                          : command === "review-read"
+                            ? state.reviewRead
+                            : command === "review-decide"
+                              ? state.reviewDecide
+                              : command === "read-projection"
+                                ? state.readProjection
+                                : state.create,
 }));
 vi.mock("../chat/ProviderModelPicker", () => ({
   ProviderModelPicker: (props: {
@@ -469,6 +474,7 @@ beforeEach(() => {
   state.configurationStatus.mockReset();
   state.operate = true;
   state.firstLaunchRead.mockReset();
+  state.continuationRead.mockReset();
   state.providers = [...configuredProviders];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   state.environmentId = "environment-a";
@@ -4842,7 +4848,11 @@ it("prepares a requested revision for a validated completed owned output without
     expect(text()).toContain("Fix parser");
     expect(text()).toContain(f.command.taskContract!.acceptance);
     expect(text()).toContain("Attributed parser output");
-    expect(text()).toContain("Excerpt truncated");
+    const persisted = f.projection.turnItems.find((item) => item.type === "assistant_message");
+    if (persisted?.type !== "assistant_message") throw new Error("Missing full fixture output");
+    expect(
+      renderer.root.findAllByType("pre").some((n) => n.children.join("") === persisted.text),
+    ).toBe(true);
     const editor = renderer.root.findByProps({ "aria-label": "Requested changes" });
     expect(editor.props.value).toBe("");
     expect(creationButton("Fill empty draft and open")!.props.disabled).toBe(true);
@@ -11373,3 +11383,569 @@ it("saved configuration library editor read preserves an unchanged selection and
     expect((await f.inspect()).starts).toHaveLength(0);
   });
 }, 30000);
+
+const fullReviewText =
+  "Beginning of persisted output\n" +
+  "x".repeat(2300) +
+  "\n<iframe src=evil></iframe> 😀 café\nEXACT ENDING\n  ";
+async function setupFullReview(f: LibraryFixture, key = "full-review", output = fullReviewText) {
+  creationStorage();
+  f.setWorkflowOutput(output);
+  const c = await completedForFullReview(f, key);
+  state.providers = f.providers.map((p) => ({
+    ...p,
+    displayName: p.driver,
+    models: p.models.map((m) => ({ ...m, isDefault: false })),
+  }));
+  state.load.mockImplementation(() => f.snapshot());
+  state.reviewRead.mockImplementation(({ input }) => f.review(input));
+  state.readProjection.mockImplementation(({ input }) => f.projection(input));
+  state.startStep.mockImplementation(({ input }) => f.start(input));
+  state.firstLaunchRead.mockImplementation(({ input }) => f.launchStatus(input));
+  state.continuationRead.mockImplementation(({ input }) => f.continuationStatus(input));
+  state.autoPreview.mockImplementation(({ input }) => f.previewAuto(input));
+  state.reviewDecide.mockImplementation(({ input }) =>
+    f.dispatch({
+      type: "thread.task-contract.accept",
+      commandId: CommandId.make(`full-accept-${key}`),
+      threadId: input.threadId,
+      revision: input.revision,
+      reviewTask: input.reviewTask,
+    }),
+  );
+  await act(async () => {
+    renderer = create(<TasksPage scope={libraryScope} />);
+  });
+  await act(async () => {
+    await state.load.mock.results[0]!.value;
+  });
+  await selectOnlyInboxTaskForDetailJourney(renderer);
+  return c;
+}
+async function openFullReview() {
+  await act(async () => {
+    await creationButton("Open complete output")!.props.onClick();
+  });
+}
+function completeText() {
+  return renderer.root
+    .findAllByType("pre")
+    .filter((n) => n.props["aria-label"] === "Complete persisted assistant text")
+    .map((n) => n.children.join(""));
+}
+async function awaitReviewReads(action: () => void, additional: number, f: LibraryFixture) {
+  const target = state.reviewRead.mock.calls.length + additional,
+    done = deferred<void>();
+  state.reviewRead.mockImplementation(async ({ input }) => {
+    const r = await f.review(input);
+    if (state.reviewRead.mock.calls.length === target) done.resolve();
+    return r;
+  });
+  await act(async () => {
+    action();
+    await done.promise;
+    await f.flush();
+  });
+}
+it("complete result review actual Tasks entry reads exact inert full output and uses existing explicit Accept", async () => {
+  await withLibraryFixture(async (f) => {
+    const c = await setupFullReview(f),
+      before = await f.executionCounts();
+    expect(completeText()).toEqual([]);
+    expect(state.readProjection).not.toHaveBeenCalled();
+    await openFullReview();
+    expect(completeText()).toEqual([fullReviewText]);
+    expect(text()).toContain("Persisted Goal");
+    expect(text()).toContain(c.taskContract!.goal);
+    expect(text()).toContain("Persisted Redirect");
+    expect(text()).toContain("Persisted Acceptance criteria");
+    expect(renderer.root.findAllByType("iframe")).toHaveLength(0);
+    expect(text()).toContain("does not establish an accepted answer");
+    expect(await f.executionCounts()).toEqual(before);
+    expect(state.reviewDecide).not.toHaveBeenCalled();
+    expect(state.feedbackSubmit).not.toHaveBeenCalled();
+    await creationClick("Close complete output");
+    expect(completeText()).toEqual([]);
+    await openFullReview();
+    await awaitReviewReads(
+      () => renderer.root.findByProps({ "data-task-contract-accept": "" }).props.onClick(),
+      1,
+      f,
+    );
+    expect(creationButton("Confirm decision")).toBeDefined();
+    expect(state.reviewDecide).not.toHaveBeenCalled();
+    const refreshed = deferred<void>();
+    state.load.mockImplementation(async () => {
+      const s = await f.snapshot();
+      if (state.reviewDecide.mock.calls.length) refreshed.resolve();
+      return s;
+    });
+    await act(async () => {
+      creationButton("Confirm decision")!.props.onClick();
+      await refreshed.promise;
+    });
+    expect(state.reviewDecide).toHaveBeenCalledTimes(1);
+    const p = await f.projection({ threadId: c.threadId });
+    if (p._tag !== "Success") throw new Error("missing projection");
+    expect(p.value.thread.taskAcceptedRevision).toBe(1);
+    expect((await f.inspect()).starts).toHaveLength(1);
+    expect(await f.executionCounts()).toEqual(before);
+  });
+}, 60000);
+it("complete result review actual Tasks revision preparation reads full output and starts no work", async () => {
+  await withLibraryFixture(async (f) => {
+    await setupFullReview(f, "full-revision");
+    const before = await f.executionCounts();
+    await openFullReview();
+    await awaitReviewReads(() => creationButton("Prepare revision request")!.props.onClick(), 2, f);
+    expect(text()).toContain("Review revision request");
+    expect(
+      renderer.root.findAllByType("pre").some((n) => n.children.join("") === fullReviewText),
+    ).toBe(true);
+    expect(state.startStep).not.toHaveBeenCalled();
+    expect(state.reviewDecide).not.toHaveBeenCalled();
+    expect(state.feedbackSubmit).not.toHaveBeenCalled();
+    await creationClick("Cancel revision preparation");
+    expect(await f.executionCounts()).toEqual(before);
+  });
+}, 30000);
+it.each(["accept", "revision", "live"] as const)(
+  "complete result review rejects unchanged-preview changed-tail through %s",
+  async (mode) => {
+    await withLibraryFixture(async (f) => {
+      const c = await setupFullReview(f, `full-tail-${mode}`);
+      await openFullReview();
+      const before = (await f.snapshot()).tasks[0]!.resultReadout;
+      if (mode === "accept")
+        await awaitReviewReads(
+          () => renderer.root.findByProps({ "data-task-contract-accept": "" }).props.onClick(),
+          1,
+          f,
+        );
+      await f.alterLatestOutput(
+        c.threadId,
+        fullReviewText.replace("EXACT ENDING", "CHANGED ENDING"),
+      );
+      expect((await f.snapshot()).tasks[0]!.resultReadout).toEqual(before);
+      if (mode === "live") {
+        const p = await f.projection({ threadId: c.threadId });
+        if (p._tag !== "Success") throw new Error("missing projection");
+        state.liveProjections.set(c.threadId, p.value);
+        await act(async () => renderer.update(<TasksPage scope={libraryScope} />));
+      } else if (mode === "accept")
+        await awaitReviewReads(() => creationButton("Confirm decision")!.props.onClick(), 2, f);
+      else
+        await awaitReviewReads(
+          () => creationButton("Prepare revision request")!.props.onClick(),
+          2,
+          f,
+        );
+      expect(completeText()).toEqual([]);
+      expect(state.reviewDecide).not.toHaveBeenCalled();
+      expect(state.startStep).not.toHaveBeenCalled();
+      await act(async () => {
+        await creationButton("Reload complete output")!.props.onClick();
+      });
+      expect(completeText()).toEqual([fullReviewText.replace("EXACT ENDING", "CHANGED ENDING")]);
+    });
+  },
+  30000,
+);
+
+it.each([
+  "missing",
+  "duplicate",
+  "streaming",
+  "empty",
+  "failed",
+  "running",
+  "wrong-project",
+  "wrong-owner",
+  "wrong-thread",
+  "wrong-attempt",
+  "missing-contract",
+  "wrong-contract",
+] as const)(
+  "complete result review refuses %s projection evidence",
+  async (mode) => {
+    await withLibraryFixture(async (f) => {
+      await setupFullReview(f, `full-bad-${mode}`);
+      const before = await f.executionCounts();
+      state.readProjection.mockImplementation(async ({ input }) => {
+        const r = await f.projection(input);
+        if (r._tag !== "Success") return r;
+        let p = r.value;
+        if (mode === "missing") p = { ...p, attempts: [] };
+        if (mode === "duplicate")
+          p = {
+            ...p,
+            turnItems: [
+              ...p.turnItems,
+              ...p.turnItems.filter((i) => i.type === "assistant_message"),
+            ],
+          };
+        if (mode === "streaming" || mode === "empty")
+          p = {
+            ...p,
+            turnItems: p.turnItems.map((i) =>
+              i.type === "assistant_message"
+                ? { ...i, ...(mode === "streaming" ? { streaming: true } : { text: "" }) }
+                : i,
+            ),
+          };
+        if (mode === "failed" || mode === "running")
+          p = { ...p, runs: p.runs.map((r) => ({ ...r, status: mode })) };
+        if (mode === "wrong-owner")
+          p = {
+            ...p,
+            thread: {
+              ...p.thread,
+              agentsTaskCreation: { ...p.thread.agentsTaskCreation!, actorId: "other-owner" },
+            },
+          };
+        if (mode === "wrong-project")
+          p = { ...p, thread: { ...p.thread, projectId: ProjectId.make("other-project") } };
+        if (mode === "wrong-thread")
+          p = { ...p, thread: { ...p.thread, id: ThreadId.make("other-thread") } };
+        if (mode === "wrong-attempt")
+          p = {
+            ...p,
+            runs: p.runs.map((r) => ({
+              ...r,
+              activeAttemptId: RunAttemptId.make("sibling-attempt"),
+            })),
+          };
+        if (mode === "missing-contract")
+          p = {
+            ...p,
+            messages: p.messages.map((m) => {
+              const { taskFirstLaunch: _first, taskResultContinuation: _next, ...rest } = m;
+              return rest;
+            }),
+          };
+        if (mode === "wrong-contract")
+          p = {
+            ...p,
+            messages: p.messages.map((m) =>
+              m.taskFirstLaunch
+                ? {
+                    ...m,
+                    taskFirstLaunch: {
+                      ...m.taskFirstLaunch,
+                      contract: {
+                        ...m.taskFirstLaunch.contract,
+                        goal: "Different persisted criteria",
+                      },
+                    },
+                  }
+                : m,
+            ),
+          };
+        return { ...r, value: p };
+      });
+      await openFullReview();
+      expect(completeText()).toEqual([]);
+      expect(text().includes("unavailable")).toBe(true);
+      expect(await f.executionCounts()).toEqual(before);
+      expect(state.reviewDecide).not.toHaveBeenCalled();
+      expect(state.startStep).not.toHaveBeenCalled();
+      expect(state.feedbackSubmit).not.toHaveBeenCalled();
+    });
+  },
+  30000,
+);
+
+it.each(["close", "refresh", "back", "session ABA", "environment ABA", "unmount"] as const)(
+  "complete result review retires delayed reads and captured callbacks on %s",
+  async (mode) => {
+    await withLibraryFixture(async (f) => {
+      await setupFullReview(f, `full-late-${mode}`);
+      await openFullReview();
+      const reload = creationButton("Reload complete output")!.props.onClick;
+      const delay = deferred<Awaited<ReturnType<typeof f.projection>>>(),
+        entered = deferred<void>();
+      state.readProjection.mockImplementationOnce(async ({ input }) => {
+        const r = await f.projection(input);
+        entered.resolve();
+        await delay.promise;
+        return r;
+      });
+      let pending: Promise<void>;
+      await act(async () => {
+        pending = reload();
+        await entered.promise;
+      });
+      if (mode === "close") await creationClick("Close complete output");
+      if (mode === "refresh")
+        await act(async () => {
+          creationButton("Refresh tasks")!.props.onClick();
+          await state.load.mock.results.at(-1)!.value;
+        });
+      if (mode === "back") {
+        await creationClick("Back to task inbox");
+        await selectOnlyInboxTaskForDetailJourney(renderer);
+      }
+      if (mode === "session ABA") {
+        const old = state.sessionIdentity;
+        state.sessionIdentity = null;
+        await act(async () => renderer.update(<TasksPage scope={libraryScope} />));
+        state.sessionIdentity = old;
+        await act(async () => renderer.update(<TasksPage scope={libraryScope} />));
+      }
+      if (mode === "environment ABA") {
+        state.environmentId = "environment-b";
+        await act(async () => renderer.update(<TasksPage />));
+        state.environmentId = "environment-a";
+        await act(async () => renderer.update(<TasksPage scope={libraryScope} />));
+      }
+      if (mode === "unmount") await act(async () => renderer.unmount());
+      const projection = await f.projection({
+        threadId: state.readProjection.mock.calls[0]![0].input.threadId,
+      });
+      await act(async () => {
+        delay.resolve(projection);
+        await pending!;
+        await reload();
+      });
+      if (mode !== "unmount") expect(completeText()).toEqual([]);
+      expect(state.reviewDecide).not.toHaveBeenCalled();
+      expect(state.startStep).not.toHaveBeenCalled();
+      expect(state.feedbackSubmit).not.toHaveBeenCalled();
+      expect((await f.inspect()).starts).toHaveLength(1);
+    });
+  },
+  30000,
+);
+
+it("complete result review fails closed for readonly and changed owner, and blocks disconnected captured Open", async () => {
+  await withLibraryFixture(async (f) => {
+    await setupFullReview(f, "full-permissions");
+    await f.disconnect();
+    await f.connect(["orchestration:read"]);
+    state.sessionIdentity = {};
+    await act(async () => renderer.update(<TasksPage scope={libraryScope} />));
+    await act(async () => {
+      await state.load.mock.results.at(-1)!.value;
+    });
+    await openFullReview();
+    expect(completeText()).toEqual([]);
+    expect(text()).toContain("unavailable");
+    await creationClick("Close complete output");
+    await f.disconnect();
+    await f.connectAs("another-owner");
+    await openFullReview();
+    expect(completeText()).toEqual([]);
+    expect(text()).toContain("unavailable");
+    await creationClick("Close complete output");
+    const captured = creationButton("Open complete output")!.props.onClick;
+    state.sessionIdentity = null;
+    await act(async () => renderer.update(<TasksPage scope={libraryScope} />));
+    const reads = state.readProjection.mock.calls.length;
+    await act(async () => {
+      await captured();
+    });
+    expect(state.readProjection).toHaveBeenCalledTimes(reads);
+    expect(state.reviewDecide).not.toHaveBeenCalled();
+    expect(state.startStep).not.toHaveBeenCalled();
+    expect(state.feedbackSubmit).not.toHaveBeenCalled();
+  });
+}, 30000);
+
+it("complete result review Close retires an existing unsent acceptance confirmation", async () => {
+  await withLibraryFixture(async (f) => {
+    await setupFullReview(f, "full-retired-accept");
+    await openFullReview();
+    await awaitReviewReads(
+      () => renderer.root.findByProps({ "data-task-contract-accept": "" }).props.onClick(),
+      1,
+      f,
+    );
+    const confirm = creationButton("Confirm decision")!.props.onClick;
+    await creationClick("Close complete output");
+    await act(async () => {
+      await confirm();
+    });
+    expect(creationButton("Confirm decision")).toBeUndefined();
+    expect(state.reviewDecide).not.toHaveBeenCalled();
+    expect((await f.inspect()).starts).toHaveLength(1);
+  });
+}, 30000);
+
+it.each(["task ABA", "deletion"] as const)(
+  "complete result review retires full output and old callbacks on %s",
+  async (mode) => {
+    await withLibraryFixture(async (f) => {
+      const a = await setupFullReview(f, `full-life-${mode}`);
+      await openFullReview();
+      const reload = creationButton("Reload complete output")!.props.onClick;
+      if (mode === "deletion") {
+        expect(
+          (
+            await f.dispatch({
+              type: "thread.delete",
+              commandId: CommandId.make("delete-full-review"),
+              threadId: a.threadId,
+            })
+          )._tag,
+        ).toBe("Success");
+        await act(async () => {
+          creationButton("Refresh tasks")!.props.onClick();
+          await state.load.mock.results.at(-1)!.value;
+        });
+      } else {
+        const b = await completedForFullReview(f, "full-other-task");
+        await act(async () => {
+          creationButton("Refresh tasks")!.props.onClick();
+          await state.load.mock.results.at(-1)!.value;
+        });
+        await creationClick("Back to task inbox");
+        const tasks = (await f.snapshot()).tasks;
+        await selectExactInboxTask(tasks.find((t) => t.threadId === b.threadId)!);
+        await creationClick("Back to task inbox");
+        await selectExactInboxTask(tasks.find((t) => t.threadId === a.threadId)!);
+      }
+      await act(async () => {
+        await reload();
+      });
+      expect(completeText()).toEqual([]);
+      expect(state.reviewDecide).not.toHaveBeenCalled();
+      expect(state.startStep).not.toHaveBeenCalled();
+      expect(state.feedbackSubmit).not.toHaveBeenCalled();
+    });
+  },
+  30000,
+);
+
+it.each(["manual", "auto"] as const)(
+  "complete result review uses existing separately reviewed explicit %s revision Start",
+  async (mode) => {
+    await withLibraryFixture(async (f) => {
+      const c = await setupFullReview(f, `full-start-${mode}`);
+      await openFullReview();
+      await awaitReviewReads(
+        () => creationButton("Prepare revision request")!.props.onClick(),
+        2,
+        f,
+      );
+      await act(async () =>
+        renderer.root.findByProps({ "aria-label": "Requested changes" }).props.onChange({
+          target: { value: "Revise the ending from the complete persisted result." },
+        }),
+      );
+      await creationClick(mode === "manual" ? "Choose Manual" : "Choose Auto");
+      await act(async () => {
+        await creationButton("Review result continuation")!.props.onClick();
+      });
+      expect((await f.inspect()).starts).toHaveLength(1);
+      expect(state.startStep).not.toHaveBeenCalled();
+      await act(async () => {
+        const start = creationButton("Start reviewed result continuation")!.props.onClick;
+        const first = start();
+        start();
+        await first;
+      });
+      await act(async () => {
+        await state.startStep.mock.results[0]!.value;
+      });
+      await f.settle(state.startStep.mock.calls[0]![0].input.message.messageId);
+      expect(state.startStep).toHaveBeenCalledTimes(1);
+      expect((await f.inspect()).starts).toHaveLength(2);
+      expect(state.reviewDecide).not.toHaveBeenCalled();
+      expect(state.feedbackSubmit).not.toHaveBeenCalled();
+      const p = await f.projection({ threadId: c.threadId });
+      if (p._tag !== "Success") throw new Error("missing projection");
+      expect(p.value.thread.taskAcceptedRevision).toBeNull();
+    });
+  },
+  60000,
+);
+
+it("complete result review preserves one original lost acceptance response without resend through close and remount", async () => {
+  await withLibraryFixture(async (f) => {
+    const c = await setupFullReview(f, "full-lost-accept");
+    await openFullReview();
+    await awaitReviewReads(
+      () => renderer.root.findByProps({ "data-task-contract-accept": "" }).props.onClick(),
+      1,
+      f,
+    );
+    f.dropNextReply();
+    await creationClick("Confirm decision", true);
+    await Promise.race([
+      f.awaitDroppedReply(),
+      state.reviewDecide.mock.results[0]?.value?.then(() => {
+        throw new Error("Expected lost decision reply");
+      }) ?? new Promise<void>(() => {}),
+    ]);
+    await act(async () => {
+      await f.disconnect();
+      await state.reviewDecide.mock.results[0]!.value;
+    });
+    if (creationButton("Close complete output")) await creationClick("Close complete output");
+    expect(renderer.root.findAllByProps({ "data-task-contract-accept": "" })).toHaveLength(0);
+    await act(async () => renderer.unmount());
+    await f.connect();
+    state.sessionIdentity = {};
+    await act(async () => {
+      renderer = create(<TasksPage scope={libraryScope} />);
+    });
+    await act(async () => {
+      await state.load.mock.results.at(-1)!.value;
+    });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
+    expect(state.reviewDecide).toHaveBeenCalledTimes(1);
+    expect(renderer.root.findAllByProps({ "data-task-contract-accept": "" })).toHaveLength(0);
+    const p = await f.projection({ threadId: c.threadId });
+    if (p._tag !== "Success") throw new Error("missing projection");
+    expect(p.value.thread.taskAcceptedRevision).toBe(1);
+    expect(
+      (await f.inspect()).commands.filter((c) => c.type === "thread.task-contract.accept"),
+    ).toHaveLength(1);
+    expect((await f.inspect()).starts).toHaveLength(1);
+  });
+}, 30000);
+
+it.each(["accepted", "paused"] as const)(
+  "complete result review inspects %s completed output without borrowing decision authority",
+  async (mode) => {
+    await withLibraryFixture(async (f) => {
+      const c = await setupFullReview(f, `full-phase-${mode}`);
+      const task = (await f.snapshot()).tasks.find((t) => t.threadId === c.threadId)!;
+      const review = await f.review({
+        environmentId: "environment-a",
+        taskId: task.id,
+        projectId: task.projectId,
+        threadId: c.threadId,
+        revision: 1,
+      });
+      if (review._tag !== "Success" || review.value.status !== "available")
+        throw new Error("missing owner review");
+      const decision =
+        mode === "accepted"
+          ? { type: "thread.task-contract.accept" as const, revision: 1 }
+          : { type: "thread.task-contract.redirect" as const, revision: 1 };
+      expect(
+        (
+          await f.dispatch({
+            ...decision,
+            commandId: CommandId.make(`phase-${mode}`),
+            threadId: c.threadId,
+            reviewTask: review.value.reference,
+          })
+        )._tag,
+      ).toBe("Success");
+      await act(async () => {
+        creationButton("Refresh tasks")!.props.onClick();
+        await state.load.mock.results.at(-1)!.value;
+      });
+      const before = await f.executionCounts();
+      await openFullReview();
+      expect(completeText()).toEqual([fullReviewText]);
+      expect(renderer.root.findAllByProps({ "data-task-contract-accept": "" })).toHaveLength(0);
+      expect(await f.executionCounts()).toEqual(before);
+      expect(state.reviewDecide).not.toHaveBeenCalled();
+      expect(state.startStep).not.toHaveBeenCalled();
+    });
+  },
+  30000,
+);

@@ -73,9 +73,23 @@ function outputFacts(
   environmentId: EnvironmentId,
   review: TaskContractReviewState,
   projection: OrchestrationV2ThreadProjection,
-  accepted: boolean,
+  accepted: boolean | "inspect",
 ) {
-  const eligible = accepted ? hasAcceptedOutput(task) : hasRevisionOutput(task);
+  const inspecting = accepted === "inspect";
+  const contract = task.contractReadout?.status === "available" ? task.contractReadout : null;
+  const r = task.resultReadout;
+  const eligible = inspecting
+    ? validTask(task) &&
+      r?.status === "available" &&
+      r.runStatus === "completed" &&
+      r.providerTurnStatus === "completed" &&
+      r.attemptId !== null &&
+      r.providerTurnId !== null &&
+      r.content.status === "output" &&
+      task.contractReadout?.status === "available"
+    : accepted
+      ? hasAcceptedOutput(task)
+      : hasRevisionOutput(task);
   if (
     !eligible ||
     !validReview(review) ||
@@ -83,7 +97,6 @@ function outputFacts(
     !validProjection(projection)
   )
     return null;
-  const r = task.resultReadout;
   if (r?.status !== "available" || r.content.status !== "output") return null;
   const t = projection.thread;
   if (
@@ -93,10 +106,12 @@ function outputFacts(
     review.taskId !== task.id ||
     review.projectId !== task.projectId ||
     review.threadId !== task.threadId ||
-    review.phase !== "active" ||
-    (accepted
-      ? review.acceptedRevision !== review.contract.revision
-      : review.acceptedRevision !== null || !review.actions.includes("accept")) ||
+    review.phase !== (inspecting ? contract?.phase : "active") ||
+    (inspecting
+      ? review.acceptedRevision !== contract?.acceptedRevision
+      : accepted
+        ? review.acceptedRevision !== review.contract.revision
+        : review.acceptedRevision !== null || !review.actions.includes("accept")) ||
     !task.review ||
     !sameReference(review.reference, task.review.reference) ||
     task.contractReadout?.status !== "available" ||
@@ -109,10 +124,12 @@ function outputFacts(
     t.taskGovernance !== "required" ||
     !t.taskContract ||
     !sameContract(t.taskContract, review.contract) ||
-    t.taskContractPhase !== "active" ||
-    (accepted
-      ? t.taskAcceptedRevision !== review.contract.revision
-      : t.taskAcceptedRevision !== null) ||
+    t.taskContractPhase !== (inspecting ? review.phase : "active") ||
+    (inspecting
+      ? t.taskAcceptedRevision !== review.acceptedRevision
+      : accepted
+        ? t.taskAcceptedRevision !== review.contract.revision
+        : t.taskAcceptedRevision !== null) ||
     t.archivedAt !== null ||
     t.deletedAt !== null ||
     t.forkedFrom !== null ||
@@ -197,7 +214,7 @@ function outputFacts(
     provider.providerInstanceId !== run.providerInstanceId
   )
     return null;
-  if (accepted) {
+  if (accepted === true) {
     const input = message[0]?.taskFirstLaunch ?? message[0]?.taskResultContinuation;
     // Acceptance of a later contract cannot attest an output produced under an older intent.
     if (
@@ -330,4 +347,38 @@ export function continuationResult(facts: RevisionRequestFacts): TaskContinuatio
     nodeId: item.nodeId!,
     outputSha256: digestCanonical(item.type === "assistant_message" ? item.text : ""),
   };
+}
+
+/** Read-only full review still requires an output produced under these exact criteria. */
+export function taskResultReviewFacts(
+  task: CollaborationTask,
+  environmentId: EnvironmentId,
+  review: TaskContractReviewState,
+  projection: OrchestrationV2ThreadProjection,
+) {
+  const facts = outputFacts(task, environmentId, review, projection, "inspect");
+  if (!facts) return null;
+  if (
+    projection.thread.agentsTaskCreation &&
+    projection.thread.agentsTaskCreation.actorId !== task.ownerAgentId
+  )
+    return null;
+  const message = projection.messages.find((m) => m.id === facts.result.messageId);
+  const input = message?.taskFirstLaunch ?? message?.taskResultContinuation;
+  if (
+    !input ||
+    (message?.taskFirstLaunch && message?.taskResultContinuation) ||
+    !sameContract(input.contract, facts.review.contract) ||
+    input.reference.environmentId !== environmentId ||
+    input.reference.taskId !== task.id ||
+    input.reference.projectId !== task.projectId ||
+    input.threadId !== task.threadId ||
+    input.messageId !== facts.result.messageId
+  )
+    return null;
+  return facts;
+}
+export function completeResultText(facts: RevisionRequestFacts) {
+  const item = facts.projection.turnItems.find((i) => i.id === facts.result.content.itemId);
+  return item?.type === "assistant_message" ? item.text : null;
 }

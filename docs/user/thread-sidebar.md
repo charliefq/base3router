@@ -229,6 +229,14 @@ Manual or Auto, review the exact instructions, current contract and limits, then
 explicitly start. This opens the same task conversation without another Send. Auto
 chooses its actual route when starting; a preview does not lock that choice.
 
+In **Tasks**, select a task and use **Open complete output** to read its complete
+attributable persisted assistant text beside Goal, Redirect and Acceptance criteria.
+Reading, closing or reloading records no judgment and starts no work. Output without
+complete current attribution is unavailable. Acceptance still needs its separate
+confirmation; revision requests still need a separately reviewed explicit Start.
+Refresh or changed evidence requires a fresh review. The conversation remains available
+for history.
+
 For a first task message, you can also choose one ordinary UTF-8 **.txt** reference file.
 Upload and review do not start work. Review its name, type, size and content hash alongside
 instructions and the current contract, then explicitly Start. This first slice uses the

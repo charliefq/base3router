@@ -1,3 +1,4 @@
+import { TaskResultReviewScope, TaskResultReviewPanel } from "./TaskResultReview";
 import { TaskOutputHandoff, TaskResultHandoffReadout } from "./TaskResultHandoff";
 import { resultHandoffDeliveryMatches } from "@t3tools/shared/taskResultHandoff";
 import { revisionTaskKey } from "@t3tools/shared/taskRevisionRequest";
@@ -443,7 +444,8 @@ function TaskResultReadout({
           )}
           {readout.content.status !== "unknown" && readout.content.truncated ? (
             <p className="text-xs text-muted-foreground">
-              Preview truncated; inspect the conversation for more context.
+              Preview truncated. Use Open complete output to inspect the attributable ending; the
+              conversation remains available for history.
             </p>
           ) : null}
           <p className="break-all text-xs text-muted-foreground">
@@ -1875,7 +1877,7 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
                   onBack={() => setInboxSelection(null)}
                   renderDetail={(task) => (
                     <ul aria-label="Cross-agent tasks" className="space-y-4">
-                      <li
+                      <TaskResultReviewScope
                         key={JSON.stringify([
                           environmentId,
                           task.projectId,
@@ -1883,219 +1885,249 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
                           task.threadId,
                           focusEpoch,
                         ])}
-                        className="min-w-0 rounded-xl border border-border/60 bg-card/40 p-5 shadow-xs/5"
+                        task={task}
+                        environmentId={environmentId}
+                        stale={
+                          !connectionFresh || !supervision.live || error !== null || refreshing
+                        }
+                        readVersion={readVersion}
+                        readCollaboration={loadSnapshot}
                       >
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <h2 className="min-w-0 wrap-anywhere text-base font-medium">
-                            {task.title}
-                          </h2>
-                          <Badge variant="secondary">Command ledger: {task.state}</Badge>
-                        </div>
-                        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                          Provider activity and terminal outcomes, plus owner/reviewer acceptance,
-                          require separate evidence. Contract phase and accepted revision are
-                          separate contract records.
-                        </p>
-                        <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
-                          <div className="min-w-0 space-y-1">
-                            <dt className="text-xs text-muted-foreground">Owner</dt>
-                            <dd className="wrap-anywhere">{task.ownerAgentId}</dd>
+                        <li
+                          key={JSON.stringify([
+                            environmentId,
+                            task.projectId,
+                            task.id,
+                            task.threadId,
+                            focusEpoch,
+                          ])}
+                          className="min-w-0 rounded-xl border border-border/60 bg-card/40 p-5 shadow-xs/5"
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <h2 className="min-w-0 wrap-anywhere text-base font-medium">
+                              {task.title}
+                            </h2>
+                            <Badge variant="secondary">Command ledger: {task.state}</Badge>
                           </div>
-                          <div className="min-w-0 space-y-1">
-                            <dt className="text-xs text-muted-foreground">Assignee</dt>
-                            <dd className="wrap-anywhere">{task.assigneeAgentId}</dd>
-                          </div>
-                          <div className="min-w-0 space-y-1">
-                            <dt className="text-xs text-muted-foreground">Wait reason</dt>
-                            <dd className="wrap-anywhere leading-relaxed">
-                              {task.waitReason ?? "No wait."}
-                            </dd>
-                          </div>
-                          <div className="min-w-0 space-y-1">
-                            <dt className="text-xs text-muted-foreground">Task note</dt>
-                            <dd className="wrap-anywhere leading-relaxed">{task.acceptance}</dd>
-                          </div>
-                        </dl>
-                        <div className="mt-4 space-y-2">
-                          {task.contractReadout?.status === "available" ? (
-                            <>
-                              {environmentId ? (
-                                <TaskReviewControls
-                                  key={`${environmentId}:${task.projectId}:${task.id}:${task.threadId}`}
-                                  task={task}
-                                  environmentId={environmentId}
-                                  readVersion={readVersion}
-                                  stale={
-                                    !connectionFresh ||
-                                    !supervision.live ||
-                                    error !== null ||
-                                    refreshing
-                                  }
-                                  invalidateReads={invalidateReads}
-                                  refresh={async () => await refresh()}
-                                />
-                              ) : null}
-                              {environmentId ? (
-                                <TaskCapabilityStepControls
-                                  task={task}
-                                  environmentId={environmentId}
-                                  stale={
-                                    !connectionFresh ||
-                                    !supervision.live ||
-                                    error !== null ||
-                                    refreshing
-                                  }
-                                  readVersion={readVersion}
-                                />
-                              ) : null}
-                              <dl className="space-y-1 text-xs text-muted-foreground">
-                                {task.contractReadout.contract.brake.maxTokens !== undefined ? (
-                                  <div>
-                                    <dt>Declared token cap</dt>
-                                    <dd>{task.contractReadout.contract.brake.maxTokens}</dd>
-                                  </div>
+                          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                            Provider activity and terminal outcomes, plus owner/reviewer acceptance,
+                            require separate evidence. Contract phase and accepted revision are
+                            separate contract records.
+                          </p>
+                          <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
+                            <div className="min-w-0 space-y-1">
+                              <dt className="text-xs text-muted-foreground">Owner</dt>
+                              <dd className="wrap-anywhere">{task.ownerAgentId}</dd>
+                            </div>
+                            <div className="min-w-0 space-y-1">
+                              <dt className="text-xs text-muted-foreground">Assignee</dt>
+                              <dd className="wrap-anywhere">{task.assigneeAgentId}</dd>
+                            </div>
+                            <div className="min-w-0 space-y-1">
+                              <dt className="text-xs text-muted-foreground">Wait reason</dt>
+                              <dd className="wrap-anywhere leading-relaxed">
+                                {task.waitReason ?? "No wait."}
+                              </dd>
+                            </div>
+                            <div className="min-w-0 space-y-1">
+                              <dt className="text-xs text-muted-foreground">Task note</dt>
+                              <dd className="wrap-anywhere leading-relaxed">{task.acceptance}</dd>
+                            </div>
+                          </dl>
+                          <div className="mt-4 space-y-2">
+                            {task.contractReadout?.status === "available" ? (
+                              <>
+                                {environmentId ? (
+                                  <TaskReviewControls
+                                    key={`${environmentId}:${task.projectId}:${task.id}:${task.threadId}`}
+                                    task={task}
+                                    environmentId={environmentId}
+                                    readVersion={readVersion}
+                                    stale={
+                                      !connectionFresh ||
+                                      !supervision.live ||
+                                      error !== null ||
+                                      refreshing
+                                    }
+                                    invalidateReads={invalidateReads}
+                                    refresh={async () => await refresh()}
+                                  />
                                 ) : null}
-                                {task.contractReadout.contract.brake.maxCostUsd !== undefined ? (
-                                  <div>
-                                    <dt>Declared cost cap (USD)</dt>
-                                    <dd>{task.contractReadout.contract.brake.maxCostUsd}</dd>
-                                  </div>
+                                {environmentId ? (
+                                  <TaskCapabilityStepControls
+                                    task={task}
+                                    environmentId={environmentId}
+                                    stale={
+                                      !connectionFresh ||
+                                      !supervision.live ||
+                                      error !== null ||
+                                      refreshing
+                                    }
+                                    readVersion={readVersion}
+                                  />
                                 ) : null}
-                                {task.contractReadout.contract.brake.deadlineAt !== undefined ? (
-                                  <div>
-                                    <dt>Declared deadline</dt>
-                                    <dd>{task.contractReadout.contract.brake.deadlineAt}</dd>
-                                  </div>
-                                ) : null}
-                              </dl>
-                              <p className="text-xs text-muted-foreground">
-                                Stop conditions are recorded for human review; this card does not
-                                enforce natural-language conditions.
+                                <dl className="space-y-1 text-xs text-muted-foreground">
+                                  {task.contractReadout.contract.brake.maxTokens !== undefined ? (
+                                    <div>
+                                      <dt>Declared token cap</dt>
+                                      <dd>{task.contractReadout.contract.brake.maxTokens}</dd>
+                                    </div>
+                                  ) : null}
+                                  {task.contractReadout.contract.brake.maxCostUsd !== undefined ? (
+                                    <div>
+                                      <dt>Declared cost cap (USD)</dt>
+                                      <dd>{task.contractReadout.contract.brake.maxCostUsd}</dd>
+                                    </div>
+                                  ) : null}
+                                  {task.contractReadout.contract.brake.deadlineAt !== undefined ? (
+                                    <div>
+                                      <dt>Declared deadline</dt>
+                                      <dd>{task.contractReadout.contract.brake.deadlineAt}</dd>
+                                    </div>
+                                  ) : null}
+                                </dl>
+                                <p className="text-xs text-muted-foreground">
+                                  Stop conditions are recorded for human review; this card does not
+                                  enforce natural-language conditions.
+                                </p>
+                              </>
+                            ) : (
+                              <p className="text-sm text-muted-foreground">
+                                {task.contractReadout === undefined
+                                  ? "Persisted contract readout is unavailable in this snapshot."
+                                  : task.contractReadout.reason === "ordinary_chat"
+                                    ? "Ordinary chat has no persisted task contract."
+                                    : task.contractReadout.reason === "missing_contract"
+                                      ? "The governed thread has no complete persisted contract."
+                                      : task.contractReadout.reason === "invalid_contract"
+                                        ? "The stored contract is incomplete or unreadable; its fields cannot be confirmed."
+                                        : "No valid linked conversation is available to read a persisted contract."}
                               </p>
-                            </>
-                          ) : (
-                            <p className="text-sm text-muted-foreground">
-                              {task.contractReadout === undefined
-                                ? "Persisted contract readout is unavailable in this snapshot."
-                                : task.contractReadout.reason === "ordinary_chat"
-                                  ? "Ordinary chat has no persisted task contract."
-                                  : task.contractReadout.reason === "missing_contract"
-                                    ? "The governed thread has no complete persisted contract."
-                                    : task.contractReadout.reason === "invalid_contract"
-                                      ? "The stored contract is incomplete or unreadable; its fields cannot be confirmed."
-                                      : "No valid linked conversation is available to read a persisted contract."}
-                            </p>
-                          )}
-                        </div>
-                        <TaskBudgetReadout
-                          readout={task.budgetReadout}
-                          stale={
-                            !connectionFresh || !supervision.live || error !== null || refreshing
-                          }
-                        />
-                        <TaskRoutingReadout readout={task.routingReadout} />
-                        {environmentId && task.threadId ? (
-                          <TaskRunSupervision
-                            task={task}
-                            environmentId={environmentId}
-                            enabled={supervision.watched.has(task.threadId)}
-                            live={supervision.live}
-                            stale={
-                              !connectionFresh || !supervision.live || error !== null || refreshing
-                            }
-                            changed={supervision.changed}
-                            observe={supervision.observe}
-                          />
-                        ) : null}
-                        <TaskResultReadout
-                          readout={task.resultReadout}
-                          routing={task.routingReadout}
-                        />
-                        {environmentId ? (
-                          <TaskResultFeedback
-                            task={task}
-                            environmentId={environmentId}
-                            stale={
-                              !connectionFresh || !supervision.live || error !== null || refreshing
-                            }
-                            readVersion={readVersion}
-                          />
-                        ) : null}
-                        {environmentId &&
-                        selectedProject?.id === task.projectId &&
-                        selectedProvider ? (
-                          <TaskOutputHandoff
-                            task={task}
-                            environmentId={environmentId}
-                            stale={
-                              !connectionFresh || !supervision.live || error !== null || refreshing
-                            }
-                            readVersion={readVersion}
-                            disabled={creating || !canOperateConnection}
-                            onSelect={(source) => {
-                              if (
-                                !canOperate() ||
-                                creationOwner.current ||
-                                selectedProject.id !== source.reference.projectId
-                              )
-                                return;
-                              const token = randomUUID();
-                              lockCreation(token);
-                              setCreationRequest({
-                                providerId: selectedProvider.instanceId,
-                                token,
-                                source,
-                              });
-                            }}
-                          />
-                        ) : null}
-                        {environmentId ? (
-                          <TaskRevisionRequest
-                            task={task}
-                            environmentId={environmentId}
-                            stale={
-                              !connectionFresh || !supervision.live || error !== null || refreshing
-                            }
-                            readVersion={readVersion}
-                            readCollaboration={loadSnapshot}
-                            onOpen={() => openTask(task)}
-                          />
-                        ) : null}
-                        <div className="mt-4 flex flex-col gap-3 border-t border-border/50 pt-4 sm:flex-row sm:items-center sm:justify-between">
-                          <div className="space-y-1 text-xs leading-relaxed text-muted-foreground">
-                            <p>Gate {task.gateDecision}. This task does not grant execution.</p>
-                            <p>
-                              {task.threadId
-                                ? "Opening this task returns to its project thread."
-                                : "This task has no project thread."}
-                            </p>
+                            )}
                           </div>
-                          <div className="shrink-0 space-y-2">
-                            {environmentId ? (
-                              <TaskFirstInstructions
-                                task={task}
-                                environmentId={environmentId}
-                                stale={
-                                  !connectionFresh ||
-                                  !supervision.live ||
-                                  error !== null ||
-                                  refreshing
-                                }
-                                readVersion={readVersion}
-                                onOpen={() => openTask(task)}
-                              />
-                            ) : null}
-                            <Button
-                              disabled={!task.threadId || !environmentId}
-                              onClick={() => openTask(task)}
-                              size="sm"
-                              variant="outline"
-                            >
-                              Open conversation
-                            </Button>
+                          <TaskBudgetReadout
+                            readout={task.budgetReadout}
+                            stale={
+                              !connectionFresh || !supervision.live || error !== null || refreshing
+                            }
+                          />
+                          <TaskRoutingReadout readout={task.routingReadout} />
+                          {environmentId && task.threadId ? (
+                            <TaskRunSupervision
+                              task={task}
+                              environmentId={environmentId}
+                              enabled={supervision.watched.has(task.threadId)}
+                              live={supervision.live}
+                              stale={
+                                !connectionFresh ||
+                                !supervision.live ||
+                                error !== null ||
+                                refreshing
+                              }
+                              changed={supervision.changed}
+                              observe={supervision.observe}
+                            />
+                          ) : null}
+                          <TaskResultReviewPanel />
+                          <TaskResultReadout
+                            readout={task.resultReadout}
+                            routing={task.routingReadout}
+                          />
+                          {environmentId ? (
+                            <TaskResultFeedback
+                              task={task}
+                              environmentId={environmentId}
+                              stale={
+                                !connectionFresh ||
+                                !supervision.live ||
+                                error !== null ||
+                                refreshing
+                              }
+                              readVersion={readVersion}
+                            />
+                          ) : null}
+                          {environmentId &&
+                          selectedProject?.id === task.projectId &&
+                          selectedProvider ? (
+                            <TaskOutputHandoff
+                              task={task}
+                              environmentId={environmentId}
+                              stale={
+                                !connectionFresh ||
+                                !supervision.live ||
+                                error !== null ||
+                                refreshing
+                              }
+                              readVersion={readVersion}
+                              disabled={creating || !canOperateConnection}
+                              onSelect={(source) => {
+                                if (
+                                  !canOperate() ||
+                                  creationOwner.current ||
+                                  selectedProject.id !== source.reference.projectId
+                                )
+                                  return;
+                                const token = randomUUID();
+                                lockCreation(token);
+                                setCreationRequest({
+                                  providerId: selectedProvider.instanceId,
+                                  token,
+                                  source,
+                                });
+                              }}
+                            />
+                          ) : null}
+                          {environmentId ? (
+                            <TaskRevisionRequest
+                              task={task}
+                              environmentId={environmentId}
+                              stale={
+                                !connectionFresh ||
+                                !supervision.live ||
+                                error !== null ||
+                                refreshing
+                              }
+                              readVersion={readVersion}
+                              readCollaboration={loadSnapshot}
+                              onOpen={() => openTask(task)}
+                            />
+                          ) : null}
+                          <div className="mt-4 flex flex-col gap-3 border-t border-border/50 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="space-y-1 text-xs leading-relaxed text-muted-foreground">
+                              <p>Gate {task.gateDecision}. This task does not grant execution.</p>
+                              <p>
+                                {task.threadId
+                                  ? "Opening this task returns to its project thread."
+                                  : "This task has no project thread."}
+                              </p>
+                            </div>
+                            <div className="shrink-0 space-y-2">
+                              {environmentId ? (
+                                <TaskFirstInstructions
+                                  task={task}
+                                  environmentId={environmentId}
+                                  stale={
+                                    !connectionFresh ||
+                                    !supervision.live ||
+                                    error !== null ||
+                                    refreshing
+                                  }
+                                  readVersion={readVersion}
+                                  onOpen={() => openTask(task)}
+                                />
+                              ) : null}
+                              <Button
+                                disabled={!task.threadId || !environmentId}
+                                onClick={() => openTask(task)}
+                                size="sm"
+                                variant="outline"
+                              >
+                                Open conversation
+                              </Button>
+                            </div>
                           </div>
-                        </div>
-                      </li>
+                        </li>
+                      </TaskResultReviewScope>
                     </ul>
                   )}
                 />

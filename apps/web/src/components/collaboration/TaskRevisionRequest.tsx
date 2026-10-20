@@ -1,3 +1,6 @@
+import { useTaskResultReview } from "./TaskResultReview";
+import { readTaskResultReview } from "./readTaskResultReview";
+import { completeResultText } from "@t3tools/shared/taskRevisionRequest";
 import { useTaskInboxDraft } from "./TaskInboxDrafts";
 import { useTaskFirstLaunch } from "./useTaskFirstLaunch";
 import { continuationResult } from "./taskRevisionRequest";
@@ -26,12 +29,7 @@ import {
 } from "../ui/alert-dialog";
 import {
   hasRevisionOutput,
-  revisionRequestFacts,
-  revisionSnapshotTask,
   revisionTaskKey,
-  sameRevisionTask,
-  sameRevisionReview,
-  sameRevisionProjection,
   sameRevisionFacts,
   type RevisionRequestFacts,
 } from "./taskRevisionRequest";
@@ -44,6 +42,7 @@ export function TaskRevisionRequest(props: {
   readonly readCollaboration: () => Promise<CollaborationSnapshot>;
   readonly onOpen: () => void;
 }) {
+  const resultReview = useTaskResultReview();
   const readReview = useAtomCommand(threadEnvironment.readTaskReview, { reportFailure: false });
   const readProjection = useAtomCommand(threadEnvironment.readProjection, { reportFailure: false });
   const session = Option.getOrNull(usePreparedConnection(props.environmentId));
@@ -69,7 +68,7 @@ export function TaskRevisionRequest(props: {
     owner = useRef<object | null>(null),
     epoch = useRef(0),
     mounted = useRef(true);
-  const key = `${props.environmentId}:${props.readVersion}:${props.stale}:${revisionTaskKey(props.task)}`;
+  const key = `${props.environmentId}:${props.readVersion}:${props.stale}:${revisionTaskKey(props.task)}:${resultReview?.version ?? 0}`;
   const context = useRef({ key, session });
   useLayoutEffect(() => {
     latest.current = props;
@@ -122,43 +121,7 @@ export function TaskRevisionRequest(props: {
     owner.current === token &&
     !latest.current.stale &&
     context.current.session !== null;
-  const read = async () => {
-    const p = latest.current;
-    if (!p.task.threadId || p.task.contractReadout?.status !== "available") return null;
-    const input = {
-      environmentId: p.environmentId,
-      taskId: p.task.id,
-      projectId: p.task.projectId,
-      threadId: p.task.threadId,
-      revision: p.task.contractReadout.contract.revision,
-    };
-    const first = await readReview({ environmentId: p.environmentId, input });
-    if (first._tag !== "Success" || first.value.status !== "available") return null;
-    const before = revisionSnapshotTask(await p.readCollaboration(), p.environmentId, p.task);
-    if (!before || !sameRevisionTask(before, p.task)) return null;
-    const a = await readProjection({
-      environmentId: p.environmentId,
-      input: { threadId: ThreadId.make(p.task.threadId) },
-    });
-    const b = await readProjection({
-      environmentId: p.environmentId,
-      input: { threadId: ThreadId.make(p.task.threadId) },
-    });
-    const after = revisionSnapshotTask(await p.readCollaboration(), p.environmentId, p.task);
-    const last = await readReview({ environmentId: p.environmentId, input });
-    if (
-      a._tag !== "Success" ||
-      b._tag !== "Success" ||
-      last._tag !== "Success" ||
-      last.value.status !== "available" ||
-      !after ||
-      !sameRevisionTask(before, after) ||
-      !sameRevisionReview(first.value, last.value) ||
-      !sameRevisionProjection(a.value, b.value)
-    )
-      return null;
-    return revisionRequestFacts(after, p.environmentId, last.value, b.value);
-  };
+  const read = () => readTaskResultReview(latest.current, readReview, readProjection, "revision");
   const prepare = async () => {
     if (!available || owner.current || reviewRef.current) return;
     const token = {};
@@ -175,6 +138,7 @@ export function TaskRevisionRequest(props: {
         );
         return;
       }
+      if (resultReview && !resultReview.matches(facts)) return;
       reviewRef.current = facts;
       setReview(facts);
     } catch {
@@ -313,15 +277,10 @@ export function TaskRevisionRequest(props: {
                 <dt>Current Acceptance</dt>
                 <dd>{review.review.contract.acceptance}</dd>
               </dl>
-              <p>Attributed completed output excerpt</p>
+              <p>Complete attributable persisted assistant output (not owner acceptance)</p>
               <pre className="whitespace-pre-wrap break-all text-sm">
-                {review.result.content.preview}
+                {completeResultText(review)}
               </pre>
-              {review.result.content.truncated ? (
-                <p>Excerpt truncated. Open conversation for full context.</p>
-              ) : (
-                <p>Open conversation for full context.</p>
-              )}
               <p>
                 Run {review.result.runId}; message {review.result.messageId}; attempt{" "}
                 {review.result.attemptId}; turn {review.result.providerTurnId}; item{" "}
