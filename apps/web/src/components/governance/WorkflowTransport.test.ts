@@ -40,6 +40,8 @@ it("uses authenticated production workflow handlers for reviewed Start, persiste
       },
     });
     expect(preview._tag).toBe("Success");
+    if (preview._tag === "Success")
+      expect(preview.value.packetText).toContain("Run brief not recorded.");
     if (preview._tag !== "Success" || !preview.value.review) throw new Error("No review");
     expect((await f.inspect()).starts).toHaveLength(0);
     const input: typeof WorkflowDispatchStageInput.Type = {

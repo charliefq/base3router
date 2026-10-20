@@ -11,12 +11,14 @@ import {
   WORKFLOW_MAX_ARTIFACT_CHARS,
   WORKFLOW_MAX_RECORDS,
   WorkflowRun as WorkflowRunSchema,
+  WorkflowRunBrief,
   shouldAcceptCursorCloudRunnerUpdate,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { WorkflowRevisionFeedback } from "@t3tools/contracts";
 import { workflowRevisionArtifact, workflowRevisionSource } from "@t3tools/shared/workflowRevision";
 const validRevisionFeedback = Schema.is(WorkflowRevisionFeedback);
+const validRunBrief = Schema.is(WorkflowRunBrief);
 const sameRevisionSource = Schema.toEquivalence(WorkflowRevisionFeedback.fields.source);
 
 import { BUILTIN_AGENT_PROFILES, BUILTIN_WORKFLOW_TEMPLATES } from "./Builtins.ts";
@@ -149,6 +151,7 @@ const nextAttempt = (
 });
 
 export function initialWorkflowRun(input: {
+  readonly brief?: string;
   readonly runId: WorkflowRun["id"];
   readonly projectId: WorkflowRun["projectId"];
   readonly template: WorkflowTemplate;
@@ -156,8 +159,11 @@ export function initialWorkflowRun(input: {
   readonly originMessageId: WorkflowRun["originatingMessageId"];
   readonly at: string;
 }): WorkflowRun {
+  if (input.brief !== undefined && !validRunBrief(input.brief))
+    reject("Run brief must be nonblank, well-formed plain text within 2000 UTF-16 code units.");
   const first = input.template.stages[0] ?? reject("Workflow template has no first stage.");
   return {
+    ...(input.brief !== undefined ? { brief: input.brief } : {}),
     id: input.runId,
     projectId: input.projectId,
     templateId: input.template.id,
@@ -335,6 +341,7 @@ export function applyWorkflowMutation(
       if (template.status !== "active") reject("Workflow template version is unavailable.");
       validateTemplate(template, catalog);
       const expected = initialWorkflowRun({
+        ...(run.brief !== undefined ? { brief: run.brief } : {}),
         runId: run.id,
         projectId: run.projectId,
         template,

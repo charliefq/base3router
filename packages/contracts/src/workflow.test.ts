@@ -199,3 +199,39 @@ it.each(["", " \n\t", "x".repeat(2001)])("rejects blank or oversized saved feedb
     }),
   ).toThrow();
 });
+
+const briefAction = (brief: unknown) => ({
+  type: "run.start",
+  projectId: "project-1",
+  commandId: "brief-create",
+  runId: "brief-run",
+  templateId: "research-flow",
+  templateVersion: 1,
+  originatingThreadId: null,
+  originatingMessageId: null,
+  brief,
+});
+it("preserves exact bounded run brief Unicode, whitespace and legacy absence", () => {
+  const brief = "  原始要求 e\u0301 😀\r\nKeep this requirement.  ";
+  expect(decodeWorkflowActionInput(briefAction(brief))).toMatchObject({ brief });
+  expect(decodeWorkflowRun({ ...run, brief })).toMatchObject({ brief });
+  expect(decodeWorkflowRun(run)).not.toHaveProperty("brief");
+  expect(decodeWorkflowActionInput(briefAction("😀".repeat(1000)))).toMatchObject({
+    brief: "😀".repeat(1000),
+  });
+});
+it.each([
+  "",
+  " \r\n\t",
+  "a".repeat(2001),
+  "😀".repeat(1000) + "x",
+  "bad\u0000text",
+  "bad\ud800text",
+  "bad\udc00text",
+  123,
+  null,
+  {},
+])("rejects invalid new run brief before mutation: %j", (brief) => {
+  expect(() => decodeWorkflowActionInput(briefAction(brief))).toThrow();
+  expect(() => decodeWorkflowRun({ ...run, brief })).toThrow();
+});

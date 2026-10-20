@@ -67,6 +67,17 @@ function currentStage(catalog: WorkflowCatalog, run: WorkflowRun): WorkflowStage
   );
 }
 
+function RunBrief({ run }: { readonly run: WorkflowRun }) {
+  return (
+    <section aria-label={`Run brief ${run.id}`}>
+      <h4>
+        Run brief · {run.templateId} v{run.templateVersion}
+      </h4>
+      <pre className="whitespace-pre-wrap break-all">{run.brief ?? "Run brief not recorded."}</pre>
+    </section>
+  );
+}
+
 function ArtifactReview(props: { readonly artifact: WorkflowArtifact }) {
   const artifact = props.artifact;
   return (
@@ -237,6 +248,7 @@ export function ProjectWorkflowDecisions(props: {
         </div>
       ) : (
         <div className="mt-2 space-y-2">
+          <RunBrief run={activeRun} />
           <p className="text-xs" data-workflow-stage={stage?.id ?? ""}>
             {stage?.label ?? activeRun.currentStageId ?? activeRun.status} · {activeRun.status}
             {stage?.type === "human_gate" ? " · human gate" : ""}
@@ -475,6 +487,7 @@ export function ProjectWorkflowDecisions(props: {
                   </a>
                 </p>
               ))}
+            <RunBrief run={run} />
             <WorkflowDecisionHistory decisions={run.decisions} />
             {run.artifacts.map((artifact) => (
               <ArtifactReview key={artifact.id} artifact={artifact} />

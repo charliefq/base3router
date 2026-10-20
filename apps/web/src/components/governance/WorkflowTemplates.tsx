@@ -1,5 +1,7 @@
 import {
   WorkflowActionInput,
+  WorkflowRunBrief,
+  WORKFLOW_RUN_BRIEF_MAX_CHARS,
   WorkflowTemplateDraft,
   WorkflowStage as WorkflowStageSchema,
   type WorkflowCatalog,
@@ -31,7 +33,9 @@ const Draft = Schema.Struct({
     }),
   ).check(Schema.isMaxLength(12)),
 });
+const validBrief = Schema.is(WorkflowRunBrief);
 const Retained = Schema.Struct({
+  brief: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(WORKFLOW_RUN_BRIEF_MAX_CHARS))),
   draft: Schema.NullOr(Draft),
   expectedVersion: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 10000 })),
   selection: Schema.NullOr(
@@ -107,6 +111,7 @@ function TemplateEditor(props: Parameters<typeof WorkflowTemplates>[0] & { sessi
   const roles = catalog.profiles.filter((p) => p.origin === "built-in" && p.projectId === null);
   const facts = JSON.stringify([
     catalog.reusableTemplatesVersion,
+    catalog.runBriefVersion,
     catalog.templates.map((t) => [t.id, t.version, t.projectId, t.status, t.updatedAt]),
     catalog.templates.filter((t) => t.id === retained.selection?.id || t.id === retained.draft?.id),
     roles,
@@ -216,9 +221,17 @@ function TemplateEditor(props: Parameters<typeof WorkflowTemplates>[0] & { sessi
         expectedVersion: retained.expectedVersion,
       };
     } else {
-      if (!selected || selectedIssue || openRun) return;
+      if (
+        !selected ||
+        selectedIssue ||
+        openRun ||
+        catalog.runBriefVersion !== 1 ||
+        !validBrief(retained.brief ?? "")
+      )
+        return;
       command = {
         type: "run.start",
+        brief: retained.brief!,
         projectId: props.projectId,
         commandId: id("workflow_create"),
         runId: id("workflow_run"),
@@ -246,7 +259,9 @@ function TemplateEditor(props: Parameters<typeof WorkflowTemplates>[0] & { sessi
         persist({
           ...state,
           command: null,
-          ...(command.type === "template.save" ? { draft: null, expectedVersion: 0 } : {}),
+          ...(command.type === "template.save"
+            ? { draft: null, expectedVersion: 0 }
+            : { brief: "" }),
         })
       ) {
         setNotice(
@@ -383,6 +398,26 @@ function TemplateEditor(props: Parameters<typeof WorkflowTemplates>[0] & { sessi
         </div>
       ) : null}
       {selectedIssue ? <p>{selectedIssue}</p> : null}
+      <label>
+        Run brief
+        <Textarea
+          aria-label="Run brief"
+          value={retained.brief ?? ""}
+          maxLength={WORKFLOW_RUN_BRIEF_MAX_CHARS}
+          disabled={!editable || catalog.runBriefVersion !== 1}
+          onChange={(e) => change({ ...retained, brief: e.target.value })}
+        />
+      </label>
+      <p>
+        Describe this run once. Up to 2,000 UTF-16 code units (😀 uses two). Whitespace is
+        preserved. The saved brief stays with every stage and revision; it grants no permissions or
+        approval.
+      </p>
+      {catalog.runBriefVersion !== 1 ? (
+        <p>Run briefs are unavailable on this server; ledger creation is blocked.</p>
+      ) : !validBrief(retained.brief ?? "") ? (
+        <p>Enter a nonblank, valid plain-text run brief before reviewing ledger creation.</p>
+      ) : null}
       <div className="flex flex-wrap gap-2">
         <Button
           type="button"
@@ -465,7 +500,13 @@ function TemplateEditor(props: Parameters<typeof WorkflowTemplates>[0] & { sessi
         <Button
           type="button"
           size="sm"
-          disabled={!editable || !!selectedIssue || openRun}
+          disabled={
+            !editable ||
+            !!selectedIssue ||
+            openRun ||
+            catalog.runBriefVersion !== 1 ||
+            !validBrief(retained.brief ?? "")
+          }
           onClick={() => prepare("run")}
         >
           Review ledger creation
@@ -648,6 +689,11 @@ function TemplateEditor(props: Parameters<typeof WorkflowTemplates>[0] & { sessi
             Command {review.command.commandId}. This starts no provider. Context changes retire this
             confirmation.
           </p>
+          {review.command.type === "run.start" ? (
+            <pre aria-label="Reviewed run brief" className="whitespace-pre-wrap break-all">
+              {review.command.brief}
+            </pre>
+          ) : null}
           {review.command.type === "template.save" ? (
             <>
               <p>

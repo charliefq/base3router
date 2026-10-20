@@ -92,6 +92,7 @@ beforeEach(async () => {
     projectId: ProjectId.make("project-a"),
     catalog: {
       reusableTemplatesVersion: 1,
+      runBriefVersion: 1,
       profiles: roles,
       templates: templates,
       runs: [],
@@ -140,6 +141,7 @@ it("edits an exact saved version with expectedVersion and leaves existing saved 
     draft: { id: v1.id },
   });
   expect(JSON.stringify(v1)).toBe(original);
+  await input("Run brief", "Reviewed fixture run requirements");
   await click("Review ledger creation");
   await click("Confirm workflow command");
   expect(mocks.action.mock.calls[2]![0].input).toMatchObject({
@@ -152,6 +154,7 @@ it("retires ledger review if selected source content changes even without a time
   await act(async () =>
     renderer.root.findByType("select").props.onValueChange("saas-production@1"),
   );
+  await input("Run brief", "Reviewed fixture run requirements");
   await click("Review ledger creation");
   const old = button("Confirm workflow command").props.onClick;
   props = {
@@ -177,6 +180,7 @@ it("retains the original ledger run identity on lost reply and reconciliation af
   await act(async () =>
     renderer.root.findByType("select").props.onValueChange("saas-production@1"),
   );
+  await input("Run brief", "Reviewed fixture run requirements");
   await click("Review ledger creation");
   await click("Confirm workflow command");
   const original = mocks.action.mock.calls[0]![0].input;
@@ -309,6 +313,7 @@ it("keeps the original save identity after a lost reply and remount, and reconci
 it("requires a separate exact saved-version selection and creates only the reviewed ledger identity", async () => {
   const select = renderer.root.findByType("select");
   await act(async () => select.props.onValueChange("saas-production@1"));
+  await input("Run brief", "Reviewed fixture run requirements");
   await click("Review ledger creation");
   expect(mocks.action).not.toHaveBeenCalled();
   expect(text()).toContain("saas-production v1");
@@ -372,4 +377,96 @@ it("does not claim an acknowledged mutation was unsent when clearing its recover
   await click("Check original workflow command");
   expect(button("New workflow draft").props.disabled).toBe(false);
   expect(mocks.action).toHaveBeenCalledTimes(1);
+});
+
+it("requires and reviews the exact run brief before sending one ledger command", async () => {
+  await act(async () =>
+    renderer.root.findByType("select").props.onValueChange("saas-production@1"),
+  );
+  expect(button("Review ledger creation").props.disabled).toBe(true);
+  const brief = "  保留原始要求 😀\r\nNo silent deletion.  ";
+  await input("Run brief", brief);
+  await click("Review ledger creation");
+  expect(renderer.root.findByProps({ "aria-label": "Reviewed run brief" }).children.join("")).toBe(
+    brief,
+  );
+  expect(text()).toContain("saas-production v1");
+  expect(mocks.action).not.toHaveBeenCalled();
+  await click("Confirm workflow command");
+  expect(mocks.action.mock.calls[0]![0].input).toMatchObject({
+    type: "run.start",
+    templateId: "saas-production",
+    templateVersion: 1,
+    brief,
+  });
+  expect(renderer.root.findByProps({ "aria-label": "Run brief" }).props.value).toBe("");
+});
+
+it.each(["brief-A-B-A", "environment", "project", "session", "context-A-B-A", "capability"])(
+  "retires exact brief confirmation on %s while retained text grants no authority",
+  async (change) => {
+    await act(async () =>
+      renderer.root.findByType("select").props.onValueChange("saas-production@1"),
+    );
+    await input("Run brief", "Original retained brief");
+    await click("Review ledger creation");
+    const confirm = button("Confirm workflow command").props.onClick;
+    const original = props;
+    if (change === "brief-A-B-A") {
+      await input("Run brief", "Other brief");
+      await input("Run brief", "Original retained brief");
+    }
+    if (change === "environment" || change === "context-A-B-A")
+      props = { ...props, environmentId: EnvironmentId.make("environment-b") };
+    if (change === "project") props = { ...props, projectId: ProjectId.make("project-b") };
+    if (change === "session") mocks.session = {};
+    if (change === "capability") {
+      const catalog = { ...props.catalog };
+      delete catalog.runBriefVersion;
+      props = { ...props, catalog };
+    }
+    await update();
+    if (change === "context-A-B-A") {
+      props = original;
+      await update();
+      expect(text()).toContain("Original retained brief");
+    }
+    await act(async () => confirm());
+    expect(mocks.action).not.toHaveBeenCalled();
+    expect(button("Confirm workflow command")).toBeUndefined();
+  },
+);
+it.each(["", " \n\t", "bad\ud800", "bad\u0000"])(
+  "blocks malformed/blank brief review: %j",
+  async (brief) => {
+    await act(async () =>
+      renderer.root.findByType("select").props.onValueChange("saas-production@1"),
+    );
+    await input("Run brief", brief);
+    expect(button("Review ledger creation").props.disabled).toBe(true);
+    await click("Review ledger creation");
+    expect(button("Confirm workflow command")).toBeUndefined();
+    expect(mocks.action).not.toHaveBeenCalled();
+  },
+);
+it("keeps committed ledger truth and original identity when receipt cleanup storage fails", async () => {
+  await act(async () =>
+    renderer.root.findByType("select").props.onValueChange("saas-production@1"),
+  );
+  await input("Run brief", "Original committed brief");
+  await click("Review ledger creation");
+  const set = globalThis.sessionStorage.setItem;
+  globalThis.sessionStorage.setItem = (key, raw) => {
+    if (JSON.parse(raw).command === null) throw new Error("cleanup failed");
+    set(key, raw);
+  };
+  await click("Confirm workflow command");
+  expect(text()).toContain("Original command is committed; recovery storage could not be updated");
+  expect(text()).toContain("Original committed brief");
+  expect(mocks.action).toHaveBeenCalledTimes(1);
+  expect(button("Review ledger creation").props.disabled).toBe(true);
+  globalThis.sessionStorage.setItem = set;
+  await click("Check original workflow command");
+  expect(mocks.action).toHaveBeenCalledTimes(1);
+  expect(renderer.root.findByProps({ "aria-label": "Run brief" }).props.value).toBe("");
 });

@@ -334,6 +334,8 @@ const program = Effect.gen(function* () {
           type: "run.start",
           run: initialWorkflowRun({
             runId: "recovery-run",
+            brief:
+              "  Process-persisted original requirements 😀\r\nKeep across revision/restart.  ",
             projectId,
             template: BUILTIN_WORKFLOW_TEMPLATES[0]!,
             originThreadId: null,

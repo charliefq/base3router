@@ -27,6 +27,18 @@ const WORKFLOW_MAX_ATTEMPTS = 5;
 export const WORKFLOW_MAX_ARTIFACT_CHARS = 12_000;
 export const WORKFLOW_MAX_RECORDS = 1_024;
 export const WORKFLOW_REVISION_FEEDBACK_MAX_CHARS = 2_000;
+export const WORKFLOW_RUN_BRIEF_MAX_CHARS = 2_000;
+// UTF-16 code units, matching JS length and textarea maxLength. No normalization:
+// paired supplementary characters count two; lone surrogates/control bytes reject.
+/* eslint-disable no-control-regex -- These controls and lone surrogates are invalid plain-text input. */
+const invalidBriefCodePoints =
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\uD800-\uDFFF]/u;
+/* eslint-enable no-control-regex */
+export const WorkflowRunBrief = Schema.String.check(
+  Schema.isMaxLength(WORKFLOW_RUN_BRIEF_MAX_CHARS),
+  Schema.makeFilter((text) => text.trim().length > 0),
+  Schema.makeFilter((text) => !invalidBriefCodePoints.test(text)),
+);
 
 const Id = TrimmedNonEmptyString.check(
   Schema.isMaxLength(80),
@@ -214,6 +226,7 @@ export const WorkflowDecision = Schema.Struct({
 export type WorkflowDecision = typeof WorkflowDecision.Type;
 
 export const WorkflowRun = Schema.Struct({
+  brief: Schema.optionalKey(WorkflowRunBrief),
   id: WorkflowRunId,
   projectId: ProjectId,
   templateId: WorkflowTemplateId,
@@ -233,6 +246,7 @@ export const WorkflowRun = Schema.Struct({
 export type WorkflowRun = typeof WorkflowRun.Type;
 
 export const WorkflowCatalog = Schema.Struct({
+  runBriefVersion: Schema.optionalKey(Schema.Literal(1)),
   reusableTemplatesVersion: Schema.optionalKey(Schema.Literal(1)),
   revisionFeedbackVersion: Schema.optionalKey(Schema.Literal(1)),
   profiles: Schema.Array(AgentProfile).check(Schema.isMaxLength(WORKFLOW_MAX_RECORDS)),
@@ -310,6 +324,7 @@ export const WorkflowActionInput = Schema.Union([
   Schema.Struct({
     ...WorkflowActionBase,
     type: Schema.Literal("run.start"),
+    brief: Schema.optionalKey(WorkflowRunBrief),
     runId: WorkflowRunId,
     templateId: WorkflowTemplateId,
     templateVersion: Version,

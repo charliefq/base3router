@@ -182,6 +182,10 @@ it("rejects a superseded attempt after a revision is persisted by another proces
   const reloadedFeedback = JSON.parse(
     NodeFS.readFileSync(NodePath.join(directory, "journey-read.json"), "utf8"),
   ) as { runs: Array<WorkflowRun> };
+  assert.equal(
+    reloadedFeedback.runs[0]!.brief,
+    "  Process-persisted original requirements 😀\r\nKeep across revision/restart.  ",
+  );
   assert.deepEqual(reloadedFeedback.runs[0]!.decisions.at(-1)!.revisionFeedback, {
     text: "Persisted process revision request",
     source: {
@@ -270,6 +274,10 @@ it("executes one disposable fake-provider Discovery, inspects real persisted out
     NodeFS.readFileSync(NodePath.join(directory, "journey-read.json"), "utf8"),
   ) as { runs: Array<unknown> };
   assert.deepEqual(reloaded.runs[0], result.architecture);
+  assert.equal(
+    (reloaded.runs[0] as WorkflowRun).brief,
+    "  Process-persisted original requirements 😀\r\nKeep across revision/restart.  ",
+  );
   assert.deepEqual(inspect(directory), before);
 });
 

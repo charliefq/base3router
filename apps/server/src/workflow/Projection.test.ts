@@ -25,6 +25,7 @@ const event: WorkflowRecordedEvent = {
       type: "run.start",
       run: initialWorkflowRun({
         runId: "run-1",
+        brief: "  Immutable original brief 😀\r\nNo backfill.  ",
         projectId,
         template: BUILTIN_WORKFLOW_TEMPLATES[0]!,
         originThreadId: null,
@@ -44,6 +45,7 @@ layer("workflow projection", (it) => {
       yield* projectWorkflowEvent(event);
       const first = yield* readWorkflowCatalog(projectId);
       assert.equal(first.runs[0]?.templateVersion, 1);
+      assert.equal(first.runs[0]?.brief, "  Immutable original brief 😀\r\nNo backfill.  ");
       yield* projectWorkflowEvent(event);
       assert.deepStrictEqual(yield* readWorkflowCatalog(projectId), first);
       yield* sql`DELETE FROM projection_workflow_runs`;

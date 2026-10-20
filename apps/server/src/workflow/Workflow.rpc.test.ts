@@ -1311,3 +1311,55 @@ memoryLayer("workflow feedback global identity", (it) => {
     }),
   );
 });
+
+memoryLayer("run brief original receipts", (it) => {
+  it.effect(
+    "deduplicates exact run start and conflicts on altered brief even for legacy receipts without input",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations({ toMigrationInclusive: 56 });
+        yield* insertProject();
+        const brief = "  Original brief 😀\r\nNo replacement.  ";
+        const input = {
+          type: "run.start" as const,
+          projectId,
+          commandId: "brief-original",
+          runId: "brief-original",
+          templateId: template.id,
+          templateVersion: template.version,
+          originatingThreadId: null,
+          originatingMessageId: null,
+          brief,
+        };
+        const events: WorkflowRecordCommand[] = [];
+        const dispatch = (command: WorkflowRecordCommand) =>
+          Effect.sync(() => {
+            events.push(command);
+            return { sequence: 1 };
+          });
+        const first = yield* performWorkflowAction(input, dispatch);
+        expect(first.runs[0]?.brief).toBe(brief);
+        expect(events[0]?.mutation.type === "run.start" && events[0].mutation.run.brief).toBe(
+          brief,
+        );
+        const sql = yield* SqlClient.SqlClient;
+        const before = yield* sql`SELECT total_changes() AS changes`;
+        expect(yield* performWorkflowAction(input, dispatch)).toEqual(first);
+        expect(
+          (yield* Effect.exit(
+            performWorkflowAction({ ...input, brief: brief + " altered" }, dispatch),
+          ))._tag,
+        ).toBe("Failure");
+        expect(yield* sql`SELECT total_changes() AS changes`).toEqual(before);
+        yield* sql`UPDATE base3_workflow_commands SET mutation_json=json_remove(mutation_json,'$.input') WHERE command_id=${input.commandId}`;
+        const legacyBefore = yield* sql`SELECT total_changes() AS changes`;
+        expect(yield* performWorkflowAction(input, dispatch)).toEqual(first);
+        expect(
+          (yield* Effect.exit(performWorkflowAction({ ...input, brief: "Changed" }, dispatch)))
+            ._tag,
+        ).toBe("Failure");
+        expect(yield* sql`SELECT total_changes() AS changes`).toEqual(legacyBefore);
+        expect(events).toHaveLength(1);
+      }),
+  );
+});

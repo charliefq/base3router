@@ -292,6 +292,7 @@ it.each(["template.save", "run.start"] as const)(
         projectId,
         commandId: "lost-template-run",
         runId: "lost-workflow-run",
+        brief: "  Original lost-reply brief 😀\r\nNo resend.  ",
         templateId: save.draft.id,
         templateVersion: 1,
         originatingThreadId: null,
@@ -319,7 +320,15 @@ it.each(["template.save", "run.start"] as const)(
       expect((await f.inspect()).starts).toHaveLength(0);
       if (original.type === "template.save")
         expect(before.templates.filter((t) => t.id === original.draft.id)).toHaveLength(1);
-      else expect(before.runs.filter((r) => r.id === original.runId)).toHaveLength(1);
+      else {
+        expect(before.runs.filter((r) => r.id === original.runId)).toHaveLength(1);
+        expect(before.runs.find((r) => r.id === original.runId)?.brief).toBe(original.brief);
+        expect(
+          success(
+            await f.workflowTemplateStatus({ ...original, brief: original.brief + " changed" }),
+          ),
+        ).toBe("conflict");
+      }
       expect(
         (
           await f.workflowTemplateStatus({

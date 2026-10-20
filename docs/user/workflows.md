@@ -1,6 +1,10 @@
 # Supervised workflows
 
-Start a workflow from Governance to create its stage history. This does not start a model.
+In Governance, select an exact saved template version and enter a brief for this run. Review both
+before creating its stage history. The brief accepts up to 2,000 UTF-16 code units (😀 uses two),
+preserves whitespace, and stays unchanged through every stage, revision, pause and completed-run
+history. It does not change the reusable template. Older runs show **Run brief not recorded**;
+requirements are not inferred from their conversations or artifacts. Creation starts no model.
 For an agent stage, preview the packet, choose an exact provider instance and model, and enter
 Goal, Redirect, Acceptance and Brake. Review the stage, then explicitly start it. Changing the
 model, instructions or workflow context requires a fresh review. Each stage permits one provider

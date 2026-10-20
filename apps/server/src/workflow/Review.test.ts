@@ -64,6 +64,7 @@ const fixture = Effect.gen(function* () {
       projectId,
       commandId: "review-create",
       runId: "review-run",
+      brief: "Original review-bound brief",
       templateId: "saas-production",
       templateVersion: 1,
       originatingThreadId: null,
@@ -106,6 +107,7 @@ layer("reviewed workflow dispatch", (it) => {
     "contract",
     "model",
     "instruction",
+    "brief",
     "expiry",
     "deadline",
     "starts",
@@ -155,6 +157,8 @@ layer("reviewed workflow dispatch", (it) => {
         if (!preview.review) return yield* Effect.die("Missing review");
         input = { ...input, review: preview.review };
       }
+      if (change === "brief")
+        yield* f.sql`UPDATE projection_workflow_runs SET run_json=json_set(run_json, '$.brief', 'Changed after review') WHERE run_id=${input.runId}`;
       if (change === "pause")
         yield* performWorkflowAction(
           { type: "run.pause", projectId, commandId: "pause", runId: input.runId },
