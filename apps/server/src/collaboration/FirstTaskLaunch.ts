@@ -84,29 +84,30 @@ const IssuedFile = Schema.fromJsonString(
 );
 const decodeIssuedFile = Schema.decodeUnknownOption(IssuedFile);
 const encodeIssuedFile = Schema.encodeSync(IssuedFile);
-export const validateTaskReferenceIssuance = Effect.fn("TaskReferenceFile.validateIssuance")(
-  function* (sql: SqlClient.SqlClient, launch: TaskFirstLaunch) {
-    const actor = yield* reviewedTaskPrincipal;
-    const now = DateTime.formatIso(yield* DateTime.now);
-    const proof = yield* Effect.try({
-      try: () => verifyTaskReferenceFile(launch, actor.actorId, now),
-      catch: () => deny(),
-    });
-    const rows = yield* sql<{
-      issued: string | null;
-    }>`SELECT json_extract(payload_json,'$.__taskReferenceFileReview') AS issued FROM orchestration_v2_projection_threads WHERE thread_id=${launch.threadId}`;
-    const issued = rows[0]?.issued ? decodeIssuedFile(rows[0].issued) : Option.none();
-    const { referenceFile: _file, ...base } = launch;
-    if (
-      Option.isNone(issued) ||
-      issued.value.sessionId !== actor.sessionId ||
-      argumentHash(issued.value.review) !== argumentHash(proof) ||
-      issued.value.launchSha256 !== argumentHash(base)
-    )
-      return yield* deny();
-    return proof;
-  },
-);
+const validateTaskReferenceIssuance = Effect.fn("TaskReferenceFile.validateIssuance")(function* (
+  sql: SqlClient.SqlClient,
+  launch: TaskFirstLaunch,
+) {
+  const actor = yield* reviewedTaskPrincipal;
+  const now = DateTime.formatIso(yield* DateTime.now);
+  const proof = yield* Effect.try({
+    try: () => verifyTaskReferenceFile(launch, actor.actorId, now),
+    catch: () => deny(),
+  });
+  const rows = yield* sql<{
+    issued: string | null;
+  }>`SELECT json_extract(payload_json,'$.__taskReferenceFileReview') AS issued FROM orchestration_v2_projection_threads WHERE thread_id=${launch.threadId}`;
+  const issued = rows[0]?.issued ? decodeIssuedFile(rows[0].issued) : Option.none();
+  const { referenceFile: _file, ...base } = launch;
+  if (
+    Option.isNone(issued) ||
+    issued.value.sessionId !== actor.sessionId ||
+    argumentHash(issued.value.review) !== argumentHash(proof) ||
+    issued.value.launchSha256 !== argumentHash(base)
+  )
+    return yield* deny();
+  return proof;
+});
 export const prepareTaskReferenceClaim = Effect.fn("TaskReferenceFile.prepareClaim")(function* (
   sql: SqlClient.SqlClient,
   c: Dispatch,

@@ -8,12 +8,9 @@ import {
   type OrchestrationV2Command,
   type TaskFirstLaunch,
 } from "@t3tools/contracts";
-import { sha256Hex } from "@t3tools/shared/actionCanonical";
 import { withTaskTransportFixture } from "./taskCreationTransportFixture";
 type Fixture = Parameters<Parameters<typeof withTaskTransportFixture>[0]>[0];
-export function value<A>(
-  result: { _tag: "Success"; value: A } | { _tag: "Failure"; cause: unknown },
-): A {
+function value<A>(result: { _tag: "Success"; value: A } | { _tag: "Failure"; cause: unknown }): A {
   if (result._tag !== "Success") throw new Error(String(result.cause));
   return result.value;
 }
@@ -75,47 +72,3 @@ export async function prepareTask(
   };
   return { original, task, launch };
 }
-export const start = (f: Fixture, marker: TaskFirstLaunch) =>
-  f.start({
-    commandId: marker.commandId,
-    threadId: marker.threadId,
-    message: {
-      messageId: marker.messageId,
-      role: "user",
-      text: marker.text,
-      attachments: marker.referenceFile ? [marker.referenceFile.source] : [],
-    },
-    modelSelection: marker.modelSelection,
-    routingMode: marker.routingMode,
-    dispatchMode: "start",
-    runtimeMode: marker.runtimeMode,
-    interactionMode: marker.interactionMode,
-    taskFirstLaunch: marker,
-  });
-export const command = (
-  marker: TaskFirstLaunch,
-): Extract<OrchestrationV2Command, { type: "message.dispatch" }> => ({
-  type: "message.dispatch",
-  commandId: marker.commandId,
-  threadId: marker.threadId,
-  messageId: marker.messageId,
-  text: marker.text,
-  attachments: marker.referenceFile ? [marker.referenceFile.source] : [],
-  routingMode: marker.routingMode,
-  modelSelection: marker.modelSelection,
-  dispatchMode: { type: "start_immediately" },
-  createdBy: "user",
-  creationSource: "web",
-  taskFirstLaunch: marker,
-});
-
-export const prepareFile = async (f: Fixture, key: string, mode: "manual" | "auto" = "manual") => {
-  const p = await prepareTask(f, key, mode);
-  const text = "Reference bytes: café\nRecorded evidence only.\n";
-  const attachment = await f.uploadFile("notes.txt", text);
-  const reviewed = value(
-    await f.reviewReferenceFile({ launch: p.launch, attachment, contentSha256: sha256Hex(text) }),
-  );
-  if (reviewed.status !== "available") throw new Error(reviewed.reason);
-  return { ...p, text, attachment, marker: { ...p.launch, referenceFile: reviewed.review } };
-};
