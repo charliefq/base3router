@@ -162,12 +162,20 @@ export function providerMessageTextWithAttachmentPaths(input: {
   readonly text: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly attachmentsDir: string;
+  readonly requireFilePaths?: boolean;
 }): string {
   let text = input.text;
-  const appendContext = (context: string | undefined) => {
-    if (context === undefined) return;
+  const appendContext = (context: string | undefined, required = false) => {
+    if (context === undefined) {
+      if (required) throw new Error("Required attachment path is unavailable.");
+      return;
+    }
     const candidate = text ? `${text}\n\n${context}` : context;
     if (candidate.length <= PROVIDER_SEND_TURN_MAX_INPUT_CHARS) text = candidate;
+    else if (required)
+      throw new Error(
+        "Complete instructions and required attachment path exceed the provider input limit.",
+      );
   };
 
   for (const attachment of input.attachments) {
@@ -179,6 +187,7 @@ export function providerMessageTextWithAttachmentPaths(input: {
       path === null
         ? undefined
         : `[Attached ${attachment.type} "${attachment.name}" is saved at: ${path}]`,
+      input.requireFilePaths === true && attachment.type === "file",
     );
   }
 

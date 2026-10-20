@@ -9,7 +9,7 @@ import {
   verifyTaskReferenceFile,
   taskReferenceTargetAvailable,
 } from "@t3tools/shared/taskReferenceFile";
-import { readTaskReferenceFile } from "./TaskReferenceFile.ts";
+import { readTaskReferenceFile, validateTaskReferenceFileInput } from "./TaskReferenceFile.ts";
 import {
   createAttachmentId,
   parseThreadSegmentFromAttachmentId,
@@ -114,6 +114,7 @@ export const prepareTaskReferenceClaim = Effect.fn("TaskReferenceFile.prepareCla
 ) {
   if (!c.taskFirstLaunch?.referenceFile) return undefined;
   const proof = yield* validateTaskReferenceIssuance(sql, c.taskFirstLaunch);
+  yield* validateTaskReferenceFileInput(proof.attachment, c.text);
   if (argumentHash(c.attachments) !== argumentHash([proof.source])) return yield* deny();
   const { referenceFile: _file, ...base } = c.taskFirstLaunch;
   yield* validateFirstTaskLaunch(sql, { ...c, taskFirstLaunch: base, attachments: [] });
@@ -225,7 +226,7 @@ export const validateFirstTaskLaunch = Effect.fn("FirstTaskLaunch.validate")(fun
   if (m.referenceFile) {
     const proof = yield* validateTaskReferenceIssuance(sql, m);
     if (argumentHash(c.attachments) !== argumentHash([proof.attachment])) return yield* deny();
-    yield* readTaskReferenceFile(proof.attachment, proof.contentSha256).pipe(
+    yield* readTaskReferenceFile(proof.attachment, proof.contentSha256, c.text).pipe(
       Effect.mapError(() => deny()),
     );
   }
@@ -451,6 +452,7 @@ export const reviewTaskReferenceFile = Effect.fn("TaskReferenceFile.review")(
         ),
       ),
     };
+    yield* validateTaskReferenceFileInput(binding.attachment, launch.text);
     const review = { ...binding, bindingSha256: taskReferenceFileBinding(launch, binding) };
     const record = encodeIssuedFile({
       review,
@@ -467,7 +469,7 @@ export const reviewTaskReferenceFile = Effect.fn("TaskReferenceFile.review")(
     Effect.succeed({
       status: "unavailable" as const,
       reason:
-        "Owned task, reference file bytes, scope or session could not be confirmed. No work started.",
+        "Owned task, reference content, session or complete native input budget could not be confirmed. Shorten long instructions or refresh and review. No work started.",
     }),
   ),
 );

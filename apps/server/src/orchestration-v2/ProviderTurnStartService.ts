@@ -753,7 +753,11 @@ export const layer: Layer.Layer<
                 cause: "Reference file scope or actual target changed.",
               });
             yield* withReferenceStore(
-              readTaskReferenceFile(selectedFile.attachment, selectedFile.contentSha256),
+              readTaskReferenceFile(
+                selectedFile.attachment,
+                selectedFile.contentSha256,
+                message.text,
+              ),
             );
           }),
         );
@@ -1708,7 +1712,11 @@ export const layer: Layer.Layer<
                 cause: "Actual reference file input differs or was already attempted.",
               });
             yield* withReferenceStore(
-              readTaskReferenceFile(selectedFile.attachment, selectedFile.contentSha256),
+              readTaskReferenceFile(
+                selectedFile.attachment,
+                selectedFile.contentSha256,
+                turnInput.message.text,
+              ),
             );
             pendingFile = {
               status: "unknown",

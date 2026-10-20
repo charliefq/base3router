@@ -2846,10 +2846,19 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         ) =>
           Effect.gen(function* () {
             const inputItems: Array<CodexSchema.V2TurnStartParams__UserInput> = [];
-            const text = providerMessageTextWithAttachmentPaths({
-              text: codexSkillMentionText(turnInput.message.text),
-              attachments: turnInput.message.attachments,
-              attachmentsDir: serverConfig.attachmentsDir,
+            const text = yield* Effect.try({
+              try: () =>
+                providerMessageTextWithAttachmentPaths({
+                  text: codexSkillMentionText(turnInput.message.text),
+                  attachments: turnInput.message.attachments,
+                  attachmentsDir: serverConfig.attachmentsDir,
+                  requireFilePaths: true,
+                }),
+              catch: (cause) =>
+                toProtocolError(
+                  "Complete file input could not be serialized; nothing sent.",
+                  cause,
+                ),
             });
             if (text.length > 0) {
               inputItems.push({

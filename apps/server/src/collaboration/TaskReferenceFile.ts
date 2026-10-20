@@ -1,3 +1,4 @@
+import { providerMessageTextWithAttachmentPaths } from "../orchestration-v2/AttachmentPrompt.ts";
 import * as Clock from "effect/Clock";
 import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
@@ -17,10 +18,33 @@ export class TaskReferenceFileDenied extends Schema.TaggedError<TaskReferenceFil
   "TaskReferenceFileDenied",
   { reason: Schema.String },
 ) {}
+export const validateTaskReferenceFileInput = Effect.fn("TaskReferenceFile.validateInput")(
+  function* (attachment: ChatFileAttachment, text: string) {
+    const config = yield* Effect.serviceOption(ServerConfig.ServerConfig);
+    if (Option.isNone(config))
+      return yield* new TaskReferenceFileDenied({ reason: "Reference file store unavailable." });
+    yield* Effect.try({
+      try: () =>
+        providerMessageTextWithAttachmentPaths({
+          text,
+          attachments: [attachment],
+          attachmentsDir: config.value.attachmentsDir,
+          requireFilePaths: true,
+        }),
+      catch: () =>
+        new TaskReferenceFileDenied({
+          reason:
+            "Complete instructions and reference path exceed the native input limit. Shorten instructions and review again.",
+        }),
+    });
+  },
+);
 export const readTaskReferenceFile = Effect.fn("TaskReferenceFile.read")(function* (
   attachment: ChatFileAttachment,
   expectedSha256: string,
+  instructions?: string,
 ) {
+  if (instructions !== undefined) yield* validateTaskReferenceFileInput(attachment, instructions);
   if (!isPlainTaskReference(attachment))
     return yield* new TaskReferenceFileDenied({
       reason: "Only one ordinary UTF-8 text/plain .txt file is supported.",

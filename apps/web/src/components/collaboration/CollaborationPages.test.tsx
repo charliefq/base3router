@@ -1,3 +1,4 @@
+import { sha256Hex } from "@t3tools/shared/actionCanonical";
 import { withTaskTransportFixture } from "./testkit/taskCreationTransportFixture";
 import { prepareTask as prepareReferenceTask } from "./testkit/taskReferenceFileFixture";
 import {
@@ -9566,4 +9567,103 @@ it.each([
     });
   },
   30000,
+);
+
+it.each(["adapter-accepted", "unknown", "mismatched"] as const)(
+  "persisted reference file result shows %s attribution without local launch recovery",
+  async (outcome) => {
+    await withTaskTransportFixture(async (f) => {
+      const p = await prepareReferenceTask(f, `result-file-${outcome}`);
+      const bytes = "Persisted file evidence: café\n";
+      const attachment = await f.uploadFile("persisted-notes.txt", bytes);
+      const reviewed = await f.reviewReferenceFile({
+        launch: p.launch,
+        attachment,
+        contentSha256: sha256Hex(bytes),
+      });
+      if (reviewed._tag !== "Success" || reviewed.value.status !== "available")
+        throw new Error("File review unavailable");
+      const proof = reviewed.value.review;
+      const marker = { ...p.launch, referenceFile: proof };
+      if (outcome === "unknown") f.holdInput(marker.text);
+      try {
+        const started = await f.dispatch({
+          type: "message.dispatch",
+          commandId: marker.commandId,
+          messageId: marker.messageId,
+          threadId: marker.threadId,
+          text: marker.text,
+          attachments: [proof.source],
+          routingMode: marker.routingMode,
+          modelSelection: marker.modelSelection,
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+          taskFirstLaunch: marker,
+        });
+        expect(started._tag).toBe("Success");
+        if (outcome === "unknown") await f.awaitHeldStart();
+        else await f.settle(marker.messageId);
+        if (outcome === "mismatched") await f.corruptFileDelivery(marker.threadId);
+        state.snapshot = await f.snapshot();
+        const task = state.snapshot.tasks.find((t) => t.threadId === marker.threadId)!;
+        const result = task.resultReadout;
+        if (result?.status !== "available") throw new Error("No persisted result evidence");
+        expect(result.referenceFileSelection).toEqual(proof);
+        expect(result.referenceFileDelivery?.status).toBe(
+          outcome === "mismatched" ? undefined : outcome,
+        );
+        vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn() });
+        state.load.mockImplementation(() => f.snapshot());
+        const before = await f.executionCounts();
+        await act(async () => {
+          renderer = create(<TasksPage />);
+        });
+        await act(async () => {
+          await state.load.mock.results[0]!.value;
+        });
+        await selectOnlyInboxTaskForDetailJourney(renderer);
+        expect(text()).toContain("Reference file provenance");
+        expect(text()).toContain("persisted-notes.txt");
+        expect(text()).toContain(proof.source.id);
+        expect(text()).toContain(proof.attachment.id);
+        expect(text()).toContain(proof.contentSha256);
+        expect(text()).toContain("does not establish successful completion or owner acceptance");
+        const section = renderer.root.findByProps({ "aria-label": "Reference file provenance" });
+        const evidence = section
+          .findAllByType("p")
+          .map((p) => [p.props.children].flat(Infinity).join(""))
+          .join("\n");
+        const paragraphs = renderer.root
+          .findAllByType("p")
+          .map((p) => [p.props.children].flat(Infinity).join(""))
+          .join("\n");
+        if (outcome === "mismatched") {
+          expect(text()).toContain("Unknown / no matching delivery evidence");
+          expect(evidence).not.toContain("adapter-accepted");
+        } else {
+          expect(evidence).toContain(`File input delivery: ${outcome}`);
+          expect(evidence).toContain(result.runId);
+          expect(evidence).toContain(result.attemptId);
+          expect(evidence).toContain(result.messageId);
+          expect(evidence).toContain(result.referenceFileDelivery!.modelSelection.instanceId);
+          expect(evidence).toContain(result.referenceFileDelivery!.modelSelection.model);
+        }
+        if (outcome === "unknown") {
+          expect(paragraphs).toContain("Latest persisted run status: running");
+          expect(text()).not.toContain("Latest persisted assistant output");
+        }
+        expect(await f.executionCounts()).toEqual(before);
+        expect((await f.inspect()).starts).toHaveLength(1);
+        expect(state.startStep).not.toHaveBeenCalled();
+        expect(state.fileUpload).not.toHaveBeenCalled();
+        expect(state.firstLaunchRead).not.toHaveBeenCalled();
+      } finally {
+        if (outcome === "unknown") {
+          f.releaseHeldStart();
+          await f.settle(marker.messageId);
+        }
+      }
+    });
+  },
 );

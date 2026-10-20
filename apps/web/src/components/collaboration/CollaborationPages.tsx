@@ -1,3 +1,4 @@
+import { taskReferenceDeliveryMatches } from "@t3tools/shared/taskReferenceFile";
 import { TaskInbox } from "./TaskInbox";
 import { TaskInboxDrafts } from "./TaskInboxDrafts";
 import { resolveInboxSelection, type InboxKey } from "./taskInbox";
@@ -291,7 +292,28 @@ const resultUnknownReason = (reason: string) => {
   }
 };
 
-function TaskResultReadout({ readout }: { readout: CollaborationTaskResultReadout | undefined }) {
+function TaskResultReadout({
+  readout,
+  routing,
+}: {
+  readout: CollaborationTaskResultReadout | undefined;
+  routing: CollaborationTaskRoutingReadout | undefined;
+}) {
+  const selection = readout?.status === "available" ? readout.referenceFileSelection : undefined;
+  const delivery =
+    readout?.status === "available" &&
+    routing?.status === "available" &&
+    routing.runId === readout.runId &&
+    routing.messageId === readout.messageId &&
+    routing.configuredModel &&
+    taskReferenceDeliveryMatches(selection, readout.referenceFileDelivery, {
+      runId: readout.runId,
+      attemptId: readout.attemptId,
+      messageId: readout.messageId,
+      modelSelection: routing.configuredModel,
+    })
+      ? readout.referenceFileDelivery
+      : undefined;
   return (
     <div className="mt-4 space-y-2 rounded-lg border border-border/50 p-3">
       <h3 className="text-sm font-medium">Result evidence</h3>
@@ -302,6 +324,31 @@ function TaskResultReadout({ readout }: { readout: CollaborationTaskResultReadou
             selection={readout.instructionSkillSelection}
             delivery={readout.instructionSkillDelivery}
           />
+          {selection ? (
+            <section aria-label="Reference file provenance" className="break-all space-y-1 text-sm">
+              <h4 className="font-medium">Reference file provenance</h4>
+              <p>
+                Selected file: {selection.source.name} · {selection.source.mimeType} ·{" "}
+                {selection.source.sizeBytes} bytes.
+              </p>
+              <p>
+                Content SHA256 {selection.contentSha256}; source {selection.source.id}; final{" "}
+                {selection.attachment.id}; review {selection.reviewId}.
+              </p>
+              <p>
+                File input delivery: {delivery?.status ?? "Unknown / no matching delivery evidence"}
+                .
+              </p>
+              {delivery ? (
+                <p>
+                  Run {delivery.runId}; attempt {delivery.attemptId}; message {delivery.messageId};
+                  actual model {delivery.modelSelection.instanceId} /{" "}
+                  {delivery.modelSelection.model}; observed {delivery.observedAt}.
+                </p>
+              ) : null}
+              <p>File delivery does not establish successful completion or owner acceptance.</p>
+            </section>
+          ) : null}
           <p className="text-sm">Latest persisted run status: {readout.runStatus}</p>
           <p className="text-sm">
             Correlated provider-turn status: {readout.providerTurnStatus ?? "Unknown"}
@@ -1852,7 +1899,10 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
                             observe={supervision.observe}
                           />
                         ) : null}
-                        <TaskResultReadout readout={task.resultReadout} />
+                        <TaskResultReadout
+                          readout={task.resultReadout}
+                          routing={task.routingReadout}
+                        />
                         {environmentId ? (
                           <TaskResultFeedback
                             task={task}

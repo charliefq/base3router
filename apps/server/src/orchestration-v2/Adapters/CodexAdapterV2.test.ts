@@ -1,3 +1,11 @@
+import { withTaskResultLinkageFixture } from "../../collaboration/testkit/taskResultLinkageFixture.ts";
+import {
+  createPendingAttachmentId,
+  createAttachmentId,
+  resolveAttachmentPath,
+} from "../../attachmentStore.ts";
+import { sha256Hex } from "@t3tools/shared/actionCanonical";
+import { providerMessageTextWithAttachmentPaths } from "../AttachmentPrompt.ts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { makeSqlitePersistenceLive } from "../../persistence/Layers/Sqlite.ts";
 import { checkpointWorkspace } from "../testkit/ReplayFixtureWorkspace.ts";
@@ -11,6 +19,9 @@ import {
 } from "./ProviderTextDeltaCoalescer.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  ChatAttachmentId,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  type TaskFirstLaunch,
   CommandId,
   EventId,
   CheckpointId,
@@ -1383,6 +1394,12 @@ describe("CodexAdapterV2 background command detail", () => {
   });
 });
 
+const decodeReferenceRpcInput = Schema.decodeUnknownSync(
+  Schema.Struct({
+    model: Schema.String,
+    input: Schema.Array(Schema.Struct({ type: Schema.Literal("text"), text: Schema.String })),
+  }),
+);
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 const CODEX_TEST_MODEL_SELECTION = {
   instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
@@ -1725,6 +1742,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             event.type === "subagent.updated",
         );
       return {
+        adapter,
+        serverConfig,
         runtime,
         providerThread,
         threadId,
@@ -1736,6 +1755,190 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         firstTerminal: Deferred.await(firstTerminal),
       };
     });
+
+  it.live.each(
+    (["manual", "auto"] as const).flatMap((mode) =>
+      (["exact-fit", "overflow", "max-instructions"] as const).map((boundary) => ({
+        mode,
+        boundary,
+      })),
+    ),
+  )(
+    "$mode reviewed file reaches final Codex RPC intact or rejects $boundary before native work",
+    ({ mode, boundary }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const requests: Array<{ method: string; params: unknown }> = [];
+          const harness = yield* makeCodexReplayHarness(
+            makeCodexReplayTranscript({
+              scenario: `reference-boundary-${mode}-${boundary}`,
+              entries: codexReplayPreamble({
+                nativeThreadId: "reference-native",
+                nativeTurnId: "reference-turn",
+                prompt: "unused",
+              }).slice(0, -3),
+            }),
+            () => Effect.void,
+            (method, params) =>
+              method === "turn/start"
+                ? Effect.sync(() => requests.push({ method, params })).pipe(
+                    Effect.andThen(Effect.die("Synthetic RPC capture; no provider execution")),
+                  )
+                : Effect.void,
+          );
+          const fs = yield* FileSystem.FileSystem;
+          const source = {
+            type: "file" as const,
+            id: ChatAttachmentId.make(createPendingAttachmentId(".txt")),
+            name: "notes.txt",
+            mimeType: "text/plain",
+            sizeBytes: 1,
+          };
+          yield* fs.writeFileString(
+            resolveAttachmentPath({
+              attachmentsDir: harness.serverConfig.attachmentsDir,
+              attachment: source,
+            })!,
+            "x",
+          );
+          yield* withTaskResultLinkageFixture(
+            (f) =>
+              Effect.gen(function* () {
+                const c = yield* f.createTask(`rpc-${mode}-${boundary}`);
+                const task = (yield* f.readSnapshot()).tasks.find(
+                  (t) => t.threadId === c.threadId,
+                )!;
+                const thread = (yield* f.orchestrator.getThreadProjection(c.threadId)).thread;
+                const facts = yield* f.readReview({
+                  environmentId: "environment-a",
+                  projectId: c.projectId,
+                  taskId: task.id,
+                  threadId: c.threadId,
+                  revision: 1,
+                });
+                if (facts.status !== "available") return yield* Effect.die("No task facts");
+                const finalShape = {
+                  ...source,
+                  id: ChatAttachmentId.make(createAttachmentId(c.threadId, ".txt")!),
+                };
+                const appendix = providerMessageTextWithAttachmentPaths({
+                  text: "",
+                  attachments: [finalShape],
+                  attachmentsDir: harness.serverConfig.attachmentsDir,
+                });
+                const text = "x".repeat(
+                  boundary === "max-instructions"
+                    ? PROVIDER_SEND_TURN_MAX_INPUT_CHARS
+                    : PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+                        appendix.length -
+                        2 +
+                        (boundary === "overflow" ? 1 : 0),
+                );
+                const launch: TaskFirstLaunch = {
+                  commandId: CommandId.make(`rpc-${mode}-${boundary}`),
+                  messageId: MessageId.make(`rpc-${mode}-${boundary}`),
+                  threadId: c.threadId,
+                  text,
+                  reference: facts.reference,
+                  contract: facts.contract,
+                  routingMode: mode,
+                  modelSelection: thread.modelSelection,
+                  runtimeMode: thread.runtimeMode,
+                  interactionMode: thread.interactionMode,
+                };
+                const reviewed = yield* f.reviewReferenceFile({
+                  launch,
+                  attachment: source,
+                  contentSha256: sha256Hex("x"),
+                });
+                if (boundary !== "exact-fit") {
+                  assert.equal(reviewed.status, "unavailable");
+                  const direct = makeCodexTestTurnInput({
+                    threadId: harness.threadId,
+                    providerThread: harness.providerThread,
+                    now: yield* DateTime.now,
+                    attemptId: RunAttemptId.make(`direct-${mode}-${boundary}`),
+                    text,
+                  });
+                  const rejected = yield* harness.runtime
+                    .startTurn({
+                      ...direct,
+                      message: { ...direct.message, attachments: [finalShape] },
+                    })
+                    .pipe(Effect.result);
+                  assert.equal(rejected._tag, "Failure");
+                  assert.equal(requests.length, 0);
+                  assert.deepEqual(yield* f.noExecution(), {
+                    runs: 0,
+                    grants: 0,
+                    outbox: 0,
+                    messages: 0,
+                  });
+                  return;
+                }
+                if (reviewed.status !== "available")
+                  return yield* Effect.die("Exact-fit reference review rejected");
+                const terminal = yield* f.orchestrator.streamDomainEvents.pipe(
+                  Stream.filter(
+                    (e) =>
+                      e.type === "run.updated" &&
+                      e.payload.userMessageId === launch.messageId &&
+                      e.payload.status === "failed",
+                  ),
+                  Stream.take(1),
+                  Stream.runDrain,
+                  Effect.forkScoped,
+                );
+                yield* f.dispatchReference({
+                  type: "message.dispatch",
+                  commandId: launch.commandId,
+                  messageId: launch.messageId,
+                  threadId: launch.threadId,
+                  text,
+                  attachments: [source],
+                  routingMode: mode,
+                  modelSelection: launch.modelSelection,
+                  dispatchMode: { type: "start_immediately" },
+                  createdBy: "user",
+                  creationSource: "web",
+                  taskFirstLaunch: { ...launch, referenceFile: reviewed.review },
+                });
+                yield* Fiber.join(terminal);
+                yield* f.worker.drain();
+                assert.equal(requests.length, 1);
+                const params = decodeReferenceRpcInput(requests[0]!.params);
+                assert.equal(params.model, thread.modelSelection.model);
+                assert.equal(params.input.length, 1);
+                const finalText = params.input[0]!.text;
+                assert.equal(finalText.length, PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
+                assert.isTrue(finalText.startsWith(text + "\n\n"));
+                assert.include(
+                  finalText,
+                  resolveAttachmentPath({
+                    attachmentsDir: harness.serverConfig.attachmentsDir,
+                    attachment: reviewed.review.attachment,
+                  })!,
+                );
+                const snapshot = (yield* f.readSnapshot()).tasks.find(
+                  (t) => t.threadId === c.threadId,
+                )!;
+                if (snapshot.resultReadout?.status === "available")
+                  assert.notEqual(
+                    snapshot.resultReadout.referenceFileDelivery?.status,
+                    "adapter-accepted",
+                  );
+              }),
+            {
+              adapter: harness.adapter,
+              serverConfigLayer: Layer.succeed(ServerConfig.ServerConfig, harness.serverConfig),
+              governedWorker: true,
+              terminalOnly: true,
+              useProjectRuntimePolicy: true,
+            },
+          );
+        }),
+      ).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+  );
 
   it.effect("a coarse native terminal timestamp cannot predate its completed output", () =>
     Effect.gen(function* () {

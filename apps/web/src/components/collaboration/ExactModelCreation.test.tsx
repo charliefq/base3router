@@ -37,6 +37,16 @@ vi.mock("@effect/atom-react", () => ({
 vi.mock("../../state/server", () => ({
   primaryServerProvidersAtom: "providers",
   primaryServerKeybindingsAtom: "keys",
+  serverEnvironment: { configValueAtom: () => "upload-config" },
+}));
+vi.mock("../../lib/attachmentUploadQueue", () => ({
+  startAttachmentUpload: vi.fn(() => {
+    throw new Error("No-file exact-model journey must not upload");
+  }),
+  releaseDraftAttachment: vi.fn(),
+  useAttachmentUploadStore: (
+    select: (state: { uploadsByImageId: Record<string, never> }) => unknown,
+  ) => select({ uploadsByImageId: {} }),
 }));
 vi.mock("../../state/session", async () => {
   const Option = await import("effect/Option");
