@@ -1,3 +1,4 @@
+import { useTaskInboxDraft } from "./TaskInboxDrafts";
 import { SelectionBasisReadout } from "./SelectionBasisReadout";
 import { TaskCapabilityStepControls } from "./TaskCapabilityStepControls";
 import { useTaskFirstLaunch } from "./useTaskFirstLaunch";
@@ -111,7 +112,7 @@ export function TaskFirstInstructions(props: {
   const session = Option.getOrNull(usePreparedConnection(props.environmentId));
   const [review, setReview] = useState<Review | null>(null);
   const reviewRef = useRef<Review | null>(null);
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] = useTaskInboxDraft<string>("first-instructions", props, "");
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [executionBusy, setExecutionBusy] = useState(false);

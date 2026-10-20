@@ -1,3 +1,4 @@
+import { useTaskInboxDraft } from "./TaskInboxDrafts";
 import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
 import * as Schema from "effect/Schema";
 import { useLayoutEffect, useRef, useState } from "react";
@@ -60,10 +61,10 @@ export function TaskReviewControls(props: {
     key: string;
   } | null>(null);
   const editorRef = useRef(editor);
-  const [retainedDraft, setRetainedDraft] = useState<{
+  const [retainedDraft, setRetainedDraft] = useTaskInboxDraft<{
     identity: string;
     draft: TaskInstructionDraft;
-  } | null>(null);
+  } | null>("contract-instructions", props, null);
   const resolveEditor = useRef<((draft: TaskInstructionDraft | null) => void) | null>(null);
   const previewingRef = useRef(false);
   const previewGeneration = useRef(0);

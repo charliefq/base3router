@@ -92,6 +92,13 @@ const state = vi.hoisted(() => ({
   readCreationStatus: vi.fn(),
   autoPreview: vi.fn(),
   sessionIdentity: {} as object | null,
+  shellThreads: [] as Array<{
+    id: string;
+    status: string;
+    activeRunId: string | null;
+    latestRunId: string | null;
+    latestRunCompletedAt: null;
+  }>,
   detailWatches: [] as Array<string | null>,
   streamLive: true,
   liveProjection: null as OrchestrationV2ThreadProjection | null,
@@ -130,7 +137,7 @@ vi.mock("../../state/workflow", () => ({
 vi.mock("../../state/shell", () => ({
   useEnvironmentShellState: () => ({
     status: state.streamLive ? "live" : "cached",
-    snapshot: Option.none(),
+    snapshot: Option.some({ threads: state.shellThreads }),
     error: Option.none(),
   }),
 }));
@@ -307,6 +314,38 @@ import { AgentsPage, TasksPage } from "./CollaborationPages";
 import { AgentsTaskCreator } from "./AgentsTaskCreator";
 
 let renderer: ReactTestRenderer;
+// Existing detail journeys now explicitly enter the sole inbox row before using controls.
+async function selectOnlyInboxTaskForDetailJourney(view = renderer) {
+  let root: ReactTestRenderer["root"];
+  try {
+    root = view.root;
+  } catch {
+    return;
+  }
+  if (root.findAllByProps({ "aria-label": "Cross-agent tasks" }).length) return;
+  const rows = root
+    .findAllByType("button")
+    .filter((node) => node.props["data-task-inbox-open"] !== undefined && !node.props.disabled);
+  if (rows.length === 1) await act(async () => rows[0]!.props.onClick());
+}
+function creationScopeSelectValues() {
+  return renderer.root
+    .findAllByType("select")
+    .filter(
+      (n) =>
+        !n.findAllByProps({ "aria-label": "Inbox project" }).length &&
+        !n.findAllByProps({ "aria-label": "Inbox assignee" }).length,
+    )
+    .map((n) => n.props.value);
+}
+async function selectExactInboxTask(task: CollaborationTask, view = renderer) {
+  await act(async () =>
+    view.root
+      .findByProps({ "aria-label": `View task ${task.id} in ${task.projectId}` })
+      .props.onClick(),
+  );
+}
+
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
   let reject!: (cause: Error) => void;
@@ -407,6 +446,7 @@ beforeEach(() => {
   state.sessionIdentity = {};
   state.streamLive = true;
   state.detailWatches = [];
+  state.shellThreads = [];
   state.liveProjection = null;
   state.liveProjections.clear();
 });
@@ -905,6 +945,7 @@ describe("Tasks loading and conversation access", () => {
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     expect(text()).toContain("project-a running evidence");
     expect(text()).toContain("No executable provider is ready");
     expect(creationButton("Create governed task")!.props.disabled).toBe(true);
@@ -926,6 +967,7 @@ describe("Tasks loading and conversation access", () => {
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     await creationClick("Create governed task", true);
     expect(creationButton("Review new task")).toBeDefined();
     expect(creationButton("Create governed task")!.props.disabled).toBe(true);
@@ -942,6 +984,7 @@ describe("Tasks loading and conversation access", () => {
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     expect(text()).toContain("Reading cross-agent tasks.");
     expect(text()).not.toContain("No cross-agent tasks yet.");
     await act(async () => reading.resolve(state.snapshot));
@@ -972,6 +1015,7 @@ describe("Tasks loading and conversation access", () => {
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     expect(text()).toContain("DENY");
     const open = renderer.root
       .findAllByType("button")
@@ -1027,6 +1071,7 @@ describe("Tasks command-ledger provenance", () => {
       await act(async () => {
         renderer = create(<TasksPage />);
       });
+      await selectOnlyInboxTaskForDetailJourney(renderer);
       expect(renderer.root.findAllByType("span").map((node) => node.children.join(""))).toContain(
         `Command ledger: ${ledgerState}`,
       );
@@ -1081,6 +1126,7 @@ describe("Tasks command-ledger provenance", () => {
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     expect(renderer.root.findAllByType("span").map((node) => node.children.join(""))).toContain(
       "Command ledger: completed",
     );
@@ -1131,6 +1177,7 @@ describe("Tasks read freshness", () => {
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
   };
   const refreshTasks = async () => {
     await act(async () => {
@@ -1143,6 +1190,7 @@ describe("Tasks read freshness", () => {
   const switchEnvironment = async (environmentId: string) => {
     state.environmentId = environmentId;
     await act(async () => renderer.update(<TasksPage />));
+    await selectOnlyInboxTaskForDetailJourney(renderer);
   };
 
   it("keeps the newer refresh when the initial read returns last", async () => {
@@ -1152,6 +1200,7 @@ describe("Tasks read freshness", () => {
     await mountTasks();
     await refreshTasks();
     await act(async () => refresh.resolve(snapshot("New revision goal", 2)));
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     expect(text()).toContain("New revision goal");
     await act(async () => initial.resolve(snapshot("Old revision goal", 1)));
     expect(text()).toContain("New revision goal");
@@ -1304,6 +1353,7 @@ it("renders the persisted SQLite contract through the server snapshot and refres
           await act(async () => {
             renderer = create(<TasksPage />);
           });
+          await selectOnlyInboxTaskForDetailJourney(renderer);
           expect(text()).toContain("SQLite persisted goal");
           expect(text()).toContain("Ask before widening scope");
           expect(text()).toContain("Owner inspects persisted result");
@@ -1515,6 +1565,7 @@ it.each(["manual", "auto", "task-debugging"] as const)(
             await act(async () => {
               renderer = create(<TasksPage />);
             });
+            await selectOnlyInboxTaskForDetailJourney(renderer);
             expect(text()).toContain(mode === "manual" ? "Manual" : "Auto");
             if (mode === "task-debugging") {
               expect(text()).toContain("Local task debugging");
@@ -1815,6 +1866,7 @@ it.each([
             await act(async () => {
               renderer = create(<TasksPage />);
             });
+            await selectOnlyInboxTaskForDetailJourney(renderer);
             expect(text()).toContain("Result evidence");
             expect(text()).toContain("running");
             expect(text()).toContain(
@@ -2068,6 +2120,7 @@ it.each([
   await act(async () => {
     renderer = create(<TasksPage />);
   });
+  await selectOnlyInboxTaskForDetailJourney(renderer);
   expect(text()).toContain(message);
   expect(text()).toContain("Routing evidence is unavailable");
   expect(text()).toContain("No validated persisted result evidence");
@@ -2266,6 +2319,12 @@ it("creates two actual owned tasks from Agents, reloads exact enrollment and use
         await act(async () => {
           renderer = create(<TasksPage />);
         });
+        await selectOnlyInboxTaskForDetailJourney(renderer);
+        await selectExactInboxTask(
+          (await EffectForFixture.runPromise(f.readSnapshot())).tasks.find(
+            (t) => t.threadId === created[0],
+          )!,
+        );
         const card = () =>
           renderer.root
             .findAllByType("li")
@@ -2338,6 +2397,7 @@ it("creates a persisted governed task from Tasks without starting provider work"
         await act(async () => {
           renderer = create(<TasksPage />);
         });
+        await selectOnlyInboxTaskForDetailJourney(renderer);
         await creationClick("Create governed task", true);
         await fillCreation("Task page fixture");
         await creationClick("Review new task");
@@ -2359,6 +2419,7 @@ it("creates a persisted governed task from Tasks without starting provider work"
           messages: 0,
         });
         await act(async () => renderer.update(<TasksPage />));
+        await selectOnlyInboxTaskForDetailJourney(renderer);
         expect(text()).toContain("Task page fixture");
       }),
     ),
@@ -2834,7 +2895,9 @@ it("renders two normal governed creations, refreshes/reopens and navigates each 
           await act(async () => {
             renderer = create(<TasksPage />);
           });
+          await selectOnlyInboxTaskForDetailJourney(renderer);
           const text = () => JSON.stringify(renderer.toJSON());
+          await selectExactInboxTask(snapshot.tasks[0]!, renderer);
           expect(text()).toContain("Fix parser behavior");
           expect(snapshot.tasks).toHaveLength(2);
           expect(text()).toContain("Write parser documentation");
@@ -2849,13 +2912,17 @@ it("renders two normal governed creations, refreshes/reopens and navigates each 
               .find((node) => node.children.includes("Refresh tasks"))!
               .props.onClick();
           });
-          const buttons = renderer.root
-            .findAllByType("button")
-            .filter((node) => node.children.includes("Open conversation"));
-          expect(buttons).toHaveLength(2);
-          for (const [index, threadId] of ["task-parser", "task-docs"].entries()) {
+          for (const threadId of ["task-parser", "task-docs"]) {
+            await selectExactInboxTask(
+              snapshot.tasks.find((t) => t.threadId === threadId)!,
+              renderer,
+            );
+            const buttons = renderer.root
+              .findAllByType("button")
+              .filter((node) => node.children.includes("Open conversation"));
+            expect(buttons).toHaveLength(1);
             await act(async () => {
-              buttons[index]!.props.onClick();
+              buttons[0]!.props.onClick();
             });
             expect(state.navigate).toHaveBeenLastCalledWith({
               to: "/$environmentId/$threadId",
@@ -2903,6 +2970,7 @@ it("renders ordinary roots before and after actual upgrade, refreshes/reopens an
         await act(async () => {
           renderer = create(<TasksPage />);
         });
+        await selectOnlyInboxTaskForDetailJourney(renderer);
         expect(text()).not.toContain("Fix parser behavior");
         expect(
           renderer.root
@@ -2918,7 +2986,9 @@ it("renders ordinary roots before and after actual upgrade, refreshes/reopens an
           await act(async () => {
             renderer = create(<TasksPage />);
           });
+          await selectOnlyInboxTaskForDetailJourney(renderer);
           const text = () => JSON.stringify(renderer.toJSON());
+          await selectExactInboxTask(snapshot.tasks[0]!, renderer);
           expect(text()).toContain("Fix parser behavior");
           expect(snapshot.tasks).toHaveLength(2);
           expect(text()).toContain("Write parser documentation");
@@ -2933,13 +3003,17 @@ it("renders ordinary roots before and after actual upgrade, refreshes/reopens an
               .find((node) => node.children.includes("Refresh tasks"))!
               .props.onClick();
           });
-          const buttons = renderer.root
-            .findAllByType("button")
-            .filter((node) => node.children.includes("Open conversation"));
-          expect(buttons).toHaveLength(2);
-          for (const [index, threadId] of ["task-parser", "task-docs"].entries()) {
+          for (const threadId of ["task-parser", "task-docs"]) {
+            await selectExactInboxTask(
+              snapshot.tasks.find((t) => t.threadId === threadId)!,
+              renderer,
+            );
+            const buttons = renderer.root
+              .findAllByType("button")
+              .filter((node) => node.children.includes("Open conversation"));
+            expect(buttons).toHaveLength(1);
             await act(async () => {
-              buttons[index]!.props.onClick();
+              buttons[0]!.props.onClick();
             });
             expect(state.navigate).toHaveBeenLastCalledWith({
               to: "/$environmentId/$threadId",
@@ -2982,6 +3056,7 @@ it("confirms three Tasks decisions against actual authoritative services and ref
         await act(async () => {
           renderer = create(<TasksPage />);
         });
+        await selectOnlyInboxTaskForDetailJourney(renderer);
         expect(text()).toContain("Fix parser behavior");
         const actionButton = (action: string) =>
           renderer.root
@@ -3151,6 +3226,7 @@ it.each([
           await act(async () => {
             renderer = create(<TasksPage />);
           });
+          await selectOnlyInboxTaskForDetailJourney(renderer);
           const button = (name: string) =>
             renderer.root.findAllByType("button").find((node) => node.children.includes(name));
           const action = () =>
@@ -3180,6 +3256,7 @@ it.each([
               };
               state.load.mockResolvedValue(state.snapshot);
               await act(async () => renderer.update(<TasksPage />));
+              await selectOnlyInboxTaskForDetailJourney(renderer);
             } else await click("Refresh tasks");
           };
           const originalAction = action()!;
@@ -3230,8 +3307,10 @@ it.each([
               if (mode === "decision-navigation-race") {
                 state.environmentId = "environment-b";
                 await act(async () => renderer.update(<TasksPage />));
+                await selectOnlyInboxTaskForDetailJourney(renderer);
                 state.environmentId = "environment-a";
                 await act(async () => renderer.update(<TasksPage />));
+                await selectOnlyInboxTaskForDetailJourney(renderer);
                 await act(async () =>
                   staleRead!.resolve({
                     ...(await EffectForFixture.runPromise(fixture.readSnapshot())),
@@ -3306,6 +3385,7 @@ it.each(["readonly", "wrong-environment"] as const)(
           await act(async () => {
             renderer = create(<TasksPage />);
           });
+          await selectOnlyInboxTaskForDetailJourney(renderer);
           expect(
             renderer.root
               .findAllByType("button")
@@ -3343,23 +3423,21 @@ it("isolates explicitly confirmed decisions on two actual governed Tasks roots",
         await act(async () => {
           renderer = create(<TasksPage />);
         });
+        await selectOnlyInboxTaskForDetailJourney(renderer);
         expect(
           renderer.root
             .findAllByType("button")
             .filter((b) => b.props["data-task-contract-accept"] !== undefined),
-        ).toHaveLength(2);
+        ).toHaveLength(0);
         for (const root of ["task-parser", "task-second"]) {
-          const index = (await EffectForFixture.runPromise(fixture.readSnapshot())).tasks
-            .filter(
-              (t) =>
-                t.contractReadout?.status === "available" &&
-                t.contractReadout.acceptedRevision !== 1,
-            )
-            .findIndex((t) => t.threadId === root);
+          const selectedTask = (
+            await EffectForFixture.runPromise(fixture.readSnapshot())
+          ).tasks.find((t) => t.threadId === root)!;
+          await selectExactInboxTask(selectedTask);
           const buttons = renderer.root
             .findAllByType("button")
             .filter((b) => b.props["data-task-contract-accept"] !== undefined);
-          await act(async () => buttons[index]!.props.onClick());
+          await act(async () => buttons[0]!.props.onClick());
           expect(state.reviewRead.mock.calls.at(-1)?.[0]).toMatchObject({
             environmentId: "environment-a",
             input: { threadId: root, environmentId: "environment-a" },
@@ -3409,6 +3487,7 @@ it("opens an instruction editor only after an actual owned root is explicitly pa
         await act(async () => {
           renderer = create(<TasksPage />);
         });
+        await selectOnlyInboxTaskForDetailJourney(renderer);
         await act(async () =>
           renderer.root
             .findAllByType("button")
@@ -3472,6 +3551,7 @@ it("pauses, previews and saves new instructions still paused, then separately re
           await act(async () => {
             renderer = create(<TasksPage />);
           });
+          await selectOnlyInboxTaskForDetailJourney(renderer);
           expect(button("Revise paused instructions")).toBeUndefined();
           await act(async () =>
             renderer.root
@@ -3617,6 +3697,7 @@ it.each([
           await act(async () => {
             renderer = create(<TasksPage />);
           });
+          await selectOnlyInboxTaskForDetailJourney(renderer);
           const button = (name: string) =>
             renderer.root.findAllByType("button").find((b) => b.children.includes(name));
           const click = async (name: string) => {
@@ -3627,6 +3708,7 @@ it.each([
             else if (mode.endsWith("environment")) {
               state.environmentId = "environment-b";
               await act(async () => renderer.update(<TasksPage />));
+              await selectOnlyInboxTaskForDetailJourney(renderer);
             } else await click("Refresh tasks");
           };
           const edit = button("Revise paused instructions")!;
@@ -3749,8 +3831,10 @@ it.each([
                 if (mode === "commit-refresh-navigation") {
                   state.environmentId = "environment-b";
                   await act(async () => renderer.update(<TasksPage />));
+                  await selectOnlyInboxTaskForDetailJourney(renderer);
                   state.environmentId = "environment-a";
                   await act(async () => renderer.update(<TasksPage />));
+                  await selectOnlyInboxTaskForDetailJourney(renderer);
                   await act(async () =>
                     refresh.resolve({
                       ...(await EffectForFixture.runPromise(fixture.readSnapshot())),
@@ -3823,6 +3907,7 @@ it.each(["active", "accepted", "accepted-paused", "paused-readonly"] as const)(
           await act(async () => {
             renderer = create(<TasksPage />);
           });
+          await selectOnlyInboxTaskForDetailJourney(renderer);
           expect(
             renderer.root
               .findAllByType("button")
@@ -4081,6 +4166,7 @@ it("selection basis preview prepares reviewed first instructions for an actual o
         await act(async () => {
           renderer = create(<TasksPage />);
         });
+        await selectOnlyInboxTaskForDetailJourney(renderer);
         const before = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
         expect(creationButton("Prepare first instructions")).toBeDefined();
         await creationClick("Prepare first instructions", true);
@@ -4290,6 +4376,7 @@ it.each([
           await act(async () => {
             renderer = create(<TasksPage />);
           });
+          await selectOnlyInboxTaskForDetailJourney(renderer);
           await creationClick("Prepare first instructions");
           expect(creationButton("Fill empty draft and open")).toBeDefined();
           const gated = deferred<{ _tag: "Success"; value: TaskContractReviewState }>();
@@ -4335,10 +4422,12 @@ it.each([
           if (mode === "session") {
             state.sessionIdentity = {};
             await act(async () => renderer.update(<TasksPage />));
+            await selectOnlyInboxTaskForDetailJourney(renderer);
           }
           if (mode === "environment") {
             state.environmentId = "environment-b";
             await act(async () => renderer.update(<TasksPage />));
+            await selectOnlyInboxTaskForDetailJourney(renderer);
           }
           if (mode === "project") {
             state.load.mockResolvedValue({
@@ -4353,6 +4442,7 @@ it.each([
               await act(async () => {
                 renderer = create(<TasksPage />);
               });
+            await selectOnlyInboxTaskForDetailJourney(renderer);
           }
           if (mode === "cancel-new-review") {
             await creationClick("Cancel preparation");
@@ -4533,6 +4623,7 @@ it.each([
         await act(async () => {
           renderer = create(<TasksPage />);
         });
+        await selectOnlyInboxTaskForDetailJourney(renderer);
         const before = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
         expect(creationButton("Prepare first instructions")).toBeDefined();
         await creationClick("Prepare first instructions", true);
@@ -4563,10 +4654,12 @@ it.each([
         if (mode === "session") {
           state.sessionIdentity = {};
           await act(async () => renderer.update(<TasksPage />));
+          await selectOnlyInboxTaskForDetailJourney(renderer);
         }
         if (mode === "environment") {
           state.environmentId = "environment-b";
           await act(async () => renderer.update(<TasksPage />));
+          await selectOnlyInboxTaskForDetailJourney(renderer);
         }
         if (mode === "target" || mode === "revision") {
           const snapshot = await EffectForFixture.runPromise(f.readSnapshot());
@@ -4673,6 +4766,7 @@ it("prepares a requested revision for a validated completed owned output without
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     const before = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
     const effects = await EffectForFixture.runPromise(f.noExecution());
     expect(creationButton("Prepare revision request")).toBeDefined();
@@ -4754,6 +4848,7 @@ it.each([
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     await creationClick("Prepare revision request");
     const edit = () => renderer.root.findByProps({ "aria-label": "Requested changes" });
     await act(async () =>
@@ -4840,10 +4935,12 @@ it.each([
     if (mode === "session") {
       state.sessionIdentity = {};
       await act(async () => renderer.update(<TasksPage />));
+      await selectOnlyInboxTaskForDetailJourney(renderer);
     }
     if (mode === "environment") {
       state.environmentId = "environment-b";
       await act(async () => renderer.update(<TasksPage />));
+      await selectOnlyInboxTaskForDetailJourney(renderer);
     }
     if (mode === "navigation") await creationClick("Open conversation for full context");
     if (mode === "cancel") await creationClick("Cancel revision preparation");
@@ -4971,6 +5068,7 @@ it("shows mounted Tasks result feedback through the authenticated SQLite service
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     expect(feedbackButton("Helpful")).toBeDefined();
     expect(feedbackButton("Not helpful")).toBeDefined();
     expect(await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`)).toEqual(changes);
@@ -4988,6 +5086,7 @@ it("shows mounted Tasks result feedback through the authenticated SQLite service
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     expect(text()).toContain("Recorded: Helpful");
     expect(feedbackButton("Helpful")).toBeUndefined();
     expect(await f.baseline()).toEqual(before);
@@ -5000,6 +5099,7 @@ it("records Not helpful only after explicit confirmation", async () => {
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     await clickFeedback("Not helpful");
     expect(state.feedbackSubmit).not.toHaveBeenCalled();
     await clickFeedback("Confirm feedback");
@@ -5013,6 +5113,7 @@ it("guards same-render double clicks and recovers a committed lost response thro
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     await clickFeedback("Helpful");
     state.feedbackSubmit.mockImplementationOnce(async (input) => {
       await f.submit(input);
@@ -5038,16 +5139,19 @@ it.each(["environment", "session", "result", "deletion"])(
       await act(async () => {
         renderer = create(<TasksPage />);
       });
+      await selectOnlyInboxTaskForDetailJourney(renderer);
       await clickFeedback("Helpful");
       const retainedConfirm = feedbackButton("Confirm feedback")!.props.onClick;
       if (scenario === "environment") {
         state.environmentId = "environment-b";
         state.snapshot = { ...state.snapshot, environmentId: "environment-b", tasks: [] };
         await act(async () => renderer.update(<TasksPage />));
+        await selectOnlyInboxTaskForDetailJourney(renderer);
       }
       if (scenario === "session") {
         state.sessionIdentity = {};
         await act(async () => renderer.update(<TasksPage />));
+        await selectOnlyInboxTaskForDetailJourney(renderer);
       }
       if (scenario === "result") {
         await EffectForFixture.runPromise(
@@ -5074,6 +5178,7 @@ it.each(["success", "failure"])("ignores late feedback %s after navigation", asy
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     await clickFeedback("Helpful");
     const reply = deferred<import("@t3tools/contracts").TaskResultFeedbackState>(),
       entered = deferred<void>();
@@ -5088,6 +5193,7 @@ it.each(["success", "failure"])("ignores late feedback %s after navigation", asy
     state.environmentId = "environment-b";
     state.snapshot = { ...state.snapshot, environmentId: "environment-b", tasks: [] };
     await act(async () => renderer.update(<TasksPage />));
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     await act(async () => {
       if (outcome === "success") reply.resolve(saved!);
       else reply.reject(new Error("late old request"));
@@ -5102,6 +5208,7 @@ it("ignores a deferred old-session feedback preview and never opens its confirma
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     const preview = deferred<import("@t3tools/contracts").TaskResultFeedbackState>();
     state.feedbackRead.mockReturnValueOnce(preview.promise);
     const choose = feedbackButton("Helpful")!.props.onClick;
@@ -5113,6 +5220,7 @@ it("ignores a deferred old-session feedback preview and never opens its confirma
     expect(state.feedbackRead.mock.calls.length).toBe(reads + 1);
     state.sessionIdentity = {};
     await act(async () => renderer.update(<TasksPage />));
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     await act(async () => preview.resolve(await f.read()));
     expect(feedbackButton("Confirm feedback")).toBeUndefined();
     expect(state.feedbackSubmit).not.toHaveBeenCalled();
@@ -5132,10 +5240,12 @@ it("keeps persistent feedback read failures stable until explicit refresh and re
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     expect(state.feedbackRead).toHaveBeenCalledTimes(1);
     expect(text()).toContain("Feedback could not be read");
     expect(feedbackButton("Helpful")).toBeUndefined();
     await act(async () => renderer.update(<TasksPage />));
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     expect(state.feedbackRead).toHaveBeenCalledTimes(1);
     await clickFeedback("Refresh feedback");
     expect(state.feedbackRead).toHaveBeenCalledTimes(2);
@@ -5165,9 +5275,11 @@ it.each(["success", "failure"] as const)(
       await act(async () => {
         renderer = create(<TasksPage />);
       });
+      await selectOnlyInboxTaskForDetailJourney(renderer);
       expect(state.feedbackRead).toHaveBeenCalledTimes(1);
       state.sessionIdentity = {};
       await act(async () => renderer.update(<TasksPage />));
+      await selectOnlyInboxTaskForDetailJourney(renderer);
       await act(async () => {
         if (outcome === "success") oldReply.resolve(oldFacts);
         else oldReply.reject(new Error("obsolete read failure"));
@@ -5176,6 +5288,7 @@ it.each(["success", "failure"] as const)(
       expect(feedbackButton("Helpful")).toBeUndefined();
       expect(text()).toContain("Feedback could not be read");
       await act(async () => renderer.update(<TasksPage />));
+      await selectOnlyInboxTaskForDetailJourney(renderer);
       expect(state.feedbackRead).toHaveBeenCalledTimes(2);
       state.feedbackRead.mockImplementation(f.readHttp);
       await clickFeedback("Refresh feedback");
@@ -6120,6 +6233,7 @@ it("Tasks budget frozen behavior preserves partial and frozen evidence on failed
   await act(async () => {
     renderer = create(<TasksPage />);
   });
+  await selectOnlyInboxTaskForDetailJourney(renderer);
   expect(budgetText()).toContain("Task tree budget evidence");
   expect(budgetText()).toContain("Reserved provider starts / declared limit / remaining");
   expect(budgetText()).toContain("4 / 2 / 0");
@@ -6172,6 +6286,7 @@ it.each(["ordinary_chat", "budget_read_failed", "inconsistent_tree_accounting"])
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     expect(budgetText()).toContain(`Budget evidence unknown: ${reason}`);
     expect(budgetText()).not.toContain("0 tokens");
     expect(budgetText()).not.toContain("None observed in this snapshot");
@@ -6237,6 +6352,7 @@ it("eligible cap mounted real preview and persisted route refresh preserve read-
         await act(async () => {
           renderer = create(<TasksPage />);
         });
+        await selectOnlyInboxTaskForDetailJourney(renderer);
         const before = await EffectForFixture.runPromise(f.sql`SELECT total_changes() AS n`);
         await creationClick("Prepare first instructions");
         await creationClick("Preview Auto", true);
@@ -6332,6 +6448,7 @@ it.each([undefined, "openrouter/auto", "fixture/text-model"])(
               await act(async () => {
                 renderer = create(<TasksPage />);
               });
+              await selectOnlyInboxTaskForDetailJourney(renderer);
               expect(text()).not.toContain("Linked task output");
             });
             yield* f.execute(c, "linkage-mounted-message");
@@ -6359,6 +6476,7 @@ it.each([undefined, "openrouter/auto", "fixture/text-model"])(
                 renderer.unmount();
                 renderer = create(<TasksPage />);
               });
+              await selectOnlyInboxTaskForDetailJourney(renderer);
               expect(text()).toContain(
                 result.content.status === "output" ? result.content.preview : "missing",
               );
@@ -6433,6 +6551,7 @@ it("Manual target cap mounted Tasks refresh and remount show persisted explanati
           await act(async () => {
             renderer = create(<TasksPage />);
           });
+          await selectOnlyInboxTaskForDetailJourney(renderer);
         });
         yield* f.execute(
           creation,
@@ -6469,6 +6588,7 @@ it("Manual target cap mounted Tasks refresh and remount show persisted explanati
             renderer.unmount();
             renderer = create(<TasksPage />);
           });
+          await selectOnlyInboxTaskForDetailJourney(renderer);
           expect(text()).toContain(route.explanation!);
           expect(text()).toContain(
             "Manual selection; automatic ranking did not decide the target.",
@@ -7447,6 +7567,7 @@ it("creation confirmation offers review/start for its exact task and does not st
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     await creationClick("Create governed task");
     await fillCreation("Creation then generic launch");
     for (const label of [
@@ -7506,6 +7627,7 @@ it("governed creation requires explicit exact model and never falls back after w
   await act(async () => {
     renderer = create(<TasksPage />);
   });
+  await selectOnlyInboxTaskForDetailJourney(renderer);
   await creationClick("Create governed task");
   await fillCreation("Explicit selection", false);
   expect(creationButton("Review new task")!.props.disabled).toBe(true);
@@ -7516,6 +7638,7 @@ it("governed creation requires explicit exact model and never falls back after w
   const staleConfirm = creationButton("Create task")!.props.onClick;
   state.providers = [configuredProviders[0]!];
   await act(async () => renderer.update(<TasksPage />));
+  await selectOnlyInboxTaskForDetailJourney(renderer);
   expect(creationButton("Create task")).toBeUndefined();
   expect(creationButton("Review new task")!.props.disabled).toBe(true);
   expect(text()).toContain("exact-second");
@@ -7686,17 +7809,11 @@ describe("validated setup detours mounted with memory history", () => {
     await flow.press("Return to Tasks", true);
     await flow.router.load();
     await flow.remount();
-    expect(renderer.root.findAllByType("select").map((n) => n.props.value)).toEqual([
-      "project-b",
-      "second",
-    ]);
+    expect(creationScopeSelectValues()).toEqual(["project-b", "second"]);
     const href = flow.router.state.location.href;
     await act(async () => renderer.unmount());
     await journey("tasks", href);
-    expect(renderer.root.findAllByType("select").map((n) => n.props.value)).toEqual([
-      "project-b",
-      "second",
-    ]);
+    expect(creationScopeSelectValues()).toEqual(["project-b", "second"]);
     noProviderWork();
   });
   it("restores the exact Agents project/provider selection without creating a conversation", async () => {
@@ -7712,10 +7829,7 @@ describe("validated setup detours mounted with memory history", () => {
     await flow.router.load();
     await flow.remount();
     await flow.press("Create agent");
-    expect(renderer.root.findAllByType("select").map((node) => node.props.value)).toEqual([
-      "second",
-      "project-b",
-    ]);
+    expect(creationScopeSelectValues()).toEqual(["second", "project-b"]);
     noProviderWork();
   });
   it("blocks malformed retained scope until an explicit current-scope selection", async () => {
@@ -7793,10 +7907,7 @@ describe("validated setup detours mounted with memory history", () => {
     });
     await flow.remount();
     expect(flow.router.state.location.pathname).toBe("/tasks");
-    expect(renderer.root.findAllByType("select").map((n) => n.props.value)).toEqual([
-      "project-b",
-      "second",
-    ]);
+    expect(creationScopeSelectValues()).toEqual(["project-b", "second"]);
     await act(async () => {
       flow.router.history.forward();
       await flow.router.load();
@@ -8047,6 +8158,7 @@ it("refreshes late attributed output from the linked native stream without manua
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     expect(text()).not.toContain(output);
     const reads = state.load.mock.calls.length;
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -8241,6 +8353,7 @@ it("coalesces linked lifecycle changes and ignores streamed token updates", asyn
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const reads = state.load.mock.calls.length;
@@ -8253,6 +8366,7 @@ it("coalesces linked lifecycle changes and ignores streamed token updates", asyn
           ),
         };
         await act(async () => renderer.update(<TasksPage />));
+        await selectOnlyInboxTaskForDetailJourney(renderer);
       }
       await act(async () => {
         await vi.advanceTimersByTimeAsync(150);
@@ -8266,6 +8380,7 @@ it("coalesces linked lifecycle changes and ignores streamed token updates", asyn
           runs: base.runs.map((r) => ({ ...r, status: i % 2 ? "running" : "starting" })),
         };
         await act(async () => renderer.update(<TasksPage />));
+        await selectOnlyInboxTaskForDetailJourney(renderer);
       }
       await act(async () => {
         await vi.advanceTimersByTimeAsync(150);
@@ -8273,9 +8388,11 @@ it("coalesces linked lifecycle changes and ignores streamed token updates", asyn
       expect(state.load.mock.calls.length - after).toBe(1);
       state.streamLive = false;
       await act(async () => renderer.update(<TasksPage />));
+      await selectOnlyInboxTaskForDetailJourney(renderer);
       expect(text()).toContain("UNKNOWN");
       state.streamLive = true;
       await act(async () => renderer.update(<TasksPage />));
+      await selectOnlyInboxTaskForDetailJourney(renderer);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(150);
       });
@@ -8296,6 +8413,7 @@ it("keeps a governed Start in Tasks and observes its attributed result without m
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     await prepareGeneric("Stay in Tasks for this implementation.", "manual");
     await creationClick("Choose fixture Manual model");
     await creationClick("Review ordinary task launch");
@@ -8305,6 +8423,7 @@ it("keeps a governed Start in Tasks and observes its attributed result without m
     });
     state.liveProjection = await EffectForFixture.runPromise(f.projection());
     await act(async () => renderer.update(<TasksPage />));
+    await selectOnlyInboxTaskForDetailJourney(renderer);
     expect(text()).toContain("Observed run:");
     expect(state.navigate).not.toHaveBeenCalled();
     await EffectForFixture.runPromise(f.drain());
@@ -8312,6 +8431,7 @@ it("keeps a governed Start in Tasks and observes its attributed result without m
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       await act(async () => renderer.update(<TasksPage />));
+      await selectOnlyInboxTaskForDetailJourney(renderer);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(150);
       });
@@ -8348,6 +8468,7 @@ it("retains draft instructions through unrelated refresh and invalidates old exe
         await act(async () => {
           renderer = create(<TasksPage />);
         });
+        await selectOnlyInboxTaskForDetailJourney(renderer);
         await act(async () =>
           renderer.root
             .findAllByType("button")
@@ -8383,7 +8504,7 @@ it("retains draft instructions through unrelated refresh and invalidates old exe
   );
 }, 30000);
 
-it("bounds detail subscriptions for a large Tasks catalog to eight relevant linked rows", async () => {
+it("mounts no hidden detail subscriptions and watches only an explicitly focused row beyond the first eight", async () => {
   await withTaskRevisionRequestFixture(async (f) => {
     const original = await EffectForFixture.runPromise(f.readSnapshot());
     const task = original.tasks[0]!;
@@ -8398,9 +8519,14 @@ it("bounds detail subscriptions for a large Tasks catalog to eight relevant link
     await act(async () => {
       renderer = create(<TasksPage />);
     });
-    const watches = state.detailWatches.slice(-24).filter((id) => id !== null);
-    expect(watches).toHaveLength(8);
-    expect(watches).toEqual(Array.from({ length: 8 }, (_, index) => `thread-${index}`));
+    await selectOnlyInboxTaskForDetailJourney(renderer);
+    expect(state.detailWatches.filter((id) => id !== null)).toHaveLength(0);
+    const target = renderer.root.findByProps({
+      "aria-label": `View task task-23 in ${task.projectId}`,
+    });
+    await act(async () => target.props.onClick());
+    const watches = state.detailWatches.filter((id) => id !== null);
+    expect([...new Set(watches)]).toEqual(["thread-23"]);
     expect(state.interrupt).not.toHaveBeenCalled();
     expect(state.startStep).not.toHaveBeenCalled();
   });
@@ -8516,6 +8642,7 @@ it.each(["unrelated refresh", "authoritative contract change"] as const)(
       await act(async () => {
         renderer = create(<TasksPage />);
       });
+      await selectOnlyInboxTaskForDetailJourney(renderer);
       await creationClick("Prepare revision request");
       await act(async () =>
         renderer.root
@@ -8553,6 +8680,7 @@ it.each(["contract", "phase", "acceptance"] as const)(
       await act(async () => {
         renderer = create(<TasksPage />);
       });
+      await selectOnlyInboxTaskForDetailJourney(renderer);
       await act(async () =>
         renderer.root
           .findAllByType("button")
@@ -8579,6 +8707,7 @@ it.each(["contract", "phase", "acceptance"] as const)(
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
         await act(async () => renderer.update(<TasksPage />));
+        await selectOnlyInboxTaskForDetailJourney(renderer);
         await act(async () => {
           await vi.advanceTimersByTimeAsync(150);
         });
@@ -8619,9 +8748,24 @@ it("retains task A's requested changes when task B's stream refreshes the catalo
       b.threadId,
       await EffectForFixture.runPromise(f.orchestrator.getThreadProjection(b.threadId)),
     );
+    state.shellThreads = [
+      {
+        id: b.threadId,
+        status: "idle",
+        activeRunId: null,
+        latestRunId: null,
+        latestRunCompletedAt: null,
+      },
+    ];
     await act(async () => {
       renderer = create(<TasksPage />);
     });
+    await selectOnlyInboxTaskForDetailJourney(renderer);
+    await selectExactInboxTask(
+      (await EffectForFixture.runPromise(f.readSnapshot())).tasks.find(
+        (t) => t.threadId === f.command.threadId,
+      )!,
+    );
     await creationClick("Prepare revision request");
     await act(async () =>
       renderer.root
@@ -8646,9 +8790,19 @@ it("retains task A's requested changes when task B's stream refreshes the catalo
       b.threadId,
       await EffectForFixture.runPromise(f.orchestrator.getThreadProjection(b.threadId)),
     );
+    state.shellThreads = [
+      {
+        id: b.threadId,
+        status: "working",
+        activeRunId: "unrelated-run",
+        latestRunId: "unrelated-run",
+        latestRunCompletedAt: null,
+      },
+    ];
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       await act(async () => renderer.update(<TasksPage />));
+      await selectOnlyInboxTaskForDetailJourney(renderer);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(150);
       });
@@ -8892,3 +9046,204 @@ it("pending module review from an old session cannot revive after session A-B-A"
     expect((await EffectForFixture.runPromise(f.inspect())).starts).toHaveLength(0);
   });
 }, 30000);
+
+it("Task inbox list/filter/focus/return/reload reads never mutate tasks or start providers", async () => {
+  const a = agentTaskFixture("project-a");
+  const b = { ...agentTaskFixture("historical-project"), assigneeAgentId: "unavailable-provider" };
+  state.snapshot = { ...state.snapshot, tasks: [a, b] };
+  await act(async () => {
+    renderer = create(<TasksPage />);
+  });
+  expect(renderer.root.findAllByProps({ "aria-label": "Cross-agent tasks" })).toHaveLength(0);
+  expect(state.detailWatches.filter((id) => id !== null)).toHaveLength(0);
+  await act(async () =>
+    renderer.root
+      .findByProps({ "aria-label": "Inbox search" })
+      .props.onChange({ target: { value: "historical" } }),
+  );
+  const project = renderer.root
+    .findAllByType("select")
+    .find((n) => n.findAllByProps({ "aria-label": "Inbox project" }).length)!;
+  await act(async () => project.props.onChange({ target: { value: JSON.stringify(b.projectId) } }));
+  await act(async () =>
+    renderer.root
+      .findByProps({ "aria-label": `View task ${b.id} in ${b.projectId}` })
+      .props.onClick(),
+  );
+  expect(text()).toContain(b.title);
+  await creationClick("Back to task inbox");
+  expect(renderer.root.findByProps({ "aria-label": "Inbox search" }).props.value).toBe(
+    "historical",
+  );
+  await creationClick("Refresh tasks");
+  expect(renderer.root.findByProps({ "aria-label": "Inbox search" }).props.value).toBe(
+    "historical",
+  );
+  await act(async () => renderer.unmount());
+  await act(async () => {
+    renderer = create(<TasksPage />);
+  });
+  expect(renderer.root.findAllByProps({ "aria-label": "Cross-agent tasks" })).toHaveLength(0);
+  expect(state.create).not.toHaveBeenCalled();
+  expect(state.startStep).not.toHaveBeenCalled();
+  expect(state.reviewDecide).not.toHaveBeenCalled();
+  expect(state.interrupt).not.toHaveBeenCalled();
+  expect(state.navigate).not.toHaveBeenCalled();
+});
+it("Task inbox A→B→A focus retires an actual executable review callback", async () => {
+  const module = await loadTaskReviewFixture();
+  await EffectForFixture.runPromise(
+    module.withTaskReviewFixture((f) =>
+      EffectForFixture.promise(async () => {
+        const snapshot = await EffectForFixture.runPromise(f.readSnapshot());
+        const a = snapshot.tasks[0]!;
+        const { review: _hint, ...otherBase } = a;
+        const b = {
+          ...otherBase,
+          id: "inbox-other-task",
+          title: "Other task",
+          threadId: null,
+          projectId: "historical-project",
+        };
+        state.load.mockResolvedValue({ ...snapshot, tasks: [a, b] });
+        state.reviewRead.mockImplementation(async ({ input }) => ({
+          _tag: "Success",
+          value: await EffectForFixture.runPromise(f.readReview(input)),
+        }));
+        state.reviewDecide.mockImplementation(async ({ input }) => ({
+          _tag: "Success",
+          value: await EffectForFixture.runPromise(f.decide(input)),
+        }));
+        await act(async () => {
+          renderer = create(<TasksPage />);
+        });
+        const view = async (t: typeof a) =>
+          act(async () =>
+            renderer.root
+              .findByProps({ "aria-label": `View task ${t.id} in ${t.projectId}` })
+              .props.onClick(),
+          );
+        await view(a);
+        const action = renderer.root
+          .findAllByType("button")
+          .find((n) => n.props["data-task-contract-accept"] !== undefined)!;
+        await act(async () => action.props.onClick());
+        const old = creationButton("Confirm decision")!.props.onClick;
+        await creationClick("Back to task inbox");
+        await view(b);
+        await view(a);
+        expect(creationButton("Confirm decision")).toBeUndefined();
+        await act(async () => old());
+        expect(state.reviewDecide).not.toHaveBeenCalled();
+        expect((await EffectForFixture.runPromise(f.facts())).acceptedRevision).toBeNull();
+        expect(state.startStep).not.toHaveBeenCalled();
+      }),
+    ),
+  );
+});
+it("Task inbox preserves unsaved paused instructions but no executable save through focus changes", async () => {
+  const module = await loadTaskReviewFixture();
+  await EffectForFixture.runPromise(
+    module.withTaskReviewFixture((f) =>
+      EffectForFixture.promise(async () => {
+        const snapshot = await EffectForFixture.runPromise(f.readSnapshot());
+        const a = snapshot.tasks[0]!;
+        const { review: _hint, ...otherBase } = a;
+        const b = { ...otherBase, id: "inbox-draft-other", title: "Other task", threadId: null };
+        state.load.mockImplementation(async () => ({
+          ...(await EffectForFixture.runPromise(f.readSnapshot())),
+          tasks: [(await EffectForFixture.runPromise(f.readSnapshot())).tasks[0]!, b],
+        }));
+        state.reviewRead.mockImplementation(async ({ input }) => ({
+          _tag: "Success",
+          value: await EffectForFixture.runPromise(f.readReview(input)),
+        }));
+        state.reviewDecide.mockImplementation(async ({ input }) => ({
+          _tag: "Success",
+          value: await EffectForFixture.runPromise(f.decide(input)),
+        }));
+        await act(async () => {
+          renderer = create(<TasksPage />);
+        });
+        const view = async (t: typeof a) =>
+          act(async () =>
+            renderer.root
+              .findByProps({ "aria-label": `View task ${t.id} in ${t.projectId}` })
+              .props.onClick(),
+          );
+        await view(a);
+        await act(async () =>
+          renderer.root
+            .findAllByType("button")
+            .find((n) => n.props["data-task-contract-redirect-action"] !== undefined)!
+            .props.onClick(),
+        );
+        await creationClick("Confirm decision");
+        await creationClick("Revise paused instructions");
+        await act(async () =>
+          renderer.root
+            .findByProps({ "aria-label": "goal instruction" })
+            .props.onChange({ target: { value: "Retain this unsaved inbox goal" } }),
+        );
+        await creationClick("Preview instruction changes");
+        const old = creationButton("Save new revision")!.props.onClick;
+        await creationClick("Back to task inbox");
+        await view(b);
+        await view(a);
+        expect(renderer.root.findByProps({ "aria-label": "goal instruction" }).props.value).toBe(
+          "Retain this unsaved inbox goal",
+        );
+        expect(creationButton("Save new revision")).toBeUndefined();
+        await act(async () => old());
+        expect(state.reviewDecide).toHaveBeenCalledTimes(1);
+        expect(
+          (await EffectForFixture.runPromise(f.readSnapshot())).tasks.find((t) => t.id === a.id)
+            ?.contractReadout,
+        ).toMatchObject({ contract: { revision: 1 } });
+      }),
+    ),
+  );
+});
+it.each(["session", "stale", "environment"] as const)(
+  "Task inbox retires current confirmation after %s changes without replacing focus",
+  async (change) => {
+    const module = await loadTaskReviewFixture();
+    await EffectForFixture.runPromise(
+      module.withTaskReviewFixture((f) =>
+        EffectForFixture.promise(async () => {
+          state.load.mockImplementation(() => EffectForFixture.runPromise(f.readSnapshot()));
+          state.reviewRead.mockImplementation(async ({ input }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(f.readReview(input)),
+          }));
+          state.reviewDecide.mockImplementation(async ({ input }) => ({
+            _tag: "Success",
+            value: await EffectForFixture.runPromise(f.decide(input)),
+          }));
+          await act(async () => {
+            renderer = create(<TasksPage />);
+          });
+          const task = (await EffectForFixture.runPromise(f.readSnapshot())).tasks[0]!;
+          await selectExactInboxTask(task);
+          await act(async () =>
+            renderer.root.findByProps({ "data-task-contract-accept": "" }).props.onClick(),
+          );
+          const old = creationButton("Confirm decision")!.props.onClick;
+          if (change === "session") state.sessionIdentity = {};
+          if (change === "stale") state.streamLive = false;
+          if (change === "environment") state.environmentId = "environment-b";
+          await act(async () => renderer.update(<TasksPage />));
+          await act(async () => old());
+          expect(state.reviewDecide).not.toHaveBeenCalled();
+          expect(state.startStep).not.toHaveBeenCalled();
+          expect((await EffectForFixture.runPromise(f.facts())).acceptedRevision).toBeNull();
+          if (change === "stale") expect(text()).toContain("Stale inbox facts");
+          if (change === "environment")
+            expect(
+              renderer.root.findAllByProps({ "aria-label": "Cross-agent tasks" }),
+            ).toHaveLength(0);
+        }),
+      ),
+    );
+  },
+);

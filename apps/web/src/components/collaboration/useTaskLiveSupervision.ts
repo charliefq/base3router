@@ -8,6 +8,7 @@ const MAX_VISIBLE_DETAILS = 8;
 export function useTaskLiveSupervision(input: {
   environmentId: EnvironmentId | null;
   tasks: ReadonlyArray<CollaborationTask>;
+  detailTasks?: ReadonlyArray<CollaborationTask>;
   context: object;
   refresh: () => Promise<unknown> | undefined;
   invalidate: () => void;
@@ -131,7 +132,10 @@ export function useTaskLiveSupervision(input: {
     }
   }, []);
   const watched = new Set(
-    ids.filter((id) => !visibilityReady || visible.has(id)).slice(0, MAX_VISIBLE_DETAILS),
+    (input.detailTasks ?? input.tasks)
+      .flatMap((task) => (task.threadId ? [task.threadId] : []))
+      .filter((id) => !visibilityReady || visible.has(id))
+      .slice(0, MAX_VISIBLE_DETAILS),
   );
   return { live, watched, observe, changed: schedule };
 }

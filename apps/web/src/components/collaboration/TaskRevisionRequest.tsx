@@ -1,3 +1,4 @@
+import { useTaskInboxDraft } from "./TaskInboxDrafts";
 import { useTaskFirstLaunch } from "./useTaskFirstLaunch";
 import { continuationResult } from "./taskRevisionRequest";
 import {
@@ -53,7 +54,11 @@ export function TaskRevisionRequest(props: {
     props.task.id,
     props.task.threadId,
   ]);
-  const [drafts, setDrafts] = useState<ReadonlyMap<string, string>>(new Map());
+  const [drafts, setDrafts] = useTaskInboxDraft<ReadonlyMap<string, string>>(
+    "requested-revision",
+    props,
+    new Map(),
+  );
   const changes = drafts.get(draftScope) ?? "";
   const currentDraftScope = useRef(draftScope);
   const [notice, setNotice] = useState<string | null>(null);
