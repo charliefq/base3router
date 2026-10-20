@@ -9503,6 +9503,10 @@ it.each([
           .props.onChange({ target: { value: "Summarize the supplied notes." } });
       });
       await creationClick(mode === "auto" ? "Choose Auto" : "Choose Manual");
+      expect(text()).toContain(
+        "Review the file and optional instruction skill together before Start.",
+      );
+      expect(text()).not.toContain("Remove the file to choose an instruction skill");
       const module = taskInstructionSkillModules()[0]!;
       if (joint && order === "skill-first") await chooseInstructionModule(module.id);
       const file = new File(["Exact café reference bytes\n"], "notes.txt", { type: "text/plain" });

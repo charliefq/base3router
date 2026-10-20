@@ -170,8 +170,8 @@ export function TaskReferenceFilePicker(props: {
         />
       </label>
       <p>
-        Uploading does not start the task. Reference files currently require Codex. Remove the file
-        to choose an instruction skill.
+        Uploading does not start the task. Reference files currently require Codex. Review the file
+        and optional instruction skill together before Start.
       </p>
       {file ? (
         <p>
