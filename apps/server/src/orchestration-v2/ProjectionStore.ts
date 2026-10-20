@@ -568,13 +568,20 @@ export function upsertProviderTurn(
 function preserveInstructionDelivery<
   T extends {
     readonly instructionSkillDelivery?: import("@t3tools/contracts").TaskInstructionSkillDelivery;
+    readonly referenceFileDelivery?: import("@t3tools/contracts").TaskReferenceFileDelivery;
   },
 >(current: T | undefined, next: T): T {
+  const priorFile = current?.referenceFileDelivery;
+  const withFile =
+    priorFile &&
+    (next.referenceFileDelivery === undefined || priorFile.status === "adapter-accepted")
+      ? { ...next, referenceFileDelivery: priorFile }
+      : next;
   const previous = current?.instructionSkillDelivery;
   return previous &&
     (next.instructionSkillDelivery === undefined || previous.status === "adapter-accepted")
-    ? { ...next, instructionSkillDelivery: previous }
-    : next;
+    ? { ...withFile, instructionSkillDelivery: previous }
+    : withFile;
 }
 
 /** A stale run snapshot must not erase fields that other events recorded on the run. */
@@ -585,6 +592,9 @@ function preserveRunRecordedFields(
   if (current === undefined) return next;
   return {
     ...preserveInstructionDelivery(current, next),
+    ...(next.referenceFileSelection === undefined && current.referenceFileSelection !== undefined
+      ? { referenceFileSelection: current.referenceFileSelection }
+      : {}),
     ...(next.instructionSkillSelection === undefined &&
     current.instructionSkillSelection !== undefined
       ? { instructionSkillSelection: current.instructionSkillSelection }
@@ -1685,14 +1695,24 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       END
     `;
 
-    const keepInstructionDelivery = (
+    const keepReferenceDelivery = (
       payload: Statement.Fragment,
       previous: Statement.Fragment,
     ) => sql`
+      CASE WHEN json_type(${previous}, '$.referenceFileDelivery') IS NOT NULL AND (
+        json_type(excluded.payload_json,'$.referenceFileDelivery') IS NULL OR json_extract(${previous},'$.referenceFileDelivery.status')='adapter-accepted'
+      ) THEN json_set(${payload},'$.referenceFileDelivery',json_extract(${previous},'$.referenceFileDelivery')) ELSE ${payload} END
+    `;
+
+    const keepInstructionDelivery = (payload: Statement.Fragment, previous: Statement.Fragment) =>
+      keepReferenceDelivery(
+        sql`
       CASE WHEN json_type(${previous}, '$.instructionSkillDelivery') IS NOT NULL AND (
         json_type(excluded.payload_json,'$.instructionSkillDelivery') IS NULL OR json_extract(${previous},'$.instructionSkillDelivery.status')='adapter-accepted'
       ) THEN json_set(${payload},'$.instructionSkillDelivery',json_extract(${previous},'$.instructionSkillDelivery')) ELSE ${payload} END
-    `;
+    `,
+        previous,
+      );
 
     const apply: ProjectionStoreV2Shape["apply"] = (event) =>
       Effect.gen(function* () {
@@ -1819,7 +1839,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 payload_json = ${keepInstructionDelivery(
                   keepRecordedRunField(
                     keepRecordedRunField(
-                      keepRecordedRunField(sql`excluded.payload_json`, "$.delegatedCompletion"),
+                      keepRecordedRunField(
+                        keepRecordedRunField(
+                          sql`excluded.payload_json`,
+                          "$.referenceFileSelection",
+                        ),
+                        "$.delegatedCompletion",
+                      ),
                       "$.restartCancelledBackgroundWork",
                     ),
                     "$.instructionSkillSelection",

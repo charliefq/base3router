@@ -1,3 +1,4 @@
+import * as NodeCrypto from "node:crypto";
 import * as FileSystem from "effect/FileSystem";
 import {
   ChatAttachmentId,
@@ -22,6 +23,8 @@ export class AttachmentClaimError extends Schema.TaggedError<AttachmentClaimErro
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+const isAttachmentClaimError = Schema.is(AttachmentClaimError);
 
 export const validateAttachmentLimits = Effect.fn("AttachmentClaims.validateAttachmentLimits")(
   function* (attachments: ReadonlyArray<ChatAttachment>) {
@@ -63,6 +66,7 @@ export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingA
   function* (input: {
     readonly threadId: string;
     readonly attachments: ReadonlyArray<ChatAttachment>;
+    readonly reserved?: Readonly<Record<string, { readonly id: string; readonly sha256: string }>>;
   }) {
     yield* validateAttachmentLimits(input.attachments);
     if (
@@ -90,6 +94,9 @@ export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingA
             attachmentsDir: serverConfig.attachmentsDir,
             threadId: input.threadId,
             attachmentId: attachment.id,
+            ...(input.reserved?.[attachment.id]
+              ? { reservedFinalId: input.reserved[attachment.id]!.id }
+              : {}),
           });
           if (!claim.ok) {
             return yield* new AttachmentClaimError({
@@ -129,21 +136,64 @@ export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingA
           // cancelled, so the copy and its rollback registration stay in one
           // uninterruptible region: an interrupt landing mid-copy still waits
           // for the write to settle and records the path before cleanup runs.
-          yield* fileSystem.copyFile(claim.currentPath, claim.finalPath).pipe(
-            Effect.mapError(
-              (cause) =>
-                new AttachmentClaimError({
-                  message: `Failed to claim attachment '${attachment.name}' for this thread.`,
-                  cause,
-                }),
-            ),
-            Effect.andThen(Effect.sync(() => claimedPaths.push(claim.finalPath))),
-            Effect.uninterruptible,
-          );
+          const reserved = input.reserved?.[attachment.id];
+          if (reserved) {
+            // An issued file review reserves this identity. Never overwrite an existing claim,
+            // including when a duplicate Start races the original copy.
+            const sourceBytes = yield* fileSystem.readFile(claim.currentPath);
+            if (
+              sourceBytes.length !== attachment.sizeBytes ||
+              NodeCrypto.createHash("sha256").update(sourceBytes).digest("hex") !== reserved.sha256
+            )
+              return yield* new AttachmentClaimError({
+                message: "Source reference content changed.",
+              });
+            yield* Effect.scoped(
+              fileSystem.open(claim.finalPath, { flag: "wx" }).pipe(
+                Effect.tap(() => Effect.sync(() => claimedPaths.push(claim.finalPath))),
+                Effect.flatMap((file) => file.writeAll(sourceBytes)),
+              ),
+            ).pipe(
+              Effect.catch((error) =>
+                fileSystem
+                  .exists(claim.finalPath)
+                  .pipe(Effect.flatMap((exists) => (exists ? Effect.void : Effect.fail(error)))),
+              ),
+              Effect.uninterruptible,
+            );
+            const bytes = yield* fileSystem.readFile(claim.finalPath);
+            if (
+              bytes.length !== attachment.sizeBytes ||
+              NodeCrypto.createHash("sha256").update(bytes).digest("hex") !== reserved.sha256
+            )
+              return yield* new AttachmentClaimError({
+                message: "Reserved reference content changed; no replacement claim.",
+              });
+          } else {
+            yield* fileSystem.copyFile(claim.currentPath, claim.finalPath).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new AttachmentClaimError({
+                    message: `Failed to claim attachment '${attachment.name}' for this thread.`,
+                    cause,
+                  }),
+              ),
+              Effect.andThen(Effect.sync(() => claimedPaths.push(claim.finalPath))),
+              Effect.uninterruptible,
+            );
+          }
+
           return normalized;
         }),
       { concurrency: 1 },
-    ).pipe(Effect.onError(() => releaseClaimedAttachments(claimedPaths)));
+    ).pipe(
+      Effect.mapError((cause) =>
+        isAttachmentClaimError(cause)
+          ? cause
+          : new AttachmentClaimError({ message: "Reference claim storage unavailable.", cause }),
+      ),
+      Effect.onError(() => releaseClaimedAttachments(claimedPaths)),
+    );
     return { attachments, claimedPaths } satisfies ClaimedAttachments;
   },
 );

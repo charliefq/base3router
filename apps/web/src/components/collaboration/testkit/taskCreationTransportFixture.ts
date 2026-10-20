@@ -35,6 +35,13 @@ import {
 import * as Commands from "@t3tools/client-runtime/operations";
 
 type ServerFixture = {
+  expireAttachment: (attachment: import("@t3tools/contracts").ChatFileAttachment) => Promise<void>;
+  corruptFileDelivery: (threadId: string) => Promise<void>;
+  attachmentBytes: (attachment: import("@t3tools/contracts").ChatFileAttachment) => Promise<string>;
+  changeAttachment: (
+    attachment: import("@t3tools/contracts").ChatFileAttachment,
+    text: string,
+  ) => Promise<void>;
   providers: ReadonlyArray<ServerProvider>;
   seedTaskRouting: (
     profiles: ReadonlyArray<{
@@ -95,6 +102,12 @@ type ServerFixture = {
   inspect: () => Promise<{
     starts: ReadonlyArray<ModelSelection>;
     inputs: ReadonlyArray<string>;
+    fileReads: ReadonlyArray<{
+      messageId: string;
+      attachment: import("@t3tools/contracts").ChatFileAttachment;
+      text: string;
+    }>;
+    attachments: ReadonlyArray<ReadonlyArray<import("@t3tools/contracts").ChatAttachment>>;
     commands: ReadonlyArray<OrchestrationV2Command>;
     rpcMethods: ReadonlyArray<string>;
   }>;
@@ -269,6 +282,34 @@ const makeClientFixture = Effect.fn("TaskTransport.makeClientFixture")(function*
       command(Commands.readTaskResultContinuationStatus(input)),
     dispatch: (input: OrchestrationV2Command) =>
       command(request("orchestration.dispatchCommand", input)),
+    deleteFile: (attachmentId: string) => command(request("attachments.delete", { attachmentId })),
+    uploadFile: async (name: string, text: string) => {
+      const minted = await command(
+        request("attachments.createUploadUrl", {
+          type: "file",
+          name,
+          mimeType: "text/plain",
+          sizeBytes: new TextEncoder().encode(text).length,
+        }),
+      );
+      if (minted._tag !== "Success") throw new Error("Upload mint failed");
+      const response = await fetch(new URL(minted.value.relativeUrl, currentDetails!.httpBaseUrl), {
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body: text,
+      });
+      if (!response.ok)
+        throw new Error(`Upload failed (${response.status}): ${await response.text()}`);
+      return {
+        type: "file" as const,
+        id: importAttachmentId(minted.value.attachmentId),
+        name,
+        mimeType: "text/plain",
+        sizeBytes: new TextEncoder().encode(text).length,
+      };
+    },
+    reviewReferenceFile: (input: import("@t3tools/contracts").TaskReferenceFileReviewInput) =>
+      command(Commands.readTaskReferenceFileReview(input)),
     reviewInstructionSkill: (
       input: Parameters<typeof Commands.readTaskInstructionSkillReview>[0],
     ) => command(Commands.readTaskInstructionSkillReview(input)),
@@ -293,3 +334,6 @@ export async function withTaskTransportFixture(check: (f: ClientFixture) => Prom
   };
   await module.withTaskCreationTransportFixture((server) => clientFixture(server, check));
 }
+
+import { ChatAttachmentId as AttachmentId } from "@t3tools/contracts";
+const importAttachmentId = (s: string) => AttachmentId.make(s);

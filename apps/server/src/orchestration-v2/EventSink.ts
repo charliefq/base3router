@@ -1,3 +1,5 @@
+import * as FileSystem from "effect/FileSystem";
+import * as ReferenceServerConfig from "../config.ts";
 import { commitCapabilityStep } from "../collaboration/TaskCapabilityStep.ts";
 import { commitResultContinuation } from "../collaboration/ResultContinuation.ts";
 import { commitFirstTaskLaunch } from "../collaboration/FirstTaskLaunch.ts";
@@ -334,6 +336,17 @@ const baseLayer: Layer.Layer<
   EventSinkV2,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const referenceConfig = yield* Effect.serviceOption(ReferenceServerConfig.ServerConfig);
+    const referenceFs = yield* Effect.serviceOption(FileSystem.FileSystem);
+    const withReferenceStore = <A, E>(effect: Effect.Effect<A, E>) => {
+      return Option.isSome(referenceConfig) && Option.isSome(referenceFs)
+        ? effect.pipe(
+            Effect.provideService(ReferenceServerConfig.ServerConfig, referenceConfig.value),
+            Effect.provideService(FileSystem.FileSystem, referenceFs.value),
+          )
+        : effect;
+    };
+
     const commandReceipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
     const effectOutbox = yield* EffectOutbox.EffectOutboxV2;
     const eventStore = yield* EventStore.EventStoreV2;
@@ -1468,7 +1481,9 @@ const baseLayer: Layer.Layer<
                 commandId: input.commandId,
                 eventCount: input.events.length,
               });
-            yield* commitFirstTaskLaunch(sql, input.firstLaunchCommand, input.events);
+            yield* withReferenceStore(
+              commitFirstTaskLaunch(sql, input.firstLaunchCommand, input.events),
+            );
           }
           if (
             input.events.some(

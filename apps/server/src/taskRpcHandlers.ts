@@ -1,4 +1,7 @@
-import { reviewTaskInstructionSkill } from "./collaboration/FirstTaskLaunch.ts";
+import {
+  reviewTaskInstructionSkill,
+  reviewTaskReferenceFile,
+} from "./collaboration/FirstTaskLaunch.ts";
 import { RpcGroup } from "effect/unstable/rpc";
 import {
   ORCHESTRATION_V2_WS_METHODS,
@@ -49,6 +52,7 @@ export const TaskRpcGroup = RpcGroup.make(
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getAgentsCreationStatus ||
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskFirstLaunchStatus ||
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskInstructionSkillReview ||
+      rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskReferenceFileReview ||
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskResultContinuationStatus ||
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskAutoPreview ||
       rpc._tag === ORCHESTRATION_V2_WS_METHODS.getTaskReview ||
@@ -84,6 +88,7 @@ export const makeTaskRpcHandlers = Effect.fn("ws.makeTaskRpcHandlers")(function*
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
   const intakeContext = yield* Effect.context<
+    | SqlClient.SqlClient
     | ThreadManagementService.ThreadManagementService
     | ThreadLaunchService.ThreadLaunchService
     | FileSystem.FileSystem
@@ -406,6 +411,15 @@ export const makeTaskRpcHandlers = Effect.fn("ws.makeTaskRpcHandlers")(function*
       observeRpcEffect(
         ORCHESTRATION_V2_WS_METHODS.getTaskInstructionSkillReview,
         reviewTaskInstructionSkill(sql, input).pipe(
+          Effect.provideService(ServerEnvironment.ServerEnvironment, serverEnvironment),
+          Effect.provideService(ProviderRegistry, providerRegistry),
+        ),
+      ),
+    [ORCHESTRATION_V2_WS_METHODS.getTaskReferenceFileReview]: (input) =>
+      observeRpcEffect(
+        ORCHESTRATION_V2_WS_METHODS.getTaskReferenceFileReview,
+        reviewTaskReferenceFile(sql, input).pipe(
+          Effect.provide(intakeContext),
           Effect.provideService(ServerEnvironment.ServerEnvironment, serverEnvironment),
           Effect.provideService(ProviderRegistry, providerRegistry),
         ),

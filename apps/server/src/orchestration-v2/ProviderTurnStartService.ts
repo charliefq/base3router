@@ -1,3 +1,10 @@
+import * as ReferenceServerConfig from "../config.ts";
+import { type TaskReferenceFileDelivery } from "@t3tools/contracts";
+import {
+  verifyTaskReferenceFile,
+  taskReferenceTargetAvailable,
+} from "@t3tools/shared/taskReferenceFile";
+import { readTaskReferenceFile } from "../collaboration/TaskReferenceFile.ts";
 import {
   verifyTaskInstructionSkillReview,
   taskInstructionSkillTargetAvailable,
@@ -134,6 +141,16 @@ export const layer: Layer.Layer<
     const contextHandoffService = yield* ContextHandoffService.ContextHandoffServiceV2;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const fileSystem = yield* FileSystem.FileSystem;
+    const referenceConfig = yield* Effect.serviceOption(ReferenceServerConfig.ServerConfig);
+    const withReferenceStore = <A, E>(effect: Effect.Effect<A, E>) => {
+      return Option.isSome(referenceConfig)
+        ? effect.pipe(
+            Effect.provideService(ReferenceServerConfig.ServerConfig, referenceConfig.value),
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+          )
+        : effect;
+    };
+
     const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
@@ -685,6 +702,80 @@ export const layer: Layer.Layer<
           return;
         }
         savedCapabilityContext = capability.success;
+      }
+      const selectedFile = message.taskFirstLaunch?.referenceFile;
+      if (selectedFile) {
+        const checked = yield* Effect.result(
+          Effect.gen(function* () {
+            if (
+              Option.isNone(capabilitySql) ||
+              Option.isNone(capabilityEnvironment) ||
+              !message.taskFirstLaunch ||
+              run.referenceFileDelivery
+            )
+              return yield* new ProviderTurnStartError({
+                runId,
+                cause: "Original file delivery unavailable or already attempted; no resend.",
+              });
+            const launch = message.taskFirstLaunch;
+            const grants = yield* capabilitySql.value<{
+              actor_id: string;
+            }>`SELECT actor_id FROM base3_execution_grants WHERE grant_id=${`grant:message:${input.threadId}:${message.id}`}`;
+            const now = DateTime.formatIso(yield* DateTime.now);
+            yield* Effect.try({
+              try: () => verifyTaskReferenceFile(launch, grants[0]?.actor_id ?? "", now),
+              catch: (cause) => new ProviderTurnStartError({ runId, cause }),
+            });
+            const provider = Option.isSome(capabilityProvider)
+              ? (yield* capabilityProvider.value.getProviders).find(
+                  (p) => p.instanceId === run.modelSelection.instanceId,
+                )
+              : undefined;
+            if (
+              resolvedRuntimePolicy.runtimeMode !== launch.runtimeMode ||
+              resolvedRuntimePolicy.interactionMode !== launch.interactionMode ||
+              (yield* capabilityEnvironment.value.getEnvironmentId) !==
+                launch.reference.environmentId ||
+              projection.thread.projectId !== launch.reference.projectId ||
+              launch.threadId !== input.threadId ||
+              launch.messageId !== message.id ||
+              projection.thread.taskContractPhase !== "active" ||
+              projection.thread.taskAcceptedRevision !== null ||
+              argumentHash(projection.thread.taskContract) !== argumentHash(launch.contract) ||
+              argumentHash(run.referenceFileSelection) !== argumentHash(selectedFile) ||
+              argumentHash(message.attachments) !== argumentHash([selectedFile.attachment]) ||
+              !taskReferenceTargetAvailable(provider, run.modelSelection) ||
+              (launch.routingMode === "manual" &&
+                argumentHash(run.modelSelection) !== argumentHash(launch.modelSelection))
+            )
+              return yield* new ProviderTurnStartError({
+                runId,
+                cause: "Reference file scope or actual target changed.",
+              });
+            yield* withReferenceStore(
+              readTaskReferenceFile(selectedFile.attachment, selectedFile.contentSha256),
+            );
+          }),
+        );
+        if (checked._tag === "Failure") {
+          yield* settleRunBeforeStart({
+            signal: "reference-file-blocked",
+            status: "failed",
+            now: yield* DateTime.now,
+            providerInstanceId: run.providerInstanceId,
+            itemProviderThreadId: providerThread.id,
+            item: {
+              type: "error",
+              title: "Reviewed reference file blocked",
+              failure: makeProviderFailure({
+                message:
+                  "Reference file input changed or was already attempted. No native input was resent.",
+                class: "provider_error",
+              }),
+            },
+          });
+          return;
+        }
       }
       let instructionModule: TaskInstructionSkillModule | null = null;
       let instructionContext = "";
@@ -1475,6 +1566,41 @@ export const layer: Layer.Layer<
                 events: updates,
               })).committed;
             });
+          const recordReferenceDelivery = (evidence: TaskReferenceFileDelivery) =>
+            Effect.gen(function* () {
+              const fresh = yield* projectionStore.getTurnStartContext(input.threadId, run.id);
+              const currentRun = fresh.runs.find((r) => r.id === run.id);
+              const currentAttempt = fresh.attempts.find((a) => a.id === attempt.id);
+              if (!currentRun || !currentAttempt || currentRun.activeAttemptId !== attempt.id)
+                return false;
+              const occurredAt = yield* DateTime.now;
+              const updates: OrchestrationV2DomainEvent[] = [];
+              for (const event of [
+                {
+                  type: "run.updated",
+                  payload: { ...currentRun, referenceFileDelivery: evidence },
+                },
+                {
+                  type: "run-attempt.updated",
+                  payload: { ...currentAttempt, referenceFileDelivery: evidence },
+                },
+              ] as const)
+                updates.push({
+                  ...event,
+                  id: yield* idAllocator.allocate.event({ threadId: input.threadId }),
+                  threadId: input.threadId,
+                  runId: run.id,
+                  providerInstanceId: run.providerInstanceId,
+                  occurredAt,
+                });
+              return (yield* eventSink.writeIfRunCurrent({
+                threadId: input.threadId,
+                runId: run.id,
+                activeAttemptId: attempt.id,
+                expectedStatus: currentRun.status,
+                events: updates,
+              })).committed;
+            });
           if (instructionModule && selectedInstruction && message.taskFirstLaunch) {
             const nowIso = DateTime.formatIso(yield* DateTime.now);
             const current = yield* Effect.try({
@@ -1546,10 +1672,72 @@ export const layer: Layer.Layer<
                 cause: "Instruction delivery identity could not be retained; nothing sent.",
               });
           }
+          let pendingFile: TaskReferenceFileDelivery | null = null;
+          if (selectedFile && message.taskFirstLaunch) {
+            const now = DateTime.formatIso(yield* DateTime.now);
+            yield* Effect.try({
+              try: () =>
+                verifyTaskReferenceFile(message.taskFirstLaunch!, selectedFile.actorId, now),
+              catch: (cause) => new ProviderTurnStartError({ runId, cause }),
+            });
+            const provider = Option.isSome(capabilityProvider)
+              ? (yield* capabilityProvider.value.getProviders).find(
+                  (p) => p.instanceId === turnInput.modelSelection.instanceId,
+                )
+              : undefined;
+            const fresh = yield* projectionStore.getTurnStartContext(input.threadId, run.id);
+            const actual = fresh.runs.find((r) => r.id === run.id);
+            if (
+              !actual ||
+              actual.referenceFileDelivery ||
+              actual.activeAttemptId !== attempt.id ||
+              argumentHash(actual.modelSelection) !== argumentHash(turnInput.modelSelection) ||
+              turnInput.runId !== run.id ||
+              turnInput.attemptId !== attempt.id ||
+              turnInput.message.messageId !== message.id ||
+              argumentHash(turnInput.message.attachments) !==
+                argumentHash([selectedFile.attachment]) ||
+              !taskReferenceTargetAvailable(provider, turnInput.modelSelection) ||
+              fresh.thread.taskContractPhase !== "active" ||
+              fresh.thread.taskAcceptedRevision !== null ||
+              argumentHash(fresh.thread.taskContract) !==
+                argumentHash(message.taskFirstLaunch.contract)
+            )
+              return yield* new ProviderTurnStartError({
+                runId,
+                cause: "Actual reference file input differs or was already attempted.",
+              });
+            yield* withReferenceStore(
+              readTaskReferenceFile(selectedFile.attachment, selectedFile.contentSha256),
+            );
+            pendingFile = {
+              status: "unknown",
+              reviewId: selectedFile.reviewId,
+              source: selectedFile.source,
+              attachment: selectedFile.attachment,
+              contentSha256: selectedFile.contentSha256,
+              runId: run.id,
+              attemptId: attempt.id,
+              messageId: message.id,
+              modelSelection: turnInput.modelSelection,
+              observedAt: now,
+            };
+            if (!(yield* recordReferenceDelivery(pendingFile)))
+              return yield* new ProviderTurnStartError({
+                runId,
+                cause: "Reference file delivery identity could not be retained.",
+              });
+          }
           yield* deliver({
             ...turnInput,
             ...(conversationHistory === undefined ? {} : { conversationHistory }),
           });
+          if (pendingFile)
+            yield* recordReferenceDelivery({
+              ...pendingFile,
+              status: "adapter-accepted",
+              observedAt: DateTime.formatIso(yield* DateTime.now),
+            }).pipe(Effect.catchCause(() => Effect.succeed(false)));
           if (pendingInstruction) {
             const accepted = {
               ...pendingInstruction,

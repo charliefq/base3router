@@ -1,5 +1,23 @@
+import {
+  TaskReferenceFileReview,
+  TaskReferenceFileReviewInput,
+  type TaskReferenceFileReviewState,
+} from "@t3tools/contracts";
+import {
+  taskReferenceFileBinding,
+  taskReferenceDeliveryMatches,
+  verifyTaskReferenceFile,
+  taskReferenceTargetAvailable,
+} from "@t3tools/shared/taskReferenceFile";
+import { readTaskReferenceFile } from "./TaskReferenceFile.ts";
+import {
+  createAttachmentId,
+  parseThreadSegmentFromAttachmentId,
+  PENDING_ATTACHMENT_THREAD_SEGMENT,
+} from "../attachmentStore.ts";
 import * as NodeCrypto from "node:crypto";
 import {
+  ChatAttachmentId,
   TaskInstructionSkillReview,
   TaskInstructionSkillReviewInput,
   type TaskInstructionSkillReviewState,
@@ -57,6 +75,52 @@ const decodeRun = Schema.decodeUnknownEffect(Schema.fromJsonString(Orchestration
 const decodeAttempt = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2RunAttemptJson),
 );
+const IssuedFile = Schema.fromJsonString(
+  Schema.Struct({
+    review: TaskReferenceFileReview,
+    sessionId: Schema.String,
+    launchSha256: Schema.String,
+  }),
+);
+const decodeIssuedFile = Schema.decodeUnknownOption(IssuedFile);
+const encodeIssuedFile = Schema.encodeSync(IssuedFile);
+export const validateTaskReferenceIssuance = Effect.fn("TaskReferenceFile.validateIssuance")(
+  function* (sql: SqlClient.SqlClient, launch: TaskFirstLaunch) {
+    const actor = yield* reviewedTaskPrincipal;
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const proof = yield* Effect.try({
+      try: () => verifyTaskReferenceFile(launch, actor.actorId, now),
+      catch: () => deny(),
+    });
+    const rows = yield* sql<{
+      issued: string | null;
+    }>`SELECT json_extract(payload_json,'$.__taskReferenceFileReview') AS issued FROM orchestration_v2_projection_threads WHERE thread_id=${launch.threadId}`;
+    const issued = rows[0]?.issued ? decodeIssuedFile(rows[0].issued) : Option.none();
+    const { referenceFile: _file, ...base } = launch;
+    if (
+      Option.isNone(issued) ||
+      issued.value.sessionId !== actor.sessionId ||
+      argumentHash(issued.value.review) !== argumentHash(proof) ||
+      issued.value.launchSha256 !== argumentHash(base)
+    )
+      return yield* deny();
+    return proof;
+  },
+);
+export const prepareTaskReferenceClaim = Effect.fn("TaskReferenceFile.prepareClaim")(function* (
+  sql: SqlClient.SqlClient,
+  c: Dispatch,
+) {
+  if (!c.taskFirstLaunch?.referenceFile) return undefined;
+  const proof = yield* validateTaskReferenceIssuance(sql, c.taskFirstLaunch);
+  if (argumentHash(c.attachments) !== argumentHash([proof.source])) return yield* deny();
+  const { referenceFile: _file, ...base } = c.taskFirstLaunch;
+  yield* validateFirstTaskLaunch(sql, { ...c, taskFirstLaunch: base, attachments: [] });
+  yield* readTaskReferenceFile(proof.source, proof.contentSha256).pipe(
+    Effect.mapError(() => deny()),
+  );
+  return { [proof.source.id]: { id: proof.attachment.id, sha256: proof.contentSha256 } };
+});
 const sameMarker = Schema.toEquivalence(TaskFirstLaunch);
 const decodeSkillReviewInput = Schema.decodeUnknownOption(TaskInstructionSkillReviewInput);
 const decodeStrictLaunch = Schema.decodeUnknownOption(TaskFirstLaunch);
@@ -112,6 +176,7 @@ export const reviewedTaskPrincipal = Effect.gen(function* () {
 });
 export const reviewedDispatchMatches = (c: Dispatch, authorized: boolean, kind: Kind = "first") => {
   const m = marker(c, kind);
+  const file = kind === "first" ? c.taskFirstLaunch?.referenceFile : undefined;
   return (
     m !== undefined &&
     (kind === "first" ? c.taskResultContinuation === undefined : c.taskFirstLaunch === undefined) &&
@@ -124,7 +189,10 @@ export const reviewedDispatchMatches = (c: Dispatch, authorized: boolean, kind: 
       argumentHash(m.modelSelection) === argumentHash(c.modelSelection)) &&
     c.createdBy === "user" &&
     c.dispatchMode.type === "start_immediately" &&
-    c.attachments.length === 0 &&
+    (file && kind === "first"
+      ? argumentHash(c.attachments) === argumentHash([file.source]) ||
+        argumentHash(c.attachments) === argumentHash([file.attachment])
+      : c.attachments.length === 0) &&
     c.context === undefined &&
     c.capabilityStep === undefined &&
     c.sourcePlanRef === undefined &&
@@ -153,6 +221,13 @@ export const validateFirstTaskLaunch = Effect.fn("FirstTaskLaunch.validate")(fun
   if (!reviewedDispatchMatches(c, authorized)) return yield* deny();
   const m = c.taskFirstLaunch;
   if (!validLaunch(m)) return yield* deny();
+  if (m.referenceFile) {
+    const proof = yield* validateTaskReferenceIssuance(sql, m);
+    if (argumentHash(c.attachments) !== argumentHash([proof.attachment])) return yield* deny();
+    yield* readTaskReferenceFile(proof.attachment, proof.contentSha256).pipe(
+      Effect.mapError(() => deny()),
+    );
+  }
   let reviewedModule: ReturnType<typeof verifyInstructionSkillReview> | undefined;
   if (m.instructionSkill) {
     const rows = yield* sql<{
@@ -191,6 +266,8 @@ export const validateFirstTaskLaunch = Effect.fn("FirstTaskLaunch.validate")(fun
       !isProviderAvailable(provider) ||
       !isProviderTaskExecutionCapable(provider) ||
       !provider.models.some((p) => p.slug === c.modelSelection?.model) ||
+      (m.referenceFile !== undefined &&
+        (!c.modelSelection || !taskReferenceTargetAvailable(provider, c.modelSelection))) ||
       // Auto proof binds intent/preference; the atomic admission checks the actual routed target.
       (reviewedModule !== undefined &&
         (!c.modelSelection ||
@@ -262,7 +339,7 @@ export const reviewTaskInstructionSkill = Effect.fn("TaskInstructionSkill.review
     if (Option.isNone(decodeSkillReviewInput(input, { onExcessProperty: "error" })))
       return { status: "unavailable", reason: "Invalid or expanded instruction module review." };
     const launch = input.launch;
-    if (launch.instructionSkill)
+    if (launch.instructionSkill || launch.referenceFile)
       return {
         status: "unavailable",
         reason: "Choose Manual or Auto and review a first launch without an existing skill proof.",
@@ -324,6 +401,76 @@ export const reviewTaskInstructionSkill = Effect.fn("TaskInstructionSkill.review
   ),
 );
 
+const isTaskReferenceFileReviewInput = Schema.is(TaskReferenceFileReviewInput);
+export const reviewTaskReferenceFile = Effect.fn("TaskReferenceFile.review")(
+  function* (
+    sql: SqlClient.SqlClient,
+    input: TaskReferenceFileReviewInput,
+  ): Effect.fn.Return<TaskReferenceFileReviewState, unknown> {
+    if (
+      !isTaskReferenceFileReviewInput(input) ||
+      input.launch.referenceFile ||
+      input.launch.instructionSkill ||
+      parseThreadSegmentFromAttachmentId(input.attachment.id) !== PENDING_ATTACHMENT_THREAD_SEGMENT
+    )
+      return yield* deny();
+    const launch = input.launch;
+    const actor = yield* reviewedTaskPrincipal;
+    yield* validateFirstTaskLaunch(sql, {
+      type: "message.dispatch",
+      commandId: launch.commandId,
+      messageId: launch.messageId,
+      threadId: launch.threadId,
+      text: launch.text,
+      attachments: [],
+      routingMode: launch.routingMode,
+      modelSelection: launch.modelSelection,
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "user",
+      creationSource: "web",
+      taskFirstLaunch: launch,
+    });
+    yield* readTaskReferenceFile(input.attachment, input.contentSha256);
+    const id = createAttachmentId(launch.threadId, ".txt");
+    if (!id) return yield* deny();
+    const now = yield* DateTime.now;
+    const binding = {
+      reviewId: NodeCrypto.randomUUID(),
+      source: input.attachment,
+      attachment: { ...input.attachment, id: ChatAttachmentId.make(id) },
+      contentSha256: input.contentSha256,
+      actorId: actor.actorId,
+      reviewedAt: DateTime.formatIso(now),
+      expiresAt: DateTime.formatIso(
+        DateTime.makeUnsafe(
+          Math.min(
+            DateTime.toEpochMillis(now) + 300000,
+            actor.expiresAt ? Date.parse(actor.expiresAt) : Infinity,
+          ),
+        ),
+      ),
+    };
+    const review = { ...binding, bindingSha256: taskReferenceFileBinding(launch, binding) };
+    const record = encodeIssuedFile({
+      review,
+      sessionId: actor.sessionId,
+      launchSha256: argumentHash(launch),
+    });
+    if (new TextEncoder().encode(record).length > 4096) return yield* deny();
+    const stored =
+      yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.__taskReferenceFileReview',json(${record})) WHERE thread_id=${launch.threadId} RETURNING thread_id`;
+    if (stored.length !== 1) return yield* deny();
+    return { status: "available", review };
+  },
+  Effect.catchCause(() =>
+    Effect.succeed({
+      status: "unavailable" as const,
+      reason:
+        "Owned task, reference file bytes, scope or session could not be confirmed. No work started.",
+    }),
+  ),
+);
+
 export const commitFirstTaskLaunch = Effect.fn("FirstTaskLaunch.commit")(function* (
   sql: SqlClient.SqlClient,
   c: Dispatch,
@@ -332,6 +479,11 @@ export const commitFirstTaskLaunch = Effect.fn("FirstTaskLaunch.commit")(functio
   if (!c.taskFirstLaunch) return;
   yield* validateFirstTaskLaunch(sql, c, true);
   yield* commitReviewedTaskDispatch(sql, c, events, "first");
+  if (c.taskFirstLaunch.referenceFile) {
+    const retired =
+      yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_remove(payload_json,'$.__taskReferenceFileReview') WHERE thread_id=${c.threadId} AND json_extract(payload_json,'$.__taskReferenceFileReview.review.reviewId')=${c.taskFirstLaunch.referenceFile.reviewId} RETURNING thread_id`;
+    if (retired.length !== 1) return yield* deny();
+  }
   if (c.taskFirstLaunch.instructionSkill) {
     const retired = yield* sql<{
       thread_id: string;
@@ -403,7 +555,7 @@ export const readFirstTaskLaunchStatus = Effect.fn("FirstTaskLaunch.status")(
         status: "unknown",
         reason: "Original launch command is unavailable or inconsistent.",
       };
-    const original = marker(c, kind)!;
+    const original = marker(c, kind)! as TaskFirstLaunch;
     const actor = yield* reviewedTaskPrincipal;
     const env = yield* Effect.serviceOption(ServerEnvironment);
     if (
@@ -458,6 +610,8 @@ export const readFirstTaskLaunchStatus = Effect.fn("FirstTaskLaunch.status")(
       !markerMessage(message, kind) ||
       !equalMarker(markerMessage(message, kind)!, original, kind) ||
       message.text !== c.text ||
+      (original.referenceFile &&
+        argumentHash(message.attachments) !== argumentHash([original.referenceFile.attachment])) ||
       message.runId === null ||
       grants[0]?.actor_id !== actor.actorId
     )
@@ -489,6 +643,15 @@ export const readFirstTaskLaunchStatus = Effect.fn("FirstTaskLaunch.status")(
       runId: run.id,
       attemptId: run.activeAttemptId,
       actualModelSelection: run.modelSelection,
+      ...(original.referenceFile ? { referenceFileSelection: original.referenceFile } : {}),
+      ...(taskReferenceDeliveryMatches(original.referenceFile, run.referenceFileDelivery, {
+        runId: run.id,
+        attemptId: run.activeAttemptId,
+        messageId: c.messageId,
+        modelSelection: run.modelSelection,
+      })
+        ? { referenceFileDelivery: run.referenceFileDelivery }
+        : {}),
       ...(run.instructionSkillSelection
         ? { instructionSkillSelection: run.instructionSkillSelection }
         : {}),

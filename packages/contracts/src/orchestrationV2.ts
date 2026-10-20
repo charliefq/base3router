@@ -1,4 +1,9 @@
 import {
+  TaskReferenceFileReview,
+  TaskReferenceFileDelivery,
+  TaskReferenceFileReviewState,
+} from "./taskReferenceFile.ts";
+import {
   TaskInstructionSkillReview,
   TaskInstructionSkillDelivery,
   TaskInstructionSkillReviewState,
@@ -8,6 +13,7 @@ import {
   TaskFirstLaunch,
   TaskFirstLaunchStatus,
   TaskInstructionSkillReviewInput,
+  TaskReferenceFileReviewInput,
   TaskResultContinuation,
 } from "./taskFirstLaunch.ts";
 import { TaskCapabilityPlan, TaskCapabilityEvidence } from "./taskCapabilityPlan.ts";
@@ -564,7 +570,9 @@ export type OrchestrationV2RunBackgroundWorkCancelled =
   typeof OrchestrationV2RunBackgroundWorkCancelled.Type;
 
 export const OrchestrationV2Run = Schema.Struct({
+  referenceFileSelection: Schema.optionalKey(TaskReferenceFileReview),
   instructionSkillSelection: Schema.optionalKey(TaskInstructionSkillReview),
+  referenceFileDelivery: Schema.optionalKey(TaskReferenceFileDelivery),
   instructionSkillDelivery: Schema.optionalKey(TaskInstructionSkillDelivery),
   capabilityDispatchEvidence: Schema.optionalKey(TaskCapabilityEvidence),
   capabilityEvidence: Schema.optionalKey(TaskCapabilityEvidence),
@@ -606,6 +614,7 @@ export const OrchestrationV2Run = Schema.Struct({
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
 
 export const OrchestrationV2RunAttempt = Schema.Struct({
+  referenceFileDelivery: Schema.optionalKey(TaskReferenceFileDelivery),
   instructionSkillDelivery: Schema.optionalKey(TaskInstructionSkillDelivery),
   capabilityEvidence: Schema.optionalKey(TaskCapabilityEvidence),
   id: RunAttemptId,
@@ -3068,6 +3077,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getTaskReview: "orchestration.getTaskReview",
   getTaskFirstLaunchStatus: "orchestration.getTaskFirstLaunchStatus",
   getTaskInstructionSkillReview: "orchestration.getTaskInstructionSkillReview",
+  getTaskReferenceFileReview: "orchestration.getTaskReferenceFileReview",
   getTaskResultContinuationStatus: "orchestration.getTaskResultContinuationStatus",
   getTaskAutoPreview: "orchestration.getTaskAutoPreview",
   getAgentsCreationStatus: "orchestration.getAgentsCreationStatus",
@@ -3441,6 +3451,10 @@ export const OrchestrationV2RpcSchemas = {
   getTaskInstructionSkillReview: {
     input: TaskInstructionSkillReviewInput,
     output: TaskInstructionSkillReviewState,
+  },
+  getTaskReferenceFileReview: {
+    input: TaskReferenceFileReviewInput,
+    output: TaskReferenceFileReviewState,
   },
   getTaskFirstLaunchStatus: {
     input: Schema.Struct({ command: OrchestrationV2Command }),

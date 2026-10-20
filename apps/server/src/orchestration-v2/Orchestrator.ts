@@ -1,3 +1,4 @@
+import * as ReferenceServerConfig from "../config.ts";
 import { validateResultContinuation } from "../collaboration/ResultContinuation.ts";
 import {
   SavedPrRead,
@@ -756,6 +757,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     );
 
   const fileSystem = yield* FileSystem.FileSystem;
+  const referenceConfig = yield* Effect.serviceOption(ReferenceServerConfig.ServerConfig);
+  const withReferenceStore = <A, E>(effect: Effect.Effect<A, E>) => {
+    return Option.isSome(referenceConfig)
+      ? effect.pipe(
+          Effect.provideService(ReferenceServerConfig.ServerConfig, referenceConfig.value),
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+        )
+      : effect;
+  };
+
   const path = yield* Path.Path;
   const providerAdapters = yield* ProviderAdapterRegistryV2;
   const continuationRequests = yield* ProviderContinuationRequests;
@@ -4803,6 +4814,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           checkpointId: null,
           contextHandoffId: null,
           ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+          ...(command.taskFirstLaunch?.referenceFile
+            ? { referenceFileSelection: command.taskFirstLaunch.referenceFile }
+            : {}),
           ...(command.taskFirstLaunch?.instructionSkill
             ? { instructionSkillSelection: command.taskFirstLaunch.instructionSkill }
             : {}),
@@ -5156,6 +5170,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           checkpointId: null,
           contextHandoffId: legacyImportHandoff?.id ?? null,
           ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+          ...(command.taskFirstLaunch?.referenceFile
+            ? { referenceFileSelection: command.taskFirstLaunch.referenceFile }
+            : {}),
           ...(command.taskFirstLaunch?.instructionSkill
             ? { instructionSkillSelection: command.taskFirstLaunch.instructionSkill }
             : {}),
@@ -5862,6 +5879,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           legacyImportRecoveryHandoff?.id ??
           null,
         ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
+        ...(command.taskFirstLaunch?.referenceFile
+          ? { referenceFileSelection: command.taskFirstLaunch.referenceFile }
+          : {}),
         ...(command.taskFirstLaunch?.instructionSkill
           ? { instructionSkillSelection: command.taskFirstLaunch.instructionSkill }
           : {}),
@@ -9507,7 +9527,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             commandType: command.type,
             cause: "First-launch store unavailable.",
           });
-        yield* validateFirstTaskLaunch(database.value, command).pipe(mapDispatchError(command));
+        yield* validateFirstTaskLaunch(database.value, command).pipe(
+          withReferenceStore,
+          mapDispatchError(command),
+        );
       }
       if (Option.isSome(database))
         yield* withCapabilityRegistration(validateCapabilityDispatch(database.value, command)).pipe(

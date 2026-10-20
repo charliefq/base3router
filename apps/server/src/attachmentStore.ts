@@ -22,7 +22,7 @@ const ATTACHMENT_ID_PATTERN = new RegExp(
 );
 
 export const PENDING_ATTACHMENT_THREAD_SEGMENT = "pending";
-const PENDING_ATTACHMENT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+export const PENDING_ATTACHMENT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const PARTIAL_UPLOAD_MAX_AGE_MS = 60 * 60 * 1000;
 
 export function toSafeThreadAttachmentSegment(threadId: string): string | null {
@@ -186,6 +186,7 @@ export function planAttachmentClaim(input: {
   readonly attachmentsDir: string;
   readonly threadId: string;
   readonly attachmentId: string;
+  readonly reservedFinalId?: string;
 }): AttachmentClaimPlan {
   const uuid = parseAttachmentUuid(input.attachmentId);
   const requestedSegment = parseThreadSegmentFromAttachmentId(input.attachmentId);
@@ -208,7 +209,14 @@ export function planAttachmentClaim(input: {
     return { ok: false, reason: "attachment not found (removed or expired)" };
   }
   const fileExtension = parseAttachmentFileExtension(input.attachmentId) ?? undefined;
-  const finalId = createAttachmentId(input.threadId, fileExtension);
+  const finalId = input.reservedFinalId ?? createAttachmentId(input.threadId, fileExtension);
+  if (
+    input.reservedFinalId &&
+    (parseThreadSegmentFromAttachmentId(finalId!) !==
+      toSafeThreadAttachmentSegment(input.threadId) ||
+      parseAttachmentFileExtension(finalId!) !== (fileExtension ?? null))
+  )
+    return { ok: false, reason: "reserved claim scope or type mismatch" };
   if (!finalId) {
     return { ok: false, reason: "failed to create attachment id" };
   }

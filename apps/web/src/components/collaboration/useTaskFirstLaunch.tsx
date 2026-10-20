@@ -1,3 +1,4 @@
+import { TaskReferenceFilePicker, type TaskReferenceSelection } from "./TaskReferenceFilePicker";
 import {
   taskInstructionSkillModules,
   taskInstructionSkillRef,
@@ -55,6 +56,10 @@ export function useTaskFirstLaunch(props: {
   resultBound?: boolean;
   priorResult?: TaskContinuationResult | null;
 }) {
+  const readFileReview = useAtomCommand(threadEnvironment.readTaskReferenceFileReview, {
+    reportFailure: false,
+  });
+  const [referenceFile, setReferenceFile] = useState<TaskReferenceSelection | null>(null);
   const readSkillReview = useAtomCommand(threadEnvironment.readTaskInstructionSkillReview, {
     reportFailure: false,
   });
@@ -76,6 +81,7 @@ export function useTaskFirstLaunch(props: {
     props.task.threadId ?? "missing",
   );
   const [saved, setSaved] = useState(() => readFirstLaunchAttempt(key));
+  const retainFile = useRef(saved.attempt !== null);
   const [skillChoices, setSkillChoices] = useState<ReadonlyMap<string, string>>(new Map());
   const skillChoice = props.resultBound ? "" : (skillChoices.get(key) ?? "");
   const skillCatalog = taskInstructionSkillModules();
@@ -123,9 +129,11 @@ export function useTaskFirstLaunch(props: {
       pending.current = false;
       setBusy(false);
       setReviewed(null);
+      setReferenceFile(null);
       setStatus(null);
       setNotice(null);
       const retained = readFirstLaunchAttempt(key);
+      retainFile.current = retained.attempt !== null;
       setSaved(
         retained.attempt
           ? {
@@ -155,6 +163,7 @@ export function useTaskFirstLaunch(props: {
     props.thread?.runtimeMode,
     props.thread?.interactionMode,
     selectedSkill,
+    referenceFile,
     invalidSkill,
   ]);
   // A-B-A invalidates authority even if the same inert selection is restored.
@@ -183,7 +192,7 @@ export function useTaskFirstLaunch(props: {
   const reviewModule = review ? reviewed?.module : null;
   const autoIntent = useMemo(
     () =>
-      review?.instructionSkill && review.routingMode === "auto"
+      (review?.instructionSkill || review?.referenceFile) && review.routingMode === "auto"
         ? classifyLocalTask(review.text)
         : null,
     [review],
@@ -197,20 +206,24 @@ export function useTaskFirstLaunch(props: {
     setReviewed(next);
   };
   useLayoutEffect(() => {
-    const proof = review?.instructionSkill;
+    const proof = review?.referenceFile ?? review?.instructionSkill;
     if (!proof) return;
     const timer = setTimeout(
       () => {
         if (reviewOwner.current === reviewToken) {
           activeReview.current = null;
           setReviewed(null);
-          setNotice("Instruction module review expired. Review again before Start.");
+          setNotice(
+            review?.referenceFile
+              ? "Reference file review expired. Review again before Start."
+              : "Instruction module review expired. Review again before Start.",
+          );
         }
       },
       Math.max(0, Date.parse(proof.expiresAt) - Date.now()),
     );
     return () => clearTimeout(timer);
-  }, [review?.instructionSkill, reviewToken]);
+  }, [review?.instructionSkill, review?.referenceFile, reviewToken]);
   const current = (generation: number) =>
     mounted.current &&
     epoch.current === generation &&
@@ -258,6 +271,7 @@ export function useTaskFirstLaunch(props: {
       activeReview.current?.value !== review ||
       reviewOwner.current !== reviewToken ||
       (review.instructionSkill && Date.parse(review.instructionSkill.expiresAt) <= Date.now()) ||
+      (review.referenceFile && Date.parse(review.referenceFile.expiresAt) <= Date.now()) ||
       pending.current ||
       session === null ||
       props.stale ||
@@ -280,7 +294,7 @@ export function useTaskFirstLaunch(props: {
       threadId: review.threadId,
       messageId: review.messageId,
       text: review.text,
-      attachments: [],
+      attachments: review.referenceFile ? [review.referenceFile.source] : [],
       modelSelection: review.modelSelection,
       routingMode: review.routingMode,
       ...(props.resultBound && review.priorResult
@@ -292,6 +306,7 @@ export function useTaskFirstLaunch(props: {
     };
     try {
       store({ status: "pending", command });
+      retainFile.current = true;
     } catch {
       setNotice("Recovery storage could not retain the original command. Nothing was sent.");
       return;
@@ -311,7 +326,7 @@ export function useTaskFirstLaunch(props: {
             messageId: command.messageId,
             role: "user",
             text: command.text,
-            attachments: [],
+            attachments: command.attachments,
           },
           modelSelection: review.modelSelection,
           routingMode: review.routingMode,
@@ -406,10 +421,39 @@ export function useTaskFirstLaunch(props: {
             Open original conversation and results
           </Button>
           {status?.status === "admitted" ? (
-            <TaskInstructionSkillReadout
-              selection={status.instructionSkillSelection}
-              delivery={status.instructionSkillDelivery}
-            />
+            <>
+              {status.referenceFileSelection ? (
+                <section aria-label="Reference file provenance">
+                  <p>
+                    Selected reference {status.referenceFileSelection.source.name}; content SHA256{" "}
+                    {status.referenceFileSelection.contentSha256}
+                  </p>
+                  <p>
+                    Native attachment delivery:{" "}
+                    {status.referenceFileDelivery?.status ?? "Unknown / no delivery evidence"};
+                    final {status.referenceFileDelivery?.attachment.id ?? "Unknown"}. Delivery is
+                    not provider completion or owner acceptance.
+                  </p>
+                </section>
+              ) : null}
+              {status.referenceFileDelivery ? (
+                <p>
+                  Observed file {status.referenceFileDelivery.attachment.name}; content SHA256{" "}
+                  {status.referenceFileDelivery.contentSha256}; source{" "}
+                  {status.referenceFileDelivery.source.id}; final{" "}
+                  {status.referenceFileDelivery.attachment.id}; run{" "}
+                  {status.referenceFileDelivery.runId}; attempt{" "}
+                  {status.referenceFileDelivery.attemptId}; message{" "}
+                  {status.referenceFileDelivery.messageId}; actual model{" "}
+                  {status.referenceFileDelivery.modelSelection.instanceId} /{" "}
+                  {status.referenceFileDelivery.modelSelection.model}.
+                </p>
+              ) : null}
+              <TaskInstructionSkillReadout
+                selection={status.instructionSkillSelection}
+                delivery={status.instructionSkillDelivery}
+              />
+            </>
           ) : null}
           {status?.status === "admitted" ? (
             <p>
@@ -454,6 +498,7 @@ export function useTaskFirstLaunch(props: {
               onClick={() => {
                 try {
                   clearRejectedFirstLaunchAttempt(key);
+                  retainFile.current = false;
                   setSaved({ attempt: null, error: null });
                   setStatus(null);
                   setReview(null);
@@ -480,6 +525,22 @@ export function useTaskFirstLaunch(props: {
           ? "Ordinary requested changes on the exact completed result. No contract, acceptance, configuration or capability mutation."
           : "Ordinary model turn — choose and review separately from the saved-PR operation below. Unsupported saved-PR suggestions never start this path automatically."}
       </p>
+      {!props.resultBound ? (
+        <TaskReferenceFilePicker
+          key={key}
+          environmentId={props.environmentId}
+          session={session}
+          disabled={!available || busy || saved.attempt !== null}
+          retain={retainFile}
+          onChange={setReferenceFile}
+        />
+      ) : null}
+      {referenceFile && skillChoice ? (
+        <p>
+          Reference file and instruction-only skill cannot be combined. Explicitly remove one to
+          review.
+        </p>
+      ) : null}
       {!props.resultBound ? (
         <section aria-label="First-party instruction module selection">
           <label>
@@ -564,6 +625,7 @@ export function useTaskFirstLaunch(props: {
           busy ||
           reviewBusy ||
           invalidSkill ||
+          (referenceFile !== null && (referenceFile.status !== "ready" || !!skillChoice)) ||
           !mode ||
           !manual ||
           !props.text.trim() ||
@@ -578,7 +640,8 @@ export function useTaskFirstLaunch(props: {
             !manual ||
             preparing.current ||
             reviewOwner.current !== reviewToken ||
-            invalidSkill
+            invalidSkill ||
+            (referenceFile !== null && (referenceFile.status !== "ready" || !!skillChoice))
           )
             return;
           const value: LaunchReview = {
@@ -594,6 +657,49 @@ export function useTaskFirstLaunch(props: {
             interactionMode: props.thread.interactionMode,
             ...(props.resultBound && props.priorResult ? { priorResult: props.priorResult } : {}),
           };
+          if (referenceFile?.status === "ready") {
+            const token = reviewToken;
+            preparing.current = true;
+            setReviewBusy(true);
+            setReview(null);
+            void (async () => {
+              try {
+                const result = await readFileReview({
+                  environmentId: props.environmentId,
+                  input: {
+                    launch: value,
+                    attachment: referenceFile.attachment,
+                    contentSha256: referenceFile.contentSha256,
+                  },
+                });
+                if (reviewOwner.current !== token) return;
+                if (result._tag !== "Success" || result.value.status !== "available") {
+                  setNotice(
+                    "Reference file or task facts unavailable. Nothing started; no file was dropped.",
+                  );
+                  return;
+                }
+                const proof = result.value.review;
+                if (
+                  JSON.stringify(proof.source) !== JSON.stringify(referenceFile.attachment) ||
+                  proof.contentSha256 !== referenceFile.contentSha256
+                ) {
+                  setNotice("Reviewed file differs from the selected upload. Nothing started.");
+                  return;
+                }
+                setReview({ ...value, referenceFile: proof });
+              } catch {
+                if (reviewOwner.current === token)
+                  setNotice("Reference file review unavailable. Nothing started.");
+              } finally {
+                if (reviewOwner.current === token) {
+                  preparing.current = false;
+                  setReviewBusy(false);
+                }
+              }
+            })();
+            return;
+          }
           if (!selectedSkill) {
             setReview(value);
             return;
@@ -641,6 +747,20 @@ export function useTaskFirstLaunch(props: {
       {review ? (
         <div aria-label="Reviewed ordinary task launch">
           <p>Exact instructions: {review.text}</p>
+          {review.referenceFile ? (
+            <section aria-label="Reviewed task reference file">
+              <p>
+                {review.referenceFile.source.name} · {review.referenceFile.source.mimeType} ·{" "}
+                {review.referenceFile.source.sizeBytes} bytes
+              </p>
+              <p>
+                Content SHA256 {review.referenceFile.contentSha256}; source{" "}
+                {review.referenceFile.source.id}; final {review.referenceFile.attachment.id}; review{" "}
+                {review.referenceFile.reviewId}; expires {review.referenceFile.expiresAt}. Upload
+                and review are not execution.
+              </p>
+            </section>
+          ) : null}
           {reviewModule && review.instructionSkill ? (
             <section aria-label="Exact reviewed instruction module">
               <p>

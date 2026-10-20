@@ -1,3 +1,4 @@
+import { taskReferenceTargetAvailable } from "@t3tools/shared/taskReferenceFile";
 import {
   resolveTaskInstructionSkill,
   taskInstructionSkillTargetAvailable,
@@ -806,6 +807,23 @@ const bindRoute = (input: {
     }
     if (binding === undefined) {
       return yield* deny(input.command.type, "binding", "No immutable route binding was produced.");
+    }
+    if (input.command.taskFirstLaunch?.referenceFile) {
+      const actual = bound.modelSelection ?? {
+        instanceId: binding.target.instanceId,
+        model: binding.target.model,
+      };
+      if (
+        !taskReferenceTargetAvailable(
+          input.providers.find((p) => p.instanceId === actual.instanceId),
+          actual,
+        )
+      )
+        return yield* deny(
+          input.command.type,
+          "reference-file-target",
+          "The actual route does not support this reference-file transport. No fallback was sent.",
+        );
     }
     // Check the actual route before reserving starts or issuing grants. Never drop a
     // selected module or reroute it silently to a different/Manual request.

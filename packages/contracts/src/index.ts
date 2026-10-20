@@ -82,3 +82,5 @@ export * from "./taskCapabilityPlan.ts";
 export * from "./taskCapabilityStep.ts";
 export * from "./taskFirstLaunch.ts";
 export * from "./taskInstructionSkill.ts";
+
+export * from "./taskReferenceFile.ts";

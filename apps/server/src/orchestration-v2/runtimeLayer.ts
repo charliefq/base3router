@@ -1,3 +1,5 @@
+import * as ReferenceConfig from "../config.ts";
+import * as ReferenceFileSystem from "effect/FileSystem";
 import { savedPrReadLayer } from "../collaboration/TaskCapabilityStep.ts";
 import * as CapabilityActionGate from "../actionGate/ActionGateService.ts";
 import { ConcurrencyBudgetService as CapabilityConcurrency } from "../concurrencyBudget/ConcurrencyBudgetService.ts";
@@ -92,7 +94,31 @@ const storesLayer = Layer.mergeAll(
 const savedReadProvided = savedPrReadLayer.pipe(
   Layer.provide(Layer.mergeAll(projectionStoreLayer, ProjectStore.layer)),
 );
+// Forward the existing attachment store into long-lived admission/native services.
+const referenceFileStoreContext = Layer.mergeAll(
+  Layer.unwrap(
+    Effect.serviceOption(ReferenceConfig.ServerConfig).pipe(
+      Effect.map(
+        Option.match({
+          onNone: () => Layer.empty,
+          onSome: (value) => Layer.succeed(ReferenceConfig.ServerConfig, value),
+        }),
+      ),
+    ),
+  ),
+  Layer.unwrap(
+    Effect.serviceOption(ReferenceFileSystem.FileSystem).pipe(
+      Effect.map(
+        Option.match({
+          onNone: () => Layer.empty,
+          onSome: (value) => Layer.succeed(ReferenceFileSystem.FileSystem, value),
+        }),
+      ),
+    ),
+  ),
+);
 const capabilityRuntimeServices = Layer.mergeAll(
+  referenceFileStoreContext,
   Layer.unwrap(
     Effect.serviceOption(RouterEvaluationService).pipe(
       Effect.map(
@@ -148,7 +174,10 @@ const capabilityRuntimeServices = Layer.mergeAll(
   ),
 );
 
-export const OrchestrationV2EventSinkLayerLive = eventSinkLayer.pipe(Layer.provide(storesLayer));
+export const OrchestrationV2EventSinkLayerLive = eventSinkLayer.pipe(
+  Layer.provide(storesLayer),
+  Layer.provide(referenceFileStoreContext),
+);
 const eventSinkProvided = OrchestrationV2EventSinkLayerLive;
 const projectionMaintenanceProvided = projectionMaintenanceLayer.pipe(Layer.provide(storesLayer));
 const legacyV1ThreadImporterProvided = LegacyV1ThreadImporter.layer.pipe(
@@ -293,6 +322,7 @@ const runFinalizationServiceProvided = runFinalizationServiceLayer.pipe(
 const orchestratorProvided = orchestratorLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      referenceFileStoreContext,
       savedReadProvided,
       checkpointServiceProvided,
       commandPolicyLayer,

@@ -1,3 +1,4 @@
+import { taskReferenceDeliveryMatches } from "@t3tools/shared/taskReferenceFile";
 import { readCapabilityStepState } from "./TaskCapabilityStep.ts";
 import { readTaskCapabilityEvidence } from "./taskCapabilityPlan.ts";
 import { RouterObservationEventV0 } from "@t3tools/contracts";
@@ -134,6 +135,8 @@ const contractReadout = (row: {
 };
 
 const StoredRunEvidence = Schema.Struct({
+  referenceFileSelection: OrchestrationV2Run.fields.referenceFileSelection,
+  referenceFileDelivery: OrchestrationV2Run.fields.referenceFileDelivery,
   instructionSkillSelection: OrchestrationV2Run.fields.instructionSkillSelection,
   instructionSkillDelivery: OrchestrationV2Run.fields.instructionSkillDelivery,
   capabilityEvidence: OrchestrationV2Run.fields.capabilityEvidence,
@@ -477,6 +480,15 @@ const readResultEvidence = (
       runId: run.id,
       messageId: run.userMessageId,
       runStatus: run.status,
+      ...(run.referenceFileSelection ? { referenceFileSelection: run.referenceFileSelection } : {}),
+      ...(taskReferenceDeliveryMatches(run.referenceFileSelection, run.referenceFileDelivery, {
+        runId: run.id,
+        attemptId: run.activeAttemptId,
+        messageId: run.userMessageId ?? "",
+        modelSelection: run.modelSelection,
+      })
+        ? { referenceFileDelivery: run.referenceFileDelivery }
+        : {}),
       ...(run.instructionSkillSelection
         ? { instructionSkillSelection: run.instructionSkillSelection }
         : {}),

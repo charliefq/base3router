@@ -518,6 +518,10 @@
     "./workflowRevision": {
       "types": "./src/workflowRevision.ts",
       "import": "./src/workflowRevision.ts"
+    },
+    "./taskReferenceFile": {
+      "types": "./src/taskReferenceFile.ts",
+      "import": "./src/taskReferenceFile.ts"
     }
   },
   "scripts": {

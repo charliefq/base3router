@@ -256,6 +256,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   options: {
     readonly useProjectRuntimePolicy?: boolean;
     readonly decorateSavedPrRead?: (service: SavedPrRead["Service"]) => SavedPrRead["Service"];
+    readonly serverConfigLayer?: Layer.Layer<ServerConfig.ServerConfig>;
     readonly capabilityContextLayer?: Layer.Layer<CapabilityRegistry | CapabilityEnvironment>;
     readonly databaseLayer?: Layer.Layer<
       SqlClient.SqlClient,
@@ -289,10 +290,12 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   Orchestrator.OrchestratorV2 | EffectWorker.OrchestrationEffectWorkerV2 | EventSink.EventSinkV2,
   Error | MigrationError | PlatformError.PlatformError | SqlError
 > {
-  const serverConfigLayer = Layer.effect(
-    ServerConfig.ServerConfig,
-    makeReplayServerConfig(scenario.name).pipe(Effect.orDie),
-  ).pipe(Layer.provide(NodeServices.layer));
+  const serverConfigLayer =
+    options.serverConfigLayer ??
+    Layer.effect(
+      ServerConfig.ServerConfig,
+      makeReplayServerConfig(scenario.name).pipe(Effect.orDie),
+    ).pipe(Layer.provide(NodeServices.layer));
   const databaseLayer = options.databaseLayer ?? SqlitePersistenceMemory;
   const baseRuntimeLayer = options.useProjectRuntimePolicy
     ? RuntimePolicy.layerFromProjectStore.pipe(
@@ -356,7 +359,9 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         )
   ).pipe(Layer.provide(storesLayer), Layer.provide(serverSettingsLayer));
   const eventSinkProvided = sinkLayer.pipe(
-    Layer.provide(Layer.mergeAll(storesLayer, databaseLayer)),
+    Layer.provide(
+      Layer.mergeAll(storesLayer, databaseLayer, serverConfigLayer, NodeServices.layer),
+    ),
   );
   const commandReceiptStoreProvided = receiptLayer.pipe(Layer.provide(databaseLayer));
   const providerEventIngestorProvided = ProviderEventIngestor.layer.pipe(
@@ -422,6 +427,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         storesLayer,
         databaseLayer,
         options.capabilityContextLayer ?? Layer.empty,
+        serverConfigLayer,
         checkpointServiceProvided,
         eventSinkProvided,
         IdAllocator.layer,
@@ -438,6 +444,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         databaseLayer,
         CapabilityActionGate.layer.pipe(Layer.provide(databaseLayer)),
         options.capabilityContextLayer ?? Layer.empty,
+        serverConfigLayer,
         contextHandoffServiceProvided,
         eventSinkProvided,
         IdAllocator.layer,
@@ -494,6 +501,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     Layer.provide(
       Layer.mergeAll(
         savedReadProvided,
+        serverConfigLayer,
         checkpointServiceProvided,
         CommandPolicy.layer,
         contextHandoffServiceProvided,
@@ -528,6 +536,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
               IdAllocator.layer,
               databaseLayer,
               options.capabilityContextLayer ?? Layer.empty,
+              serverConfigLayer,
             ),
           ),
         )

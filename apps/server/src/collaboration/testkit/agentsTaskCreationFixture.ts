@@ -1,4 +1,6 @@
-import { reviewTaskInstructionSkill } from "../FirstTaskLaunch.ts";
+import * as ThreadMessageIntake from "../../orchestration-v2/ThreadMessageIntake.ts";
+import * as ServerConfig from "../../config.ts";
+import { reviewTaskInstructionSkill, reviewTaskReferenceFile } from "../FirstTaskLaunch.ts";
 import type { SavedPrRead } from "../TaskCapabilityStep.ts";
 import * as ActionGate from "../../actionGate/ActionGateService.ts";
 import * as ProviderSessions from "../../orchestration-v2/ProviderSessionManager.ts";
@@ -148,6 +150,10 @@ type Fixture = {
   readReview: (
     input: TaskContractReviewInput,
   ) => ReturnType<Orchestrator.OrchestratorV2["Service"]["getTaskReview"]>;
+  reviewReferenceFile: (
+    input: import("@t3tools/contracts").TaskReferenceFileReviewInput,
+  ) => ReturnType<typeof reviewTaskReferenceFile>;
+  dispatchReference: (command: OrchestrationV2Command) => Effect.Effect<unknown>;
   reviewInstructionSkill: (
     input: import("@t3tools/contracts").TaskInstructionSkillReviewInput,
   ) => ReturnType<typeof reviewTaskInstructionSkill>;
@@ -163,6 +169,7 @@ type Fixture = {
 export const withAgentsTaskCreationFixture = <E>(
   check: (fixture: Fixture) => Effect.Effect<void, E, Scope.Scope>,
   options: {
+    readonly serverConfigLayer?: Layer.Layer<ServerConfig.ServerConfig>;
     readonly useProjectRuntimePolicy?: boolean;
     readonly decorateSavedPrRead?: (service: SavedPrRead["Service"]) => SavedPrRead["Service"];
     readonly runContinuationWorker?: boolean;
@@ -212,6 +219,7 @@ export const withAgentsTaskCreationFixture = <E>(
           }),
       }),
     {
+      ...(options.serverConfigLayer ? { serverConfigLayer: options.serverConfigLayer } : {}),
       databaseLayer: database,
       useProjectRuntimePolicy: options.useProjectRuntimePolicy ?? false,
       ...(options.decorateSavedPrRead ? { decorateSavedPrRead: options.decorateSavedPrRead } : {}),
@@ -234,6 +242,7 @@ export const withAgentsTaskCreationFixture = <E>(
     orchestrator,
     registry,
     environmentLayer,
+    options.serverConfigLayer ?? Layer.empty,
     RouterEvaluation.layer.pipe(Layer.provide(database)),
     ProjectStore.layer.pipe(Layer.provide(database)),
     ThreadManagement.layer.pipe(Layer.provide(orchestrator)),
@@ -252,6 +261,7 @@ export const withAgentsTaskCreationFixture = <E>(
       const evaluation = yield* RouterEvaluation.RouterEvaluationService;
       const eventSink = yield* EventSink.EventSinkV2;
       const canonical = yield* CollaborationThreads.CollaborationThreads;
+      const threads = yield* ThreadManagement.ThreadManagementService;
       const context = yield* Effect.context();
       const now = DateTime.formatIso(yield* DateTime.now);
       for (const id of ["project-a", "project-b"])
@@ -312,6 +322,23 @@ export const withAgentsTaskCreationFixture = <E>(
           }).pipe(actorContext, Effect.provide(context)),
         readReview: (input) =>
           service.getTaskReview(input).pipe(actorContext, Effect.provide(context)),
+        reviewReferenceFile: (input) =>
+          reviewTaskReferenceFile(sql, input).pipe(actorContext, Effect.provide(context)),
+        dispatchReference: (command) =>
+          options.serverConfigLayer
+            ? ThreadMessageIntake.dispatchCommand(command).pipe(
+                actorContext,
+                Effect.provide(
+                  Layer.mergeAll(
+                    Layer.succeedContext(context),
+                    Layer.succeed(ThreadManagement.ThreadManagementService, threads),
+                    options.serverConfigLayer,
+                    NodeServices.layer,
+                  ),
+                ),
+                Effect.orDie,
+              )
+            : Effect.die("Reference fixture requires a configured attachment store"),
         reviewInstructionSkill: (input) =>
           reviewTaskInstructionSkill(sql, input).pipe(actorContext, Effect.provide(context)),
         readFirstLaunchStatus: (command) =>

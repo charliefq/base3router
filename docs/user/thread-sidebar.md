@@ -229,6 +229,16 @@ Manual or Auto, review the exact instructions, current contract and limits, then
 explicitly start. This opens the same task conversation without another Send. Auto
 chooses its actual route when starting; a preview does not lock that choice.
 
+For a first task message, you can also choose one ordinary UTF-8 **.txt** reference file.
+Upload and review do not start work. Review its name, type, size and content hash alongside
+instructions and the current contract, then explicitly Start. This first slice uses the
+Codex file transport. Auto can choose a different eligible model at dispatch; if the actual
+target cannot receive the file, the launch is blocked without dropping it or switching modes.
+Reference files and instruction-only skills cannot be combined; explicitly remove one.
+Removing the file or changing task/session facts retires its review. After an uncertain Start,
+keep the original identity and use status recovery rather than uploading or starting again.
+Recorded input delivery is separate from provider completion and owner acceptance.
+
 For a first task message, you can optionally select **Evidence-grounded summary** or
 **Structured comparison** as an instruction-only task skill. Choose Manual or Auto, then review
 its exact instructions, version and content hash alongside the routing choice and task contract.

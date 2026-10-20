@@ -9,6 +9,7 @@ import {
   type AgentsTaskCreationReview,
   TaskFirstLaunch,
   TaskInstructionSkillReviewInput,
+  TaskReferenceFileReviewInput,
   CommandId,
   CheckpointId,
   CheckpointScopeId,
@@ -1321,6 +1322,35 @@ export const readTaskInstructionSkillReview = Effect.fn(
     ? {
         status: "unavailable" as const,
         reason: "Authenticated session changed while reviewing module.",
+      }
+    : result;
+});
+
+const decodeTaskReferenceFileReviewInput = Schema.decodeUnknownOption(TaskReferenceFileReviewInput);
+export const readTaskReferenceFileReview = Effect.fn(
+  "EnvironmentCommands.readTaskReferenceFileReview",
+)(function* (input: TaskReferenceFileReviewInput) {
+  // Validate before the RPC encoder can discard unknown instruction or grant fields.
+  if (
+    Option.isNone(
+      decodeTaskReferenceFileReviewInput(input, {
+        onExcessProperty: "error",
+      }),
+    )
+  ) {
+    return {
+      status: "unavailable" as const,
+      reason: "Reference file review contains unsupported fields.",
+    };
+  }
+  const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+  const before = yield* SubscriptionRef.get(supervisor.session);
+  const result = yield* request(ORCHESTRATION_V2_WS_METHODS.getTaskReferenceFileReview, input);
+  const after = yield* SubscriptionRef.get(supervisor.session);
+  return Option.isNone(before) || Option.isNone(after) || before.value !== after.value
+    ? {
+        status: "unavailable" as const,
+        reason: "Authenticated session changed while reviewing the reference file.",
       }
     : result;
 });

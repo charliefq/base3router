@@ -1,3 +1,4 @@
+import { TaskReferenceFileReview, TaskReferenceFileDelivery } from "./taskReferenceFile.ts";
 import {
   TaskInstructionSkillReview,
   TaskInstructionSkillDelivery,
@@ -151,6 +152,8 @@ export const CollaborationTaskResultReadout = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("available"),
     capabilityEvidence: Schema.optionalKey(TaskCapabilityEvidence),
+    referenceFileSelection: Schema.optionalKey(TaskReferenceFileReview),
+    referenceFileDelivery: Schema.optionalKey(TaskReferenceFileDelivery),
     instructionSkillSelection: Schema.optionalKey(TaskInstructionSkillReview),
     instructionSkillDelivery: Schema.optionalKey(TaskInstructionSkillDelivery),
     runId: TrimmedNonEmptyString,

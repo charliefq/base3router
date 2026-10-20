@@ -1,3 +1,4 @@
+import * as ServerConfig from "../../config.ts";
 import {
   makeOpenRouterAdapter,
   OPENROUTER_DRIVER,
@@ -49,6 +50,7 @@ interface LinkageAdapterOptions {
   readonly supportsActiveSteering?: boolean;
   readonly governedWorker?: boolean;
   readonly startWorker?: boolean;
+  readonly serverConfigLayer?: Layer.Layer<ServerConfig.ServerConfig>;
   readonly restartSessionOnSelectionChange?: boolean;
   readonly onSteer?: (
     input: ProviderAdapterV2SteerInput,
@@ -555,6 +557,7 @@ export const withTaskResultLinkageFixture = <E>(
           }),
         {
           dbPath,
+          ...(options.serverConfigLayer ? { serverConfigLayer: options.serverConfigLayer } : {}),
           useProjectRuntimePolicy: options.useProjectRuntimePolicy ?? false,
           ...(options.decorateSavedPrRead
             ? { decorateSavedPrRead: options.decorateSavedPrRead }

@@ -36,6 +36,7 @@ export const RPC_REQUIRED_SCOPES = {
   [ORCHESTRATION_V2_WS_METHODS.getTaskResultContinuationStatus]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.getTaskFirstLaunchStatus]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.getTaskInstructionSkillReview]: AuthOrchestrationOperateScope,
+  [ORCHESTRATION_V2_WS_METHODS.getTaskReferenceFileReview]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.getTaskUsageCohort]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.launchThread]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.subscribeArchivedShell]: AuthOrchestrationReadScope,

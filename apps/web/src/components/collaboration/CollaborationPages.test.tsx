@@ -1,3 +1,5 @@
+import { withTaskTransportFixture } from "./testkit/taskCreationTransportFixture";
+import { prepareTask as prepareReferenceTask } from "./testkit/taskReferenceFileFixture";
 import {
   taskInstructionSkillModules,
   taskInstructionSkillRef,
@@ -87,6 +89,11 @@ const state = vi.hoisted(() => ({
   startStep: vi.fn(),
   firstLaunchRead: vi.fn(),
   reviewRead: vi.fn(),
+  fileReview: vi.fn(),
+  fileUpload: vi.fn(),
+  fileRelease: vi.fn(),
+  fileUploadPromise: Promise.resolve(),
+  fileUploads: {} as Record<string, unknown>,
   skillReview: vi.fn(),
   reviewDecide: vi.fn(),
   readProjection: vi.fn(),
@@ -108,7 +115,19 @@ const state = vi.hoisted(() => ({
   feedbackSubmit: vi.fn(),
 }));
 vi.mock("@effect/atom-react", () => ({
-  useAtomValue: (atom: string) => (atom === "environment" ? state.environmentId : state.providers),
+  useAtomValue: (atom: string) =>
+    atom === "environment"
+      ? state.environmentId
+      : atom === "file-config"
+        ? {
+            environment: {
+              capabilities: {
+                attachmentUploads: true,
+                fileAttachments: { maxUploadBytes: 1024 * 1024 },
+              },
+            },
+          }
+        : state.providers,
 }));
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-router")>();
@@ -125,7 +144,10 @@ vi.mock("../../state/session", () => ({
   usePreparedConnection: () =>
     state.sessionIdentity === null ? Option.none() : Option.some(state.sessionIdentity),
 }));
-vi.mock("../../state/server", () => ({ primaryServerProvidersAtom: "providers" }));
+vi.mock("../../state/server", () => ({
+  primaryServerProvidersAtom: "providers",
+  serverEnvironment: { configValueAtom: () => "file-config" },
+}));
 vi.mock("../../hooks/useNewProject", () => ({ useNewProject: () => state.createProject }));
 vi.mock("../../state/entities", () => ({ useProjects: () => state.projects }));
 vi.mock("../../state/workflow", () => ({
@@ -162,33 +184,42 @@ vi.mock("../../state/threads", () => ({
     readFirstLaunchStatus: "first-launch-status",
     readTaskReview: "review-read",
     readTaskInstructionSkillReview: "skill-review",
+    readTaskReferenceFileReview: "file-review",
     decideTaskContract: "review-decide",
     readProjection: "read-projection",
     readCreationStatus: "read-creation-status",
     readAutoPreview: "auto-preview",
   },
 }));
+vi.mock("../../lib/attachmentUploadQueue", () => ({
+  startAttachmentUpload: (input: unknown) => state.fileUpload(input),
+  releaseDraftAttachment: (file: unknown) => state.fileRelease(file),
+  useAttachmentUploadStore: (select: (state: unknown) => unknown) =>
+    select({ uploadsByImageId: state.fileUploads }),
+}));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
-    command === "skill-review"
-      ? state.skillReview
-      : command === "interrupt"
-        ? state.interrupt
-        : command === "first-launch-status"
-          ? state.firstLaunchRead
-          : command === "capability-start"
-            ? state.startStep
-            : command === "auto-preview"
-              ? state.autoPreview
-              : command === "read-creation-status"
-                ? state.readCreationStatus
-                : command === "review-read"
-                  ? state.reviewRead
-                  : command === "review-decide"
-                    ? state.reviewDecide
-                    : command === "read-projection"
-                      ? state.readProjection
-                      : state.create,
+    command === "file-review"
+      ? state.fileReview
+      : command === "skill-review"
+        ? state.skillReview
+        : command === "interrupt"
+          ? state.interrupt
+          : command === "first-launch-status"
+            ? state.firstLaunchRead
+            : command === "capability-start"
+              ? state.startStep
+              : command === "auto-preview"
+                ? state.autoPreview
+                : command === "read-creation-status"
+                  ? state.readCreationStatus
+                  : command === "review-read"
+                    ? state.reviewRead
+                    : command === "review-decide"
+                      ? state.reviewDecide
+                      : command === "read-projection"
+                        ? state.readProjection
+                        : state.create,
 }));
 vi.mock("../chat/ProviderModelPicker", () => ({
   ProviderModelPicker: (props: {
@@ -435,6 +466,11 @@ beforeEach(() => {
   state.startStep.mockReset();
   state.interrupt.mockReset().mockResolvedValue({ _tag: "Success", value: { sequence: 1 } });
   state.reviewRead.mockReset();
+  state.fileReview.mockReset();
+  state.fileUpload.mockReset();
+  state.fileRelease.mockReset();
+  state.fileUploads = {};
+  state.fileUploadPromise = Promise.resolve();
   state.skillReview.mockReset();
   state.reviewDecide.mockReset();
   state.readProjection.mockReset();
@@ -9397,4 +9433,137 @@ it.each(["session", "stale", "environment"] as const)(
       ),
     );
   },
+);
+
+it.each([
+  { mode: "manual" as const, transition: "start" },
+  { mode: "auto" as const, transition: "start" },
+  { mode: "manual" as const, transition: "remove" },
+  { mode: "auto" as const, transition: "session" },
+  { mode: "manual" as const, transition: "stale" },
+])(
+  "mounted $mode reference file uploads/reviews with $transition transition",
+  async ({ mode, transition }) => {
+    await withTaskTransportFixture(async (f) => {
+      const p = await prepareReferenceTask(f, `ui-file-${mode}`, mode);
+      state.providers = f.providers.map((provider) => ({
+        ...provider,
+        displayName: provider.displayName ?? provider.driver,
+        models: provider.models.map((m) => ({ ...m, isDefault: false })),
+      }));
+      state.reviewRead.mockImplementation(({ input }) => f.review(input));
+      state.readProjection.mockImplementation(({ input }) => f.projection(input));
+      state.fileReview.mockImplementation(({ input }) => f.reviewReferenceFile(input));
+      state.startStep.mockImplementation(({ input }) => f.start(input));
+      state.firstLaunchRead.mockImplementation(({ input }) => f.launchStatus(input));
+      state.fileUpload.mockImplementation(({ image, environmentId }) => {
+        state.fileUploadPromise = (async () => {
+          const uploaded = await f.uploadFile(image.name, await image.file.text());
+          state.fileUploads[image.id] = {
+            status: "ready",
+            environmentId,
+            attachmentId: uploaded.id,
+          };
+        })();
+      });
+      const props = {
+        task: p.task,
+        environmentId: EnvironmentId.make("environment-a"),
+        stale: false,
+        readVersion: 1,
+        onOpen: vi.fn(),
+      };
+      await act(async () => {
+        renderer = create(<TaskFirstInstructions {...props} />);
+      });
+      await creationClick("Prepare first instructions");
+      await act(async () => {
+        await state.reviewRead.mock.results[0]!.value;
+      });
+      await act(async () => {
+        await state.readProjection.mock.results[0]!.value;
+      });
+      await act(async () => {
+        await state.reviewRead.mock.results[1]!.value;
+      });
+      await act(async () => {
+        renderer.root
+          .findByProps({ "aria-label": "Initial instructions" })
+          .props.onChange({ target: { value: "Summarize the supplied notes." } });
+      });
+      await creationClick(mode === "auto" ? "Choose Auto" : "Choose Manual");
+      const file = new File(["Exact café reference bytes\n"], "notes.txt", { type: "text/plain" });
+      await act(async () => {
+        renderer.root
+          .findByProps({ "aria-label": "Choose task reference file" })
+          .props.onChange({ currentTarget: { files: [file], value: "" } });
+        await file.arrayBuffer();
+      });
+      await act(async () => {
+        await state.fileUploadPromise;
+        renderer.update(<TaskFirstInstructions {...props} />);
+      });
+      expect((await f.inspect()).starts).toHaveLength(0);
+      expect(state.fileUpload).toHaveBeenCalledTimes(1);
+      await creationClick("Review ordinary task launch");
+      await act(async () => {
+        await state.fileReview.mock.results[0]!.value;
+      });
+      expect(text()).toContain("Reviewed task reference file");
+      expect(text()).toContain("notes.txt");
+      expect((await f.inspect()).starts).toHaveLength(0);
+      const start = creationButton("Start reviewed ordinary task")!.props.onClick;
+      if (transition !== "start") {
+        if (transition === "remove") await creationClick("Remove reference file");
+        if (transition === "session") {
+          const session = state.sessionIdentity;
+          for (const value of [{}, session])
+            await act(async () => {
+              state.sessionIdentity = value;
+              renderer.update(<TaskFirstInstructions {...props} />);
+            });
+        }
+        if (transition === "stale")
+          await act(async () => {
+            renderer.update(<TaskFirstInstructions {...props} stale />);
+          });
+        await act(async () => {
+          await start();
+        });
+        expect(state.startStep).not.toHaveBeenCalled();
+        expect((await f.inspect()).starts).toHaveLength(0);
+        expect(state.fileRelease).toHaveBeenCalledTimes(1);
+        return;
+      }
+      await act(async () => {
+        start();
+        start();
+      });
+      await act(async () => {
+        await state.startStep.mock.results[0]!.value;
+      });
+      const original = state.startStep.mock.calls[0]![0].input;
+      await f.settle(original.message.messageId);
+      const observed = await f.inspect();
+      expect(observed.starts).toHaveLength(1);
+      expect(observed.attachments[0]).toEqual([original.taskFirstLaunch.referenceFile.attachment]);
+      expect(await f.attachmentBytes(original.taskFirstLaunch.referenceFile.attachment)).toBe(
+        await file.text(),
+      );
+      await act(async () => {
+        renderer.unmount();
+        renderer = create(<TaskFirstInstructions {...props} />);
+      });
+      await creationClick("Read original launch status");
+      await act(async () => {
+        await state.firstLaunchRead.mock.results.at(-1)!.value;
+      });
+      expect(text()).toContain("Reference file provenance");
+      expect(text()).toContain("adapter-accepted");
+      expect(state.startStep).toHaveBeenCalledTimes(1);
+      expect(state.fileUpload).toHaveBeenCalledTimes(1);
+      expect(state.fileRelease).not.toHaveBeenCalled();
+    });
+  },
+  30000,
 );

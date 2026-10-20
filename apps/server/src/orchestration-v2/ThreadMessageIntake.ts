@@ -1,3 +1,7 @@
+import { prepareTaskReferenceClaim } from "../collaboration/FirstTaskLaunch.ts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Option from "effect/Option";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import { remapComposerContextAttachments } from "@t3tools/shared/composerContextReferences";
 import { appendUserInputAttachmentPaths } from "../provider/userInputAttachments.ts";
 import type { ChatAttachment, OrchestrationV2Command } from "@t3tools/contracts";
@@ -128,9 +132,37 @@ export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(
     (command.type !== "queued-run.edit" || command.attachments === undefined)
   )
     return yield* threads.dispatch(command);
+  let reserved:
+    | Readonly<Record<string, { readonly id: string; readonly sha256: string }>>
+    | undefined;
+  if (command.type === "message.dispatch" && command.taskFirstLaunch?.referenceFile) {
+    const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
+    if (Option.isNone(sqlOption))
+      return yield* new AttachmentClaims.AttachmentClaimError({
+        message: "Reference review store unavailable.",
+      });
+    const sql = sqlOption.value;
+    const receipts = yield* Effect.serviceOption(CommandReceiptStore.CommandReceiptStoreV2);
+    const hasReceipt = Option.isSome(receipts)
+      ? Option.isSome(yield* receipts.value.getByCommandId(command.commandId))
+      : (yield* sql`SELECT command_id FROM orchestration_command_receipts WHERE command_id=${command.commandId}`)
+          .length > 0;
+    // Receipt replay must not allocate or copy another claim, even if the original pending upload expired.
+    if (hasReceipt) return yield* threads.dispatch(command);
+    reserved = yield* prepareTaskReferenceClaim(sql, command).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AttachmentClaims.AttachmentClaimError({
+            message: "Reference review is unavailable or changed.",
+            cause,
+          }),
+      ),
+    );
+  }
   const claimed = yield* AttachmentClaims.claimPendingAttachments({
     threadId: command.threadId,
     attachments: command.attachments ?? [],
+    ...(reserved ? { reserved } : {}),
   });
   return yield* threads
     .dispatch({

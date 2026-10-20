@@ -1,3 +1,5 @@
+import { TaskReferenceFileReview, TaskReferenceFileDelivery } from "./taskReferenceFile.ts";
+import { ChatFileAttachment } from "./chatAttachment.ts";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import {
@@ -33,6 +35,7 @@ const LaunchFields = {
 const LaunchSchema = Schema.Struct({
   ...LaunchFields,
   instructionSkill: Schema.optionalKey(TaskInstructionSkillReview),
+  referenceFile: Schema.optionalKey(TaskReferenceFileReview),
 });
 const decodeStrictLaunch = Schema.decodeUnknownOption(LaunchSchema);
 export const TaskFirstLaunch = Schema.Unknown.check(
@@ -50,6 +53,19 @@ export const TaskInstructionSkillReviewInput = Schema.Unknown.check(
 ).pipe(Schema.decodeTo(ReviewInputSchema));
 export type TaskInstructionSkillReviewInput = typeof TaskInstructionSkillReviewInput.Type;
 export type TaskFirstLaunch = typeof TaskFirstLaunch.Type;
+const FileReviewInput = Schema.Struct({
+  launch: TaskFirstLaunch,
+  attachment: ChatFileAttachment,
+  contentSha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+});
+const decodeFileReviewInput = Schema.decodeUnknownOption(FileReviewInput);
+export const TaskReferenceFileReviewInput = Schema.Unknown.check(
+  Schema.makeFilter((raw) =>
+    Option.isSome(decodeFileReviewInput(raw, { onExcessProperty: "error" })),
+  ),
+).pipe(Schema.decodeTo(FileReviewInput));
+export type TaskReferenceFileReviewInput = typeof TaskReferenceFileReviewInput.Type;
+
 /** Complete attributed output identity; digest covers the full text, never its preview. */
 export const TaskContinuationResult = Schema.Struct({
   runId: TrimmedNonEmptyString,
@@ -78,6 +94,8 @@ export const TaskFirstLaunchStatus = Schema.Union([
     runId: RunId,
     attemptId: RunAttemptId,
     actualModelSelection: ModelSelection,
+    referenceFileSelection: Schema.optionalKey(TaskReferenceFileReview),
+    referenceFileDelivery: Schema.optionalKey(TaskReferenceFileDelivery),
     instructionSkillSelection: Schema.optionalKey(TaskInstructionSkillReview),
     instructionSkillDelivery: Schema.optionalKey(TaskInstructionSkillDelivery),
     runStatus: Schema.String,
