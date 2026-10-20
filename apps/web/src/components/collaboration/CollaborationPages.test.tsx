@@ -9,6 +9,7 @@ import {
   withIntentExecutionFixture,
 } from "./testkit/capabilityReviewFixture";
 import { TaskFirstInstructions } from "./TaskFirstInstructions";
+import { TaskInboxDrafts } from "./TaskInboxDrafts";
 import { withFirstLaunchFixture } from "./testkit/firstLaunchFixture";
 import { firstLaunchStorageKey, readFirstLaunchAttempt } from "./taskFirstLaunchAttempt";
 import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
@@ -7380,6 +7381,61 @@ const prepareGeneric = async (instructions: string, mode: "manual" | "auto") => 
   );
   await creationClick(mode === "manual" ? "Choose Manual" : "Choose Auto");
 };
+it.each(["Retain these unsaved first instructions.", ""])(
+  "retains first instructions %j across focused task return and retires old editor callbacks",
+  async (draft) => {
+    await withFirstLaunchFixture(async (f) => {
+      wireGenericLaunch(f);
+      const props = genericProps(f);
+      const view = (selected: "a" | "b") => (
+        <TaskInboxDrafts>
+          {selected === "a" ? <TaskFirstInstructions key="a" {...props} /> : <p>Task B</p>}
+        </TaskInboxDrafts>
+      );
+      await act(async () => {
+        renderer = create(view("a"));
+      });
+      await creationClick("Prepare first instructions");
+      const editor = () => renderer.root.findByProps({ "aria-label": "Initial instructions" });
+      expect(editor().props.value).toBe(
+        f.task.contractReadout?.status === "available" ? f.task.contractReadout.contract.goal : "",
+      );
+      const retiredEdit = editor().props.onChange;
+      const retiredPreview = creationButton("Preview Auto")!.props.onClick;
+      await act(async () => editor().props.onChange({ target: { value: draft } }));
+      await act(async () =>
+        renderer.root.findByProps({ "data-review-dialog": "" }).props.onClose(),
+      );
+      await act(async () => renderer.update(view("b")));
+      await act(async () => {
+        retiredEdit({ target: { value: "Retired editor must not overwrite retained text" } });
+        retiredPreview();
+      });
+      await act(async () => renderer.update(view("a")));
+      expect(renderer.root.findAllByProps({ "aria-label": "Initial instructions" })).toHaveLength(
+        0,
+      );
+      const readsBefore = state.reviewRead.mock.calls.length;
+      await creationClick("Prepare first instructions");
+      expect(state.reviewRead.mock.calls.length).toBe(readsBefore + 2);
+      expect(editor().props.value).toBe(draft);
+      expect(state.autoPreview).not.toHaveBeenCalled();
+      if (draft) {
+        await creationClick("Preview Auto");
+        await act(async () => {
+          await state.autoPreview.mock.results.at(-1)!.value;
+        });
+        expect(state.autoPreview.mock.calls.at(-1)![0].input.text).toBe(draft);
+      } else {
+        expect(creationButton("Preview Auto")!.props.disabled).toBe(true);
+      }
+      expect(state.startStep).not.toHaveBeenCalled();
+      expect(props.onOpen).not.toHaveBeenCalled();
+      expect((await EffectForFixture.runPromise(f.inspect())).starts).toHaveLength(0);
+    });
+  },
+);
+
 it.each(["manual", "auto"] as const)(
   "generic %s Tasks launch reaches actual input/output and recovers the same identity after remount",
   async (mode) => {

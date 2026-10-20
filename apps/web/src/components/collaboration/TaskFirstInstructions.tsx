@@ -106,13 +106,15 @@ export function TaskFirstInstructions(props: {
   const [previewBusy, setPreviewBusy] = useState(false);
   const previewOwner = useRef<object | null>(null);
   const textEpoch = useRef(0);
-  const promptRef = useRef("");
   const readReview = useAtomCommand(threadEnvironment.readTaskReview, { reportFailure: false });
   const readProjection = useAtomCommand(threadEnvironment.readProjection, { reportFailure: false });
   const session = Option.getOrNull(usePreparedConnection(props.environmentId));
   const [review, setReview] = useState<Review | null>(null);
   const reviewRef = useRef<Review | null>(null);
-  const [prompt, setPrompt] = useTaskInboxDraft<string>("first-instructions", props, "");
+  // null means never initialized; an intentionally empty edited draft must survive focus return.
+  const [draft, setPrompt] = useTaskInboxDraft<string | null>("first-instructions", props, null);
+  const prompt = draft ?? "";
+  const promptRef = useRef(prompt);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [executionBusy, setExecutionBusy] = useState(false);
@@ -219,8 +221,11 @@ export function TaskFirstInstructions(props: {
       reviewRef.current = facts;
       setReview(facts);
       setLaunchThread(fresh!.thread);
+      const saved = fresh!.thread.agentsTaskCreation?.review;
       const initial =
-        fresh!.thread.agentsTaskCreation?.review.effectiveInstructions ?? facts.contract.goal;
+        saved?.configuration !== undefined
+          ? (saved.effectiveInstructions ?? facts.contract.goal)
+          : (draft ?? saved?.effectiveInstructions ?? facts.contract.goal);
       promptRef.current = initial;
       textEpoch.current++;
       previewOwner.current = null;
@@ -443,6 +448,7 @@ export function TaskFirstInstructions(props: {
                   launchThread?.agentsTaskCreation?.review.configuration !== undefined
                 }
                 onChange={(event) => {
+                  if (!mounted.current || reviewRef.current !== review || !available) return;
                   promptRef.current = event.target.value;
                   textEpoch.current++;
                   previewOwner.current = null;
