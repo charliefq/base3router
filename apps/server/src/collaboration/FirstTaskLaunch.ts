@@ -1,3 +1,10 @@
+import { validateAcceptedSource } from "./ResultHandoff.ts";
+import type { ProjectionStoreV2Shape } from "../orchestration-v2/ProjectionStore.ts";
+import {
+  resultHandoffInput,
+  resultHandoffTargetAvailable,
+  resultHandoffDeliveryMatches,
+} from "@t3tools/shared/taskResultHandoff";
 import { taskFirstLaunchInput, jointTaskInputBinding } from "@t3tools/shared/taskJointInputReview";
 import {
   TaskReferenceFileReview,
@@ -197,6 +204,20 @@ const equalMarker = (
 const sameContract = Schema.toEquivalence(TaskContract);
 const sameReference = Schema.toEquivalence(TaskContractReviewReference);
 type Dispatch = Extract<OrchestrationV2Command, { type: "message.dispatch" }>;
+/** An empty handoff destination cannot enter through ordinary chat or capability dispatch. */
+export const validateHandoffFirstInput = Effect.fn("ResultHandoff.validateFirstInput")(function* (
+  sql: SqlClient.SqlClient,
+  threadId: Dispatch["threadId"],
+  launch: TaskFirstLaunch | undefined,
+) {
+  const rows = yield* sql<{
+    source: string | null;
+    runs: number;
+  }>`SELECT json_type(t.payload_json,'$.agentsTaskCreation.review.resultHandoff') AS source,
+    (SELECT COUNT(*) FROM orchestration_v2_projection_runs r WHERE r.thread_id=t.thread_id) AS runs
+    FROM orchestration_v2_projection_threads t WHERE t.thread_id=${threadId}`;
+  if (rows[0]?.source && rows[0].runs === 0 && !launch?.resultHandoff) return yield* deny();
+});
 export const reviewedTaskPrincipal = Effect.gen(function* () {
   const c = yield* PolicyExecutionContext;
   if (
@@ -252,9 +273,10 @@ export const validateFirstTaskLaunch = Effect.fn("FirstTaskLaunch.validate")(fun
   sql: SqlClient.SqlClient,
   c: Dispatch,
   authorized = false,
+  readProjection?: ProjectionStoreV2Shape["getThreadProjection"],
 ) {
   if (!c.taskFirstLaunch) return;
-  yield* reviewedTaskPrincipal;
+  const actor = yield* reviewedTaskPrincipal;
   if (!reviewedDispatchMatches(c, authorized)) return yield* deny();
   const m = c.taskFirstLaunch;
   if (!validLaunch(m)) return yield* deny();
@@ -286,6 +308,8 @@ export const validateFirstTaskLaunch = Effect.fn("FirstTaskLaunch.validate")(fun
       !isProviderAvailable(provider) ||
       !isProviderTaskExecutionCapable(provider) ||
       !provider.models.some((p) => p.slug === c.modelSelection?.model) ||
+      (m.resultHandoff !== undefined &&
+        (!c.modelSelection || !resultHandoffTargetAvailable(provider, c.modelSelection))) ||
       (m.referenceFile !== undefined &&
         (!c.modelSelection || !taskReferenceTargetAvailable(provider, c.modelSelection))) ||
       // Auto proof binds intent/preference; the atomic admission checks the actual routed target.
@@ -315,6 +339,22 @@ export const validateFirstTaskLaunch = Effect.fn("FirstTaskLaunch.validate")(fun
   if (!rows[0]) return yield* deny();
   const t = yield* decodeThread(rows[0].payload_json);
   const configured = t.agentsTaskCreation?.review;
+  const source = configured?.resultHandoff;
+  if (argumentHash(source) !== argumentHash(m.resultHandoff)) return yield* deny();
+  if (source) {
+    if (
+      m.referenceFile ||
+      m.instructionSkill ||
+      source.reference.projectId !== m.reference.projectId ||
+      source.reference.environmentId !== m.reference.environmentId ||
+      source.threadId === c.threadId
+    )
+      return yield* deny();
+    yield* Effect.try({ try: () => resultHandoffInput(m.text, source), catch: () => deny() });
+    yield* validateAcceptedSource(sql, source, actor.actorId, readProjection).pipe(
+      Effect.mapError(() => deny()),
+    );
+  }
   if (configured?.configuration && m.text !== configured.effectiveInstructions)
     return yield* deny();
   if (
@@ -536,9 +576,10 @@ export const commitFirstTaskLaunch = Effect.fn("FirstTaskLaunch.commit")(functio
   sql: SqlClient.SqlClient,
   c: Dispatch,
   events: ReadonlyArray<OrchestrationV2DomainEvent>,
+  readProjection?: ProjectionStoreV2Shape["getThreadProjection"],
 ) {
   if (!c.taskFirstLaunch) return;
-  yield* validateFirstTaskLaunch(sql, c, true);
+  yield* validateFirstTaskLaunch(sql, c, true, readProjection);
   yield* commitReviewedTaskDispatch(sql, c, events, "first");
   if (c.taskFirstLaunch.referenceFile) {
     const retired =
@@ -581,6 +622,9 @@ export const commitReviewedTaskDispatch = Effect.fn("ReviewedTaskDispatch.commit
       ? !run.payload.instructionSkillSelection ||
         argumentHash(selectedInstruction) !== argumentHash(run.payload.instructionSkillSelection)
       : run.payload.instructionSkillSelection !== undefined) ||
+    (kind === "first" &&
+      argumentHash(run.payload.resultHandoffSelection) !==
+        argumentHash(c.taskFirstLaunch?.resultHandoff)) ||
     attempt?.type !== "run-attempt.created" ||
     attempt.payload.runId !== run.payload.id ||
     argumentHash(run.payload.modelSelection) !== argumentHash(c.modelSelection) ||
@@ -704,6 +748,15 @@ export const readFirstTaskLaunchStatus = Effect.fn("FirstTaskLaunch.status")(
       runId: run.id,
       attemptId: run.activeAttemptId,
       actualModelSelection: run.modelSelection,
+      ...(original.resultHandoff ? { resultHandoffSelection: original.resultHandoff } : {}),
+      ...(resultHandoffDeliveryMatches(original.resultHandoff, run.resultHandoffDelivery, {
+        runId: run.id,
+        attemptId: run.activeAttemptId,
+        messageId: c.messageId,
+        modelSelection: run.modelSelection,
+      })
+        ? { resultHandoffDelivery: run.resultHandoffDelivery }
+        : {}),
       ...(original.referenceFile ? { referenceFileSelection: original.referenceFile } : {}),
       ...(taskReferenceDeliveryMatches(original.referenceFile, run.referenceFileDelivery, {
         runId: run.id,

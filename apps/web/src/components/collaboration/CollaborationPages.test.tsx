@@ -1,3 +1,6 @@
+import { TaskOutputHandoff } from "./TaskResultHandoff";
+import { acceptedHandoffSource } from "./testkit/resultHandoffJourney";
+import { resultHandoffInput } from "@t3tools/shared/taskResultHandoff";
 import { sha256Hex } from "@t3tools/shared/actionCanonical";
 import { withTaskTransportFixture } from "./testkit/taskCreationTransportFixture";
 import { prepareTask as prepareReferenceTask } from "./testkit/taskReferenceFileFixture";
@@ -10108,3 +10111,245 @@ it("joint expiry retires both inputs and the captured Start callback", async () 
     }
   });
 });
+
+it.each(["manual", "auto"] as const)(
+  "mounted accepted source creates, reviews and starts one independent %s destination",
+  async (mode) => {
+    await withTaskTransportFixture(async (f) => {
+      const source = await acceptedHandoffSource(f, `mounted-handoff-${mode}`);
+      creationStorage();
+      state.providers = f.providers.map((p) => ({
+        ...p,
+        displayName: p.driver,
+        models: p.models.map((m) => ({ ...m, isDefault: false })),
+      }));
+      state.load.mockImplementation(() => f.snapshot());
+      let readDone = deferred<void>(),
+        sourceReads = 0;
+      state.reviewRead.mockImplementation(async ({ input }) => {
+        const r = await f.review(input);
+        if (input.threadId === source.c.threadId && ++sourceReads % 2 === 0) readDone.resolve();
+        return r;
+      });
+      state.readProjection.mockImplementation(({ input }) => f.projection(input));
+      state.create.mockImplementation(({ input }) => f.create(input));
+      state.readCreationStatus.mockImplementation(({ input }) => f.creationStatus(input));
+      state.startStep.mockImplementation(({ input }) => f.start(input));
+      state.firstLaunchRead.mockImplementation(({ input }) => f.launchStatus(input));
+      await act(async () => {
+        renderer = create(
+          <TasksPage
+            scope={{
+              scopeEnvironmentId: "environment-a",
+              scopeProjectId: "project-a",
+              scopeProviderId: "codex",
+            }}
+          />,
+        );
+      });
+      await act(async () => {
+        await state.load.mock.results[0]!.value;
+      });
+      await selectOnlyInboxTaskForDetailJourney(renderer);
+      expect(text()).toContain(source.c.title);
+      expect(
+        renderer.root
+          .findAllByType(TaskOutputHandoff)
+          .map((n) => ({ stale: n.props.stale, disabled: n.props.disabled })),
+      ).toEqual([{ stale: false, disabled: false }]);
+      await act(async () => {
+        await readDone.promise;
+      });
+      expect(creationButton("Use this output in a new task")).toBeDefined();
+      readDone = deferred<void>();
+      await creationClick("Use this output in a new task");
+      await act(async () => {
+        await readDone.promise;
+      });
+      await fillCreation("Independent writing task", false);
+      await creationClick("Select exact model: exact-second");
+      for (const label of [
+        "Optional token cap",
+        "Optional reported cost cap (USD)",
+        "Optional UTC deadline",
+      ])
+        await act(async () =>
+          renderer.root
+            .findByProps({ "aria-label": label })
+            .props.onChange({ target: { value: "" } }),
+        );
+      await creationClick("Review new task");
+      expect(
+        renderer.root.findAllByType("pre").some((n) => n.children.join("") === source.source.text),
+      ).toBe(true);
+      expect(text()).toContain(source.source.result.itemId);
+      expect((await f.inspect()).starts).toHaveLength(1);
+      await act(async () => {
+        const submit = creationButton("Create task")!.props.onClick;
+        const pending = submit();
+        submit();
+        await pending;
+      });
+      const created = state.create.mock.calls[0]![0].input;
+      expect(created.taskCreationReview.resultHandoff).toEqual(source.source);
+      expect((await f.inspect()).starts).toHaveLength(1);
+      expect(creationButton("Prepare created task for review/start")).toBeDefined();
+      const createdTask = (await f.snapshot()).tasks.find((t) => t.threadId === created.threadId)!;
+      await act(async () => renderer.unmount());
+      state.reviewRead.mockReset().mockImplementation(({ input }) => f.review(input));
+      await act(async () => {
+        renderer = create(
+          <TaskFirstInstructions
+            task={createdTask}
+            environmentId={EnvironmentId.make("environment-a")}
+            stale={false}
+            readVersion={1}
+            onOpen={vi.fn()}
+          />,
+        );
+      });
+      await act(async () => {
+        await creationButton("Prepare first instructions")!.props.onClick();
+      });
+      await act(async () =>
+        renderer.root
+          .findByProps({ "aria-label": "Initial instructions" })
+          .props.onChange({ target: { value: "Write an independent article." } }),
+      );
+      await creationClick(mode === "auto" ? "Choose Auto" : "Choose Manual");
+      await act(async () => {
+        await creationButton("Review ordinary task launch")!.props.onClick();
+      });
+      expect(
+        renderer.root.findAllByType("pre").some((n) => n.children.join("") === source.source.text),
+      ).toBe(true);
+      expect(creationButton("Start reviewed ordinary task")).toBeDefined();
+      expect((await f.inspect()).starts).toHaveLength(1);
+      await act(async () => {
+        await creationButton("Start reviewed ordinary task")!.props.onClick();
+      });
+      await act(async () => {
+        await state.startStep.mock.results[0]!.value;
+      });
+      const launch = state.startStep.mock.calls[0]![0].input;
+      await act(async () => {
+        await f.settle(launch.message.messageId);
+      });
+      expect((await f.inspect()).inputs.at(-1)).toBe(
+        resultHandoffInput("Write an independent article.", source.source),
+      );
+      expect((await f.inspect()).starts).toHaveLength(2);
+      expect((await f.snapshot()).tasks).toHaveLength(2);
+      const persisted = await f.snapshot();
+      await act(async () => renderer.unmount());
+      creationStorage();
+      state.load.mockImplementation(async () => ({
+        ...persisted,
+        tasks: persisted.tasks.filter((t) => t.threadId === created.threadId),
+      }));
+      state.reviewRead.mockReset().mockImplementation(({ input }) => f.review(input));
+      await act(async () => {
+        renderer = create(
+          <TasksPage
+            scope={{
+              scopeEnvironmentId: "environment-a",
+              scopeProjectId: "project-a",
+              scopeProviderId: "codex",
+            }}
+          />,
+        );
+      });
+      await act(async () => {
+        await state.load.mock.results.at(-1)!.value;
+      });
+      await selectOnlyInboxTaskForDetailJourney(renderer);
+      expect(text()).toContain("Native reference delivery:");
+      expect(text()).toContain("adapter-accepted");
+      expect(text()).toContain(source.source.result.outputSha256);
+      expect(
+        renderer.root
+          .findAllByType("a")
+          .some((n) => n.props.href === `/environment-a/${encodeURIComponent(source.c.threadId)}`),
+      ).toBe(true);
+
+      expect(await f.projection({ threadId: source.c.threadId })).toEqual({
+        _tag: "Success",
+        value: source.projection,
+      });
+    });
+  },
+  30000,
+);
+
+it.each(["environment", "session", "read-version"] as const)(
+  "accepted output action and delayed selection retire through %s A-to-B-to-A",
+  async (change) => {
+    await withTaskTransportFixture(async (f) => {
+      const s = await acceptedHandoffSource(f, `source-race-${change}`),
+        task = (await f.snapshot()).tasks.find((t) => t.threadId === s.c.threadId)!;
+      state.load.mockImplementation(() => f.snapshot());
+      let readCount = 0;
+      const verified = deferred<void>();
+      state.reviewRead.mockImplementation(async ({ input }) => {
+        const r = await f.review(input);
+        if (++readCount === 2) verified.resolve();
+        return r;
+      });
+      state.readProjection.mockImplementation(({ input }) => f.projection(input));
+      const onSelect = vi.fn(),
+        props = {
+          task,
+          environmentId: EnvironmentId.make("environment-a"),
+          stale: false,
+          readVersion: 1,
+          disabled: false,
+          onSelect,
+        };
+      await act(async () => {
+        renderer = create(<TaskOutputHandoff {...props} />);
+      });
+      await act(async () => {
+        await verified.promise;
+        await f.flush();
+      });
+      const retained = creationButton("Use this output in a new task")!.props.onClick;
+      const delayed = deferred<Awaited<ReturnType<typeof f.projection>>>(),
+        entered = deferred<void>();
+      state.readProjection.mockImplementationOnce(async ({ input }) => {
+        const result = await f.projection(input);
+        entered.resolve();
+        await delayed.promise;
+        return result;
+      });
+      await act(async () => retained());
+      await act(async () => {
+        await entered.promise;
+      });
+      const session = state.sessionIdentity;
+      if (change === "session") state.sessionIdentity = { ...session!, syntheticReplacement: true };
+      await act(async () =>
+        renderer.update(
+          <TaskOutputHandoff
+            {...props}
+            environmentId={EnvironmentId.make(
+              change === "environment" ? "environment-b" : "environment-a",
+            )}
+            readVersion={change === "read-version" ? 2 : 1}
+          />,
+        ),
+      );
+      state.sessionIdentity = session;
+      await act(async () => renderer.update(<TaskOutputHandoff {...props} />));
+      await act(async () => {
+        delayed.resolve(await f.projection({ threadId: s.c.threadId }));
+        await f.flush();
+      });
+      await act(async () => retained());
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(state.create).not.toHaveBeenCalled();
+      expect(state.startStep).not.toHaveBeenCalled();
+      expect((await f.inspect()).starts).toHaveLength(1);
+    });
+  },
+  30000,
+);

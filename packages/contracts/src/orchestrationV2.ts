@@ -1,3 +1,4 @@
+import { TaskResultHandoff, TaskResultHandoffDelivery } from "./taskResultHandoff.ts";
 import {
   TaskReferenceFileReview,
   TaskReferenceFileDelivery,
@@ -114,6 +115,7 @@ export const OrchestrationV2CreationSource = Schema.Literals([
 export type OrchestrationV2CreationSource = typeof OrchestrationV2CreationSource.Type;
 
 export const AgentsTaskCreationReview = Schema.Struct({
+  resultHandoff: Schema.optionalKey(TaskResultHandoff),
   configuration: Schema.optionalKey(AgentConfigurationSnapshot),
   effectiveInstructions: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(20_000))),
   capabilityPlan: Schema.optionalKey(TaskCapabilityPlan),
@@ -570,6 +572,8 @@ export type OrchestrationV2RunBackgroundWorkCancelled =
   typeof OrchestrationV2RunBackgroundWorkCancelled.Type;
 
 export const OrchestrationV2Run = Schema.Struct({
+  resultHandoffSelection: Schema.optionalKey(TaskResultHandoff),
+  resultHandoffDelivery: Schema.optionalKey(TaskResultHandoffDelivery),
   referenceFileSelection: Schema.optionalKey(TaskReferenceFileReview),
   instructionSkillSelection: Schema.optionalKey(TaskInstructionSkillReview),
   referenceFileDelivery: Schema.optionalKey(TaskReferenceFileDelivery),
@@ -614,6 +618,7 @@ export const OrchestrationV2Run = Schema.Struct({
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
 
 export const OrchestrationV2RunAttempt = Schema.Struct({
+  resultHandoffDelivery: Schema.optionalKey(TaskResultHandoffDelivery),
   referenceFileDelivery: Schema.optionalKey(TaskReferenceFileDelivery),
   instructionSkillDelivery: Schema.optionalKey(TaskInstructionSkillDelivery),
   capabilityEvidence: Schema.optionalKey(TaskCapabilityEvidence),
@@ -1713,6 +1718,7 @@ export const OrchestrationV2DomainEvent = Schema.Union([
 export type OrchestrationV2DomainEvent = typeof OrchestrationV2DomainEvent.Type;
 
 export const OrchestrationV2ThreadProjection = Schema.Struct({
+  eventSequence: Schema.optionalKey(NonNegativeInt),
   thread: OrchestrationV2AppThread,
   runs: Schema.Array(OrchestrationV2Run),
   attempts: Schema.Array(OrchestrationV2RunAttempt),

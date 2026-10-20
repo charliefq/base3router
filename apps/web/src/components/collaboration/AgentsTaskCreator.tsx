@@ -1,3 +1,5 @@
+import { TaskResultHandoffReadout } from "./TaskResultHandoff";
+import type { TaskResultHandoff } from "@t3tools/contracts";
 import { TaskConfigurations } from "./TaskConfigurations";
 import { configurationInput } from "@t3tools/shared/agentConfiguration";
 import type { AgentConfigurationSnapshot } from "@t3tools/contracts";
@@ -100,7 +102,12 @@ export function AgentsTaskCreator(props: {
     | { readonly id: string; readonly title: string; readonly workspaceRoot?: string }
     | undefined;
   readonly providers: ReadonlyArray<ServerProvider>;
-  readonly request: { readonly providerId: string; readonly token: string } | null;
+  readonly request: {
+    readonly providerId: string;
+    readonly token: string;
+    readonly source?: TaskResultHandoff;
+  } | null;
+  readonly sourceVersion?: string | undefined;
   readonly onLock: (owner: string) => void;
   readonly onRelease: (owner: string) => void;
   readonly onOpen: (environmentId: EnvironmentId, threadId: ThreadId) => void;
@@ -177,6 +184,8 @@ export function AgentsTaskCreator(props: {
     selectedProvider && providerExecutable(selectedProvider),
     selectedProvider?.models.map((model) => [model.slug, model.isDefault]),
     props.project?.workspaceRoot,
+    props.request?.source,
+    props.sourceVersion,
     selectedProvider?.skills,
     selectedProvider?.workspaceSnapshots,
     selectedProvider?.auth,
@@ -541,6 +550,7 @@ export function AgentsTaskCreator(props: {
       taskGovernance: "required",
       taskContract: proposed.contract,
       taskCreationReview: {
+        ...(props.request?.source ? { resultHandoff: props.request.source } : {}),
         ...(configuration
           ? {
               configuration,
@@ -829,6 +839,10 @@ export function AgentsTaskCreator(props: {
                     <dt>UTC deadline</dt>
                     <dd>{review.taskContract?.brake.deadlineAt ?? "Not selected"}</dd>
                   </dl>
+                  <TaskResultHandoffReadout
+                    source={review.taskCreationReview?.resultHandoff}
+                    complete
+                  />
                   <TaskCapabilityReadout plan={review.taskCreationReview?.capabilityPlan} />
                   <p>Permissions: approval-required/default.</p>
                   <p>
@@ -843,7 +857,7 @@ export function AgentsTaskCreator(props: {
             <Button type="button" variant="outline" onClick={closeCurrentReview}>
               Back to task draft
             </Button>
-            <Button type="button" onClick={() => void submit()}>
+            <Button type="button" onClick={() => submit()}>
               Create task
             </Button>
           </AlertDialogFooter>

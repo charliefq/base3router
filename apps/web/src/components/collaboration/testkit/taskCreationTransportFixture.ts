@@ -36,7 +36,9 @@ import * as Commands from "@t3tools/client-runtime/operations";
 
 type ServerFixture = {
   expireAttachment: (attachment: import("@t3tools/contracts").ChatFileAttachment) => Promise<void>;
-  failJointEvidence: (stage: "pending-file" | "accepted-file" | "accepted-skill") => void;
+  failJointEvidence: (
+    stage: "pending-file" | "accepted-file" | "accepted-skill" | "accepted-handoff",
+  ) => void;
   corruptJointSkillDelivery: (threadId: string) => Promise<void>;
   corruptFileDelivery: (threadId: string) => Promise<void>;
   attachmentBytes: (attachment: import("@t3tools/contracts").ChatFileAttachment) => Promise<string>;

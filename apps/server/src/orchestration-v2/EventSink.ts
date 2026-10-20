@@ -1,3 +1,4 @@
+import { validateHandoffFirstInput } from "../collaboration/FirstTaskLaunch.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as ReferenceServerConfig from "../config.ts";
 import { commitCapabilityStep } from "../collaboration/TaskCapabilityStep.ts";
@@ -1471,6 +1472,12 @@ const baseLayer: Layer.Layer<
               commandId: input.commandId,
               eventCount: input.events.length,
             });
+          if (input.commandType === "message.dispatch")
+            yield* validateHandoffFirstInput(
+              sql,
+              input.threadId,
+              input.firstLaunchCommand?.taskFirstLaunch,
+            );
           if (input.firstLaunchCommand) {
             if (
               input.firstLaunchCommand.commandId !== input.commandId ||
@@ -1482,7 +1489,9 @@ const baseLayer: Layer.Layer<
                 eventCount: input.events.length,
               });
             yield* withReferenceStore(
-              commitFirstTaskLaunch(sql, input.firstLaunchCommand, input.events),
+              commitFirstTaskLaunch(sql, input.firstLaunchCommand, input.events, (id) =>
+                projectionStore.getThreadProjection(id),
+              ),
             );
           }
           if (
@@ -1614,7 +1623,9 @@ const baseLayer: Layer.Layer<
                   commandId: input.commandId,
                   eventCount: input.events.length,
                 });
-              const proof = yield* validateReviewedCreate(sql, input.creationCommand);
+              const proof = yield* validateReviewedCreate(sql, input.creationCommand, (id) =>
+                projectionStore.getThreadProjection(id),
+              );
               if (
                 proof === undefined ||
                 input.events.length !== 1 ||

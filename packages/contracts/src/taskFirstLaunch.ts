@@ -1,3 +1,9 @@
+import {
+  TaskContinuationResult,
+  TaskResultHandoff,
+  TaskResultHandoffDelivery,
+} from "./taskResultHandoff.ts";
+export { TaskContinuationResult } from "./taskResultHandoff.ts";
 import { TaskReferenceFileReview, TaskReferenceFileDelivery } from "./taskReferenceFile.ts";
 import { ChatFileAttachment } from "./chatAttachment.ts";
 import * as Schema from "effect/Schema";
@@ -7,14 +13,7 @@ import {
   TaskInstructionSkillRef,
   TaskInstructionSkillDelivery,
 } from "./taskInstructionSkill.ts";
-import {
-  CommandId,
-  MessageId,
-  RunId,
-  RunAttemptId,
-  ThreadId,
-  TrimmedNonEmptyString,
-} from "./baseSchemas.ts";
+import { CommandId, MessageId, RunId, RunAttemptId, ThreadId } from "./baseSchemas.ts";
 import { TaskContract, TaskContractReviewReference } from "./taskContract.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { RuntimeMode, ProviderInteractionMode } from "./providerPolicy.ts";
@@ -34,6 +33,7 @@ const LaunchFields = {
 };
 const LaunchSchema = Schema.Struct({
   ...LaunchFields,
+  resultHandoff: Schema.optionalKey(TaskResultHandoff),
   instructionSkill: Schema.optionalKey(TaskInstructionSkillReview),
   referenceFile: Schema.optionalKey(TaskReferenceFileReview),
 });
@@ -67,19 +67,6 @@ export const TaskReferenceFileReviewInput = Schema.Unknown.check(
 ).pipe(Schema.decodeTo(FileReviewInput));
 export type TaskReferenceFileReviewInput = typeof TaskReferenceFileReviewInput.Type;
 
-/** Complete attributed output identity; digest covers the full text, never its preview. */
-export const TaskContinuationResult = Schema.Struct({
-  runId: TrimmedNonEmptyString,
-  messageId: TrimmedNonEmptyString,
-  attemptId: TrimmedNonEmptyString,
-  providerThreadId: TrimmedNonEmptyString,
-  providerTurnId: TrimmedNonEmptyString,
-  itemId: TrimmedNonEmptyString,
-  rootNodeId: TrimmedNonEmptyString,
-  nodeId: TrimmedNonEmptyString,
-  outputSha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
-});
-export type TaskContinuationResult = typeof TaskContinuationResult.Type;
 export const TaskResultContinuation = Schema.Struct({
   ...LaunchFields,
   priorResult: TaskContinuationResult,
@@ -95,6 +82,8 @@ export const TaskFirstLaunchStatus = Schema.Union([
     runId: RunId,
     attemptId: RunAttemptId,
     actualModelSelection: ModelSelection,
+    resultHandoffSelection: Schema.optionalKey(TaskResultHandoff),
+    resultHandoffDelivery: Schema.optionalKey(TaskResultHandoffDelivery),
     referenceFileSelection: Schema.optionalKey(TaskReferenceFileReview),
     referenceFileDelivery: Schema.optionalKey(TaskReferenceFileDelivery),
     instructionSkillSelection: Schema.optionalKey(TaskInstructionSkillReview),

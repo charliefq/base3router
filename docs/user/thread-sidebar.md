@@ -288,3 +288,11 @@ Choose **Snooze → Custom…** from a thread's menu to pick a date and time in 
 local time zone, or a duration in minutes, hours, or days. Durations start when
 you confirm; one day means 24 hours. On web and desktop, you can also snooze
 several selected threads together. Choose **Wake thread** to bring a thread back early.
+
+### Use an accepted output in a new task
+
+For an owned task’s current accepted revision, use **Use this output in a new task** to prepare one independent task in the same project and environment. The source must be idle with a completed, attributable plain-text output. Choose the destination’s own title, Goal, Redirect, Acceptance, Brake and exact model or saved configuration, then review and create it. Creation starts no provider work.
+
+Review the complete source text separately from the new task’s instructions, choose Manual or Auto, and explicitly Start. Source references are limited to 16,000 UTF-16 code units and 64 KiB UTF-8; larger outputs reject without shortening. Complete reference plus instructions must also fit the native input limit. A changed source requires fresh review; the original destination never silently switches to a different output. This handoff cannot combine a file or instruction skill.
+
+The source is untrusted context. Its permissions, tools, budget and approval do not transfer. Delivery, provider completion and owner acceptance remain separate evidence. If creation or Start has an uncertain outcome, recover its original command identity; do not create a replacement or resend automatically.

@@ -1,3 +1,7 @@
+import { TaskOutputHandoff, TaskResultHandoffReadout } from "./TaskResultHandoff";
+import { resultHandoffDeliveryMatches } from "@t3tools/shared/taskResultHandoff";
+import { revisionTaskKey } from "@t3tools/shared/taskRevisionRequest";
+import type { TaskResultHandoff } from "@t3tools/contracts";
 import { taskInstructionDeliveryMatches } from "@t3tools/shared/taskInstructionSkills";
 import { taskReferenceDeliveryMatches } from "@t3tools/shared/taskReferenceFile";
 import { TaskInbox } from "./TaskInbox";
@@ -342,6 +346,27 @@ function TaskResultReadout({
       <h3 className="text-sm font-medium">Result evidence</h3>
       {readout?.status === "available" ? (
         <>
+          <TaskResultHandoffReadout
+            source={readout.resultHandoffSelection}
+            delivery={
+              routing?.status === "available" &&
+              routing.runId === readout.runId &&
+              routing.messageId === readout.messageId &&
+              routing.configuredModel &&
+              resultHandoffDeliveryMatches(
+                readout.resultHandoffSelection,
+                readout.resultHandoffDelivery,
+                {
+                  runId: readout.runId,
+                  attemptId: readout.attemptId,
+                  messageId: readout.messageId,
+                  modelSelection: routing.configuredModel,
+                },
+              )
+                ? readout.resultHandoffDelivery
+                : undefined
+            }
+          />
           <TaskCapabilityReadout evidence={readout.capabilityEvidence} historical />
           <TaskInstructionSkillReadout
             selection={readout.instructionSkillSelection}
@@ -672,6 +697,7 @@ export function AgentsPage(scopeProps: CollaborationScopeProps = {}) {
   const [creationRequest, setCreationRequest] = useState<{
     providerId: string;
     token: string;
+    source?: TaskResultHandoff;
   } | null>(null);
   const [creating, setCreating] = useState(false);
   const [showAgentCreation, setShowAgentCreation] = useState(false);
@@ -1529,6 +1555,7 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
   const [creationRequest, setCreationRequest] = useState<{
     providerId: string;
     token: string;
+    source?: TaskResultHandoff;
   } | null>(null);
   const creationOwner = useRef<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -1724,6 +1751,16 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
                 project={selectedProject}
                 providers={providers}
                 request={creationRequest}
+                sourceVersion={
+                  creationRequest?.source
+                    ? (() => {
+                        const task = tasks.find(
+                          (t) => t.id === creationRequest.source!.reference.taskId,
+                        );
+                        return task ? revisionTaskKey(task) : "missing-source";
+                      })()
+                    : undefined
+                }
                 onLock={lockCreation}
                 onRelease={releaseCreation}
                 refresh={async () => await refresh()}
@@ -1944,6 +1981,34 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
                               !connectionFresh || !supervision.live || error !== null || refreshing
                             }
                             readVersion={readVersion}
+                          />
+                        ) : null}
+                        {environmentId &&
+                        selectedProject?.id === task.projectId &&
+                        selectedProvider ? (
+                          <TaskOutputHandoff
+                            task={task}
+                            environmentId={environmentId}
+                            stale={
+                              !connectionFresh || !supervision.live || error !== null || refreshing
+                            }
+                            readVersion={readVersion}
+                            disabled={creating || !canOperateConnection}
+                            onSelect={(source) => {
+                              if (
+                                !canOperate() ||
+                                creationOwner.current ||
+                                selectedProject.id !== source.reference.projectId
+                              )
+                                return;
+                              const token = randomUUID();
+                              lockCreation(token);
+                              setCreationRequest({
+                                providerId: selectedProvider.instanceId,
+                                token,
+                                source,
+                              });
+                            }}
                           />
                         ) : null}
                         {environmentId ? (

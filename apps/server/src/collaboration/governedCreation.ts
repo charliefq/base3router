@@ -1,3 +1,5 @@
+import { validateAcceptedSource } from "./ResultHandoff.ts";
+import type { ProjectionStoreV2Shape } from "../orchestration-v2/ProjectionStore.ts";
 import { configurationInput, configurationSnapshot } from "@t3tools/shared/agentConfiguration";
 import { readWorkflowCatalog } from "../workflow/Projection.ts";
 import { AgentConfigurationSnapshot } from "@t3tools/contracts";
@@ -89,7 +91,11 @@ const principal = Effect.gen(function* () {
 });
 
 export const validateReviewedCreate = Effect.fn("governedCreation.validateReviewedCreate")(
-  function* (sql: SqlClient.SqlClient, command: Create) {
+  function* (
+    sql: SqlClient.SqlClient,
+    command: Create,
+    readProjection?: ProjectionStoreV2Shape["getThreadProjection"],
+  ) {
     const review = command.taskCreationReview;
     if (review === undefined) return;
     const actorId = yield* principal;
@@ -128,6 +134,18 @@ export const validateReviewedCreate = Effect.fn("governedCreation.validateReview
     if (Option.isNone(environment) || Option.isNone(registry)) return yield* refuse();
     if ((yield* environment.value.getEnvironmentId) !== review.environmentId)
       return yield* refuse();
+    if (review.resultHandoff) {
+      const source = review.resultHandoff;
+      if (
+        source.reference.environmentId !== review.environmentId ||
+        source.reference.projectId !== command.projectId ||
+        source.threadId === command.threadId
+      )
+        return yield* refuse();
+      yield* validateAcceptedSource(sql, source, actorId, readProjection).pipe(
+        Effect.mapError(() => refuse()),
+      );
+    }
     const provider = (yield* registry.value.getProviders).find(
       (item) => item.instanceId === review.modelSelection.instanceId,
     );

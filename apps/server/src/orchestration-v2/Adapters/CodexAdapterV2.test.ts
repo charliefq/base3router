@@ -1,3 +1,5 @@
+import { resultHandoffInput, resultHandoffText } from "@t3tools/shared/taskResultHandoff";
+import { digestCanonical } from "@t3tools/shared/actionCanonical";
 import {
   taskInstructionSkillModules,
   taskInstructionSkillRef,
@@ -1760,6 +1762,92 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         firstTerminal: Deferred.await(firstTerminal),
       };
     });
+
+  it.live.each(
+    (["manual", "auto"] as const).flatMap((mode) =>
+      ["exact-fit", "overflow"].map((boundary) => ({ mode, boundary })),
+    ),
+  )(
+    "accepted-output $mode $boundary preserves complete native text or rejects before RPC",
+    ({ mode, boundary }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const requests: unknown[] = [];
+          const harness = yield* makeCodexReplayHarness(
+            makeCodexReplayTranscript({
+              scenario: `handoff-${mode}-${boundary}`,
+              entries: codexReplayPreamble({
+                nativeThreadId: "handoff-native",
+                nativeTurnId: "handoff-turn",
+                prompt: "unused",
+              }).slice(0, -3),
+            }),
+            () => Effect.void,
+            (method, params) =>
+              method === "turn/start"
+                ? Effect.sync(() => requests.push(params)).pipe(
+                    Effect.andThen(
+                      Effect.die("Synthetic handoff RPC capture; no provider execution"),
+                    ),
+                  )
+                : Effect.void,
+          );
+          const sourceText = "  accepted source café\n" + "z".repeat(2200) + "\n ";
+          const source = {
+            reference: {
+              environmentId: "environment-a",
+              projectId: "project-a",
+              taskId: "source-task",
+              threadUpdatedAt: "2026-10-20T00:00:00.000Z",
+              threadSequence: 1,
+            },
+            threadId: ThreadId.make("source-thread"),
+            revision: 1,
+            eventSequence: 2,
+            title: "Accepted research",
+            result: {
+              runId: "source-run",
+              messageId: "source-message",
+              attemptId: "source-attempt",
+              providerThreadId: "source-provider-thread",
+              providerTurnId: "source-turn",
+              itemId: "source-item",
+              rootNodeId: "source-root",
+              nodeId: "source-node",
+              outputSha256: digestCanonical(sourceText),
+            },
+            text: sourceText,
+          };
+          const appendix = resultHandoffText(source);
+          const instructions = "x".repeat(
+            PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+              appendix.length +
+              (boundary === "overflow" ? 1 : 0),
+          );
+          if (boundary === "overflow")
+            assert.throws(() => resultHandoffInput(instructions, source));
+          const text = instructions + appendix;
+          const direct = makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make(`handoff-${mode}-${boundary}`),
+            text,
+          });
+          const outcome = yield* harness.runtime.startTurn(direct).pipe(Effect.exit);
+          assert.equal(outcome._tag, "Failure");
+          if (boundary === "overflow") assert.equal(requests.length, 0);
+          else {
+            assert.equal(requests.length, 1);
+            const params = decodeReferenceRpcInput(requests[0]);
+            assert.equal(params.input.length, 1);
+            assert.equal(params.input[0]!.text, text);
+            assert.include(params.input[0]!.text, sourceText);
+            assert.equal(params.model, direct.modelSelection.model);
+          }
+        }),
+      ).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+  );
 
   it.live.each(
     (["file-only", "joint"] as const).flatMap((kind) =>

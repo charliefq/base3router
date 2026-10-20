@@ -364,7 +364,7 @@ export function TaskFirstInstructions(props: {
         variant="outline"
         type="button"
         disabled={!available || busy || launch.busy || launch.hasOriginal}
-        onClick={() => void prepare()}
+        onClick={() => prepare()}
       >
         {props.prepareLabel ?? "Prepare first instructions"}
       </Button>
@@ -458,15 +458,21 @@ export function TaskFirstInstructions(props: {
                 }}
               />
               {launch.controls}
-              <TaskCapabilityStepControls
-                task={props.task}
-                environmentId={props.environmentId}
-                stale={props.stale}
-                readVersion={props.readVersion}
-                instructions={prompt}
-                onBusyChange={setExecutionBusy}
-                onOpen={props.onOpen}
-              />
+              {!launchThread?.agentsTaskCreation?.review.resultHandoff ? (
+                <TaskCapabilityStepControls
+                  task={props.task}
+                  environmentId={props.environmentId}
+                  stale={props.stale}
+                  readVersion={props.readVersion}
+                  instructions={prompt}
+                  onBusyChange={setExecutionBusy}
+                  onOpen={props.onOpen}
+                />
+              ) : (
+                <p>
+                  Use the reviewed ordinary Start to deliver this task’s immutable source reference.
+                </p>
+              )}
               <Button
                 type="button"
                 variant="outline"
@@ -548,7 +554,15 @@ export function TaskFirstInstructions(props: {
             >
               Cancel preparation
             </Button>
-            <Button type="button" disabled={busy || !prompt.trim()} onClick={() => void apply()}>
+            <Button
+              type="button"
+              disabled={
+                busy ||
+                !prompt.trim() ||
+                launchThread?.agentsTaskCreation?.review.resultHandoff !== undefined
+              }
+              onClick={() => void apply()}
+            >
               Fill empty draft and open
             </Button>
           </AlertDialogFooter>

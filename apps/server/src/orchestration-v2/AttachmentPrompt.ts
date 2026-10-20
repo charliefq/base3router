@@ -165,6 +165,8 @@ export function providerMessageTextWithAttachmentPaths(input: {
   readonly requireFilePaths?: boolean;
 }): string {
   let text = input.text;
+  if (input.requireFilePaths === true && text.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS)
+    throw new Error("Complete native text exceeds the provider input limit.");
   const appendContext = (context: string | undefined, required = false) => {
     if (context === undefined) {
       if (required) throw new Error("Required attachment path is unavailable.");

@@ -1,3 +1,4 @@
+import { validateHandoffFirstInput } from "../collaboration/FirstTaskLaunch.ts";
 import * as ReferenceServerConfig from "../config.ts";
 import { validateResultContinuation } from "../collaboration/ResultContinuation.ts";
 import {
@@ -2153,7 +2154,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const agentsTaskCreation =
       command.taskCreationReview === undefined || Option.isNone(creationSql)
         ? undefined
-        : yield* validateReviewedCreate(creationSql.value, command).pipe(mapDispatchError(command));
+        : yield* validateReviewedCreate(creationSql.value, command, (id) =>
+            projectionStore.getThreadProjection(id),
+          ).pipe(mapDispatchError(command));
     const thread: OrchestrationV2AppThread = {
       createdBy: command.createdBy,
       creationSource: command.creationSource,
@@ -4817,6 +4820,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.taskFirstLaunch?.referenceFile
             ? { referenceFileSelection: command.taskFirstLaunch.referenceFile }
             : {}),
+          ...(command.taskFirstLaunch?.resultHandoff
+            ? { resultHandoffSelection: command.taskFirstLaunch.resultHandoff }
+            : {}),
           ...(command.taskFirstLaunch?.instructionSkill
             ? { instructionSkillSelection: command.taskFirstLaunch.instructionSkill }
             : {}),
@@ -5172,6 +5178,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
           ...(command.taskFirstLaunch?.referenceFile
             ? { referenceFileSelection: command.taskFirstLaunch.referenceFile }
+            : {}),
+          ...(command.taskFirstLaunch?.resultHandoff
+            ? { resultHandoffSelection: command.taskFirstLaunch.resultHandoff }
             : {}),
           ...(command.taskFirstLaunch?.instructionSkill
             ? { instructionSkillSelection: command.taskFirstLaunch.instructionSkill }
@@ -5881,6 +5890,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(command.sourcePlanRef === undefined ? {} : { sourcePlanRef: command.sourcePlanRef }),
         ...(command.taskFirstLaunch?.referenceFile
           ? { referenceFileSelection: command.taskFirstLaunch.referenceFile }
+          : {}),
+        ...(command.taskFirstLaunch?.resultHandoff
+          ? { resultHandoffSelection: command.taskFirstLaunch.resultHandoff }
           : {}),
         ...(command.taskFirstLaunch?.instructionSkill
           ? { instructionSkillSelection: command.taskFirstLaunch.instructionSkill }
@@ -9509,6 +9521,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     if (command.type === "message.dispatch") {
       const database = yield* taskReviewSqlAtCall;
+      if (Option.isSome(database))
+        yield* validateHandoffFirstInput(
+          database.value,
+          command.threadId,
+          command.taskFirstLaunch,
+        ).pipe(mapDispatchError(command));
       if (command.taskResultContinuation) {
         if (Option.isNone(database))
           return yield* new OrchestratorDispatchError({
@@ -9527,10 +9545,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             commandType: command.type,
             cause: "First-launch store unavailable.",
           });
-        yield* validateFirstTaskLaunch(database.value, command).pipe(
-          withReferenceStore,
-          mapDispatchError(command),
-        );
+        yield* validateFirstTaskLaunch(database.value, command, false, (id) =>
+          projectionStore.getThreadProjection(id),
+        ).pipe(withReferenceStore, mapDispatchError(command));
       }
       if (Option.isSome(database))
         yield* withCapabilityRegistration(validateCapabilityDispatch(database.value, command)).pipe(

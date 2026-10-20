@@ -1,3 +1,6 @@
+import { TaskResultHandoffReadout, readFreshHandoff } from "./TaskResultHandoff";
+import { resultHandoffInput } from "@t3tools/shared/taskResultHandoff";
+import { digestCanonical } from "@t3tools/shared/actionCanonical";
 import { verifyJointTaskInputReview } from "@t3tools/shared/taskJointInputReview";
 import { TaskReferenceFilePicker, type TaskReferenceSelection } from "./TaskReferenceFilePicker";
 import {
@@ -57,6 +60,15 @@ export function useTaskFirstLaunch(props: {
   resultBound?: boolean;
   priorResult?: TaskContinuationResult | null;
 }) {
+  const readSourceReview = useAtomCommand(threadEnvironment.readTaskReview, {
+    reportFailure: false,
+  });
+  const readSourceProjection = useAtomCommand(threadEnvironment.readProjection, {
+    reportFailure: false,
+  });
+  const source = props.resultBound
+    ? undefined
+    : props.thread?.agentsTaskCreation?.review.resultHandoff;
   const readFileReview = useAtomCommand(threadEnvironment.readTaskReferenceFileReview, {
     reportFailure: false,
   });
@@ -161,6 +173,7 @@ export function useTaskFirstLaunch(props: {
     props.facts?.contract,
     props.stale,
     props.priorResult,
+    source,
     props.thread?.runtimeMode,
     props.thread?.interactionMode,
     selectedSkill,
@@ -423,6 +436,10 @@ export function useTaskFirstLaunch(props: {
           </Button>
           {status?.status === "admitted" ? (
             <>
+              <TaskResultHandoffReadout
+                source={status.resultHandoffSelection}
+                delivery={status.resultHandoffDelivery}
+              />
               {status.referenceFileSelection ? (
                 <section aria-label="Reference file provenance">
                   <p>
@@ -521,12 +538,13 @@ export function useTaskFirstLaunch(props: {
   );
   const controls = (
     <section aria-label="Ordinary governed task launch">
+      <TaskResultHandoffReadout source={source} complete />
       <p>
         {props.resultBound
           ? "Ordinary requested changes on the exact completed result. No contract, acceptance, configuration or capability mutation."
           : "Ordinary model turn — choose and review separately from the saved-PR operation below. Unsupported saved-PR suggestions never start this path automatically."}
       </p>
-      {!props.resultBound ? (
+      {!props.resultBound && !source ? (
         <TaskReferenceFilePicker
           key={key}
           environmentId={props.environmentId}
@@ -542,7 +560,7 @@ export function useTaskFirstLaunch(props: {
           untrusted evidence; the skill grants no additional authority.
         </p>
       ) : null}
-      {!props.resultBound ? (
+      {!props.resultBound && !source ? (
         <section aria-label="First-party instruction module selection">
           <label>
             Instruction-only task skill
@@ -656,8 +674,38 @@ export function useTaskFirstLaunch(props: {
             modelSelection: manual,
             runtimeMode: props.thread.runtimeMode,
             interactionMode: props.thread.interactionMode,
+            ...(source ? { resultHandoff: source } : {}),
             ...(props.resultBound && props.priorResult ? { priorResult: props.priorResult } : {}),
           };
+          if (source) {
+            const token = reviewToken;
+            preparing.current = true;
+            setReviewBusy(true);
+            setReview(null);
+            return (async () => {
+              try {
+                const current = await readFreshHandoff(
+                  props.environmentId,
+                  source.reference.taskId,
+                  readSourceReview,
+                  readSourceProjection,
+                );
+                if (reviewOwner.current !== token) return;
+                if (!current || digestCanonical(current) !== digestCanonical(source))
+                  throw new Error("Source changed");
+                resultHandoffInput(value.text, source);
+                setReview(value);
+              } catch {
+                if (reviewOwner.current === token)
+                  setNotice("Accepted source or combined input budget changed. Nothing started.");
+              } finally {
+                if (reviewOwner.current === token) {
+                  preparing.current = false;
+                  setReviewBusy(false);
+                }
+              }
+            })();
+          }
           if (referenceFile?.status === "ready") {
             const token = reviewToken;
             preparing.current = true;
@@ -837,7 +885,7 @@ export function useTaskFirstLaunch(props: {
           <Button
             size="sm"
             disabled={!available || busy || (review.routingMode === "manual" && !manualReady)}
-            onClick={() => void submit()}
+            onClick={() => submit()}
           >
             {props.resultBound
               ? "Start reviewed result continuation"

@@ -61,14 +61,16 @@ export function revisionSnapshotTask(
 }
 
 /** Server resultReadout validates attribution; these reads must agree on the same latest result. */
-export function revisionRequestFacts(
+function outputFacts(
   task: CollaborationTask,
   environmentId: EnvironmentId,
   review: TaskContractReviewState,
   projection: OrchestrationV2ThreadProjection,
+  accepted: boolean,
 ) {
+  const eligible = accepted ? hasAcceptedOutput(task) : hasRevisionOutput(task);
   if (
-    !hasRevisionOutput(task) ||
+    !eligible ||
     !validReview(review) ||
     review.status !== "available" ||
     !validProjection(projection)
@@ -85,8 +87,9 @@ export function revisionRequestFacts(
     review.projectId !== task.projectId ||
     review.threadId !== task.threadId ||
     review.phase !== "active" ||
-    review.acceptedRevision !== null ||
-    !review.actions.includes("accept") ||
+    (accepted
+      ? review.acceptedRevision !== review.contract.revision
+      : review.acceptedRevision !== null || !review.actions.includes("accept")) ||
     !task.review ||
     !sameReference(review.reference, task.review.reference) ||
     task.contractReadout?.status !== "available" ||
@@ -100,7 +103,9 @@ export function revisionRequestFacts(
     !t.taskContract ||
     !sameContract(t.taskContract, review.contract) ||
     t.taskContractPhase !== "active" ||
-    t.taskAcceptedRevision !== null ||
+    (accepted
+      ? t.taskAcceptedRevision !== review.contract.revision
+      : t.taskAcceptedRevision !== null) ||
     t.archivedAt !== null ||
     t.deletedAt !== null ||
     t.forkedFrom !== null ||
@@ -185,6 +190,18 @@ export function revisionRequestFacts(
     provider.providerInstanceId !== run.providerInstanceId
   )
     return null;
+  if (accepted) {
+    const input = message[0]?.taskFirstLaunch ?? message[0]?.taskResultContinuation;
+    // Acceptance of a later contract cannot attest an output produced under an older intent.
+    if (
+      !input ||
+      !sameContract(input.contract, review.contract) ||
+      input.threadId !== t.id ||
+      input.messageId !== run.userMessageId ||
+      (message[0]?.taskFirstLaunch && message[0]?.taskResultContinuation)
+    )
+      return null;
+  }
   if (
     [...projection.attempts]
       .filter((v) => v.runId === run.id)
@@ -254,6 +271,36 @@ export function revisionRequestFacts(
   )
     return null;
   return { task, review: review as Review, projection, result: { ...r, content: r.content } };
+}
+// Keep accepted-source handoff and unaccepted continuation policy separate.
+export const revisionRequestFacts = (
+  task: CollaborationTask,
+  environmentId: EnvironmentId,
+  review: TaskContractReviewState,
+  projection: OrchestrationV2ThreadProjection,
+) => outputFacts(task, environmentId, review, projection, false);
+export const acceptedResultFacts = (
+  task: CollaborationTask,
+  environmentId: EnvironmentId,
+  review: TaskContractReviewState,
+  projection: OrchestrationV2ThreadProjection,
+) => outputFacts(task, environmentId, review, projection, true);
+export function hasAcceptedOutput(task: CollaborationTask) {
+  const r = task.resultReadout,
+    c = task.contractReadout;
+  return (
+    validTask(task) &&
+    r?.status === "available" &&
+    r.runStatus === "completed" &&
+    r.providerTurnStatus === "completed" &&
+    r.attemptId !== null &&
+    r.providerTurnId !== null &&
+    r.content.status === "output" &&
+    c?.status === "available" &&
+    c.phase === "active" &&
+    c.acceptedRevision === c.contract.revision &&
+    task.review !== undefined
+  );
 }
 export type RevisionRequestFacts = NonNullable<ReturnType<typeof revisionRequestFacts>>;
 export const sameRevisionFacts = (a: RevisionRequestFacts, b: RevisionRequestFacts) =>

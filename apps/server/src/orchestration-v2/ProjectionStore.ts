@@ -287,7 +287,7 @@ export interface ProjectionRecordFilter {
 }
 export type ProjectionRecordField = Exclude<
   keyof OrchestrationV2ThreadProjection,
-  "thread" | "updatedAt" | "visibleTurnItems"
+  "thread" | "updatedAt" | "eventSequence" | "visibleTurnItems"
 >;
 export type ProjectionRecords<K extends ProjectionRecordField> = Pick<
   OrchestrationV2ThreadProjection,
@@ -567,10 +567,17 @@ export function upsertProviderTurn(
 /** Adapter acknowledgement is monotonic across later lifecycle snapshots. */
 function preserveInstructionDelivery<
   T extends {
+    readonly resultHandoffDelivery?: import("@t3tools/contracts").TaskResultHandoffDelivery;
     readonly instructionSkillDelivery?: import("@t3tools/contracts").TaskInstructionSkillDelivery;
     readonly referenceFileDelivery?: import("@t3tools/contracts").TaskReferenceFileDelivery;
   },
 >(current: T | undefined, next: T): T {
+  const handoff = current?.resultHandoffDelivery;
+  if (
+    handoff &&
+    (next.resultHandoffDelivery === undefined || handoff.status === "adapter-accepted")
+  )
+    next = { ...next, resultHandoffDelivery: handoff };
   const priorFile = current?.referenceFileDelivery;
   const withFile =
     priorFile &&
@@ -592,6 +599,9 @@ function preserveRunRecordedFields(
   if (current === undefined) return next;
   return {
     ...preserveInstructionDelivery(current, next),
+    ...(next.resultHandoffSelection === undefined && current.resultHandoffSelection !== undefined
+      ? { resultHandoffSelection: current.resultHandoffSelection }
+      : {}),
     ...(next.referenceFileSelection === undefined && current.referenceFileSelection !== undefined
       ? { referenceFileSelection: current.referenceFileSelection }
       : {}),
@@ -1695,6 +1705,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       END
     `;
 
+    const keepHandoffDelivery = (payload: Statement.Fragment, previous: Statement.Fragment) => sql`
+      CASE WHEN json_type(${previous}, '$.resultHandoffDelivery') IS NOT NULL AND (
+        json_type(excluded.payload_json,'$.resultHandoffDelivery') IS NULL OR json_extract(${previous},'$.resultHandoffDelivery.status')='adapter-accepted'
+      ) THEN json_set(${payload},'$.resultHandoffDelivery',json_extract(${previous},'$.resultHandoffDelivery')) ELSE ${payload} END
+    `;
+
     const keepReferenceDelivery = (
       payload: Statement.Fragment,
       previous: Statement.Fragment,
@@ -1705,12 +1721,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     `;
 
     const keepInstructionDelivery = (payload: Statement.Fragment, previous: Statement.Fragment) =>
-      keepReferenceDelivery(
-        sql`
+      keepHandoffDelivery(
+        keepReferenceDelivery(
+          sql`
       CASE WHEN json_type(${previous}, '$.instructionSkillDelivery') IS NOT NULL AND (
         json_type(excluded.payload_json,'$.instructionSkillDelivery') IS NULL OR json_extract(${previous},'$.instructionSkillDelivery.status')='adapter-accepted'
       ) THEN json_set(${payload},'$.instructionSkillDelivery',json_extract(${previous},'$.instructionSkillDelivery')) ELSE ${payload} END
     `,
+          previous,
+        ),
         previous,
       );
 
@@ -1841,7 +1860,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     keepRecordedRunField(
                       keepRecordedRunField(
                         keepRecordedRunField(
-                          sql`excluded.payload_json`,
+                          keepRecordedRunField(
+                            sql`excluded.payload_json`,
+                            "$.resultHandoffSelection",
+                          ),
                           "$.referenceFileSelection",
                         ),
                         "$.delegatedCompletion",
@@ -3844,7 +3866,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       }).pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
 
     const getThreadProjection: ProjectionStoreV2Shape["getThreadProjection"] = (threadId) =>
-      readProjection(threadId, new Set());
+      Effect.gen(function* () {
+        const projection = yield* readProjection(threadId, new Set());
+        const rows = yield* sql<{
+          sequence: number;
+        }>`SELECT COALESCE(MAX(sequence),0) AS sequence FROM orchestration_events WHERE aggregate_kind='thread' AND application_event_version=2 AND stream_id=${threadId}`;
+        return { ...projection, eventSequence: Number(rows[0]?.sequence ?? 0) };
+      }).pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
 
     const getRuntimeRecoveryProjection: ProjectionStoreV2Shape["getRuntimeRecoveryProjection"] = (
       threadId,
@@ -4818,7 +4846,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             return {
               schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
               snapshotSequence: rows[0]?.snapshot_sequence ?? 0,
-              projection,
+              projection: { ...projection, eventSequence: rows[0]?.snapshot_sequence ?? 0 },
             };
           }),
         )

@@ -1,3 +1,11 @@
+import { validateAcceptedSource } from "../collaboration/ResultHandoff.ts";
+import {
+  resultHandoffInput,
+  resultHandoffText,
+  resultHandoffTargetAvailable,
+} from "@t3tools/shared/taskResultHandoff";
+import { digestCanonical } from "@t3tools/shared/actionCanonical";
+import type { TaskResultHandoffDelivery } from "@t3tools/contracts";
 import * as ReferenceServerConfig from "../config.ts";
 import { type TaskReferenceFileDelivery } from "@t3tools/contracts";
 import {
@@ -703,6 +711,101 @@ export const layer: Layer.Layer<
         }
         savedCapabilityContext = capability.success;
       }
+      if (
+        run.ordinal === 1 &&
+        projection.thread.agentsTaskCreation?.review.resultHandoff &&
+        !message.taskFirstLaunch?.resultHandoff
+      ) {
+        yield* settleRunBeforeStart({
+          signal: "result-handoff-missing",
+          status: "failed",
+          now: yield* DateTime.now,
+          providerInstanceId: run.providerInstanceId,
+          itemProviderThreadId: providerThread.id,
+          item: {
+            type: "error",
+            title: "Required source reference missing",
+            failure: makeProviderFailure({
+              message: "Use the reviewed first Start for this handoff destination.",
+              class: "provider_error",
+            }),
+          },
+        });
+        return;
+      }
+      const selectedSource = message.taskFirstLaunch?.resultHandoff;
+      if (selectedSource) {
+        const checked = yield* Effect.result(
+          Effect.gen(function* () {
+            if (
+              Option.isNone(capabilitySql) ||
+              Option.isNone(capabilityEnvironment) ||
+              !message.taskFirstLaunch ||
+              run.resultHandoffDelivery
+            )
+              return yield* new ProviderTurnStartError({
+                runId,
+                cause: "Original source delivery unavailable or already attempted; no resend.",
+              });
+            const launch = message.taskFirstLaunch;
+            const grants = yield* capabilitySql.value<{
+              actor_id: string;
+            }>`SELECT actor_id FROM base3_execution_grants WHERE grant_id=${`grant:message:${input.threadId}:${message.id}`}`;
+            const provider = Option.isSome(capabilityProvider)
+              ? (yield* capabilityProvider.value.getProviders).find(
+                  (p) => p.instanceId === run.modelSelection.instanceId,
+                )
+              : undefined;
+            if (
+              !grants[0]?.actor_id ||
+              (yield* capabilityEnvironment.value.getEnvironmentId) !==
+                selectedSource.reference.environmentId ||
+              projection.thread.projectId !== selectedSource.reference.projectId ||
+              argumentHash(projection.thread.agentsTaskCreation?.review.resultHandoff) !==
+                argumentHash(selectedSource) ||
+              argumentHash(run.resultHandoffSelection) !== argumentHash(selectedSource) ||
+              projection.thread.taskContractPhase !== "active" ||
+              projection.thread.taskAcceptedRevision !== null ||
+              argumentHash(projection.thread.taskContract) !== argumentHash(launch.contract) ||
+              resolvedRuntimePolicy.runtimeMode !== launch.runtimeMode ||
+              resolvedRuntimePolicy.interactionMode !== launch.interactionMode ||
+              !resultHandoffTargetAvailable(provider, run.modelSelection) ||
+              (launch.routingMode === "manual" &&
+                argumentHash(run.modelSelection) !== argumentHash(launch.modelSelection))
+            )
+              return yield* new ProviderTurnStartError({
+                runId,
+                cause: "Source delivery scope or actual target changed.",
+              });
+            yield* validateAcceptedSource(
+              capabilitySql.value,
+              selectedSource,
+              grants[0].actor_id,
+              (id) => projectionStore.getThreadProjection(id),
+            );
+            yield* Effect.try(() => resultHandoffInput(message.text, selectedSource));
+          }),
+        );
+        if (checked._tag === "Failure") {
+          yield* settleRunBeforeStart({
+            signal: "result-handoff-blocked",
+            status: "failed",
+            now: yield* DateTime.now,
+            providerInstanceId: run.providerInstanceId,
+            itemProviderThreadId: providerThread.id,
+            item: {
+              type: "error",
+              title: "Accepted output reference blocked",
+              failure: makeProviderFailure({
+                message:
+                  "Source reference changed or delivery was already attempted. No native input resent.",
+                class: "provider_error",
+              }),
+            },
+          });
+          return;
+        }
+      }
       const selectedFile = message.taskFirstLaunch?.referenceFile;
       if (selectedFile) {
         const checked = yield* Effect.result(
@@ -1303,7 +1406,8 @@ export const layer: Layer.Layer<
           records: message.context?.records ?? [],
         }) +
         savedCapabilityContext +
-        instructionContext;
+        instructionContext +
+        (selectedSource ? resultHandoffText(selectedSource) : "");
       // Delivered once: this run's provider turn marks the work as told. A
       // restart continuation is prompted by its own text or resumes natively.
       const noteContinuation = isRestartNoteContinuation(
@@ -1547,6 +1651,42 @@ export const layer: Layer.Layer<
               runId,
               cause: "Persisted capability context changed before native delivery.",
             });
+          let pendingHandoff: TaskResultHandoffDelivery | null = null;
+          const recordHandoffDelivery = (evidence: TaskResultHandoffDelivery) =>
+            Effect.gen(function* () {
+              const fresh = yield* projectionStore.getTurnStartContext(input.threadId, run.id);
+              const currentRun = fresh.runs.find((r) => r.id === run.id);
+              const currentAttempt = fresh.attempts.find((a) => a.id === attempt.id);
+              if (!currentRun || !currentAttempt || currentRun.activeAttemptId !== attempt.id)
+                return false;
+              const occurredAt = yield* DateTime.now;
+              const updates: OrchestrationV2DomainEvent[] = [];
+              for (const event of [
+                {
+                  type: "run.updated",
+                  payload: { ...currentRun, resultHandoffDelivery: evidence },
+                },
+                {
+                  type: "run-attempt.updated",
+                  payload: { ...currentAttempt, resultHandoffDelivery: evidence },
+                },
+              ] as const)
+                updates.push({
+                  ...event,
+                  id: yield* idAllocator.allocate.event({ threadId: input.threadId }),
+                  threadId: input.threadId,
+                  runId: run.id,
+                  providerInstanceId: run.providerInstanceId,
+                  occurredAt,
+                });
+              return (yield* eventSink.writeIfRunCurrent({
+                threadId: input.threadId,
+                runId: run.id,
+                activeAttemptId: attempt.id,
+                expectedStatus: currentRun.status,
+                events: updates,
+              })).committed;
+            });
           let pendingInstruction: TaskInstructionSkillDelivery | null = null;
           const recordInstructionDelivery = (evidence: TaskInstructionSkillDelivery) =>
             Effect.gen(function* () {
@@ -1750,10 +1890,56 @@ export const layer: Layer.Layer<
                 cause: "Reference file delivery identity could not be retained.",
               });
           }
+          if (selectedSource && message.taskFirstLaunch) {
+            const fresh = yield* projectionStore.getTurnStartContext(input.threadId, run.id);
+            const provider = Option.isSome(capabilityProvider)
+              ? (yield* capabilityProvider.value.getProviders).find(
+                  (p) => p.instanceId === turnInput.modelSelection.instanceId,
+                )
+              : undefined;
+            if (
+              fresh.runs.find((r) => r.id === run.id)?.resultHandoffDelivery ||
+              argumentHash(fresh.thread.taskContract) !==
+                argumentHash(message.taskFirstLaunch.contract) ||
+              fresh.thread.taskContractPhase !== "active" ||
+              fresh.thread.taskAcceptedRevision !== null ||
+              !resultHandoffTargetAvailable(provider, turnInput.modelSelection) ||
+              turnInput.runId !== run.id ||
+              turnInput.attemptId !== attempt.id ||
+              turnInput.message.messageId !== message.id ||
+              turnInput.message.text !== resultHandoffInput(message.text, selectedSource) ||
+              argumentHash(turnInput.modelSelection) !== argumentHash(run.modelSelection)
+            )
+              return yield* new ProviderTurnStartError({
+                runId,
+                cause: "Original reference identity or native input changed; no resend.",
+              });
+            pendingHandoff = {
+              status: "unknown",
+              sourceSha256: digestCanonical(selectedSource),
+              inputSha256: sha256Hex(turnInput.message.text),
+              runId: run.id,
+              attemptId: attempt.id,
+              messageId: message.id,
+              modelSelection: turnInput.modelSelection,
+              observedAt: DateTime.formatIso(yield* DateTime.now),
+            };
+            if (!(yield* recordHandoffDelivery(pendingHandoff)))
+              return yield* new ProviderTurnStartError({
+                runId,
+                cause: "Source delivery identity could not be retained.",
+              });
+          }
           yield* deliver({
             ...turnInput,
             ...(conversationHistory === undefined ? {} : { conversationHistory }),
           });
+          if (pendingHandoff)
+            yield* recordHandoffDelivery({
+              ...pendingHandoff,
+              status: "adapter-accepted",
+              observedAt: DateTime.formatIso(yield* DateTime.now),
+            }).pipe(Effect.catchCause(() => Effect.succeed(false)));
           if (pendingFile)
             yield* recordReferenceDelivery({
               ...pendingFile,

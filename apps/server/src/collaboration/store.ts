@@ -1,3 +1,4 @@
+import { resultHandoffDeliveryMatches } from "@t3tools/shared/taskResultHandoff";
 import { taskInstructionDeliveryMatches } from "@t3tools/shared/taskInstructionSkills";
 import { taskReferenceDeliveryMatches } from "@t3tools/shared/taskReferenceFile";
 import { readCapabilityStepState } from "./TaskCapabilityStep.ts";
@@ -136,6 +137,8 @@ const contractReadout = (row: {
 };
 
 const StoredRunEvidence = Schema.Struct({
+  resultHandoffSelection: OrchestrationV2Run.fields.resultHandoffSelection,
+  resultHandoffDelivery: OrchestrationV2Run.fields.resultHandoffDelivery,
   referenceFileSelection: OrchestrationV2Run.fields.referenceFileSelection,
   referenceFileDelivery: OrchestrationV2Run.fields.referenceFileDelivery,
   instructionSkillSelection: OrchestrationV2Run.fields.instructionSkillSelection,
@@ -481,6 +484,15 @@ const readResultEvidence = (
       runId: run.id,
       messageId: run.userMessageId,
       runStatus: run.status,
+      ...(run.resultHandoffSelection ? { resultHandoffSelection: run.resultHandoffSelection } : {}),
+      ...(resultHandoffDeliveryMatches(run.resultHandoffSelection, run.resultHandoffDelivery, {
+        runId: run.id,
+        attemptId: run.activeAttemptId,
+        messageId: run.userMessageId ?? "",
+        modelSelection: run.modelSelection,
+      })
+        ? { resultHandoffDelivery: run.resultHandoffDelivery }
+        : {}),
       ...(run.referenceFileSelection ? { referenceFileSelection: run.referenceFileSelection } : {}),
       ...(taskReferenceDeliveryMatches(run.referenceFileSelection, run.referenceFileDelivery, {
         runId: run.id,
@@ -1410,9 +1422,17 @@ export const readTaskReview = Effect.fn("collaboration.readTaskReview")(function
   sql: SqlClient.SqlClient,
   input: TaskContractReviewInput,
 ) {
-  const no = (reason: string): TaskContractReviewState => ({ status: "unavailable", reason });
   const context = yield* reviewContext;
-  if (!context) return no("operate-scope-required");
+  if (!context) return { status: "unavailable" as const, reason: "operate-scope-required" };
+  return yield* readTaskReviewForActor(sql, input, context.actorId);
+});
+/** Internal read-only ownership check. Callers must derive actor from authenticated admission or its persisted grant. */
+export const readTaskReviewForActor = Effect.fn("collaboration.readTaskReviewForActor")(function* (
+  sql: SqlClient.SqlClient,
+  input: TaskContractReviewInput,
+  actorId: string,
+) {
+  const no = (reason: string): TaskContractReviewState => ({ status: "unavailable", reason });
   const environment = yield* Effect.serviceOption(ServerEnvironment.ServerEnvironment);
   if (environment._tag !== "Some") return no("environment-unavailable");
   if ((yield* environment.value.getEnvironmentId) !== input.environmentId)
@@ -1420,9 +1440,9 @@ export const readTaskReview = Effect.fn("collaboration.readTaskReview")(function
   const commands = yield* readCommands(sql);
   const snapshot = yield* validateThreadLinks(
     sql,
-    scopedSnapshot(commands, context.actorId),
+    scopedSnapshot(commands, actorId),
     commands,
-    context.actorId,
+    actorId,
   );
   const task = snapshot.tasks.find(
     (item) =>
@@ -1431,7 +1451,7 @@ export const readTaskReview = Effect.fn("collaboration.readTaskReview")(function
       item.threadId === input.threadId,
   );
   if (!task) return no("task-link-unavailable");
-  let facts = yield* reviewFacts(sql, commands, task, context.actorId, input.environmentId);
+  let facts = yield* reviewFacts(sql, commands, task, actorId, input.environmentId);
   if (facts.status === "available" && facts.contract.revision !== input.revision)
     return no("stale-revision");
   if (facts.status === "available") {

@@ -108,6 +108,16 @@ export async function withTaskRevisionRequestFixture(
           },
         };
         await Effect.runPromise(f.dispatch(command));
+        const launchReview = await Effect.runPromise(
+          f.readReview({
+            environmentId: "environment-a",
+            taskId: `task:governed:thread:${command.threadId}`,
+            projectId: command.projectId,
+            threadId: command.threadId,
+            revision: 1,
+          }),
+        );
+        if (launchReview.status !== "available") throw new Error("Source launch review missing");
         await Effect.runPromise(
           f.dispatch({
             type: "message.dispatch",
@@ -115,6 +125,19 @@ export async function withTaskRevisionRequestFixture(
             threadId: command.threadId,
             messageId: MessageId.make("revision-input"),
             text: "Implement parser",
+            taskFirstLaunch: {
+              commandId: CommandId.make("revision-fixture-dispatch"),
+              messageId: MessageId.make("revision-input"),
+              threadId: command.threadId,
+              text: "Implement parser",
+              reference: launchReview.reference,
+              contract: launchReview.contract,
+              routingMode: "manual",
+              modelSelection: command.modelSelection,
+              runtimeMode: command.runtimeMode,
+              interactionMode: command.interactionMode,
+            },
+            modelSelection: command.modelSelection,
             attachments: [],
             createdBy: "user",
             creationSource: "web",

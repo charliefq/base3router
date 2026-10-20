@@ -112,7 +112,9 @@ export async function withTaskCreationTransportFixture(
     expireAttachment: (
       attachment: import("@t3tools/contracts").ChatFileAttachment,
     ) => Promise<void>;
-    failJointEvidence: (stage: "pending-file" | "accepted-file" | "accepted-skill") => void;
+    failJointEvidence: (
+      stage: "pending-file" | "accepted-file" | "accepted-skill" | "accepted-handoff",
+    ) => void;
     corruptJointSkillDelivery: (threadId: string) => Promise<void>;
     corruptFileDelivery: (threadId: string) => Promise<void>;
     attachmentBytes: (
@@ -212,7 +214,12 @@ export async function withTaskCreationTransportFixture(
   const nativeInterrupted = Deferred.makeUnsafe<void>();
   let runningText: string | null = null;
   let workflowOutput: string | null = null;
-  let jointEvidenceFailure: "pending-file" | "accepted-file" | "accepted-skill" | null = null;
+  let jointEvidenceFailure:
+    | "pending-file"
+    | "accepted-file"
+    | "accepted-skill"
+    | "accepted-handoff"
+    | null = null;
   let interrupts = 0;
   let finishRunning: ((status: "completed" | "interrupted") => Effect.Effect<void>) | null = null;
   const nativeFileReads: Array<{
@@ -798,6 +805,8 @@ export async function withTaskCreationTransportFixture(
                     const file = event.payload.referenceFileDelivery,
                       skill = event.payload.instructionSkillDelivery;
                     if (
+                      (jointEvidenceFailure === "accepted-handoff" &&
+                        event.payload.resultHandoffDelivery?.status === "adapter-accepted") ||
                       (jointEvidenceFailure === "pending-file" &&
                         file?.status === "unknown" &&
                         skill?.status === "unknown") ||
@@ -819,14 +828,15 @@ export async function withTaskCreationTransportFixture(
               commitCommand: (input) =>
                 Effect.gen(function* () {
                   const marker = input.resultContinuationCommand?.taskResultContinuation;
-                  if (marker && input.commandId === commitTarget) {
+                  const handoff = input.firstLaunchCommand?.taskFirstLaunch?.resultHandoff;
+                  if ((marker || handoff) && input.commandId === commitTarget) {
                     commitTarget = null;
                     const plannedRun = input.events.find((event) => event.type === "run.created");
                     if (plannedRun?.type !== "run.created")
                       throw new Error("Continuation did not reach a successful run plan");
                     yield* Deferred.succeed(commitEntered, {
                       commandId: input.commandId,
-                      priorRunId: marker.priorResult.runId,
+                      priorRunId: marker?.priorResult.runId ?? handoff!.result.runId,
                       plannedRunId: plannedRun.payload.id,
                       eventTypes: input.events.map((event) => event.type),
                     });

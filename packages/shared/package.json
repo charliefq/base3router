@@ -526,7 +526,8 @@
     "./taskJointInputReview": {
       "types": "./src/taskJointInputReview.ts",
       "import": "./src/taskJointInputReview.ts"
-    }
+    },
+    "./taskResultHandoff": "./src/taskResultHandoff.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
