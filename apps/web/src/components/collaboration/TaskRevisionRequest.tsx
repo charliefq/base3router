@@ -112,6 +112,7 @@ export function TaskRevisionRequest(props: {
     stale: props.stale,
     onOpen: props.onOpen,
     resultBound: true,
+    reviewIsCurrent: resultReview?.isCurrent,
     priorResult: review ? continuationResult(review) : null,
   });
   const available = !props.stale && session !== null && hasRevisionOutput(props.task);
@@ -154,9 +155,11 @@ export function TaskRevisionRequest(props: {
     }
   };
   const apply = async () => {
-    const observed = reviewRef.current;
+    const observed = review;
     if (
+      reviewRef.current !== observed ||
       !available ||
+      (resultReview && !resultReview.isCurrent()) ||
       !observed ||
       observed !== review ||
       owner.current ||
@@ -171,7 +174,12 @@ export function TaskRevisionRequest(props: {
       proposed = changesRef.current;
     try {
       const facts = await read();
-      if (!current(generation, token) || reviewRef.current !== observed) return;
+      if (
+        !current(generation, token) ||
+        reviewRef.current !== observed ||
+        (resultReview && !resultReview.isCurrent())
+      )
+        return;
       if (changesRef.current !== proposed) {
         setNotice(
           "Requested changes changed during the reads. Review them again; no draft was changed.",
@@ -255,7 +263,7 @@ export function TaskRevisionRequest(props: {
       <AlertDialog
         open={review !== null}
         onOpenChange={(open) => {
-          if (!open) retire();
+          if (!open && review && reviewRef.current === review) retire();
         }}
       >
         <AlertDialogPopup>
@@ -291,6 +299,7 @@ export function TaskRevisionRequest(props: {
                 value={changes}
                 disabled={busy || continuation.busy}
                 onChange={(e) => {
+                  if (!review || reviewRef.current !== review) return;
                   updateChanges(e.target.value);
                 }}
               />
@@ -299,13 +308,20 @@ export function TaskRevisionRequest(props: {
             </>
           ) : null}
           <AlertDialogFooter>
-            <Button type="button" variant="outline" onClick={() => retire()}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                if (review && reviewRef.current === review) retire();
+              }}
+            >
               Cancel revision preparation
             </Button>
             <Button
               type="button"
               variant="outline"
               onClick={() => {
+                if (!review || reviewRef.current !== review) return;
                 retire();
                 props.onOpen();
               }}

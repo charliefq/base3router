@@ -35,6 +35,7 @@ type View = {
 };
 const Context = createContext<{
   version: number;
+  isCurrent: () => boolean;
   validate: () => Promise<boolean>;
   matches: (facts: RevisionRequestFacts) => boolean;
   panel: ReactNode;
@@ -128,7 +129,16 @@ export function TaskResultReviewScope(props: {
         latest.current.stale
       )
         return;
-      observedLive.current = latestLive.current;
+      const observed = latestLive.current;
+      if (facts && observed && !sameRevisionProjection(facts.projection, observed)) {
+        replace(
+          true,
+          null,
+          "Persisted result evidence changed while reading. Reload complete output before deciding.",
+        );
+        return;
+      }
+      if (facts) observedLive.current = observed;
       replace(true, facts, facts ? null : unavailable);
     } catch {
       if (mounted.current && currentScope.current === scope && owner.current === token)
@@ -239,7 +249,15 @@ export function TaskResultReviewScope(props: {
     </section>
   );
   return (
-    <Context.Provider value={{ version: view.version, validate, matches, panel }}>
+    <Context.Provider
+      value={{
+        version: view.version,
+        isCurrent: () => current() && (!view.open || view.facts !== null),
+        validate,
+        matches,
+        panel,
+      }}
+    >
       {props.children}
     </Context.Provider>
   );

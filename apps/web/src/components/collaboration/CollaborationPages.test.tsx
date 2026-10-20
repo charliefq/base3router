@@ -11949,3 +11949,289 @@ it.each(["accepted", "paused"] as const)(
   },
   30000,
 );
+
+it.each(["close", "reload"] as const)(
+  "complete result review synchronously retires captured revision Start on %s before React commits",
+  async (mode) => {
+    await withLibraryFixture(async (f) => {
+      await setupFullReview(f, `full-sync-${mode}`);
+      await openFullReview();
+      await awaitReviewReads(
+        () => creationButton("Prepare revision request")!.props.onClick(),
+        2,
+        f,
+      );
+      await act(async () =>
+        renderer.root
+          .findByProps({ "aria-label": "Requested changes" })
+          .props.onChange({ target: { value: "Revise only after a current full review." } }),
+      );
+      await creationClick("Choose Manual");
+      await act(async () => {
+        await creationButton("Review result continuation")!.props.onClick();
+      });
+      const start = creationButton("Start reviewed result continuation")!.props.onClick;
+      const retire = creationButton(
+        mode === "close" ? "Close complete output" : "Reload complete output",
+      )!.props.onClick;
+      await act(async () => {
+        const read = retire();
+        const pending = start();
+        await read;
+        await pending;
+      });
+      expect(state.startStep).not.toHaveBeenCalled();
+      expect((await f.inspect()).starts).toHaveLength(1);
+    });
+  },
+  30000,
+);
+
+it.each(["confirm", "cancel", "dialog"] as const)(
+  "complete result review confirmation ABA rejects captured %s A while B remains explicitly decidable",
+  async (mode) => {
+    await withLibraryFixture(async (f) => {
+      const c = await setupFullReview(f, `full-confirm-aba-${mode}`);
+      await openFullReview();
+      await awaitReviewReads(
+        () => renderer.root.findByProps({ "data-task-contract-accept": "" }).props.onClick(),
+        1,
+        f,
+      );
+      const old =
+        mode === "dialog"
+          ? renderer.root.findByType("dialog").props.onClose
+          : creationButton(mode === "confirm" ? "Confirm decision" : "Cancel")!.props.onClick;
+      await creationClick("Close complete output");
+      await openFullReview();
+      await awaitReviewReads(
+        () => renderer.root.findByProps({ "data-task-contract-accept": "" }).props.onClick(),
+        1,
+        f,
+      );
+      const own = creationButton("Confirm decision")!.props.onClick;
+      await act(async () => {
+        old();
+      });
+      expect(creationButton("Confirm decision")).toBeDefined();
+      expect(state.reviewDecide).not.toHaveBeenCalled();
+      await awaitReviewReads(() => own(), 2, f);
+      await act(async () => {
+        await state.reviewDecide.mock.results[0]!.value;
+      });
+      const p = await f.projection({ threadId: c.threadId });
+      if (p._tag !== "Success") throw new Error("missing projection");
+      expect(p.value.thread.taskAcceptedRevision).toBe(1);
+      expect(state.reviewDecide).toHaveBeenCalledTimes(1);
+    });
+  },
+  30000,
+);
+
+it.each(["save", "cancel", "dialog", "editor-cancel", "editor-preview"] as const)(
+  "complete result review revision confirmation ABA rejects captured %s A and saves B's own text",
+  async (mode) => {
+    await withLibraryFixture(async (f) => {
+      const c = await setupFullReview(f, `full-save-aba-${mode}`);
+      const task = (await f.snapshot()).tasks.find((t) => t.threadId === c.threadId)!;
+      const read = await f.review({
+        environmentId: "environment-a",
+        taskId: task.id,
+        projectId: task.projectId,
+        threadId: c.threadId,
+        revision: 1,
+      });
+      if (read._tag !== "Success" || read.value.status !== "available")
+        throw new Error("missing review");
+      await f.dispatch({
+        type: "thread.task-contract.redirect",
+        commandId: CommandId.make(`pause-save-${mode}`),
+        threadId: c.threadId,
+        revision: 1,
+        reviewTask: read.value.reference,
+      });
+      state.reviewDecide.mockImplementation(({ input }) =>
+        f.dispatch(
+          decodeCreationReviewCommand({
+            ...input,
+            type: `thread.task-contract.${input.action}`,
+            commandId: CommandId.make(`save-new-${mode}`),
+          }),
+        ),
+      );
+      await act(async () => {
+        creationButton("Refresh tasks")!.props.onClick();
+        await state.load.mock.results.at(-1)!.value;
+      });
+      await openFullReview();
+      const edit = async (goal: string) => {
+        await awaitReviewReads(
+          () => creationButton("Revise paused instructions")!.props.onClick(),
+          1,
+          f,
+        );
+        await act(async () =>
+          renderer.root
+            .findByProps({ "aria-label": "goal instruction" })
+            .props.onChange({ target: { value: goal } }),
+        );
+      };
+      await edit("Proposed goal A");
+      const editorOld = creationButton(
+        mode === "editor-cancel" ? "Cancel editing" : "Preview instruction changes",
+      )!.props.onClick;
+      await awaitReviewReads(
+        () => creationButton("Preview instruction changes")!.props.onClick(),
+        1,
+        f,
+      );
+      const old = mode.startsWith("editor-")
+        ? editorOld
+        : mode === "change"
+          ? () =>
+              renderer.root
+                .findByProps({ "aria-label": "Requested changes" })
+                .props.onChange({ target: { value: "Stale A edit" } })
+          : mode === "dialog"
+            ? renderer.root.findByType("dialog").props.onClose
+            : creationButton(mode === "save" ? "Save new revision" : "Cancel")!.props.onClick;
+      await creationClick("Close complete output");
+      await openFullReview();
+      await edit("Proposed goal B");
+      await awaitReviewReads(
+        () => creationButton("Preview instruction changes")!.props.onClick(),
+        1,
+        f,
+      );
+      const own = creationButton("Save new revision")!.props.onClick,
+        count = state.reviewRead.mock.calls.length;
+      await act(async () => {
+        old();
+        await f.flush();
+      });
+      expect(creationButton("Save new revision")).toBeDefined();
+      expect(state.reviewRead).toHaveBeenCalledTimes(count);
+      expect(state.reviewDecide).not.toHaveBeenCalled();
+      await act(async () => {
+        own();
+      });
+      await act(async () => {
+        await state.reviewDecide.mock.results[0]!.value;
+      });
+      const p = await f.projection({ threadId: c.threadId });
+      if (p._tag !== "Success") throw new Error("missing projection");
+      expect(p.value.thread.taskContract?.goal).toBe("Proposed goal B");
+      expect(p.value.thread.taskContract?.revision).toBe(2);
+      expect(state.reviewDecide).toHaveBeenCalledTimes(1);
+      expect((await f.inspect()).starts).toHaveLength(1);
+    });
+  },
+  30000,
+);
+
+it("complete result review rejects paired A when latest live evidence changed to B during the final review read", async () => {
+  await withLibraryFixture(async (f) => {
+    const c = await setupFullReview(f, "full-final-live-race");
+    let reads = 0;
+    const entered = deferred<void>(),
+      release = deferred<void>();
+    state.reviewRead.mockImplementation(async ({ input }) => {
+      const r = await f.review(input);
+      if (++reads === 2) {
+        entered.resolve();
+        await release.promise;
+      }
+      return r;
+    });
+    let pending: Promise<void>;
+    await act(async () => {
+      pending = creationButton("Open complete output")!.props.onClick();
+      await entered.promise;
+    });
+    await f.alterLatestOutput(
+      c.threadId,
+      fullReviewText.replace("EXACT ENDING", "LIVE CHANGED ENDING"),
+    );
+    const latest = await f.projection({ threadId: c.threadId });
+    if (latest._tag !== "Success") throw new Error("missing projection");
+    state.liveProjections.set(c.threadId, latest.value);
+    await act(async () => renderer.update(<TasksPage scope={libraryScope} />));
+    await act(async () => {
+      release.resolve();
+      await pending!;
+    });
+    expect(completeText()).toEqual([]);
+    expect(state.reviewDecide).not.toHaveBeenCalled();
+    expect(state.startStep).not.toHaveBeenCalled();
+    state.reviewRead.mockImplementation(({ input }) => f.review(input));
+    await act(async () => {
+      await creationButton("Reload complete output")!.props.onClick();
+    });
+    expect(completeText()).toEqual([fullReviewText.replace("EXACT ENDING", "LIVE CHANGED ENDING")]);
+  });
+}, 30000);
+
+it.each(["cancel", "dialog", "draft", "conversation", "change"] as const)(
+  "complete result review old revision preparation %s cannot act on a newer preparation",
+  async (mode) => {
+    await withLibraryFixture(async (f) => {
+      const c = await setupFullReview(f, `full-revision-cancel-aba-${mode}`);
+      await openFullReview();
+      await awaitReviewReads(
+        () => creationButton("Prepare revision request")!.props.onClick(),
+        2,
+        f,
+      );
+      await act(async () =>
+        renderer.root
+          .findByProps({ "aria-label": "Requested changes" })
+          .props.onChange({ target: { value: "Old A draft" } }),
+      );
+      const oldChange = renderer.root.findByProps({ "aria-label": "Requested changes" }).props
+        .onChange;
+      const old =
+        mode === "change"
+          ? () => oldChange({ target: { value: "Stale A edit" } })
+          : mode === "dialog"
+            ? renderer.root.findByType("dialog").props.onClose
+            : creationButton(
+                mode === "cancel"
+                  ? "Cancel revision preparation"
+                  : mode === "draft"
+                    ? "Fill empty draft and open"
+                    : "Open conversation for full context",
+              )!.props.onClick;
+      await creationClick("Cancel revision preparation");
+      await awaitReviewReads(
+        () => creationButton("Prepare revision request")!.props.onClick(),
+        2,
+        f,
+      );
+      await act(async () =>
+        renderer.root
+          .findByProps({ "aria-label": "Requested changes" })
+          .props.onChange({ target: { value: "Current B draft" } }),
+      );
+      const reads = state.readProjection.mock.calls.length;
+      await act(async () => {
+        await old();
+      });
+      expect(state.readProjection).toHaveBeenCalledTimes(reads);
+      expect(renderer.root.findByProps({ "aria-label": "Requested changes" }).props.value).toBe(
+        "Current B draft",
+      );
+      expect(state.navigate).not.toHaveBeenCalled();
+      expect(
+        useComposerDraftStore
+          .getState()
+          .getComposerDraft(scopeThreadRef(EnvironmentId.make("environment-a"), c.threadId)),
+      ).toBeNull();
+      expect(creationButton("Cancel revision preparation")).toBeDefined();
+      expect(state.reviewDecide).not.toHaveBeenCalled();
+      expect(state.startStep).not.toHaveBeenCalled();
+      await creationClick("Cancel revision preparation");
+      expect(creationButton("Cancel revision preparation")).toBeUndefined();
+    });
+  },
+  30000,
+);

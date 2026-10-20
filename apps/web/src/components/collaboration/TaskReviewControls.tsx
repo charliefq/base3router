@@ -2,7 +2,7 @@ import { useTaskResultReview } from "./TaskResultReview";
 import { useTaskInboxDraft } from "./TaskInboxDrafts";
 import { TaskCapabilityReadout } from "./TaskCapabilityReadout";
 import * as Schema from "effect/Schema";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import {
   ThreadId,
   TaskContractBrake,
@@ -52,17 +52,25 @@ export function TaskReviewControls(props: {
   const resultReview = useTaskResultReview();
   const readReview = useAtomCommand(threadEnvironment.readTaskReview, { reportFailure: false });
   const decide = useAtomCommand(threadEnvironment.decideTaskContract, { reportFailure: false });
-  const [confirmation, setConfirmation] = useState<{
+  type Confirmation = {
     action: TaskContractReviewAction | "set";
     proposed?: TaskInstructionDraft;
     facts: AvailableReview;
-  } | null>(null);
-  const [editor, setEditor] = useState<{
-    facts: AvailableReview;
-    draft: TaskInstructionDraft;
-    key: string;
-  } | null>(null);
+    editorToken?: object;
+  };
+  type Editor = { facts: AvailableReview; draft: TaskInstructionDraft; key: string; token: object };
+  const [confirmation, setConfirmationState] = useState<Confirmation | null>(null);
+  const confirmationRef = useRef(confirmation);
+  const setConfirmation = useCallback((value: Confirmation | null) => {
+    confirmationRef.current = value;
+    setConfirmationState(value);
+  }, []);
+  const [editor, setEditorState] = useState<Editor | null>(null);
   const editorRef = useRef(editor);
+  const setEditor = useCallback((value: Editor | null) => {
+    editorRef.current = value;
+    setEditorState(value);
+  }, []);
   const [retainedDraft, setRetainedDraft] = useTaskInboxDraft<{
     identity: string;
     draft: TaskInstructionDraft;
@@ -113,6 +121,8 @@ export function TaskReviewControls(props: {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      confirmationRef.current = null;
+      editorRef.current = null;
       resolveConfirmation.current?.(false);
       resolveConfirmation.current = null;
       resolveEditor.current?.(null);
@@ -120,7 +130,10 @@ export function TaskReviewControls(props: {
     };
   }, []);
   const close = (confirmed: boolean) => {
-    if (confirmation?.action === "set") {
+    if (!confirmation || confirmationRef.current !== confirmation) return;
+    if (confirmation.action === "set" && editorRef.current?.token !== confirmation.editorToken)
+      return;
+    if (confirmation.action === "set") {
       setConfirmation(null);
       if (confirmed && confirmation.proposed) {
         const resolve = resolveEditor.current;
@@ -209,6 +222,7 @@ export function TaskReviewControls(props: {
                         acceptance: facts.contract.acceptance,
                       },
                 key: initialFacts,
+                token: {},
               });
             })
           : await new Promise<boolean>((resolve) => {
@@ -305,7 +319,15 @@ export function TaskReviewControls(props: {
   };
   const previewInstructions = async () => {
     const editing = editorRef.current;
-    if (!editing || previewingRef.current || blocked || confirmation) return;
+    if (
+      !editor ||
+      !editing ||
+      editing.token !== editor.token ||
+      previewingRef.current ||
+      blocked ||
+      confirmation
+    )
+      return;
     const initialIdentity = identity;
     const proposed = {
       goal: editing.draft.goal.trim(),
@@ -361,7 +383,7 @@ export function TaskReviewControls(props: {
         );
         return;
       }
-      setConfirmation({ action: "set", facts: read.value, proposed });
+      setConfirmation({ action: "set", facts: read.value, proposed, editorToken: editing.token });
     } catch {
       if (
         generation === previewGeneration.current &&
@@ -449,13 +471,16 @@ export function TaskReviewControls(props: {
           busy={previewing || confirmation !== null}
           blocked={blocked}
           onChange={(draft) => {
+            const current = editorRef.current;
+            if (!editor || !current || current.token !== editor.token) return;
             if (!previewingRef.current && !confirmation && !blocked) {
               setRetainedDraft({ identity, draft });
-              setEditor((current) => (current ? { ...current, draft } : null));
+              setEditor({ ...current, draft });
             }
           }}
           onPreview={() => void previewInstructions()}
           onCancel={() => {
+            if (!editor || editorRef.current?.token !== editor.token) return;
             const resolve = resolveEditor.current;
             resolveEditor.current = null;
             previewGeneration.current += 1;

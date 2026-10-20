@@ -58,6 +58,8 @@ export function useTaskFirstLaunch(props: {
   stale: boolean;
   onOpen: () => void;
   resultBound?: boolean;
+  // Only unsent intent is gated. Original-command status recovery remains independent.
+  reviewIsCurrent?: (() => boolean) | undefined;
   priorResult?: TaskContinuationResult | null;
 }) {
   const readSourceReview = useAtomCommand(threadEnvironment.readTaskReview, {
@@ -282,6 +284,7 @@ export function useTaskFirstLaunch(props: {
   const submit = async () => {
     if (
       !review ||
+      props.reviewIsCurrent?.() === false ||
       activeReview.current?.value !== review ||
       reviewOwner.current !== reviewToken ||
       (review.instructionSkill && Date.parse(review.instructionSkill.expiresAt) <= Date.now()) ||
@@ -653,6 +656,7 @@ export function useTaskFirstLaunch(props: {
         onClick={() => {
           if (
             !available ||
+            props.reviewIsCurrent?.() === false ||
             !props.facts ||
             !props.thread ||
             !mode ||
