@@ -1,3 +1,4 @@
+import { verifyJointTaskInputReview } from "./taskJointInputReview.ts";
 import {
   isProviderAvailable,
   isProviderTaskExecutionCapable,
@@ -35,7 +36,6 @@ export function verifyTaskReferenceFile(launch: TaskFirstLaunch, actorId: string
   if (
     !isTaskFirstLaunch(launch) ||
     !proof ||
-    launch.instructionSkill ||
     proof.actorId !== actorId ||
     !isPlainTaskReference(proof.source) ||
     !isPlainTaskReference(proof.attachment)
@@ -55,7 +55,8 @@ export function verifyTaskReferenceFile(launch: TaskFirstLaunch, actorId: string
   )
     throw new Error("Reference file review expired.");
   const { bindingSha256, ...binding } = proof;
-  if (taskReferenceFileBinding(launch, binding) !== bindingSha256)
+  if (launch.instructionSkill) verifyJointTaskInputReview(launch);
+  else if (taskReferenceFileBinding(launch, binding) !== bindingSha256)
     throw new Error("Reference file input changed.");
   return proof;
 }

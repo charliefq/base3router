@@ -234,7 +234,10 @@ Upload and review do not start work. Review its name, type, size and content has
 instructions and the current contract, then explicitly Start. This first slice uses the
 Codex file transport. Auto can choose a different eligible model at dispatch; if the actual
 target cannot receive the file, the launch is blocked without dropping it or switching modes.
-Reference files and instruction-only skills cannot be combined; explicitly remove one.
+You can select an existing instruction-only skill and the file in either order, then review
+them together. Changing either input retires the entire review. The complete instructions,
+skill context and file path must fit the input limit; shorten instructions and review again
+if they do not. File content remains untrusted evidence and the skill grants no added authority.
 Removing the file or changing task/session facts retires its review. After an uncertain Start,
 keep the original identity and use status recovery rather than uploading or starting again.
 Recorded input delivery is separate from provider completion and owner acceptance.

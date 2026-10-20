@@ -1,3 +1,4 @@
+import { taskInstructionDeliveryMatches } from "@t3tools/shared/taskInstructionSkills";
 import { taskReferenceDeliveryMatches } from "@t3tools/shared/taskReferenceFile";
 import { readCapabilityStepState } from "./TaskCapabilityStep.ts";
 import { readTaskCapabilityEvidence } from "./taskCapabilityPlan.ts";
@@ -492,7 +493,19 @@ const readResultEvidence = (
       ...(run.instructionSkillSelection
         ? { instructionSkillSelection: run.instructionSkillSelection }
         : {}),
-      ...(run.instructionSkillDelivery
+      ...(run.instructionSkillDelivery &&
+      (!run.referenceFileSelection ||
+        taskInstructionDeliveryMatches(
+          run.instructionSkillSelection,
+          run.instructionSkillDelivery,
+          {
+            runId: run.id,
+            attemptId: run.activeAttemptId,
+            messageId: run.userMessageId ?? "",
+            modelSelection: run.modelSelection,
+          },
+          run.referenceFileSelection,
+        ))
         ? { instructionSkillDelivery: run.instructionSkillDelivery }
         : {}),
       ...(run.capabilityEvidence === undefined

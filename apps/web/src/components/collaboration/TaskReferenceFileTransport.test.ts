@@ -355,7 +355,7 @@ it("unsupported/oversized or forged plaintext review is unavailable before any n
   });
 });
 
-it("expired pending upload and unsupported skill combination cannot receive a file review", async () => {
+it("expired pending upload and a pre-attached separate skill proof cannot receive a file review", async () => {
   await withTaskTransportFixture(async (f) => {
     const p = await prepareTask(f, "file-expired-upload");
     const text = "notes";

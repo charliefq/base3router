@@ -1,7 +1,14 @@
 import {
+  verifyJointTaskInputReview,
+  jointTaskInputSelectionsMatch,
+} from "./taskJointInputReview.ts";
+import {
   TaskInstructionSkillModule,
   TaskInstructionSkillRef,
   TaskFirstLaunch,
+  type TaskInstructionSkillReview,
+  type TaskInstructionSkillDelivery,
+  type TaskReferenceFileReview,
   type ServerProvider,
   type ModelSelection,
   isProviderAvailable,
@@ -112,7 +119,8 @@ export function verifyTaskInstructionSkillReview(
     throw new Error("Instruction skill review expired.");
   const module = resolveTaskInstructionSkill(proof.module);
   const { bindingSha256, ...binding } = proof;
-  if (taskInstructionSkillBinding(launch, binding) !== bindingSha256)
+  if (launch.referenceFile) verifyJointTaskInputReview(launch);
+  else if (taskInstructionSkillBinding(launch, binding) !== bindingSha256)
     throw new Error("Instruction skill launch facts changed.");
   return module;
 }
@@ -139,5 +147,31 @@ export function taskInstructionSkillTargetAvailable(
     isProviderTaskExecutionCapable(provider) &&
     model !== undefined &&
     (model.inputModalities === undefined || model.inputModalities.includes("text"))
+  );
+}
+
+export function taskInstructionDeliveryMatches(
+  selection: TaskInstructionSkillReview | undefined,
+  delivery: TaskInstructionSkillDelivery | undefined,
+  identity: {
+    runId: string;
+    attemptId: string | null;
+    messageId: string;
+    modelSelection: ModelSelection;
+  },
+  reference?: TaskReferenceFileReview,
+) {
+  return (
+    !!selection &&
+    !!delivery &&
+    digestCanonical(delivery.module) === digestCanonical(selection.module) &&
+    delivery.runId === identity.runId &&
+    delivery.attemptId === identity.attemptId &&
+    delivery.messageId === identity.messageId &&
+    digestCanonical(delivery.modelSelection) === digestCanonical(identity.modelSelection) &&
+    (reference
+      ? jointTaskInputSelectionsMatch(reference, selection) &&
+        delivery.reviewId === selection.reviewId
+      : delivery.reviewId === undefined || delivery.reviewId === selection.reviewId)
   );
 }

@@ -9437,14 +9437,24 @@ it.each(["session", "stale", "environment"] as const)(
 );
 
 it.each([
-  { mode: "manual" as const, transition: "start" },
-  { mode: "auto" as const, transition: "start" },
-  { mode: "manual" as const, transition: "remove" },
-  { mode: "auto" as const, transition: "session" },
-  { mode: "manual" as const, transition: "stale" },
+  ...[
+    { mode: "manual" as const, transition: "start" },
+    { mode: "auto" as const, transition: "start" },
+    { mode: "manual" as const, transition: "remove" },
+    { mode: "auto" as const, transition: "session" },
+    { mode: "manual" as const, transition: "stale" },
+  ].map((c) => ({ ...c, joint: false, order: "file-first" as const })),
+  ...(["manual", "auto"] as const).flatMap((mode) =>
+    (["file-first", "skill-first"] as const).map((order) => ({
+      mode,
+      transition: "start",
+      joint: true,
+      order,
+    })),
+  ),
 ])(
-  "mounted $mode reference file uploads/reviews with $transition transition",
-  async ({ mode, transition }) => {
+  "mounted $mode reference file joint=$joint order=$order uploads/reviews with $transition transition",
+  async ({ mode, transition, joint, order }) => {
     await withTaskTransportFixture(async (f) => {
       const p = await prepareReferenceTask(f, `ui-file-${mode}`, mode);
       state.providers = f.providers.map((provider) => ({
@@ -9493,6 +9503,8 @@ it.each([
           .props.onChange({ target: { value: "Summarize the supplied notes." } });
       });
       await creationClick(mode === "auto" ? "Choose Auto" : "Choose Manual");
+      const module = taskInstructionSkillModules()[0]!;
+      if (joint && order === "skill-first") await chooseInstructionModule(module.id);
       const file = new File(["Exact café reference bytes\n"], "notes.txt", { type: "text/plain" });
       await act(async () => {
         renderer.root
@@ -9504,6 +9516,7 @@ it.each([
         await state.fileUploadPromise;
         renderer.update(<TaskFirstInstructions {...props} />);
       });
+      if (joint && order === "file-first") await chooseInstructionModule(module.id);
       expect((await f.inspect()).starts).toHaveLength(0);
       expect(state.fileUpload).toHaveBeenCalledTimes(1);
       await creationClick("Review ordinary task launch");
@@ -9511,6 +9524,13 @@ it.each([
         await state.fileReview.mock.results[0]!.value;
       });
       expect(text()).toContain("Reviewed task reference file");
+      if (joint) {
+        expect(text()).toContain("Exact reviewed instruction module");
+        expect(text()).toContain(module.body);
+        expect(state.fileReview.mock.calls[0]![0].input.module).toEqual(
+          taskInstructionSkillRef(module),
+        );
+      }
       expect(text()).toContain("notes.txt");
       expect((await f.inspect()).starts).toHaveLength(0);
       const start = creationButton("Start reviewed ordinary task")!.props.onClick;
@@ -9547,6 +9567,8 @@ it.each([
       await f.settle(original.message.messageId);
       const observed = await f.inspect();
       expect(observed.starts).toHaveLength(1);
+      if (joint)
+        expect(observed.inputs[0]).toBe(original.message.text + taskInstructionSkillText(module));
       expect(observed.attachments[0]).toEqual([original.taskFirstLaunch.referenceFile.attachment]);
       expect(await f.attachmentBytes(original.taskFirstLaunch.referenceFile.attachment)).toBe(
         await file.text(),
@@ -9561,6 +9583,7 @@ it.each([
       });
       expect(text()).toContain("Reference file provenance");
       expect(text()).toContain("adapter-accepted");
+      if (joint) expect(text()).toContain("Instruction module provenance");
       expect(state.startStep).toHaveBeenCalledTimes(1);
       expect(state.fileUpload).toHaveBeenCalledTimes(1);
       expect(state.fileRelease).not.toHaveBeenCalled();
@@ -9569,23 +9592,42 @@ it.each([
   30000,
 );
 
-it.each(["adapter-accepted", "unknown", "mismatched"] as const)(
-  "persisted reference file result shows %s attribution without local launch recovery",
-  async (outcome) => {
+it.each([
+  ...(["adapter-accepted", "unknown", "mismatched"] as const).flatMap((outcome) =>
+    [false, true].map((joint) => ({ outcome, joint })),
+  ),
+  ...(["partial-file", "partial-skill", "mismatched-skill"] as const).map((outcome) => ({
+    outcome,
+    joint: true,
+  })),
+])(
+  "persisted reference file result shows $outcome, joint=$joint, attribution without local launch recovery",
+  async ({ outcome, joint }) => {
     await withTaskTransportFixture(async (f) => {
       const p = await prepareReferenceTask(f, `result-file-${outcome}`);
       const bytes = "Persisted file evidence: café\n";
+      const module = taskInstructionSkillModules()[0]!;
       const attachment = await f.uploadFile("persisted-notes.txt", bytes);
       const reviewed = await f.reviewReferenceFile({
         launch: p.launch,
         attachment,
         contentSha256: sha256Hex(bytes),
+        ...(joint ? { module: taskInstructionSkillRef(module) } : {}),
       });
       if (reviewed._tag !== "Success" || reviewed.value.status !== "available")
         throw new Error("File review unavailable");
       const proof = reviewed.value.review;
-      const marker = { ...p.launch, referenceFile: proof };
-      if (outcome === "unknown") f.holdInput(marker.text);
+      const marker = {
+        ...p.launch,
+        referenceFile: proof,
+        ...(reviewed.value.instructionSkill
+          ? { instructionSkill: reviewed.value.instructionSkill }
+          : {}),
+      };
+      if (outcome === "unknown")
+        f.holdInput(marker.text + (joint ? taskInstructionSkillText(module) : ""));
+      if (outcome === "partial-file") f.failJointEvidence("accepted-file");
+      if (outcome === "partial-skill") f.failJointEvidence("accepted-skill");
       try {
         const started = await f.dispatch({
           type: "message.dispatch",
@@ -9605,14 +9647,31 @@ it.each(["adapter-accepted", "unknown", "mismatched"] as const)(
         if (outcome === "unknown") await f.awaitHeldStart();
         else await f.settle(marker.messageId);
         if (outcome === "mismatched") await f.corruptFileDelivery(marker.threadId);
+        if (outcome === "mismatched-skill") await f.corruptJointSkillDelivery(marker.threadId);
         state.snapshot = await f.snapshot();
         const task = state.snapshot.tasks.find((t) => t.threadId === marker.threadId)!;
         const result = task.resultReadout;
         if (result?.status !== "available") throw new Error("No persisted result evidence");
         expect(result.referenceFileSelection).toEqual(proof);
-        expect(result.referenceFileDelivery?.status).toBe(
-          outcome === "mismatched" ? undefined : outcome,
-        );
+        const fileStatus =
+          outcome === "mismatched"
+            ? undefined
+            : outcome === "unknown" || outcome === "partial-file"
+              ? "unknown"
+              : "adapter-accepted";
+        expect(result.referenceFileDelivery?.status).toBe(fileStatus);
+        if (joint)
+          expect(result.instructionSkillDelivery?.status).toBe(
+            outcome === "mismatched-skill"
+              ? undefined
+              : outcome === "unknown" || outcome === "partial-skill"
+                ? "unknown"
+                : "adapter-accepted",
+          );
+        vi.stubGlobal("sessionStorage", { getItem: () => null, setItem: vi.fn() });
+        expect(
+          readFirstLaunchAttempt(firstLaunchStorageKey("environment-a", marker.threadId)).attempt,
+        ).toBeNull();
         vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn() });
         state.load.mockImplementation(() => f.snapshot());
         const before = await f.executionCounts();
@@ -9642,12 +9701,18 @@ it.each(["adapter-accepted", "unknown", "mismatched"] as const)(
           expect(text()).toContain("Unknown / no matching delivery evidence");
           expect(evidence).not.toContain("adapter-accepted");
         } else {
-          expect(evidence).toContain(`File input delivery: ${outcome}`);
+          expect(evidence).toContain(`File input delivery: ${fileStatus}`);
           expect(evidence).toContain(result.runId);
           expect(evidence).toContain(result.attemptId);
           expect(evidence).toContain(result.messageId);
           expect(evidence).toContain(result.referenceFileDelivery!.modelSelection.instanceId);
           expect(evidence).toContain(result.referenceFileDelivery!.modelSelection.model);
+        }
+        if (joint) {
+          expect(text()).toContain("Instruction module provenance");
+          expect(paragraphs).toContain(
+            `Joint input delivery: ${outcome === "adapter-accepted" ? "adapter-accepted" : "Unknown / partial or unconfirmed delivery"}`,
+          );
         }
         if (outcome === "unknown") {
           expect(paragraphs).toContain("Latest persisted run status: running");
@@ -9667,3 +9732,375 @@ it.each(["adapter-accepted", "unknown", "mismatched"] as const)(
     });
   },
 );
+
+type JointTransportFixture = Parameters<Parameters<typeof withTaskTransportFixture>[0]>[0];
+function wireJointTransportUi(f: JointTransportFixture) {
+  state.providers = f.providers.map((provider) => ({
+    ...provider,
+    displayName: provider.displayName ?? provider.driver,
+    models: provider.models.map((m) => ({ ...m, isDefault: false })),
+  }));
+  state.reviewRead.mockImplementation(({ input }) => f.review(input));
+  state.readProjection.mockImplementation(({ input }) => f.projection(input));
+  state.fileReview.mockImplementation(({ input }) => f.reviewReferenceFile(input));
+  state.skillReview.mockImplementation(({ input }) => f.reviewInstructionSkill(input));
+  state.startStep.mockImplementation(({ input }) => f.start(input));
+  state.firstLaunchRead.mockImplementation(({ input }) => f.launchStatus(input));
+  state.fileUpload.mockImplementation(({ image, environmentId }) => {
+    state.fileUploadPromise = (async () => {
+      const uploaded = await f.uploadFile(image.name, await image.file.text());
+      state.fileUploads[image.id] = { status: "ready", environmentId, attachmentId: uploaded.id };
+    })();
+  });
+}
+async function openJointInstructions(
+  textValue = "Summarize the reference within the current task.",
+) {
+  const reviews = state.reviewRead.mock.calls.length;
+  const projections = state.readProjection.mock.calls.length;
+  await creationClick("Prepare first instructions");
+  await act(async () => {
+    await state.reviewRead.mock.results[reviews]!.value;
+  });
+  await act(async () => {
+    await state.readProjection.mock.results[projections]!.value;
+  });
+  await act(async () => {
+    await state.reviewRead.mock.results[reviews + 1]!.value;
+  });
+  await act(async () => {
+    renderer.root
+      .findByProps({ "aria-label": "Initial instructions" })
+      .props.onChange({ target: { value: textValue } });
+  });
+  await creationClick("Choose Auto");
+}
+async function pickJointFile(
+  props: React.ComponentProps<typeof TaskFirstInstructions>,
+  file = new File(["Joint supplied evidence: café\n"], "joint-notes.txt", { type: "text/plain" }),
+) {
+  await act(async () => {
+    renderer.root
+      .findByProps({ "aria-label": "Choose task reference file" })
+      .props.onChange({ currentTarget: { files: [file], value: "" } });
+    await file.arrayBuffer();
+  });
+  await act(async () => {
+    await state.fileUploadPromise;
+    renderer.update(<TaskFirstInstructions {...props} />);
+  });
+}
+async function mountedJointDraft(f: JointTransportFixture, key: string) {
+  const p = await prepareReferenceTask(f, key, "auto");
+  wireJointTransportUi(f);
+  const props = {
+    task: p.task,
+    environmentId: EnvironmentId.make("environment-a"),
+    stale: false,
+    readVersion: 1,
+    onOpen: vi.fn(),
+  };
+  await act(async () => {
+    renderer = create(<TaskFirstInstructions {...props} />);
+  });
+  await openJointInstructions();
+  await chooseInstructionModule(taskInstructionSkillModules()[0]!.id);
+  await pickJointFile(props);
+  return props;
+}
+it.each(["module", "routing", "instructions", "remove-file", "remove-skill"] as const)(
+  "joint executable review never resurrects through %s A-to-B-to-A or removal",
+  async (change) => {
+    await withTaskTransportFixture(async (f) => {
+      const props = await mountedJointDraft(f, `joint-ui-retire-${change}`);
+      await creationClick("Review ordinary task launch");
+      await act(async () => {
+        await state.fileReview.mock.results[0]!.value;
+      });
+      const oldStart = creationButton("Start reviewed ordinary task")!.props.onClick;
+      if (change === "module") {
+        await chooseInstructionModule(taskInstructionSkillModules()[1]!.id);
+        await chooseInstructionModule(taskInstructionSkillModules()[0]!.id);
+      }
+      if (change === "routing") {
+        await creationClick("Choose Manual");
+        await creationClick("Choose Auto");
+      }
+      if (change === "instructions")
+        for (const value of [
+          "Changed instructions",
+          "Summarize the reference within the current task.",
+        ])
+          await act(async () => {
+            renderer.root
+              .findByProps({ "aria-label": "Initial instructions" })
+              .props.onChange({ target: { value } });
+          });
+      if (change === "remove-file") await creationClick("Remove reference file");
+      if (change === "remove-skill") await chooseInstructionModule("none");
+      expect(creationButton("Start reviewed ordinary task")).toBeUndefined();
+      await act(async () => {
+        await oldStart();
+      });
+      expect(state.startStep).not.toHaveBeenCalled();
+      expect((await f.inspect()).starts).toHaveLength(0);
+      expect(state.fileReview).toHaveBeenCalledTimes(1);
+      if (change !== "remove-file" && change !== "remove-skill") {
+        await creationClick("Review ordinary task launch");
+        await act(async () => {
+          await state.fileReview.mock.results[1]!.value;
+        });
+        await act(async () => {
+          await oldStart();
+        });
+        expect(state.startStep).not.toHaveBeenCalled();
+        expect(creationButton("Start reviewed ordinary task")!.props.disabled).toBe(false);
+      }
+      expect(state.fileUpload).toHaveBeenCalledTimes(1);
+      expect(props.task.threadId).not.toBeNull();
+    });
+  },
+);
+it.each(["session", "environment", "contract"] as const)(
+  "late joint review cannot overwrite a newer review after %s A-to-B-to-A",
+  async (change) => {
+    await withTaskTransportFixture(async (f) => {
+      const props = await mountedJointDraft(f, `joint-late-${change}`);
+      const first = deferred<Awaited<ReturnType<typeof f.reviewReferenceFile>>>();
+      state.fileReview.mockImplementationOnce(() => first.promise);
+      const oldReview = creationButton("Review ordinary task launch")!.props.onClick;
+      await creationClick("Review ordinary task launch");
+      const original = await f.reviewReferenceFile(state.fileReview.mock.calls[0]![0].input);
+      if (original._tag !== "Success" || original.value.status !== "available")
+        throw new Error("No original joint proof");
+      if (change === "session") {
+        const session = state.sessionIdentity;
+        for (const identity of [{}, session])
+          await act(async () => {
+            state.sessionIdentity = identity;
+            renderer.update(<TaskFirstInstructions {...props} />);
+          });
+      } else if (change === "environment") {
+        for (const environmentId of [EnvironmentId.make("environment-b"), props.environmentId])
+          await act(async () => {
+            renderer.update(<TaskFirstInstructions {...props} environmentId={environmentId} />);
+          });
+      } else {
+        const readout = props.task.contractReadout;
+        if (readout?.status !== "available") throw new Error("No contract");
+        const changed = {
+          ...props.task,
+          contractReadout: {
+            ...readout,
+            contract: { ...readout.contract, goal: "Different context" },
+          },
+        };
+        for (const task of [changed, props.task])
+          await act(async () => {
+            renderer.update(<TaskFirstInstructions {...props} task={task} />);
+          });
+      }
+      await openJointInstructions();
+      await chooseInstructionModule(taskInstructionSkillModules()[0]!.id);
+      await pickJointFile(props);
+      await creationClick("Review ordinary task launch");
+      await act(async () => {
+        await state.fileReview.mock.results[1]!.value;
+      });
+      const latest = await state.fileReview.mock.results[1]!.value;
+      if (latest._tag !== "Success" || latest.value.status !== "available")
+        throw new Error("No latest proof");
+      await act(async () => {
+        first.resolve(original);
+        await first.promise;
+      });
+      expect(text()).toContain(latest.value.review.reviewId);
+      expect(text()).not.toContain(original.value.review.reviewId);
+      await act(async () => {
+        await oldReview();
+      });
+      expect(state.fileReview).toHaveBeenCalledTimes(2);
+      expect(state.startStep).not.toHaveBeenCalled();
+      expect(state.fileUpload).toHaveBeenCalledTimes(2);
+      expect((await f.inspect()).starts).toHaveLength(0);
+      await creationClick("Start reviewed ordinary task");
+      await act(async () => {
+        await state.startStep.mock.results[0]!.value;
+      });
+      const started = state.startStep.mock.calls[0]![0].input;
+      expect(started.taskFirstLaunch.referenceFile.reviewId).toBe(latest.value.review.reviewId);
+      await f.settle(started.message.messageId);
+      expect((await f.inspect()).starts).toHaveLength(1);
+      expect(state.fileUpload).toHaveBeenCalledTimes(2);
+    });
+  },
+);
+it.each(["session", "environment"] as const)(
+  "late reference byte read cannot upload after joint context %s A-to-B-to-A",
+  async (change) => {
+    await withTaskTransportFixture(async (f) => {
+      const p = await prepareReferenceTask(f, `joint-upload-late-${change}`);
+      wireJointTransportUi(f);
+      const props = {
+        task: p.task,
+        environmentId: EnvironmentId.make("environment-a"),
+        stale: false,
+        readVersion: 1,
+        onOpen: vi.fn(),
+      };
+      await act(async () => {
+        renderer = create(<TaskFirstInstructions {...props} />);
+      });
+      await openJointInstructions();
+      await chooseInstructionModule(taskInstructionSkillModules()[0]!.id);
+      const read = deferred<ArrayBuffer>();
+      const file = new File(["Deferred evidence"], "deferred.txt", { type: "text/plain" });
+      Object.defineProperty(file, "arrayBuffer", { value: () => read.promise });
+      await act(async () => {
+        renderer.root
+          .findByProps({ "aria-label": "Choose task reference file" })
+          .props.onChange({ currentTarget: { files: [file], value: "" } });
+      });
+      if (change === "session") {
+        const session = state.sessionIdentity;
+        for (const identity of [{}, session])
+          await act(async () => {
+            state.sessionIdentity = identity;
+            renderer.update(<TaskFirstInstructions {...props} />);
+          });
+      } else
+        for (const environmentId of [EnvironmentId.make("environment-b"), props.environmentId])
+          await act(async () => {
+            renderer.update(<TaskFirstInstructions {...props} environmentId={environmentId} />);
+          });
+      await act(async () => {
+        read.resolve(new TextEncoder().encode("Deferred evidence").buffer);
+        await read.promise;
+      });
+      expect(state.fileUpload).not.toHaveBeenCalled();
+      expect(state.fileReview).not.toHaveBeenCalled();
+      expect(state.startStep).not.toHaveBeenCalled();
+      expect((await f.inspect()).starts).toHaveLength(0);
+    });
+  },
+);
+
+it.each(["session", "environment"] as const)(
+  "late upload completion cannot restore a joint file after %s A-to-B-to-A",
+  async (change) => {
+    await withTaskTransportFixture(async (f) => {
+      const p = await prepareReferenceTask(f, `joint-late-upload-${change}`);
+      wireJointTransportUi(f);
+      const props = {
+        task: p.task,
+        environmentId: EnvironmentId.make("environment-a"),
+        stale: false,
+        readVersion: 1,
+        onOpen: vi.fn(),
+      };
+      await act(async () => {
+        renderer = create(<TaskFirstInstructions {...props} />);
+      });
+      await openJointInstructions();
+      await chooseInstructionModule(taskInstructionSkillModules()[0]!.id);
+      const uploaded = deferred<void>();
+      state.fileUpload.mockImplementationOnce(({ image, environmentId }) => {
+        state.fileUploadPromise = (async () => {
+          await uploaded.promise;
+          const attachment = await f.uploadFile(image.name, await image.file.text());
+          state.fileUploads[image.id] = {
+            status: "ready",
+            environmentId,
+            attachmentId: attachment.id,
+          };
+        })();
+      });
+      const file = new File(["Late uploaded reference"], "late-upload.txt", { type: "text/plain" });
+      await act(async () => {
+        renderer.root
+          .findByProps({ "aria-label": "Choose task reference file" })
+          .props.onChange({ currentTarget: { files: [file], value: "" } });
+        await file.arrayBuffer();
+      });
+      expect(state.fileUpload).toHaveBeenCalledTimes(1);
+      if (change === "session") {
+        const session = state.sessionIdentity;
+        for (const identity of [{}, session])
+          await act(async () => {
+            state.sessionIdentity = identity;
+            renderer.update(<TaskFirstInstructions {...props} />);
+          });
+      } else
+        for (const environmentId of [EnvironmentId.make("environment-b"), props.environmentId])
+          await act(async () => {
+            renderer.update(<TaskFirstInstructions {...props} environmentId={environmentId} />);
+          });
+      await act(async () => {
+        uploaded.resolve();
+        await state.fileUploadPromise;
+        renderer.update(<TaskFirstInstructions {...props} />);
+      });
+      await openJointInstructions();
+      await chooseInstructionModule(taskInstructionSkillModules()[0]!.id);
+      await creationClick("Review ordinary task launch");
+      await act(async () => {
+        await state.skillReview.mock.results.at(-1)!.value;
+      });
+      expect(state.fileReview).not.toHaveBeenCalled();
+      expect(state.fileUpload).toHaveBeenCalledTimes(1);
+      expect(state.fileRelease).toHaveBeenCalledTimes(1);
+      expect(state.startStep).not.toHaveBeenCalled();
+      expect(text()).not.toContain("Reviewed task reference file");
+      expect((await f.inspect()).starts).toHaveLength(0);
+    });
+  },
+);
+it("joint expiry retires both inputs and the captured Start callback", async () => {
+  await withTaskTransportFixture(async (f) => {
+    await mountedJointDraft(f, "joint-ui-expiry");
+    const realTimeout = globalThis.setTimeout;
+    let expire: (() => void) | undefined;
+    const timer = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, delay, ...args) => {
+        if (
+          typeof callback === "function" &&
+          delay !== undefined &&
+          delay > 290000 &&
+          delay <= 300000
+        )
+          expire = () => callback(...args);
+        return realTimeout(callback, delay, ...args);
+      });
+    try {
+      await creationClick("Review ordinary task launch");
+      await act(async () => {
+        await state.fileReview.mock.results[0]!.value;
+      });
+      const reviewed = await state.fileReview.mock.results[0]!.value;
+      if (reviewed._tag !== "Success" || reviewed.value.status !== "available")
+        throw new Error("No joint review");
+      const oldStart = creationButton("Start reviewed ordinary task")!.props.onClick;
+      if (!expire) throw new Error("No review expiry timer");
+      const clock = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(Date.parse(reviewed.value.review.expiresAt) + 1);
+      try {
+        await act(async () => {
+          expire!();
+        });
+        await act(async () => {
+          await oldStart();
+        });
+      } finally {
+        clock.mockRestore();
+      }
+      expect(creationButton("Start reviewed ordinary task")).toBeUndefined();
+      expect(text()).toContain("Reference file review expired");
+      expect(state.startStep).not.toHaveBeenCalled();
+      expect((await f.inspect()).starts).toHaveLength(0);
+    } finally {
+      timer.mockRestore();
+    }
+  });
+});

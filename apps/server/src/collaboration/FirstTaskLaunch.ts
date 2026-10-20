@@ -1,3 +1,4 @@
+import { taskFirstLaunchInput, jointTaskInputBinding } from "@t3tools/shared/taskJointInputReview";
 import {
   TaskReferenceFileReview,
   TaskReferenceFileReviewInput,
@@ -23,6 +24,8 @@ import {
   type TaskInstructionSkillReviewState,
 } from "@t3tools/contracts";
 import {
+  taskInstructionDeliveryMatches,
+  taskInstructionSkillText,
   taskInstructionSkillBinding,
   taskInstructionSkillTargetAvailable,
   resolveTaskInstructionSkill,
@@ -98,7 +101,7 @@ const validateTaskReferenceIssuance = Effect.fn("TaskReferenceFile.validateIssua
     issued: string | null;
   }>`SELECT json_extract(payload_json,'$.__taskReferenceFileReview') AS issued FROM orchestration_v2_projection_threads WHERE thread_id=${launch.threadId}`;
   const issued = rows[0]?.issued ? decodeIssuedFile(rows[0].issued) : Option.none();
-  const { referenceFile: _file, ...base } = launch;
+  const base = taskFirstLaunchInput(launch);
   if (
     Option.isNone(issued) ||
     issued.value.sessionId !== actor.sessionId ||
@@ -114,9 +117,15 @@ export const prepareTaskReferenceClaim = Effect.fn("TaskReferenceFile.prepareCla
 ) {
   if (!c.taskFirstLaunch?.referenceFile) return undefined;
   const proof = yield* validateTaskReferenceIssuance(sql, c.taskFirstLaunch);
-  yield* validateTaskReferenceFileInput(proof.attachment, c.text);
+  const module = c.taskFirstLaunch.instructionSkill
+    ? yield* validateTaskInstructionIssuance(sql, c.taskFirstLaunch)
+    : undefined;
+  yield* validateTaskReferenceFileInput(
+    proof.attachment,
+    c.text + (module ? taskInstructionSkillText(module) : ""),
+  );
   if (argumentHash(c.attachments) !== argumentHash([proof.source])) return yield* deny();
-  const { referenceFile: _file, ...base } = c.taskFirstLaunch;
+  const base = taskFirstLaunchInput(c.taskFirstLaunch);
   yield* validateFirstTaskLaunch(sql, { ...c, taskFirstLaunch: base, attachments: [] });
   yield* readTaskReferenceFile(proof.source, proof.contentSha256).pipe(
     Effect.mapError(() => deny()),
@@ -139,6 +148,32 @@ const IssuedInstructionReview = Schema.fromJsonString(
 );
 const decodeIssuedInstructionReview = Schema.decodeUnknownOption(IssuedInstructionReview);
 const encodeIssuedInstructionReview = Schema.encodeSync(IssuedInstructionReview);
+const validateTaskInstructionIssuance = Effect.fn("TaskInstructionSkill.validateIssuance")(
+  function* (sql: SqlClient.SqlClient, launch: TaskFirstLaunch) {
+    const actor = yield* reviewedTaskPrincipal;
+    const proof = launch.instructionSkill;
+    if (!proof) return yield* deny();
+    const rows = yield* sql<{
+      issued_json: string | null;
+    }>`SELECT json_extract(payload_json,'$.__taskInstructionSkillReview') AS issued_json FROM orchestration_v2_projection_threads WHERE thread_id=${launch.threadId}`;
+    const issued = rows[0]?.issued_json
+      ? decodeIssuedInstructionReview(rows[0].issued_json)
+      : Option.none();
+    if (
+      Option.isNone(issued) ||
+      issued.value.sessionId !== actor.sessionId ||
+      argumentHash(issued.value.review) !== argumentHash(proof) ||
+      issued.value.launchSha256 !== argumentHash(taskFirstLaunchInput(launch))
+    )
+      return yield* deny();
+    const now = DateTime.formatIso(yield* DateTime.now);
+    return yield* Effect.try({
+      try: () => verifyInstructionSkillReview(launch, actor.actorId, now),
+      catch: () => deny(),
+    });
+  },
+);
+
 const validContinuation = Schema.is(TaskResultContinuation);
 const sameContinuation = Schema.toEquivalence(TaskResultContinuation);
 type Kind = "first" | "continuation";
@@ -219,38 +254,21 @@ export const validateFirstTaskLaunch = Effect.fn("FirstTaskLaunch.validate")(fun
   authorized = false,
 ) {
   if (!c.taskFirstLaunch) return;
-  const principal = yield* reviewedTaskPrincipal;
+  yield* reviewedTaskPrincipal;
   if (!reviewedDispatchMatches(c, authorized)) return yield* deny();
   const m = c.taskFirstLaunch;
   if (!validLaunch(m)) return yield* deny();
+  const reviewedModule = m.instructionSkill
+    ? yield* validateTaskInstructionIssuance(sql, m)
+    : undefined;
   if (m.referenceFile) {
     const proof = yield* validateTaskReferenceIssuance(sql, m);
     if (argumentHash(c.attachments) !== argumentHash([proof.attachment])) return yield* deny();
-    yield* readTaskReferenceFile(proof.attachment, proof.contentSha256, c.text).pipe(
-      Effect.mapError(() => deny()),
-    );
-  }
-  let reviewedModule: ReturnType<typeof verifyInstructionSkillReview> | undefined;
-  if (m.instructionSkill) {
-    const rows = yield* sql<{
-      issued_json: string | null;
-    }>`SELECT json_extract(payload_json,'$.__taskInstructionSkillReview') AS issued_json FROM orchestration_v2_projection_threads WHERE thread_id=${m.threadId}`;
-    const issued = rows[0]?.issued_json
-      ? decodeIssuedInstructionReview(rows[0].issued_json)
-      : Option.none();
-    const { instructionSkill: _proof, ...originalLaunch } = m;
-    if (
-      Option.isNone(issued) ||
-      issued.value.sessionId !== principal.sessionId ||
-      argumentHash(issued.value.review) !== argumentHash(m.instructionSkill) ||
-      issued.value.launchSha256 !== argumentHash(originalLaunch)
-    )
-      return yield* deny();
-    const skillNow = DateTime.formatIso(yield* DateTime.now);
-    reviewedModule = yield* Effect.try({
-      try: () => verifyInstructionSkillReview(m, principal.actorId, skillNow),
-      catch: () => deny(),
-    });
+    yield* readTaskReferenceFile(
+      proof.attachment,
+      proof.contentSha256,
+      c.text + (reviewedModule ? taskInstructionSkillText(reviewedModule) : ""),
+    ).pipe(Effect.mapError(() => deny()));
   }
   if (authorized || m.routingMode === "manual") {
     const registry = yield* Effect.serviceOption(ProviderRegistry);
@@ -390,7 +408,7 @@ export const reviewTaskInstructionSkill = Effect.fn("TaskInstructionSkill.review
     if (new TextEncoder().encode(record).length > 4096) return yield* deny();
     const stored = yield* sql<{
       thread_id: string;
-    }>`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.__taskInstructionSkillReview',json(${record})) WHERE thread_id=${launch.threadId} RETURNING thread_id`;
+    }>`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(json_remove(payload_json,'$.__taskReferenceFileReview'),'$.__taskInstructionSkillReview',json(${record})) WHERE thread_id=${launch.threadId} RETURNING thread_id`;
     if (stored.length !== 1) return yield* deny();
     return { status: "available", module, review };
   },
@@ -418,6 +436,12 @@ export const reviewTaskReferenceFile = Effect.fn("TaskReferenceFile.review")(
       return yield* deny();
     const launch = input.launch;
     const actor = yield* reviewedTaskPrincipal;
+    const module = input.module
+      ? yield* Effect.try({
+          try: () => resolveTaskInstructionSkill(input.module!),
+          catch: () => deny(),
+        })
+      : undefined;
     yield* validateFirstTaskLaunch(sql, {
       type: "message.dispatch",
       commandId: launch.commandId,
@@ -452,18 +476,52 @@ export const reviewTaskReferenceFile = Effect.fn("TaskReferenceFile.review")(
         ),
       ),
     };
-    yield* validateTaskReferenceFileInput(binding.attachment, launch.text);
-    const review = { ...binding, bindingSha256: taskReferenceFileBinding(launch, binding) };
+    yield* validateTaskReferenceFileInput(
+      binding.attachment,
+      launch.text + (module ? taskInstructionSkillText(module) : ""),
+    );
+    let review = { ...binding, bindingSha256: taskReferenceFileBinding(launch, binding) };
+    let instructionSkill: TaskInstructionSkillReview | undefined;
+    if (module && input.module) {
+      const skill = {
+        reviewId: binding.reviewId,
+        module: input.module,
+        actorId: binding.actorId,
+        reviewedAt: binding.reviewedAt,
+        expiresAt: binding.expiresAt,
+        bindingSha256: "0".repeat(64),
+      };
+      const hash = jointTaskInputBinding({
+        ...launch,
+        referenceFile: review,
+        instructionSkill: skill,
+      });
+      review = { ...review, bindingSha256: hash };
+      instructionSkill = { ...skill, bindingSha256: hash };
+    }
     const record = encodeIssuedFile({
       review,
       sessionId: actor.sessionId,
       launchSha256: argumentHash(launch),
     });
     if (new TextEncoder().encode(record).length > 4096) return yield* deny();
-    const stored =
-      yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.__taskReferenceFileReview',json(${record})) WHERE thread_id=${launch.threadId} RETURNING thread_id`;
+    const skillRecord = instructionSkill
+      ? encodeIssuedInstructionReview({
+          review: instructionSkill,
+          sessionId: actor.sessionId,
+          launchSha256: argumentHash(launch),
+        })
+      : undefined;
+    if (skillRecord && new TextEncoder().encode(skillRecord).length > 4096) return yield* deny();
+    const stored = skillRecord
+      ? yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.__taskReferenceFileReview',json(${record}),'$.__taskInstructionSkillReview',json(${skillRecord})) WHERE thread_id=${launch.threadId} RETURNING thread_id`
+      : yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json=json_set(json_remove(payload_json,'$.__taskInstructionSkillReview'),'$.__taskReferenceFileReview',json(${record})) WHERE thread_id=${launch.threadId} RETURNING thread_id`;
     if (stored.length !== 1) return yield* deny();
-    return { status: "available", review };
+    return {
+      status: "available",
+      review,
+      ...(instructionSkill && module ? { instructionSkill, module } : {}),
+    };
   },
   Effect.catchCause(() =>
     Effect.succeed({
@@ -658,7 +716,19 @@ export const readFirstTaskLaunchStatus = Effect.fn("FirstTaskLaunch.status")(
       ...(run.instructionSkillSelection
         ? { instructionSkillSelection: run.instructionSkillSelection }
         : {}),
-      ...(run.instructionSkillDelivery
+      ...(run.instructionSkillDelivery &&
+      (!original.referenceFile ||
+        taskInstructionDeliveryMatches(
+          original.instructionSkill,
+          run.instructionSkillDelivery,
+          {
+            runId: run.id,
+            attemptId: run.activeAttemptId,
+            messageId: c.messageId,
+            modelSelection: run.modelSelection,
+          },
+          original.referenceFile,
+        ))
         ? { instructionSkillDelivery: run.instructionSkillDelivery }
         : {}),
       runStatus: run.status,

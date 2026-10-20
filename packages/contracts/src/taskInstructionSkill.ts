@@ -65,6 +65,7 @@ export const TaskInstructionSkillReviewState = Schema.Union([
 export type TaskInstructionSkillReviewState = typeof TaskInstructionSkillReviewState.Type;
 /** Adapter acceptance records input delivery, never completion, correctness or task acceptance. */
 export const TaskInstructionSkillDelivery = Schema.Struct({
+  reviewId: Schema.optionalKey(TrimmedNonEmptyString),
   status: Schema.Literals(["unknown", "adapter-accepted"]),
   module: TaskInstructionSkillRef,
   runId: RunId,

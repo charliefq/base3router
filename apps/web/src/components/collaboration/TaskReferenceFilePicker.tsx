@@ -52,7 +52,7 @@ export function TaskReferenceFilePicker(props: {
     setNotice(null);
     onChange(null);
   }, [retain, onChange]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     epoch.current++;
     current.current = null;
     // Retire local upload state when its environment or authenticated session changes.
@@ -67,13 +67,20 @@ export function TaskReferenceFilePicker(props: {
     // Scope changes deliberately revoke the prior session upload, even before another file is chosen.
     // eslint-disable-next-line react/exhaustive-effect-dependencies
   }, [environmentId, session, retain, onChange]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     // Availability changes revoke a staged upload before another review can use it.
     // eslint-disable-next-line react/set-state-in-effect
     if (disabled && !retain.current) clear();
   }, [disabled, retain, clear]);
   useEffect(() => {
-    if (file && hash && upload?.status === "ready" && upload.environmentId === environmentId)
+    if (
+      !disabled &&
+      file &&
+      current.current?.id === file.id &&
+      hash &&
+      upload?.status === "ready" &&
+      upload.environmentId === environmentId
+    )
       onChange({
         status: "ready",
         attachment: {
@@ -85,7 +92,7 @@ export function TaskReferenceFilePicker(props: {
         },
         contentSha256: hash,
       });
-  }, [file, hash, upload, environmentId, onChange]);
+  }, [disabled, file, hash, upload, environmentId, onChange]);
   const choose = async (files: FileList | null) => {
     clear();
     setNotice(null);
@@ -121,7 +128,13 @@ export function TaskReferenceFilePicker(props: {
         await selected.arrayBuffer(),
       );
       if (!isPlainReferenceText(text)) throw new Error("Binary content is not supported.");
-      if (generation !== epoch.current || latest.current.disabled) return;
+      if (
+        generation !== epoch.current ||
+        latest.current.disabled ||
+        latest.current.environmentId !== environmentId ||
+        latest.current.session !== session
+      )
+        return;
       const staged: ComposerFileAttachment = {
         type: "file",
         id: ChatAttachmentId.make(randomUUID()),

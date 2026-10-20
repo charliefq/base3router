@@ -756,7 +756,20 @@ export const layer: Layer.Layer<
               readTaskReferenceFile(
                 selectedFile.attachment,
                 selectedFile.contentSha256,
-                message.text,
+                message.text +
+                  (launch.instructionSkill
+                    ? taskInstructionSkillText(
+                        yield* Effect.try({
+                          try: () =>
+                            verifyTaskInstructionSkillReview(
+                              launch,
+                              grants[0]?.actor_id ?? "",
+                              now,
+                            ),
+                          catch: (cause) => new ProviderTurnStartError({ runId, cause }),
+                        }),
+                      )
+                    : ""),
               ),
             );
           }),
@@ -1662,6 +1675,7 @@ export const layer: Layer.Layer<
               });
             pendingInstruction = {
               status: "unknown",
+              reviewId: selectedInstruction.reviewId,
               module: selectedInstruction.module,
               runId: run.id,
               attemptId: attempt.id,

@@ -522,6 +522,10 @@
     "./taskReferenceFile": {
       "types": "./src/taskReferenceFile.ts",
       "import": "./src/taskReferenceFile.ts"
+    },
+    "./taskJointInputReview": {
+      "types": "./src/taskJointInputReview.ts",
+      "import": "./src/taskJointInputReview.ts"
     }
   },
   "scripts": {

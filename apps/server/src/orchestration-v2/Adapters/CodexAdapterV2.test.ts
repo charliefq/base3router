@@ -1,3 +1,8 @@
+import {
+  taskInstructionSkillModules,
+  taskInstructionSkillRef,
+  taskInstructionSkillText,
+} from "@t3tools/shared/taskInstructionSkills";
 import { withTaskResultLinkageFixture } from "../../collaboration/testkit/taskResultLinkageFixture.ts";
 import {
   createPendingAttachmentId,
@@ -1757,21 +1762,26 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     });
 
   it.live.each(
-    (["manual", "auto"] as const).flatMap((mode) =>
-      (["exact-fit", "overflow", "max-instructions"] as const).map((boundary) => ({
-        mode,
-        boundary,
-      })),
+    (["file-only", "joint"] as const).flatMap((kind) =>
+      (["manual", "auto"] as const).flatMap((mode) =>
+        (["exact-fit", "overflow", "max-instructions"] as const).map((boundary) => ({
+          kind,
+          mode,
+          boundary,
+        })),
+      ),
     ),
   )(
-    "$mode reviewed file reaches final Codex RPC intact or rejects $boundary before native work",
-    ({ mode, boundary }) =>
+    "$kind $mode reviewed file reaches final Codex RPC intact or rejects $boundary before native work",
+    ({ kind, mode, boundary }) =>
       Effect.scoped(
         Effect.gen(function* () {
+          const module = kind === "joint" ? taskInstructionSkillModules()[0]! : undefined;
+          const moduleContext = module ? taskInstructionSkillText(module) : "";
           const requests: Array<{ method: string; params: unknown }> = [];
           const harness = yield* makeCodexReplayHarness(
             makeCodexReplayTranscript({
-              scenario: `reference-boundary-${mode}-${boundary}`,
+              scenario: `reference-boundary-${kind}-${mode}-${boundary}`,
               entries: codexReplayPreamble({
                 nativeThreadId: "reference-native",
                 nativeTurnId: "reference-turn",
@@ -1804,7 +1814,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           yield* withTaskResultLinkageFixture(
             (f) =>
               Effect.gen(function* () {
-                const c = yield* f.createTask(`rpc-${mode}-${boundary}`);
+                const c = yield* f.createTask(`rpc-${kind}-${mode}-${boundary}`);
                 const task = (yield* f.readSnapshot()).tasks.find(
                   (t) => t.threadId === c.threadId,
                 )!;
@@ -1831,12 +1841,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                     ? PROVIDER_SEND_TURN_MAX_INPUT_CHARS
                     : PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
                         appendix.length -
+                        moduleContext.length -
                         2 +
                         (boundary === "overflow" ? 1 : 0),
                 );
                 const launch: TaskFirstLaunch = {
-                  commandId: CommandId.make(`rpc-${mode}-${boundary}`),
-                  messageId: MessageId.make(`rpc-${mode}-${boundary}`),
+                  commandId: CommandId.make(`rpc-${kind}-${mode}-${boundary}`),
+                  messageId: MessageId.make(`rpc-${kind}-${mode}-${boundary}`),
                   threadId: c.threadId,
                   text,
                   reference: facts.reference,
@@ -1850,6 +1861,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   launch,
                   attachment: source,
                   contentSha256: sha256Hex("x"),
+                  ...(module ? { module: taskInstructionSkillRef(module) } : {}),
                 });
                 if (boundary !== "exact-fit") {
                   assert.equal(reviewed.status, "unavailable");
@@ -1858,7 +1870,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                     providerThread: harness.providerThread,
                     now: yield* DateTime.now,
                     attemptId: RunAttemptId.make(`direct-${mode}-${boundary}`),
-                    text,
+                    text: text + moduleContext,
                   });
                   const rejected = yield* harness.runtime
                     .startTurn({
@@ -1901,7 +1913,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   dispatchMode: { type: "start_immediately" },
                   createdBy: "user",
                   creationSource: "web",
-                  taskFirstLaunch: { ...launch, referenceFile: reviewed.review },
+                  taskFirstLaunch: {
+                    ...launch,
+                    referenceFile: reviewed.review,
+                    ...(reviewed.instructionSkill
+                      ? { instructionSkill: reviewed.instructionSkill }
+                      : {}),
+                  },
                 });
                 yield* Fiber.join(terminal);
                 yield* f.worker.drain();
@@ -1911,7 +1929,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 assert.equal(params.input.length, 1);
                 const finalText = params.input[0]!.text;
                 assert.equal(finalText.length, PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
-                assert.isTrue(finalText.startsWith(text + "\n\n"));
+                assert.isTrue(finalText.startsWith(text + moduleContext + "\n\n"));
+                if (module) assert.include(finalText, module.body);
                 assert.include(
                   finalText,
                   resolveAttachmentPath({

@@ -1,3 +1,4 @@
+import { taskInstructionDeliveryMatches } from "@t3tools/shared/taskInstructionSkills";
 import { taskReferenceDeliveryMatches } from "@t3tools/shared/taskReferenceFile";
 import { TaskInbox } from "./TaskInbox";
 import { TaskInboxDrafts } from "./TaskInboxDrafts";
@@ -314,6 +315,28 @@ function TaskResultReadout({
     })
       ? readout.referenceFileDelivery
       : undefined;
+  const instructionDelivery =
+    readout?.status === "available"
+      ? !selection
+        ? readout.instructionSkillDelivery
+        : routing?.status === "available" &&
+            routing.runId === readout.runId &&
+            routing.messageId === readout.messageId &&
+            routing.configuredModel &&
+            taskInstructionDeliveryMatches(
+              readout.instructionSkillSelection,
+              readout.instructionSkillDelivery,
+              {
+                runId: readout.runId,
+                attemptId: readout.attemptId,
+                messageId: readout.messageId,
+                modelSelection: routing.configuredModel,
+              },
+              selection,
+            )
+          ? readout.instructionSkillDelivery
+          : undefined
+      : undefined;
   return (
     <div className="mt-4 space-y-2 rounded-lg border border-border/50 p-3">
       <h3 className="text-sm font-medium">Result evidence</h3>
@@ -322,8 +345,18 @@ function TaskResultReadout({
           <TaskCapabilityReadout evidence={readout.capabilityEvidence} historical />
           <TaskInstructionSkillReadout
             selection={readout.instructionSkillSelection}
-            delivery={readout.instructionSkillDelivery}
+            delivery={instructionDelivery}
           />
+          {selection && readout.instructionSkillSelection ? (
+            <p>
+              Joint input delivery:{" "}
+              {delivery?.status === "adapter-accepted" &&
+              instructionDelivery?.status === "adapter-accepted"
+                ? "adapter-accepted"
+                : "Unknown / partial or unconfirmed delivery"}
+              . This is not successful completion or owner acceptance.
+            </p>
+          ) : null}
           {selection ? (
             <section aria-label="Reference file provenance" className="break-all space-y-1 text-sm">
               <h4 className="font-medium">Reference file provenance</h4>

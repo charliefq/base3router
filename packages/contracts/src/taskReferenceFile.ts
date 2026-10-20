@@ -1,3 +1,4 @@
+import { TaskInstructionSkillReview, TaskInstructionSkillModule } from "./taskInstructionSkill.ts";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import { ChatFileAttachment } from "./chatAttachment.ts";
@@ -27,7 +28,12 @@ export const TaskReferenceFileReview = Schema.Unknown.check(
 export type TaskReferenceFileReview = typeof TaskReferenceFileReview.Type;
 export const TaskReferenceFileReviewState = Schema.Union([
   Schema.Struct({ status: Schema.Literal("unavailable"), reason: Schema.String }),
-  Schema.Struct({ status: Schema.Literal("available"), review: TaskReferenceFileReview }),
+  Schema.Struct({
+    status: Schema.Literal("available"),
+    review: TaskReferenceFileReview,
+    instructionSkill: Schema.optionalKey(TaskInstructionSkillReview),
+    module: Schema.optionalKey(TaskInstructionSkillModule),
+  }),
 ]);
 export type TaskReferenceFileReviewState = typeof TaskReferenceFileReviewState.Type;
 export const TaskReferenceFileDelivery = Schema.Struct({

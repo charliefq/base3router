@@ -54,6 +54,7 @@ export const TaskInstructionSkillReviewInput = Schema.Unknown.check(
 export type TaskInstructionSkillReviewInput = typeof TaskInstructionSkillReviewInput.Type;
 export type TaskFirstLaunch = typeof TaskFirstLaunch.Type;
 const FileReviewInput = Schema.Struct({
+  module: Schema.optionalKey(TaskInstructionSkillRef),
   launch: TaskFirstLaunch,
   attachment: ChatFileAttachment,
   contentSha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),

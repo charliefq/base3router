@@ -112,6 +112,8 @@ export async function withTaskCreationTransportFixture(
     expireAttachment: (
       attachment: import("@t3tools/contracts").ChatFileAttachment,
     ) => Promise<void>;
+    failJointEvidence: (stage: "pending-file" | "accepted-file" | "accepted-skill") => void;
+    corruptJointSkillDelivery: (threadId: string) => Promise<void>;
     corruptFileDelivery: (threadId: string) => Promise<void>;
     attachmentBytes: (
       attachment: import("@t3tools/contracts").ChatFileAttachment,
@@ -210,6 +212,7 @@ export async function withTaskCreationTransportFixture(
   const nativeInterrupted = Deferred.makeUnsafe<void>();
   let runningText: string | null = null;
   let workflowOutput: string | null = null;
+  let jointEvidenceFailure: "pending-file" | "accepted-file" | "accepted-skill" | null = null;
   let interrupts = 0;
   let finishRunning: ((status: "completed" | "interrupted") => Effect.Effect<void>) | null = null;
   const nativeFileReads: Array<{
@@ -620,6 +623,15 @@ export async function withTaskCreationTransportFixture(
                     providers = value;
                     f.setProviders(value);
                   },
+                  failJointEvidence: (stage) => {
+                    jointEvidenceFailure = stage;
+                  },
+                  corruptJointSkillDelivery: (threadId) =>
+                    run(
+                      f.sql`UPDATE orchestration_v2_projection_runs SET payload_json=json_set(payload_json,'$.instructionSkillDelivery.reviewId','unmatched-joint-review') WHERE thread_id=${threadId}`.pipe(
+                        Effect.asVoid,
+                      ),
+                    ),
                   setWorkflowOutput: (text) => {
                     workflowOutput = text;
                   },
@@ -779,6 +791,31 @@ export async function withTaskCreationTransportFixture(
             // Resume into the unchanged production transaction; never forge a plan.
             decorateEventSink: (service) => ({
               ...service,
+              writeIfRunCurrent: (input) =>
+                Effect.gen(function* () {
+                  const event = input.events.find((e) => e.type === "run.updated");
+                  if (event?.type === "run.updated") {
+                    const file = event.payload.referenceFileDelivery,
+                      skill = event.payload.instructionSkillDelivery;
+                    if (
+                      (jointEvidenceFailure === "pending-file" &&
+                        file?.status === "unknown" &&
+                        skill?.status === "unknown") ||
+                      (jointEvidenceFailure === "accepted-file" &&
+                        file?.status === "adapter-accepted" &&
+                        skill?.status === "unknown") ||
+                      (jointEvidenceFailure === "accepted-skill" &&
+                        file?.status === "adapter-accepted" &&
+                        skill?.status === "adapter-accepted")
+                    ) {
+                      jointEvidenceFailure = null;
+                      return yield* Effect.die(
+                        "Synthetic interruption between joint evidence writes",
+                      );
+                    }
+                  }
+                  return yield* service.writeIfRunCurrent(input);
+                }),
               commitCommand: (input) =>
                 Effect.gen(function* () {
                   const marker = input.resultContinuationCommand?.taskResultContinuation;

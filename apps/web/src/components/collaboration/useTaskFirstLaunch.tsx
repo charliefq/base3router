@@ -1,3 +1,4 @@
+import { verifyJointTaskInputReview } from "@t3tools/shared/taskJointInputReview";
 import { TaskReferenceFilePicker, type TaskReferenceSelection } from "./TaskReferenceFilePicker";
 import {
   taskInstructionSkillModules,
@@ -537,8 +538,8 @@ export function useTaskFirstLaunch(props: {
       ) : null}
       {referenceFile && skillChoice ? (
         <p>
-          Reference file and instruction-only skill cannot be combined. Explicitly remove one to
-          review.
+          Review the reference and instruction skill together before starting. File content remains
+          untrusted evidence; the skill grants no additional authority.
         </p>
       ) : null}
       {!props.resultBound ? (
@@ -625,7 +626,7 @@ export function useTaskFirstLaunch(props: {
           busy ||
           reviewBusy ||
           invalidSkill ||
-          (referenceFile !== null && (referenceFile.status !== "ready" || !!skillChoice)) ||
+          (referenceFile !== null && referenceFile.status !== "ready") ||
           !mode ||
           !manual ||
           !props.text.trim() ||
@@ -641,7 +642,7 @@ export function useTaskFirstLaunch(props: {
             preparing.current ||
             reviewOwner.current !== reviewToken ||
             invalidSkill ||
-            (referenceFile !== null && (referenceFile.status !== "ready" || !!skillChoice))
+            (referenceFile !== null && referenceFile.status !== "ready")
           )
             return;
           const value: LaunchReview = {
@@ -670,6 +671,7 @@ export function useTaskFirstLaunch(props: {
                     launch: value,
                     attachment: referenceFile.attachment,
                     contentSha256: referenceFile.contentSha256,
+                    ...(selectedSkill ? { module: selectedSkill } : {}),
                   },
                 });
                 if (reviewOwner.current !== token) return;
@@ -687,7 +689,25 @@ export function useTaskFirstLaunch(props: {
                   setNotice("Reviewed file differs from the selected upload. Nothing started.");
                   return;
                 }
-                setReview({ ...value, referenceFile: proof });
+                const skill = result.value.instructionSkill;
+                const module = result.value.module;
+                if (selectedSkill) {
+                  if (
+                    !skill ||
+                    !module ||
+                    JSON.stringify(taskInstructionSkillRef(module)) !==
+                      JSON.stringify(selectedSkill) ||
+                    JSON.stringify(skill.module) !== JSON.stringify(selectedSkill)
+                  ) {
+                    setNotice("Joint instruction module differs or is missing. Nothing started.");
+                    return;
+                  }
+                  const joint = { ...value, referenceFile: proof, instructionSkill: skill };
+                  verifyJointTaskInputReview(joint);
+                  setReview(joint, module);
+                } else if (skill || module) {
+                  setNotice("Unexpected companion module. Review the selected inputs again.");
+                } else setReview({ ...value, referenceFile: proof });
               } catch {
                 if (reviewOwner.current === token)
                   setNotice("Reference file review unavailable. Nothing started.");
@@ -747,6 +767,13 @@ export function useTaskFirstLaunch(props: {
       {review ? (
         <div aria-label="Reviewed ordinary task launch">
           <p>Exact instructions: {review.text}</p>
+          {review.referenceFile && review.instructionSkill ? (
+            <p>
+              Joint review {review.referenceFile.reviewId}; binding SHA256{" "}
+              {review.referenceFile.bindingSha256}. Both inputs must remain unchanged; neither
+              expands the task contract or permissions.
+            </p>
+          ) : null}
           {review.referenceFile ? (
             <section aria-label="Reviewed task reference file">
               <p>
