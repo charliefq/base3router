@@ -58,6 +58,8 @@ import { SidebarInset } from "../ui/sidebar";
 import { TaskRevisionRequest } from "./TaskRevisionRequest";
 import { TaskFirstInstructions } from "./TaskFirstInstructions";
 import { TaskReviewControls } from "./TaskReviewControls";
+import { SavedTaskConfigurationLibrary } from "./SavedTaskConfigurationLibrary";
+import type { AgentsTaskCreationRequest } from "./AgentsTaskCreator";
 import { AgentsTaskCreator } from "./AgentsTaskCreator";
 import { randomUUID } from "../../lib/utils";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
@@ -694,11 +696,9 @@ export function AgentsPage(scopeProps: CollaborationScopeProps = {}) {
     invalidateReads,
     context: directoryContext,
   } = useCollaboration(environmentId);
-  const [creationRequest, setCreationRequest] = useState<{
-    providerId: string;
-    token: string;
-    source?: TaskResultHandoff;
-  } | null>(null);
+  const [creationRequest, setCreationRequest] = useState<AgentsTaskCreationRequest | null>(null);
+  const [configurationReadVersion, setConfigurationReadVersion] = useState(0);
+  const retireConfiguration = useCallback(() => setConfigurationReadVersion((v) => v + 1), []);
   const [creating, setCreating] = useState(false);
   const [showAgentCreation, setShowAgentCreation] = useState(false);
   const selection = useCollaborationScope(environmentId, scopeProps);
@@ -728,12 +728,15 @@ export function AgentsPage(scopeProps: CollaborationScopeProps = {}) {
     creationOwner.current = owner;
     setCreating(true);
   }, []);
-  const releaseCreation = useCallback((owner: string) => {
-    if (creationOwner.current !== owner) return;
-    creationOwner.current = null;
-    setCreating(false);
-    setCreationRequest(null);
-  }, []);
+  const releaseCreation = useCallback(
+    (owner: string) => {
+      if (creationOwner.current !== owner) return;
+      creationOwner.current = null;
+      setCreating(false);
+      setCreationRequest(null);
+    },
+    [setCreationRequest],
+  );
   const projectId = selection.scope.scopeProjectId ?? null;
   const setProjectId = selection.selectProject;
   const [notice, setNotice] = useState<{
@@ -1231,9 +1234,7 @@ export function AgentsPage(scopeProps: CollaborationScopeProps = {}) {
               size="sm"
               variant="outline"
               disabled={!connected || refreshing}
-              onClick={() => {
-                void refresh();
-              }}
+              onClick={() => refresh()}
             >
               {refreshing
                 ? "Reading agent directory…"
@@ -1471,7 +1472,39 @@ export function AgentsPage(scopeProps: CollaborationScopeProps = {}) {
                 );
               })}
             </ul>
+            <SavedTaskConfigurationLibrary
+              environmentId={environmentId}
+              projectId={selectedProject?.id}
+              providers={providers}
+              fresh={fresh && !error && !scopeInvalid}
+              readVersion={readVersion}
+              disabled={creating || opening || pending}
+              canOperate={canOperate}
+              onRetire={retireConfiguration}
+              onUse={(savedConfiguration) => {
+                if (
+                  !savedConfiguration.isCurrent() ||
+                  !canOperate() ||
+                  creationOwner.current !== null ||
+                  openingRef.current
+                )
+                  return;
+                const token = randomUUID();
+                lockCreation(token);
+                setCreationRequest({
+                  providerId: savedConfiguration.configuration.modelSelection.instanceId,
+                  token,
+                  savedConfiguration,
+                });
+              }}
+            />
             <AgentsTaskCreator
+              configurationReadVersion={configurationReadVersion}
+              launchObservation={{
+                stale: !fresh || !!error,
+                readVersion,
+                tasks: snapshot?.tasks ?? [],
+              }}
               environmentId={environmentId}
               project={selectedProject}
               providers={providers}

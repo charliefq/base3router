@@ -1,3 +1,4 @@
+import { readAgentsCreationAttempt } from "./agentsTaskCreationAttempt";
 import { TaskOutputHandoff } from "./TaskResultHandoff";
 import { acceptedHandoffSource } from "./testkit/resultHandoffJourney";
 import { resultHandoffInput } from "@t3tools/shared/taskResultHandoff";
@@ -33,6 +34,7 @@ import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import {
   EnvironmentId,
+  ProjectId,
   ThreadId,
   MessageId,
   RunAttemptId,
@@ -83,6 +85,9 @@ const state = vi.hoisted(() => ({
     realGrokbot: "NOT_CONNECTED",
     grokbotIntegration: [],
   } as CollaborationSnapshot,
+  catalog: vi.fn(),
+  configurationWrite: vi.fn(),
+  operate: true,
   load: vi.fn(),
   create: vi.fn(),
   bind: vi.fn(),
@@ -145,6 +150,16 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 });
 vi.mock("../../state/primaryEnvironment", () => ({ primaryEnvironmentIdAtom: "environment" }));
 vi.mock("../../state/session", () => ({
+  useEnvironmentSessionState: () => ({
+    data: {
+      authenticated: state.sessionIdentity !== null,
+      scopes: state.operate
+        ? ["orchestration:read", "orchestration:operate"]
+        : ["orchestration:read"],
+    },
+    isPending: false,
+    hasError: false,
+  }),
   usePreparedConnection: () =>
     state.sessionIdentity === null ? Option.none() : Option.some(state.sessionIdentity),
 }));
@@ -203,27 +218,31 @@ vi.mock("../../lib/attachmentUploadQueue", () => ({
 }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
-    command === "file-review"
-      ? state.fileReview
-      : command === "skill-review"
-        ? state.skillReview
-        : command === "interrupt"
-          ? state.interrupt
-          : command === "first-launch-status"
-            ? state.firstLaunchRead
-            : command === "capability-start"
-              ? state.startStep
-              : command === "auto-preview"
-                ? state.autoPreview
-                : command === "read-creation-status"
-                  ? state.readCreationStatus
-                  : command === "review-read"
-                    ? state.reviewRead
-                    : command === "review-decide"
-                      ? state.reviewDecide
-                      : command === "read-projection"
-                        ? state.readProjection
-                        : state.create,
+    command === "configuration-catalog"
+      ? state.catalog
+      : command === "configuration-action" || command === "configuration-status"
+        ? state.configurationWrite
+        : command === "file-review"
+          ? state.fileReview
+          : command === "skill-review"
+            ? state.skillReview
+            : command === "interrupt"
+              ? state.interrupt
+              : command === "first-launch-status"
+                ? state.firstLaunchRead
+                : command === "capability-start"
+                  ? state.startStep
+                  : command === "auto-preview"
+                    ? state.autoPreview
+                    : command === "read-creation-status"
+                      ? state.readCreationStatus
+                      : command === "review-read"
+                        ? state.reviewRead
+                        : command === "review-decide"
+                          ? state.reviewDecide
+                          : command === "read-projection"
+                            ? state.readProjection
+                            : state.create,
 }));
 vi.mock("../chat/ProviderModelPicker", () => ({
   ProviderModelPicker: (props: {
@@ -442,6 +461,9 @@ beforeEach(() => {
     setItem: (key: string, value: string) => attempts.set(key, value),
     removeItem: (key: string) => attempts.delete(key),
   });
+  state.catalog.mockReset().mockResolvedValue({ _tag: "Success", value: { profiles: [] } });
+  state.configurationWrite.mockReset();
+  state.operate = true;
   state.firstLaunchRead.mockReset();
   state.providers = [...configuredProviders];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -10484,3 +10506,599 @@ it.each(["source-observation", "destination-observation", "stale-aba"] as const)
   },
   30000,
 );
+
+const libraryScope = { scopeEnvironmentId: "environment-a", scopeProjectId: "project-a" };
+type LibraryFixture = Parameters<Parameters<typeof withTaskTransportFixture>[0]>[0];
+async function withLibraryFixture(check: (f: LibraryFixture) => Promise<void>) {
+  await withTaskTransportFixture(async (f) => {
+    try {
+      await check(f);
+    } finally {
+      await act(async () => renderer?.unmount());
+    }
+  });
+}
+async function prepareLibrary(f: LibraryFixture) {
+  creationStorage();
+  const inputs = ["careful-a", "careful-b"].map((id) => ({
+    type: "profile.save" as const,
+    commandId: `save-library-${id}`,
+    projectId: ProjectId.make("project-a"),
+    expectedVersion: 0,
+    draft: {
+      id,
+      displayName: "Careful reviewer",
+      instructions: `Full ${id} instructions.\n${"Review every boundary. ".repeat(120)}End ${id}.`,
+      description: "Reusable task input",
+      purpose: "Review",
+      responsibilities: [],
+      exclusions: [],
+      requiredOutputSections: ["Result"],
+      artifactKind: "task-input",
+      capabilityPreferences: [],
+      taskConfiguration: {
+        environmentId: EnvironmentId.make("environment-a"),
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "exact-second" },
+      },
+    },
+  }));
+  for (const input of inputs) expect((await f.configuration(input))._tag).toBe("Success");
+  state.providers = f.providers.map((p) => ({
+    ...p,
+    displayName: p.driver,
+    models: p.models.map((m) => ({ ...m, isDefault: false })),
+  }));
+  state.load.mockImplementation(() => f.snapshot());
+  state.catalog.mockImplementation(({ input }) => f.catalog(input));
+  state.create.mockImplementation(({ input }) => f.create(input));
+  state.readProjection.mockImplementation(({ input }) => f.projection(input));
+  state.readCreationStatus.mockImplementation(({ input }) => f.creationStatus(input));
+  state.reviewRead.mockImplementation(({ input }) => f.review(input));
+  state.startStep.mockImplementation(({ input }) => f.start(input));
+  state.firstLaunchRead.mockImplementation(({ input }) => f.launchStatus(input));
+  state.autoPreview.mockImplementation(({ input }) => f.previewAuto(input));
+  await act(async () => {
+    renderer = create(<AgentsPage scope={libraryScope} />);
+  });
+  await act(async () => {
+    await state.load.mock.results[0]!.value;
+  });
+  await act(async () => {
+    await Promise.all(state.catalog.mock.results.map((r) => r.value));
+  });
+  return inputs;
+}
+function inspectLibrary(id = "careful-b") {
+  return renderer.root.findByProps({
+    "aria-label": `Inspect configuration Careful reviewer ${id} r1`,
+  });
+}
+async function useLibrary() {
+  await act(async () => {
+    inspectLibrary().props.onClick();
+  });
+  await act(async () => {
+    await creationButton("Use configuration")!.props.onClick();
+  });
+}
+
+it.each(["manual", "auto"] as const)(
+  "saved configuration library actual Agents journey creates independently and starts only explicit %s",
+  async (mode) => {
+    await withLibraryFixture(async (f) => {
+      const inputs = await prepareLibrary(f);
+      expect(
+        renderer.root.findAllByProps({ "aria-label": "Saved task configuration library" }),
+      ).toHaveLength(1);
+      expect(inspectLibrary("careful-a")).toBeDefined();
+      expect(inspectLibrary("careful-b")).toBeDefined();
+      expect(state.create).not.toHaveBeenCalled();
+      await act(async () => {
+        inspectLibrary().props.onClick();
+      });
+      expect(
+        renderer.root
+          .findAllByType("pre")
+          .some((n) => n.children.join("") === inputs[1]!.draft.instructions),
+      ).toBe(true);
+      await act(async () => {
+        creationButton("Cancel inspection")!.props.onClick();
+      });
+      expect(state.configurationWrite).not.toHaveBeenCalled();
+      expect((await f.inspect()).starts).toHaveLength(0);
+      await useLibrary();
+      for (const label of [
+        "Task title",
+        "Goal",
+        "Redirect",
+        "Acceptance",
+        "Provider start limit",
+        "Stop conditions",
+      ])
+        expect(renderer.root.findByProps({ "aria-label": label }).props.value).toBe("");
+      expect(text()).toContain("Selected saved configuration");
+      await fillCreation(`Independent library ${mode}`, false);
+      for (const label of [
+        "Optional token cap",
+        "Optional reported cost cap (USD)",
+        "Optional UTC deadline",
+      ])
+        await act(async () =>
+          renderer.root
+            .findByProps({ "aria-label": label })
+            .props.onChange({ target: { value: "" } }),
+        );
+      await creationClick("Review new task");
+      expect(text()).toContain("careful-b");
+      expect(text()).toContain("exact-second");
+      expect((await f.snapshot()).tasks).toHaveLength(0);
+      await act(async () => {
+        const submit = creationButton("Create task")!.props.onClick;
+        const first = submit();
+        submit();
+        await first;
+      });
+      expect(state.create).toHaveBeenCalledTimes(1);
+      const c = state.create.mock.calls[0]![0].input;
+      expect(c.taskCreationReview.configuration).toMatchObject({
+        id: "careful-b",
+        revision: 1,
+        modelSelection: { instanceId: "codex", model: "exact-second" },
+        instructions: inputs[1]!.draft.instructions,
+      });
+      expect((await f.inspect()).starts).toHaveLength(0);
+      const projection = await f.projection({ threadId: c.threadId });
+      if (projection._tag !== "Success") throw new Error("missing projection");
+      expect(projection.value.thread.lineage).toMatchObject({
+        rootThreadId: c.threadId,
+        parentThreadId: null,
+        relationshipToParent: null,
+      });
+      await act(async () => {
+        await creationButton("Prepare created task for review/start")!.props.onClick();
+      });
+      expect(renderer.root.findByProps({ "aria-label": "Initial instructions" }).props.value).toBe(
+        c.taskCreationReview.effectiveInstructions,
+      );
+      await creationClick(mode === "manual" ? "Choose Manual" : "Choose Auto");
+      await act(async () => {
+        await creationButton("Review ordinary task launch")!.props.onClick();
+      });
+      expect((await f.inspect()).starts).toHaveLength(0);
+      await act(async () => {
+        const start = creationButton("Start reviewed ordinary task")!.props.onClick;
+        const first = start();
+        start();
+        await first;
+      });
+      await act(async () => {
+        await state.startStep.mock.results[0]!.value;
+      });
+      const launch = state.startStep.mock.calls[0]![0].input;
+      await f.settle(launch.message.messageId);
+      expect((await f.inspect()).starts).toHaveLength(1);
+      const actualSelection = {
+        instanceId: "codex",
+        model: mode === "manual" ? "exact-second" : "bbb-auto",
+      };
+      expect(launch.taskFirstLaunch.routingMode).toBe(mode);
+      expect((await f.inspect()).starts[0]).toEqual(actualSelection);
+      expect(text()).toContain(actualSelection.model);
+      const completedProjection = await f.projection({ threadId: c.threadId });
+      if (completedProjection._tag !== "Success") throw new Error("missing actual run evidence");
+      expect(completedProjection.value.runs[0]!.modelSelection).toEqual(actualSelection);
+      expect(
+        completedProjection.value.thread.agentsTaskCreation!.review.configuration!.modelSelection,
+      ).toEqual(c.modelSelection);
+      expect((await f.inspect()).inputs).toEqual([c.taskCreationReview.effectiveInstructions]);
+      expect((await f.snapshot()).tasks).toHaveLength(1);
+      expect(state.configurationWrite).not.toHaveBeenCalled();
+    });
+  },
+  60000,
+);
+
+it.each(["unavailable provider", "unavailable model", "archived", "read-only"] as const)(
+  "saved configuration library inspects %s without substituting or creating work",
+  async (kind) => {
+    await withLibraryFixture(async (f) => {
+      const inputs = await prepareLibrary(f);
+      if (kind === "archived") {
+        expect(
+          (
+            await f.configuration({
+              type: "profile.archive",
+              commandId: "archive-library",
+              projectId: inputs[1]!.projectId,
+              profileId: "careful-b",
+              expectedVersion: 1,
+            })
+          )._tag,
+        ).toBe("Success");
+        await act(async () => {
+          await creationButton("Refresh saved task configurations")!.props.onClick();
+        });
+        await act(async () =>
+          renderer.root
+            .findByProps({ "aria-label": "Inspect configuration Careful reviewer careful-b r1" })
+            .props.onClick(),
+        );
+      } else {
+        if (kind === "read-only") state.operate = false;
+        else
+          state.providers = state.providers.map((p) =>
+            p.instanceId === "codex"
+              ? kind === "unavailable provider"
+                ? { ...p, enabled: false }
+                : { ...p, models: p.models.filter((m) => m.slug !== "exact-second") }
+              : p,
+          );
+        await act(async () => renderer.update(<AgentsPage scope={libraryScope} />));
+        await act(async () => {
+          await Promise.all(state.catalog.mock.results.map((r) => r.value));
+        });
+        await act(async () => inspectLibrary().props.onClick());
+      }
+      expect(
+        renderer.root
+          .findAllByType("pre")
+          .some((n) => n.children.join("") === inputs[1]!.draft.instructions),
+      ).toBe(true);
+      expect(creationButton("Use configuration")!.props.disabled).toBe(true);
+      await act(async () => {
+        await creationButton("Use configuration")!.props.onClick();
+      });
+      expect(state.create).not.toHaveBeenCalled();
+      expect(state.configurationWrite).not.toHaveBeenCalled();
+      expect((await f.inspect()).starts).toHaveLength(0);
+    });
+  },
+  30000,
+);
+
+it.each(["edit", "archive"] as const)(
+  "saved configuration library freshly rejects concurrent %s at Use",
+  async (kind) => {
+    await withLibraryFixture(async (f) => {
+      const inputs = await prepareLibrary(f);
+      await act(async () => inspectLibrary().props.onClick());
+      if (kind === "edit")
+        await f.configuration({
+          ...inputs[1]!,
+          commandId: "concurrent-edit",
+          expectedVersion: 1,
+          draft: { ...inputs[1]!.draft, instructions: "Changed exact instructions" },
+        });
+      else
+        await f.configuration({
+          type: "profile.archive",
+          commandId: "concurrent-archive",
+          projectId: inputs[1]!.projectId,
+          profileId: "careful-b",
+          expectedVersion: 1,
+        });
+      await act(async () => {
+        await creationButton("Use configuration")!.props.onClick();
+      });
+      expect(text()).toContain("changed or became unavailable");
+      expect(renderer.root.findAllByProps({ "aria-label": "Task title" })).toHaveLength(0);
+      expect(state.create).not.toHaveBeenCalled();
+      expect((await f.inspect()).starts).toHaveLength(0);
+    });
+  },
+  30000,
+);
+
+it.each([
+  "library refresh",
+  "directory refresh",
+  "scope ABA",
+  "session ABA",
+  "provider ABA",
+  "disconnect",
+] as const)(
+  "saved configuration library retires captured review/create on %s",
+  async (kind) => {
+    await withLibraryFixture(async (f) => {
+      await prepareLibrary(f);
+      await useLibrary();
+      await fillCreation("Retired library task", false);
+      await creationClick("Review new task");
+      const submit = creationButton("Create task")!.props.onClick;
+      if (kind === "library refresh")
+        await act(async () => {
+          await creationButton("Refresh saved task configurations")!.props.onClick();
+        });
+      if (kind === "directory refresh")
+        await act(async () => {
+          await creationButton("Refresh agent directory")!.props.onClick();
+        });
+      if (kind === "scope ABA") {
+        await act(async () =>
+          renderer.update(<AgentsPage scope={{ ...libraryScope, scopeProjectId: "missing" }} />),
+        );
+        await act(async () => renderer.update(<AgentsPage scope={libraryScope} />));
+      }
+      if (kind === "session ABA" || kind === "disconnect") {
+        const original = state.sessionIdentity;
+        state.sessionIdentity = null;
+        await act(async () => renderer.update(<AgentsPage scope={libraryScope} />));
+        if (kind === "session ABA") {
+          state.sessionIdentity = original;
+          await act(async () => renderer.update(<AgentsPage scope={libraryScope} />));
+        }
+      }
+      if (kind === "provider ABA") {
+        const original = state.providers;
+        state.providers = original.map((p) => ({ ...p, enabled: false }));
+        await act(async () => renderer.update(<AgentsPage scope={libraryScope} />));
+        state.providers = original;
+        await act(async () => renderer.update(<AgentsPage scope={libraryScope} />));
+      }
+      await act(async () => {
+        await submit();
+      });
+      expect(state.create).not.toHaveBeenCalled();
+      expect((await f.inspect()).starts).toHaveLength(0);
+    });
+  },
+  30000,
+);
+
+it.each(["scope ABA", "session ABA", "refresh", "unmount"] as const)(
+  "saved configuration library ignores delayed Use after %s",
+  async (change) => {
+    await withLibraryFixture(async (f) => {
+      await prepareLibrary(f);
+      await act(async () => inspectLibrary().props.onClick());
+      const result = await f.catalog({ projectId: ProjectId.make("project-a") });
+      const delayed = deferred<typeof result>();
+      state.catalog.mockReturnValueOnce(delayed.promise);
+      const captured = creationButton("Use configuration")!.props.onClick;
+      let pending: Promise<void>;
+      await act(async () => {
+        pending = captured();
+        captured();
+      });
+      if (change === "scope ABA") {
+        await act(async () =>
+          renderer.update(<AgentsPage scope={{ ...libraryScope, scopeProjectId: "missing" }} />),
+        );
+        await act(async () => renderer.update(<AgentsPage scope={libraryScope} />));
+      } else if (change === "session ABA") {
+        const session = state.sessionIdentity;
+        state.sessionIdentity = null;
+        await act(async () => renderer.update(<AgentsPage scope={libraryScope} />));
+        state.sessionIdentity = session;
+        await act(async () => renderer.update(<AgentsPage scope={libraryScope} />));
+      } else if (change === "refresh")
+        await act(async () => {
+          await creationButton("Refresh saved task configurations")!.props.onClick();
+        });
+      else await act(async () => renderer.unmount());
+      await act(async () => {
+        delayed.resolve(result);
+        await pending!;
+        await captured();
+      });
+      if (change !== "unmount")
+        expect(renderer.root.findAllByProps({ "aria-label": "Task title" })).toHaveLength(0);
+      expect(state.create).not.toHaveBeenCalled();
+      expect((await f.inspect()).starts).toHaveLength(0);
+    });
+  },
+  30000,
+);
+
+it("saved configuration library hides another owner's catalog and fails closed on owner change before create", async () => {
+  await withLibraryFixture(async (f) => {
+    await prepareLibrary(f);
+    await useLibrary();
+    await fillCreation("Wrong owner library task", false);
+    await creationClick("Review new task");
+    await f.disconnect();
+    await f.connectAs("different-owner");
+    await act(async () => {
+      await creationButton("Create task")!.props.onClick();
+    });
+    expect((await f.snapshot()).tasks).toHaveLength(0);
+    expect((await f.inspect()).starts).toHaveLength(0);
+    await act(async () => renderer.unmount());
+    creationStorage();
+    state.sessionIdentity = {};
+    await act(async () => {
+      renderer = create(<AgentsPage scope={libraryScope} />);
+    });
+    await act(async () => {
+      await state.load.mock.results.at(-1)!.value;
+    });
+    await act(async () => {
+      await Promise.all(state.catalog.mock.results.map((r) => r.value));
+    });
+    expect(text()).not.toContain("careful-b");
+    expect(renderer.root.findAllByProps({ "aria-label": "Configuration inspection" })).toHaveLength(
+      0,
+    );
+  });
+}, 30000);
+
+it.each(["creation", "launch"] as const)(
+  "saved configuration library actual-entry lost %s reply retains original identity across remount with read-only recovery",
+  async (stage) => {
+    await withLibraryFixture(async (f) => {
+      await prepareLibrary(f);
+      await useLibrary();
+      await fillCreation("Library retained original", false);
+      for (const label of [
+        "Optional token cap",
+        "Optional reported cost cap (USD)",
+        "Optional UTC deadline",
+      ])
+        await act(async () =>
+          renderer.root
+            .findByProps({ "aria-label": label })
+            .props.onChange({ target: { value: "" } }),
+        );
+      await creationClick("Review new task");
+      if (stage === "creation") {
+        f.dropNextReply();
+        await creationClick("Create task", true);
+      } else {
+        await act(async () => {
+          await creationButton("Create task")!.props.onClick();
+        });
+        await act(async () => {
+          await creationButton("Prepare created task for review/start")!.props.onClick();
+        });
+        await creationClick("Choose Manual");
+        await act(async () => {
+          await creationButton("Review ordinary task launch")!.props.onClick();
+        });
+        f.dropNextReply();
+        await creationClick("Start reviewed ordinary task", true);
+      }
+      const action = stage === "creation" ? state.create : state.startStep;
+      await Promise.race([
+        f.awaitDroppedReply(),
+        action.mock.results[0]!.value.then(() => {
+          throw new Error("Expected lost committed reply");
+        }),
+      ]);
+      const original = readAgentsCreationAttempt().attempt!.command;
+      const launchKey = firstLaunchStorageKey("environment-a", original.threadId);
+      const originalLaunch = readFirstLaunchAttempt(launchKey).attempt?.command;
+      await act(async () => {
+        await f.disconnect();
+        await action.mock.results[0]!.value;
+        renderer.unmount();
+      });
+      await f.connect();
+      state.sessionIdentity = {};
+      const commands = (await f.inspect()).commands.length;
+      await act(async () => {
+        renderer = create(<AgentsPage scope={libraryScope} />);
+      });
+      await act(async () => {
+        await state.load.mock.results.at(-1)!.value;
+      });
+      await creationClick("Recover task creation");
+      await act(async () => {
+        await state.readCreationStatus.mock.results.at(-1)!.value;
+        await state.load.mock.results.at(-1)!.value;
+        await state.readProjection.mock.results.at(-1)!.value;
+      });
+      expect(readAgentsCreationAttempt().attempt!.command).toEqual(original);
+      expect(readAgentsCreationAttempt().attempt!.status).toBe("confirmed");
+      if (stage === "launch") {
+        await f.drain();
+        await f.settle(originalLaunch!.messageId);
+        // The original task is already nonempty: recovery stays in its existing task/conversation path.
+        expect(readFirstLaunchAttempt(launchKey).attempt!.command).toEqual(originalLaunch);
+      }
+      expect(state.create).toHaveBeenCalledTimes(1);
+      expect(state.startStep).toHaveBeenCalledTimes(stage === "launch" ? 1 : 0);
+      expect((await f.inspect()).commands).toHaveLength(commands);
+      expect((await f.inspect()).starts).toHaveLength(stage === "launch" ? 1 : 0);
+      expect((await f.snapshot()).tasks).toHaveLength(1);
+    });
+  },
+  60000,
+);
+
+it("saved configuration library actual created-task Start review retires on directory refresh ABA", async () => {
+  await withLibraryFixture(async (f) => {
+    await prepareLibrary(f);
+    await useLibrary();
+    await fillCreation("Library stale Start", false);
+    for (const label of [
+      "Optional token cap",
+      "Optional reported cost cap (USD)",
+      "Optional UTC deadline",
+    ])
+      await act(async () =>
+        renderer.root
+          .findByProps({ "aria-label": label })
+          .props.onChange({ target: { value: "" } }),
+      );
+    await creationClick("Review new task");
+    await act(async () => {
+      await creationButton("Create task")!.props.onClick();
+    });
+    await act(async () => {
+      await creationButton("Prepare created task for review/start")!.props.onClick();
+    });
+    await creationClick("Choose Manual");
+    await act(async () => {
+      await creationButton("Review ordinary task launch")!.props.onClick();
+    });
+    const start = creationButton("Start reviewed ordinary task")!.props.onClick;
+    await act(async () => {
+      await creationButton("Refresh agent directory")!.props.onClick();
+    });
+    await act(async () => {
+      await start();
+    });
+    expect(state.startStep).not.toHaveBeenCalled();
+    expect((await f.inspect()).starts).toHaveLength(0);
+  });
+}, 30000);
+
+it("saved configuration library retires delayed catalog, captured inspection and unsent selection across refresh/remount", async () => {
+  await withLibraryFixture(async (f) => {
+    await prepareLibrary(f);
+    const inspect = inspectLibrary().props.onClick;
+    const catalog = await f.catalog({ projectId: ProjectId.make("project-a") });
+    const delayed = deferred<typeof catalog>();
+    state.catalog.mockReturnValueOnce(delayed.promise);
+    let pending: Promise<void>;
+    await act(async () => {
+      pending = creationButton("Refresh saved task configurations")!.props.onClick();
+    });
+    await act(async () => {
+      await inspect();
+    });
+    expect(renderer.root.findAllByProps({ "aria-label": "Configuration inspection" })).toHaveLength(
+      0,
+    );
+    await act(async () =>
+      renderer.update(<AgentsPage scope={{ ...libraryScope, scopeProjectId: "missing" }} />),
+    );
+    await act(async () => {
+      delayed.resolve(catalog);
+      await pending!;
+    });
+    expect(text()).not.toContain("careful-b");
+    await act(async () => renderer.update(<AgentsPage scope={libraryScope} />));
+    await act(async () => {
+      await Promise.all(state.catalog.mock.results.map((r) => r.value));
+    });
+    await useLibrary();
+    await fillCreation("Unsent selection", false);
+    await act(async () => renderer.unmount());
+    await act(async () => {
+      renderer = create(<AgentsPage scope={libraryScope} />);
+    });
+    await act(async () => {
+      await state.load.mock.results.at(-1)!.value;
+    });
+    await act(async () => {
+      await Promise.all(state.catalog.mock.results.map((r) => r.value));
+    });
+    expect(renderer.root.findAllByProps({ "aria-label": "Task title" })).toHaveLength(0);
+    expect(state.create).not.toHaveBeenCalled();
+    expect((await f.inspect()).starts).toHaveLength(0);
+  });
+}, 30000);
+
+it("saved configuration library refresh preserves an unrelated provider-first creation review", async () => {
+  await mount();
+  await creationClick("New task");
+  await fillCreation();
+  await creationClick("Review new task");
+  expect(creationButton("Create task")).toBeDefined();
+  await act(async () => {
+    await creationButton("Refresh saved task configurations")!.props.onClick();
+  });
+  expect(creationButton("Create task")).toBeDefined();
+  expect(state.create).not.toHaveBeenCalled();
+});

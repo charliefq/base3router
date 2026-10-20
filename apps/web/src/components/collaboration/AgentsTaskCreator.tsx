@@ -47,6 +47,14 @@ import {
   AlertDialogFooter,
 } from "../ui/alert-dialog";
 
+export type AgentsTaskCreationRequest = { readonly providerId: string; readonly token: string } & (
+  | { readonly source?: TaskResultHandoff; readonly savedConfiguration?: never }
+  | {
+      readonly source?: never;
+      readonly savedConfiguration: import("./SavedTaskConfigurationLibrary").SavedConfigurationSelection;
+    }
+);
+
 type Create = Extract<OrchestrationV2Command, { type: "thread.create" }>;
 const sameCommand = Schema.toEquivalence(OrchestrationV2Command.members[0]);
 const sameContract = Schema.toEquivalence(TaskContractFields);
@@ -102,11 +110,8 @@ export function AgentsTaskCreator(props: {
     | { readonly id: string; readonly title: string; readonly workspaceRoot?: string }
     | undefined;
   readonly providers: ReadonlyArray<ServerProvider>;
-  readonly request: {
-    readonly providerId: string;
-    readonly token: string;
-    readonly source?: TaskResultHandoff;
-  } | null;
+  readonly request: AgentsTaskCreationRequest | null;
+  readonly configurationReadVersion?: number;
   readonly sourceVersion?: string | undefined;
   readonly launchObservation?: {
     readonly stale: boolean;
@@ -191,6 +196,8 @@ export function AgentsTaskCreator(props: {
     props.project?.workspaceRoot,
     props.request?.source,
     props.sourceVersion,
+    props.request?.savedConfiguration ? props.configurationReadVersion : undefined,
+    props.request?.savedConfiguration?.isCurrent() ?? true,
     selectedProvider?.skills,
     selectedProvider?.workspaceSnapshots,
     selectedProvider?.auth,
@@ -307,14 +314,30 @@ export function AgentsTaskCreator(props: {
       currentProps.onRelease(currentProps.request.token);
       return;
     }
+    const saved = currentProps.request.savedConfiguration;
+    if (
+      saved &&
+      (!saved.isCurrent() ||
+        saved.configuration.environmentId !== currentProps.environmentId ||
+        saved.configuration.projectId !== currentProps.project.id ||
+        saved.configuration.modelSelection.instanceId !== provider.instanceId ||
+        !provider.models.some((m) => m.slug === saved.configuration.modelSelection.model))
+    ) {
+      currentProps.onRelease(currentProps.request.token);
+      return;
+    }
+    setConfiguration(saved?.configuration ?? null);
     epoch.current += 1;
     mutationOwner.current = null;
     recoveryOwner.current = null;
     setAttempt(null);
     attemptRef.current = null;
     setDraft(blank);
-    modelChoiceRef.current = null;
-    setModelChoice(null);
+    const seededChoice = saved
+      ? { token: currentProps.request.token, model: saved.configuration.modelSelection.model }
+      : null;
+    modelChoiceRef.current = seededChoice;
+    setModelChoice(seededChoice);
     closeReview();
     setNotice(null);
     setPending(false);
@@ -416,6 +439,8 @@ export function AgentsTaskCreator(props: {
     if (
       !command ||
       configurationBlockedRef.current ||
+      (latest.current.request?.savedConfiguration &&
+        !latest.current.request.savedConfiguration.isCurrent()) ||
       reviewRef.current !== command ||
       mutationOwner.current ||
       !editing ||
@@ -528,6 +553,8 @@ export function AgentsTaskCreator(props: {
       modelChoice?.token !== editing.token ||
       !proposed ||
       configurationBlockedRef.current ||
+      (latest.current.request?.savedConfiguration &&
+        !latest.current.request.savedConfiguration.isCurrent()) ||
       !props.environmentId ||
       !props.project ||
       !provider ||
@@ -605,8 +632,11 @@ export function AgentsTaskCreator(props: {
     attempt !== null &&
     props.environmentId === attempt.command.taskCreationReview?.environmentId &&
     props.project?.id === attempt.command.projectId;
-  const handoffAttempt = attempt?.command.taskCreationReview?.resultHandoff !== undefined;
-  const observedTask = handoffAttempt
+  const usesObservedTask =
+    attempt?.command.taskCreationReview?.resultHandoff !== undefined ||
+    (attempt?.command.taskCreationReview?.configuration !== undefined &&
+      (props.launchObservation !== undefined || props.request?.savedConfiguration !== undefined));
+  const observedTask = usesObservedTask
     ? props.launchObservation?.tasks.find(
         (t) =>
           t.id === createdTask?.id &&
@@ -668,9 +698,9 @@ export function AgentsTaskCreator(props: {
             <TaskFirstInstructions
               task={observedTask}
               environmentId={attempt.command.taskCreationReview!.environmentId}
-              stale={handoffAttempt ? (props.launchObservation?.stale ?? true) : false}
+              stale={usesObservedTask ? (props.launchObservation?.stale ?? true) : false}
               readVersion={
-                handoffAttempt
+                usesObservedTask
                   ? (props.launchObservation?.readVersion ?? 0)
                   : (observedTask.review?.reference.threadSequence ?? 0)
               }
@@ -696,6 +726,14 @@ export function AgentsTaskCreator(props: {
             Open created conversation
           </Button>
         </>
+      ) : null}
+      {editing &&
+      props.request?.savedConfiguration &&
+      !props.request.savedConfiguration.isCurrent() ? (
+        <p role="alert">
+          Saved configuration selection retired. Refresh the library and inspect the exact revision
+          again before preparing another task.
+        </p>
       ) : null}
       {pending ? <p role="status">Task creation response pending…</p> : null}
       {editing ? (
