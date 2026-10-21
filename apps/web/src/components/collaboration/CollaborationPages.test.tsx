@@ -13016,11 +13016,9 @@ it.each(["accept", "pause", "resume", "edit", "lost acceptance"] as const)(
       );
       if (action === "edit") {
         await act(async () =>
-          renderer.root
-            .findByProps({ "aria-label": "goal instruction" })
-            .props.onChange({
-              target: { value: "Explicit criteria change beside unavailable comparison" },
-            }),
+          renderer.root.findByProps({ "aria-label": "goal instruction" }).props.onChange({
+            target: { value: "Explicit criteria change beside unavailable comparison" },
+          }),
         );
         await awaitReviewReads(
           () => creationButton("Preview instruction changes")!.props.onClick(),
@@ -13092,11 +13090,9 @@ it("result revision comparison leaves a separately reviewed explicit revision St
     await openComparison();
     await awaitReviewReads(() => creationButton("Prepare revision request")!.props.onClick(), 2, f);
     await act(async () =>
-      renderer.root
-        .findByProps({ "aria-label": "Requested changes" })
-        .props.onChange({
-          target: { value: "Explicit third revision from its own reviewed controls" },
-        }),
+      renderer.root.findByProps({ "aria-label": "Requested changes" }).props.onChange({
+        target: { value: "Explicit third revision from its own reviewed controls" },
+      }),
     );
     await creationClick("Choose Manual");
     await act(async () => {
