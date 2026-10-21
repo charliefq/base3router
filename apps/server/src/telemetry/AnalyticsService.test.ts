@@ -67,10 +67,10 @@ it.layer(syntheticIdentityServices)("AnalyticsService test", (it) => {
   it.effect("invalid telemetry configuration is not treated as a disabled service", () =>
     Effect.gen(function* () {
       const result = yield* AnalyticsService.make.pipe(
-        Effect.provide(
+        Effect.provide([
           ConfigProvider.layer(ConfigProvider.fromUnknown({ T3CODE_TELEMETRY_ENABLED: "invalid" })),
-        ),
-        Effect.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-invalid-analytics-" })),
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3-invalid-analytics-" }),
+        ]),
         Effect.provideService(
           HttpClient.HttpClient,
           HttpClient.make(() => Effect.die("Invalid analytics must not send")),
@@ -108,10 +108,10 @@ it.layer(syntheticIdentityServices)("AnalyticsService test", (it) => {
           yield* Effect.yieldNow;
           assert.equal(sleeps, 0);
         }).pipe(
-          Effect.provide(config),
-          Effect.provide(
+          Effect.provide([
+            config,
             ConfigProvider.layer(ConfigProvider.fromUnknown({ T3CODE_TELEMETRY_ENABLED: false })),
-          ),
+          ]),
           Effect.provideService(FileSystem.FileSystem, guardedFs),
           Effect.provideService(
             HttpClient.HttpClient,

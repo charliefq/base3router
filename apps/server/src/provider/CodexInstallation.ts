@@ -381,7 +381,11 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
   const resolve = Effect.fn("CodexInstallation.resolve")(function* () {
     const local = yield* resolveLocal();
     const executable = local ?? (yield* resolveManaged());
-    const canRemove = yield* fs.exists(managedDirectory);
+    const canRemove = yield* fs
+      .exists(managedDirectory)
+      .pipe(
+        Effect.mapError(wrapFailure("resolve", "Could not inspect the managed Codex runtime.")),
+      );
     yield* SubscriptionRef.update(state, (current) =>
       isRunning(current)
         ? current
