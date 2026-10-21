@@ -90,7 +90,7 @@ export function TaskResultComparison(props: {
     currentScope = useRef(scope),
     latest = useRef(props),
     mounted = useRef(true),
-    owner = useRef<object | null>(null);
+    owner = useRef<{ cursor: { streamSequence: number | undefined } } | null>(null);
   const detail = useEnvironmentThread(
     props.environmentId,
     view.open && props.task.threadId ? ThreadId.make(props.task.threadId) : null,
@@ -99,13 +99,17 @@ export function TaskResultComparison(props: {
   const detailError = Option.getOrNull(detail.error);
   const hasLive = live !== null;
   const detailFresh = detail.status === "live" && detailError === null && hasLive;
+  const streamSequence = detail.streamSequence;
+  const cursorObservation = useMemo(() => ({ streamSequence }), [streamSequence]);
   // Detail lifecycle identity retires callbacks even when cached data keeps the same object.
   const observation = useMemo(
-    () => ({ status: detail.status, error: detailError, hasLive }),
-    [detail.status, detailError, hasLive],
+    () => ({ status: detail.status, error: detailError, hasLive, cursorObservation }),
+    [detail.status, detailError, hasLive, cursorObservation],
   );
   const latestLive = useRef(live),
     observedLive = useRef(live),
+    latestCursor = useRef(cursorObservation),
+    observedCursor = useRef(cursorObservation),
     latestDetailFresh = useRef(detailFresh),
     currentObservation = useRef(observation),
     wasDetailFresh = useRef(false);
@@ -129,6 +133,7 @@ export function TaskResultComparison(props: {
   useLayoutEffect(() => {
     latest.current = props;
     latestLive.current = live;
+    latestCursor.current = cursorObservation;
     latestDetailFresh.current = detailFresh;
     currentObservation.current = observation;
   });
@@ -142,6 +147,17 @@ export function TaskResultComparison(props: {
     };
   }, [scope, replace]);
   useLayoutEffect(() => {
+    const pending = owner.current;
+    if (view.open && pending && pending.cursor !== cursorObservation) {
+      if (pending.cursor.streamSequence === undefined) pending.cursor = cursorObservation;
+      else
+        replace(
+          true,
+          null,
+          null,
+          "Recorded comparison evidence changed during the reads. Reload the pair before reviewing it.",
+        );
+    }
     if (
       view.open &&
       !detailFresh &&
@@ -156,10 +172,13 @@ export function TaskResultComparison(props: {
       view.result?.status === "available" &&
       detailFresh &&
       live &&
-      live !== observedLive.current
+      (live !== observedLive.current || cursorObservation !== observedCursor.current)
     ) {
       observedLive.current = live;
-      if (!comparisonLiveEvidenceAgrees(view.evidence.projection, live, view.result))
+      if (
+        cursorObservation !== observedCursor.current ||
+        !comparisonLiveEvidenceAgrees(view.evidence.projection, live, view.result)
+      )
         replace(
           true,
           null,
@@ -169,6 +188,7 @@ export function TaskResultComparison(props: {
     }
   }, [
     detail.status,
+    cursorObservation,
     detailError,
     detailFresh,
     live,
@@ -189,7 +209,7 @@ export function TaskResultComparison(props: {
   const load = async () => {
     if (!current() || owner.current) return;
     replace(true, null, null, null);
-    const token = {};
+    const token = { cursor: latestCursor.current };
     owner.current = token;
     setBusy(true);
     try {
@@ -215,6 +235,7 @@ export function TaskResultComparison(props: {
         return;
       }
       const observed = latestLive.current;
+      const appliedCursor = latestCursor.current;
       const result = taskResultComparison(
         evidence.task,
         evidence.environmentId,
@@ -223,7 +244,12 @@ export function TaskResultComparison(props: {
       );
       if (
         result.status === "available" &&
-        (!observed || !comparisonLiveEvidenceAgrees(evidence.projection, observed, result))
+        (!observed ||
+          (token.cursor.streamSequence !== undefined && token.cursor !== appliedCursor) ||
+          (appliedCursor.streamSequence !== undefined &&
+            evidence.projection.eventSequence !== undefined &&
+            appliedCursor.streamSequence !== evidence.projection.eventSequence) ||
+          !comparisonLiveEvidenceAgrees(evidence.projection, observed, result))
       ) {
         replace(
           true,
@@ -234,6 +260,7 @@ export function TaskResultComparison(props: {
         return;
       }
       observedLive.current = observed;
+      observedCursor.current = appliedCursor;
       replace(true, result.status === "available" ? evidence : null, result, null);
     } catch {
       if (mounted.current && currentScope.current === scope && owner.current === token)

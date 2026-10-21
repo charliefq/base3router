@@ -40,6 +40,7 @@ import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import {
   EnvironmentId,
+  EventId,
   ProjectId,
   ThreadId,
   MessageId,
@@ -69,6 +70,7 @@ import {
 import { withTaskRevisionRequestFixture } from "./testkit/taskRevisionRequestFixture";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { applyOrchestrationV2ProjectionEvent } from "@t3tools/client-runtime/state/orchestration-v2-projection";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const { buildBoundedThreadProjection } = (await import(
@@ -144,6 +146,7 @@ const state = vi.hoisted(() => ({
   localDetailStatus: null as "empty" | "cached" | "synchronizing" | "live" | "deleted" | null,
   localDetailError: null as string | null,
   localDetailEmpty: false,
+  detailStreamSequence: undefined as number | undefined,
   liveProjection: null as OrchestrationV2ThreadProjection | null,
   liveProjections: new Map<string, OrchestrationV2ThreadProjection>(),
   feedbackRead: vi.fn(),
@@ -213,6 +216,7 @@ vi.mock("../../state/threads", () => ({
   useEnvironmentThread: (_environment: unknown, threadId: string | null) => {
     state.detailWatches.push(threadId);
     return {
+      streamSequence: state.detailStreamSequence,
       status:
         threadId && state.localDetailStatus
           ? state.localDetailStatus
@@ -553,6 +557,7 @@ beforeEach(() => {
   state.localDetailStatus = null;
   state.localDetailError = null;
   state.localDetailEmpty = false;
+  state.detailStreamSequence = undefined;
   state.detailWatches = [];
   state.shellThreads = [];
   state.liveProjection = null;
@@ -13472,40 +13477,93 @@ it.each(["error", "null data"] as const)(
   30000,
 );
 
-it("result revision comparison keeps pruned predecessor digest and observed version changes authoritative", async () => {
+it("result revision comparison reloads caught-up streamed output despite the older snapshot sequence", async () => {
   await withLibraryFixture(async (f) => {
-    const { c, m } = await seedComparison(f, "comparison-pruned-predecessor");
+    const { c } = await seedComparison(f, "comparison-stream-reload");
     const p = await f.projection({ threadId: c.threadId });
     if (p._tag !== "Success") throw new Error("missing projection");
-    const full = { ...p.value, eventSequence: p.value.eventSequence ?? 100 };
-    const policy = { maxUserTurns: 1, maxItems: 75, maxEncodedBytes: 1048576 };
+    let full = { ...p.value, eventSequence: 100 };
     const partial = buildBoundedThreadProjection({
       projection: full,
-      snapshotSequence: 1,
-      policy,
+      snapshotSequence: 100,
     }).projection;
-    expect(partial.turnItems.some((v) => v.id === m.priorResult.itemId)).toBe(false);
     state.liveProjections.set(c.threadId, partial);
+    state.detailStreamSequence = 100;
     state.readProjection.mockImplementation(async () => ({ _tag: "Success", value: full }));
     const before = await f.executionCounts();
     await openComparison();
     expect(comparisonTexts()).toHaveLength(3);
-    const changed = {
-      ...full,
-      eventSequence: full.eventSequence + 1,
-      turnItems: full.turnItems.map((v) =>
-        v.id === m.priorResult.itemId && v.type === "assistant_message"
-          ? { ...v, text: comparisonFirstText.replace("PREVIOUS ENDING", "ALTERED ENDING") }
-          : v,
-      ),
-    };
-    state.liveProjections.set(
-      c.threadId,
-      buildBoundedThreadProjection({ projection: changed, snapshotSequence: 2, policy }).projection,
+    const last = partial.turnItems.find(
+      (v) => v.type === "assistant_message" && v.text === comparisonCurrentText,
     );
-    state.readProjection.mockImplementation(async () => ({ _tag: "Success", value: changed }));
+    if (!last || last.type !== "assistant_message") throw new Error("missing current output");
+    const next = { ...last, text: comparisonCurrentText + "\nSTREAMED ENDING 🧪" };
+    const event = {
+      id: EventId.make("comparison-caught-up"),
+      threadId: c.threadId,
+      type: "turn-item.updated" as const,
+      occurredAt: full.updatedAt,
+      payload: next,
+    };
+    const caughtUp = applyOrchestrationV2ProjectionEvent(partial, event)!;
+    expect(caughtUp.eventSequence).toBe(100);
+    full = { ...applyOrchestrationV2ProjectionEvent(full, event)!, eventSequence: 101 };
+    state.liveProjections.set(c.threadId, caughtUp);
+    state.detailStreamSequence = 101;
     await act(async () => renderer.update(<TasksPage scope={libraryScope} />));
     expect(comparisonTexts()).toEqual([]);
+    await act(async () => {
+      await creationButton("Reload result comparison")!.props.onClick();
+    });
+    expect(comparisonTexts()).toHaveLength(3);
+    expect(text()).toContain("STREAMED ENDING 🧪");
+    expect(await f.executionCounts()).toEqual(before);
+  });
+}, 30000);
+
+it("result revision comparison retires a dropped historical stream update with the identical bounded projection", async () => {
+  await withLibraryFixture(async (f) => {
+    const { c, m } = await seedComparison(f, "comparison-pruned-predecessor");
+    const p = await f.projection({ threadId: c.threadId });
+    if (p._tag !== "Success") throw new Error("missing projection");
+    let full = { ...p.value, eventSequence: 100 };
+    const partial = buildBoundedThreadProjection({
+      projection: full,
+      snapshotSequence: 100,
+      policy: { maxUserTurns: 1, maxItems: 75, maxEncodedBytes: 1048576 },
+    }).projection;
+    expect(partial.turnItems.some((v) => v.id === m.priorResult.itemId)).toBe(false);
+    state.liveProjections.set(c.threadId, partial);
+    state.detailStreamSequence = 100;
+    state.readProjection.mockImplementation(async () => ({ _tag: "Success", value: full }));
+    const before = await f.executionCounts();
+    await openComparison();
+    const capturedReload = creationButton("Reload result comparison")!.props.onClick;
+    expect(comparisonTexts()).toHaveLength(3);
+    const prior = full.turnItems.find((v) => v.id === m.priorResult.itemId);
+    if (!prior || prior.type !== "assistant_message") throw new Error("missing previous output");
+    const event = {
+      id: EventId.make("comparison-omitted-tail"),
+      threadId: c.threadId,
+      type: "turn-item.updated" as const,
+      occurredAt: full.updatedAt,
+      payload: { ...prior, text: comparisonFirstText.replace("PREVIOUS ENDING", "ALTERED ENDING") },
+    };
+    const dropped = applyOrchestrationV2ProjectionEvent(partial, event, {
+      partialTimeline: true,
+      latestLocalTurnOrdinal: Math.max(...partial.turnItems.map((v) => v.ordinal)),
+    });
+    expect(dropped).toBe(partial);
+    expect(dropped!.eventSequence).toBe(100);
+    full = { ...applyOrchestrationV2ProjectionEvent(full, event)!, eventSequence: 101 };
+    state.detailStreamSequence = 101;
+    await act(async () => renderer.update(<TasksPage scope={libraryScope} />));
+    expect(comparisonTexts()).toEqual([]);
+    const reads = state.reviewRead.mock.calls.length;
+    await act(async () => {
+      await capturedReload();
+    });
+    expect(state.reviewRead).toHaveBeenCalledTimes(reads);
     await act(async () => {
       await creationButton("Reload result comparison")!.props.onClick();
     });
@@ -13516,6 +13574,65 @@ it("result revision comparison keeps pruned predecessor digest and observed vers
     expect(state.startStep).not.toHaveBeenCalled();
   });
 }, 30000);
+
+it.each(["advance", "cursor ABA"] as const)(
+  "result revision comparison retires delayed full reads after %s with unchanged projection",
+  async (mode) => {
+    await withLibraryFixture(async (f) => {
+      const { c } = await seedComparison(f, `comparison-pending-cursor-${mode}`);
+      const p = await f.projection({ threadId: c.threadId });
+      if (p._tag !== "Success") throw new Error("missing projection");
+      const full = { ...p.value, eventSequence: 100 };
+      state.liveProjections.set(
+        c.threadId,
+        buildBoundedThreadProjection({ projection: full, snapshotSequence: 100 }).projection,
+      );
+      state.detailStreamSequence = 100;
+      state.readProjection.mockImplementation(async () => ({ _tag: "Success", value: full }));
+      const entered = deferred<void>(),
+        release = deferred<void>();
+      let count = 0;
+      state.reviewRead.mockImplementation(async ({ input }) => {
+        const r = await f.review(input);
+        if (++count === 2) {
+          entered.resolve();
+          await release.promise;
+        }
+        return r;
+      });
+      const before = await f.executionCounts();
+      let pending: Promise<void>;
+      await act(async () => {
+        pending = creationButton("Compare revised result")!.props.onClick();
+        await entered.promise;
+      });
+      state.detailStreamSequence = 101;
+      await act(async () => renderer.update(<TasksPage scope={libraryScope} />));
+      if (mode === "cursor ABA") {
+        state.detailStreamSequence = 100;
+        await act(async () => renderer.update(<TasksPage scope={libraryScope} />));
+      }
+      await act(async () => {
+        release.resolve();
+        await pending!;
+      });
+      expect(comparisonTexts()).toEqual([]);
+      expect(text()).toContain("changed during the reads");
+      state.readProjection.mockImplementation(async () => ({
+        _tag: "Success",
+        value: { ...full, eventSequence: state.detailStreamSequence },
+      }));
+      await act(async () => {
+        await creationButton("Reload result comparison")!.props.onClick();
+      });
+      expect(comparisonTexts()).toHaveLength(3);
+      expect(await f.executionCounts()).toEqual(before);
+      expect(state.reviewDecide).not.toHaveBeenCalled();
+      expect(state.startStep).not.toHaveBeenCalled();
+    });
+  },
+  30000,
+);
 
 it("result revision comparison local failure keeps Close and conversation navigation read-only and Accept independent", async () => {
   await withLibraryFixture(async (f) => {

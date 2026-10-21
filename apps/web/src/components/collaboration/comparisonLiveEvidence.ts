@@ -28,12 +28,6 @@ export function comparisonLiveEvidenceAgrees(
 ) {
   if (!validProjection(live) || !sameControl(full, live)) return false;
   if (
-    full.eventSequence !== undefined &&
-    live.eventSequence !== undefined &&
-    full.eventSequence !== live.eventSequence
-  )
-    return false;
-  if (
     new Set(live.messages.map((v) => v.id)).size !== live.messages.length ||
     new Set(live.turnItems.map((v) => v.id)).size !== live.turnItems.length
   )
