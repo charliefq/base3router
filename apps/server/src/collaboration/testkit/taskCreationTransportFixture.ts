@@ -63,6 +63,8 @@ import { HttpApi } from "effect/unstable/httpapi";
 import { RpcServer, RpcSerialization, RpcGroup } from "effect/unstable/rpc";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { TaskRpcGroup, makeTaskRpcHandlers } from "../../taskRpcHandlers.ts";
+import { subscribeOrchestrationV2Thread } from "../../ws.ts";
+import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import * as EnvironmentAuth from "../../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import { environmentAuthenticatedAuthLayer } from "../../auth/http.ts";
@@ -89,6 +91,7 @@ const group = TaskRpcGroup.merge(
     ...Array.from(WsRpcGroup.requests.values()).filter(
       (rpc) =>
         rpc._tag === WS_METHODS.subscribeServerConfig ||
+        rpc._tag === ORCHESTRATION_V2_WS_METHODS.subscribeThread ||
         rpc._tag === WS_METHODS.serverProbe ||
         rpc._tag === WS_METHODS.attachmentsCreateUploadUrl ||
         rpc._tag === WS_METHODS.attachmentsDelete,
@@ -264,6 +267,9 @@ export async function withTaskCreationTransportFixture(
               yield* gate.signalCommandReady;
               const base = Layer.mergeAll(
                 engine,
+                OrchestrationEventStoreLive.pipe(
+                  Layer.provide(Layer.succeed(SqlClient.SqlClient, f.sql)),
+                ),
                 Layer.succeed(SqlClient.SqlClient, f.sql),
                 ThreadManagement.layer.pipe(Layer.provide(engine)),
                 // Transport fake at the launch boundary; the separate workflow process journey
@@ -351,6 +357,7 @@ export async function withTaskCreationTransportFixture(
                   sessionCookieName: "fixture",
                 },
                 cwd: "/fixture",
+                threadResumeCompletionMarker: true,
                 keybindingsConfigPath: "/fixture/keybindings.json",
                 keybindings: [],
                 issues: [],
@@ -379,6 +386,17 @@ export async function withTaskCreationTransportFixture(
                   const actualWorkflowDispatch = handlers[WS_METHODS.workflowDispatchStage];
                   const layer = group.toLayer({
                     ...handlers,
+                    [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: (input) =>
+                      Stream.unwrap(
+                        // Reuse the production authenticated read check before the production stream.
+                        handlers[ORCHESTRATION_V2_WS_METHODS.getThreadProjection]({
+                          threadId: input.threadId,
+                        }).pipe(
+                          Effect.andThen(
+                            subscribeOrchestrationV2Thread(input).pipe(Effect.provide(context)),
+                          ),
+                        ),
+                      ),
                     [WS_METHODS.workflowDispatchStage]: (input) =>
                       actualWorkflowDispatch(input).pipe(
                         Effect.flatMap((result) =>

@@ -1284,7 +1284,7 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
-  it.effect("dropped partial-timeline turn item publishes only its applied cursor", () =>
+  it.effect("dropped partial-timeline turn item is a true applyItem no-op", () =>
     Effect.gen(function* () {
       const recent = {
         id: TurnItemId.make("item-window"),
@@ -1370,9 +1370,6 @@ describe("EnvironmentThreads", () => {
       for (let attempt = 0; attempt < 30; attempt += 1) {
         yield* Effect.yieldNow;
       }
-      const dropped = yield* Ref.get(harness.latest);
-      expect(Option.getOrThrow(dropped.data)).toBe(seededProjection);
-      expect(dropped.streamSequence).toBe(6);
       // Drive a later unrelated title update so we know the stream continued.
       yield* Queue.offer(harness.inputs, titleUpdated("After dropped event", 7));
       const after = yield* awaitThreadState(
@@ -1820,7 +1817,6 @@ describe("EnvironmentThreads", () => {
           value.data.value.thread.title === "After",
       );
       expect(Option.isNone(live.error)).toBe(true);
-      expect(live.streamSequence).toBe(CACHED_SNAPSHOT_SEQUENCE + 4);
       expect(Option.getOrThrow(live.data).messages.map((message) => message.text)).toEqual([
         "Before",
       ]);
@@ -1837,10 +1833,7 @@ describe("EnvironmentThreads", () => {
 
   it.effect("resumes replacement sessions from the latest applied sequence", () =>
     Effect.gen(function* () {
-      const harness = yield* makeHarness({
-        cached: { ...BASE_PROJECTION, eventSequence: CACHED_SNAPSHOT_SEQUENCE },
-        completionMarker: true,
-      });
+      const harness = yield* makeHarness({ cached: BASE_PROJECTION, completionMarker: true });
       yield* Queue.offer(
         harness.inputs,
         titleUpdated("Latest title", CACHED_SNAPSHOT_SEQUENCE + 1),
@@ -1862,9 +1855,6 @@ describe("EnvironmentThreads", () => {
 
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE + 1);
-      const caughtUp = yield* Ref.get(harness.latest);
-      expect(caughtUp.streamSequence).toBe(CACHED_SNAPSHOT_SEQUENCE + 1);
-      expect(Option.getOrThrow(caughtUp.data).eventSequence).toBe(CACHED_SNAPSHOT_SEQUENCE);
       expect((yield* Ref.get(harness.latest)).status).toBe("synchronizing");
     }),
   );

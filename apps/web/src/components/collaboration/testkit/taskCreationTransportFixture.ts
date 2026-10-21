@@ -33,6 +33,10 @@ import {
   makeEnvironmentHttpApiGroupClient,
 } from "@t3tools/client-runtime/rpc";
 import * as Commands from "@t3tools/client-runtime/operations";
+import {
+  observeTaskResultComparison,
+  type ComparisonObservationInput,
+} from "../observeTaskResultComparison";
 
 type ServerFixture = {
   expireAttachment: (attachment: import("@t3tools/contracts").ChatFileAttachment) => Promise<void>;
@@ -248,6 +252,8 @@ const makeClientFixture = Effect.fn("TaskTransport.makeClientFixture")(function*
     disconnect,
     snapshot,
     methods,
+    observeComparison: (input: ComparisonObservationInput) =>
+      Effect.runPromise(provide(observeTaskResultComparison(input))),
     catalog: (input: Parameters<typeof Commands.readConfigurationCatalog>[0]) =>
       command(Commands.readConfigurationCatalog(input)),
     configurationStatus: (input: Parameters<typeof Commands.readConfigurationCommandStatus>[0]) =>

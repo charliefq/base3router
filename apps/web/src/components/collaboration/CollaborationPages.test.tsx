@@ -146,7 +146,8 @@ const state = vi.hoisted(() => ({
   localDetailStatus: null as "empty" | "cached" | "synchronizing" | "live" | "deleted" | null,
   localDetailError: null as string | null,
   localDetailEmpty: false,
-  detailStreamSequence: undefined as number | undefined,
+  comparisonObserve: vi.fn(),
+  comparisonReports: [] as Array<(state: "ready" | "changed" | "unavailable") => void>,
   liveProjection: null as OrchestrationV2ThreadProjection | null,
   liveProjections: new Map<string, OrchestrationV2ThreadProjection>(),
   feedbackRead: vi.fn(),
@@ -216,7 +217,6 @@ vi.mock("../../state/threads", () => ({
   useEnvironmentThread: (_environment: unknown, threadId: string | null) => {
     state.detailWatches.push(threadId);
     return {
-      streamSequence: state.detailStreamSequence,
       status:
         threadId && state.localDetailStatus
           ? state.localDetailStatus
@@ -256,37 +256,42 @@ vi.mock("../../lib/attachmentUploadQueue", () => ({
   useAttachmentUploadStore: (select: (state: unknown) => unknown) =>
     select({ uploadsByImageId: state.fileUploads }),
 }));
+vi.mock("./taskResultComparisonObservation", () => ({
+  taskResultComparisonObservation: "comparison-observe",
+}));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
-    command === "continuation-status"
-      ? state.continuationRead
-      : command === "configuration-catalog"
-        ? state.catalog
-        : command === "configuration-status"
-          ? state.configurationStatus
-          : command === "configuration-action"
-            ? state.configurationWrite
-            : command === "file-review"
-              ? state.fileReview
-              : command === "skill-review"
-                ? state.skillReview
-                : command === "interrupt"
-                  ? state.interrupt
-                  : command === "first-launch-status"
-                    ? state.firstLaunchRead
-                    : command === "capability-start"
-                      ? state.startStep
-                      : command === "auto-preview"
-                        ? state.autoPreview
-                        : command === "read-creation-status"
-                          ? state.readCreationStatus
-                          : command === "review-read"
-                            ? state.reviewRead
-                            : command === "review-decide"
-                              ? state.reviewDecide
-                              : command === "read-projection"
-                                ? state.readProjection
-                                : state.create,
+    command === "comparison-observe"
+      ? state.comparisonObserve
+      : command === "continuation-status"
+        ? state.continuationRead
+        : command === "configuration-catalog"
+          ? state.catalog
+          : command === "configuration-status"
+            ? state.configurationStatus
+            : command === "configuration-action"
+              ? state.configurationWrite
+              : command === "file-review"
+                ? state.fileReview
+                : command === "skill-review"
+                  ? state.skillReview
+                  : command === "interrupt"
+                    ? state.interrupt
+                    : command === "first-launch-status"
+                      ? state.firstLaunchRead
+                      : command === "capability-start"
+                        ? state.startStep
+                        : command === "auto-preview"
+                          ? state.autoPreview
+                          : command === "read-creation-status"
+                            ? state.readCreationStatus
+                            : command === "review-read"
+                              ? state.reviewRead
+                              : command === "review-decide"
+                                ? state.reviewDecide
+                                : command === "read-projection"
+                                  ? state.readProjection
+                                  : state.create,
 }));
 vi.mock("../chat/ProviderModelPicker", () => ({
   ProviderModelPicker: (props: {
@@ -557,7 +562,8 @@ beforeEach(() => {
   state.localDetailStatus = null;
   state.localDetailError = null;
   state.localDetailEmpty = false;
-  state.detailStreamSequence = undefined;
+  state.comparisonObserve.mockReset();
+  state.comparisonReports = [];
   state.detailWatches = [];
   state.shellThreads = [];
   state.liveProjection = null;
@@ -11436,6 +11442,10 @@ async function setupFullReview(
   custom?: Parameters<typeof completedForFullReview>[3],
 ) {
   creationStorage();
+  state.comparisonObserve.mockImplementation((input) => {
+    state.comparisonReports.push(input.report);
+    return f.observeComparison(input);
+  });
   f.setWorkflowOutput(output);
   if (running) f.runInput("First attributable output");
   const c = await completedForFullReview(
@@ -13477,6 +13487,16 @@ it.each(["error", "null data"] as const)(
   30000,
 );
 
+function mockComparisonObservation() {
+  state.comparisonObserve.mockImplementation((input) => {
+    state.comparisonReports.push(input.report);
+    input.report("ready");
+    return new Promise<void>((resolve) =>
+      input.signal.addEventListener("abort", () => resolve(), { once: true }),
+    );
+  });
+}
+
 it("result revision comparison reloads caught-up streamed output despite the older snapshot sequence", async () => {
   await withLibraryFixture(async (f) => {
     const { c } = await seedComparison(f, "comparison-stream-reload");
@@ -13488,7 +13508,7 @@ it("result revision comparison reloads caught-up streamed output despite the old
       snapshotSequence: 100,
     }).projection;
     state.liveProjections.set(c.threadId, partial);
-    state.detailStreamSequence = 100;
+    mockComparisonObservation();
     state.readProjection.mockImplementation(async () => ({ _tag: "Success", value: full }));
     const before = await f.executionCounts();
     await openComparison();
@@ -13509,7 +13529,7 @@ it("result revision comparison reloads caught-up streamed output despite the old
     expect(caughtUp.eventSequence).toBe(100);
     full = { ...applyOrchestrationV2ProjectionEvent(full, event)!, eventSequence: 101 };
     state.liveProjections.set(c.threadId, caughtUp);
-    state.detailStreamSequence = 101;
+    await act(async () => state.comparisonReports.at(-1)!("changed"));
     await act(async () => renderer.update(<TasksPage scope={libraryScope} />));
     expect(comparisonTexts()).toEqual([]);
     await act(async () => {
@@ -13534,7 +13554,7 @@ it("result revision comparison retires a dropped historical stream update with t
     }).projection;
     expect(partial.turnItems.some((v) => v.id === m.priorResult.itemId)).toBe(false);
     state.liveProjections.set(c.threadId, partial);
-    state.detailStreamSequence = 100;
+    mockComparisonObservation();
     state.readProjection.mockImplementation(async () => ({ _tag: "Success", value: full }));
     const before = await f.executionCounts();
     await openComparison();
@@ -13556,7 +13576,7 @@ it("result revision comparison retires a dropped historical stream update with t
     expect(dropped).toBe(partial);
     expect(dropped!.eventSequence).toBe(100);
     full = { ...applyOrchestrationV2ProjectionEvent(full, event)!, eventSequence: 101 };
-    state.detailStreamSequence = 101;
+    await act(async () => state.comparisonReports.at(-1)!("changed"));
     await act(async () => renderer.update(<TasksPage scope={libraryScope} />));
     expect(comparisonTexts()).toEqual([]);
     const reads = state.reviewRead.mock.calls.length;
@@ -13575,60 +13595,110 @@ it("result revision comparison retires a dropped historical stream update with t
   });
 }, 30000);
 
-it.each(["advance", "cursor ABA"] as const)(
-  "result revision comparison retires delayed full reads after %s with unchanged projection",
+it("result revision comparison raw observation callbacks cannot cross close and reopen ABA", async () => {
+  await withLibraryFixture(async (f) => {
+    await seedComparison(f, "comparison-observer-callback-aba");
+    mockComparisonObservation();
+    const before = await f.executionCounts();
+    await openComparison();
+    const a = state.comparisonReports.at(-1)!;
+    await creationClick("Close result comparison");
+    await openComparison();
+    const b = state.comparisonReports.at(-1)!;
+    await act(async () => {
+      a("changed");
+      a("unavailable");
+      a("ready");
+    });
+    expect(comparisonTexts()).toHaveLength(3);
+    await act(async () => b("changed"));
+    expect(comparisonTexts()).toEqual([]);
+    await act(async () => {
+      await creationButton("Reload result comparison")!.props.onClick();
+    });
+    expect(comparisonTexts()).toHaveLength(3);
+    expect(await f.executionCounts()).toEqual(before);
+  });
+}, 30000);
+
+it.each(["close", "refresh", "session ABA", "unmount"] as const)(
+  "result revision comparison disposes an unsynchronized raw observation on %s",
   async (mode) => {
     await withLibraryFixture(async (f) => {
-      const { c } = await seedComparison(f, `comparison-pending-cursor-${mode}`);
-      const p = await f.projection({ threadId: c.threadId });
-      if (p._tag !== "Success") throw new Error("missing projection");
-      const full = { ...p.value, eventSequence: 100 };
-      state.liveProjections.set(
-        c.threadId,
-        buildBoundedThreadProjection({ projection: full, snapshotSequence: 100 }).projection,
-      );
-      state.detailStreamSequence = 100;
-      state.readProjection.mockImplementation(async () => ({ _tag: "Success", value: full }));
-      const entered = deferred<void>(),
-        release = deferred<void>();
-      let count = 0;
-      state.reviewRead.mockImplementation(async ({ input }) => {
-        const r = await f.review(input);
-        if (++count === 2) {
-          entered.resolve();
-          await release.promise;
-        }
-        return r;
+      await seedComparison(f, `comparison-observer-pending-${mode}`);
+      const entered = deferred<void>();
+      let signal: AbortSignal, report: (state: "ready" | "changed" | "unavailable") => void;
+      state.comparisonObserve.mockImplementation((input) => {
+        signal = input.signal;
+        report = input.report;
+        entered.resolve();
+        return new Promise<void>((resolve) =>
+          input.signal.addEventListener("abort", () => resolve(), { once: true }),
+        );
       });
       const before = await f.executionCounts();
       let pending: Promise<void>;
       await act(async () => {
         pending = creationButton("Compare revised result")!.props.onClick();
+        await state.reviewRead.mock.results.at(-1)!.value;
+      });
+      await act(async () => {
         await entered.promise;
       });
-      state.detailStreamSequence = 101;
-      await act(async () => renderer.update(<TasksPage scope={libraryScope} />));
-      if (mode === "cursor ABA") {
-        state.detailStreamSequence = 100;
+      expect(comparisonTexts()).toEqual([]);
+      if (mode === "close") await creationClick("Close result comparison");
+      if (mode === "refresh")
+        await act(async () => {
+          creationButton("Refresh tasks")!.props.onClick();
+          await state.load.mock.results.at(-1)!.value;
+        });
+      if (mode === "session ABA") {
+        const original = state.sessionIdentity;
+        state.sessionIdentity = null;
+        await act(async () => renderer.update(<TasksPage scope={libraryScope} />));
+        state.sessionIdentity = original;
         await act(async () => renderer.update(<TasksPage scope={libraryScope} />));
       }
+      if (mode === "unmount") await act(async () => renderer.unmount());
+      expect(signal!.aborted).toBe(true);
       await act(async () => {
-        release.resolve();
+        report!("ready");
+        report!("changed");
         await pending!;
       });
-      expect(comparisonTexts()).toEqual([]);
-      expect(text()).toContain("changed during the reads");
-      state.readProjection.mockImplementation(async () => ({
-        _tag: "Success",
-        value: { ...full, eventSequence: state.detailStreamSequence },
-      }));
-      await act(async () => {
-        await creationButton("Reload result comparison")!.props.onClick();
-      });
-      expect(comparisonTexts()).toHaveLength(3);
+      if (mode !== "unmount") expect(comparisonTexts()).toEqual([]);
       expect(await f.executionCounts()).toEqual(before);
       expect(state.reviewDecide).not.toHaveBeenCalled();
       expect(state.startStep).not.toHaveBeenCalled();
+    });
+  },
+  30000,
+);
+
+it.each(["missing cursor", "unsupported", "exception"] as const)(
+  "result revision comparison is unavailable for %s observation evidence",
+  async (mode) => {
+    await withLibraryFixture(async (f) => {
+      await seedComparison(f, `comparison-observer-unavailable-${mode}`);
+      if (mode === "missing cursor")
+        state.readProjection.mockImplementation(async ({ input }) => {
+          const r = await f.projection(input);
+          if (r._tag !== "Success") return r;
+          const { eventSequence: _sequence, ...value } = r.value;
+          return { ...r, value };
+        });
+      else
+        state.comparisonObserve.mockImplementation(async (input) => {
+          if (mode === "exception") throw new Error("fixture observation failure");
+          input.report("unavailable");
+        });
+      const before = await f.executionCounts();
+      await openComparison();
+      expect(comparisonTexts()).toEqual([]);
+      expect(text()).toContain(
+        mode === "missing cursor" ? "no stream cursor" : "completion-marker stream",
+      );
+      expect(await f.executionCounts()).toEqual(before);
     });
   },
   30000,

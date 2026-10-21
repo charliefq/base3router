@@ -6,8 +6,6 @@ import { EMPTY_THREAD_HISTORY_META, type ThreadHistoryMeta } from "./threadHisto
 export type EnvironmentThreadStatus = "empty" | "cached" | "synchronizing" | "live" | "deleted";
 
 export interface EnvironmentThreadState {
-  /** Applied socket cursor, including events omitted from a bounded timeline. Not persisted. */
-  readonly streamSequence?: number;
   readonly data: Option.Option<OrchestrationV2ThreadProjection>;
   readonly status: EnvironmentThreadStatus;
   readonly error: Option.Option<string>;
