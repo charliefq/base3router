@@ -4,12 +4,13 @@ import {
   type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "../ui/badge";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 import { ModelPickerContent, resolveModelPickerSelectedModel } from "./ModelPickerContent";
+import { ChatGptSharingControl } from "./ChatGptSharingControl";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import {
   ModelEsque,
@@ -24,6 +25,8 @@ import {
 } from "./ComposerControl";
 import { useComposerMenuProps } from "./composerEventScope";
 import { shortcutLabelForCommand } from "../../keybindings";
+import { Button } from "../ui/button";
+import { SparklesIcon } from "lucide-react";
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   /**
@@ -43,6 +46,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   activeProviderIconClassName?: string;
   instanceIndicatorBackground?: string;
   size?: ComposerControlSize;
+  compact?: boolean;
   isComposerOwned?: boolean;
   disabled?: boolean;
   terminalOpen?: boolean;
@@ -51,6 +55,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   /** Aggregate settings can show a neutral value without claiming one provider is selected. */
   triggerLabel?: string;
   triggerAriaLabel?: string;
+  routingMode?: "auto" | "manual";
+  onRoutingModeChange?: (mode: "auto" | "manual") => void;
   onOpenChange?: (open: boolean) => void;
   onOpenProviderSetup?: (instanceId: ProviderInstanceId) => void;
   getModelDisabledReason?: (instanceId: ProviderInstanceId, model: string) => string | null;
@@ -59,6 +65,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const composerFloatingLayerProps = useComposerMenuProps();
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
   const isMenuOpen = props.open ?? uncontrolledIsMenuOpen;
+  const selectionPending = useRef(false);
   const size = props.size ?? "sm";
 
   // Resolve the active instance entry by exact routing key. The composer
@@ -73,15 +80,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const activeInstanceId = props.activeInstanceId;
   const selectedInstanceOptions = props.modelOptionsByInstance.get(activeInstanceId) ?? [];
   // Account-specific catalogs must keep the selected model label while unavailable.
-  const selectedModel =
-    resolveModelPickerSelectedModel({
-      driverKind: activeEntry?.driverKind,
-      model: props.model,
-      options: selectedInstanceOptions,
-    }) ??
-    (activeEntry?.driverKind === "opencode" || activeEntry?.driverKind === "antigravity"
-      ? undefined
-      : selectedInstanceOptions[0]);
+  const selectedModel = resolveModelPickerSelectedModel({
+    driverKind: activeEntry?.driverKind,
+    model: props.model,
+    options: selectedInstanceOptions,
+  });
   const triggerTitle = selectedModel
     ? getTriggerDisplayModelName(selectedModel)
     : props.model === ANTIGRAVITY_DEFAULT_MODEL
@@ -104,6 +107,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     if (!isMenuOpen) {
       return;
     }
+    selectionPending.current = false;
 
     const { documentElement, body } = document;
     const previousDocumentOverscrollBehavior = documentElement.style.overscrollBehavior;
@@ -149,7 +153,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   }, [isMenuOpen]);
 
   const handleInstanceModelChange = (instanceId: ProviderInstanceId, model: string) => {
-    if (props.disabled) return;
+    if (props.disabled || selectionPending.current) return;
+    selectionPending.current = true;
+    props.onRoutingModeChange?.("manual");
     props.onInstanceModelChange(instanceId, model);
     setIsMenuOpen(false);
   };
@@ -185,9 +191,21 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const allModelNames = selectedEntries
     ? selectedEntries.map((selection) => selection.label).join(", ") || "Choose models"
     : undefined;
+  const triggerDescription =
+    props.routingMode === "auto"
+      ? "Auto · one routed response"
+      : (props.triggerLabel ?? allModelNames ?? triggerLabel);
   const triggerTooltipContent = shortcutLabel
-    ? `${props.triggerLabel ?? allModelNames ?? triggerLabel} · ${shortcutLabel}`
-    : (props.triggerLabel ?? allModelNames ?? triggerLabel);
+    ? `${triggerDescription} · ${shortcutLabel}`
+    : triggerDescription;
+  const manualIdentityLabel = selectedEntries
+    ? selectedEntries
+        .map(
+          (selection) =>
+            `${selection.entry?.displayName ?? selection.instanceId}: ${selection.label} (${selection.model})`,
+        )
+        .join(", ")
+    : `${activeEntry?.displayName ?? props.activeInstanceId}: ${triggerLabel} (${props.model})`;
 
   return (
     <Popover
@@ -203,12 +221,21 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       <PopoverTrigger
         render={
           <ComposerControl
-            aria-label={props.triggerAriaLabel ?? allModelNames}
+            aria-label={
+              props.routingMode
+                ? props.routingMode === "auto"
+                  ? "Model routing: Auto, local classification"
+                  : `Model routing: Manual, ${manualIdentityLabel}`
+                : (props.triggerAriaLabel ?? allModelNames)
+            }
+            data-composer-routing={props.routingMode}
             size={size}
             data-chat-provider-model-picker="true"
             className={cn(
               "min-w-0 shrink justify-between whitespace-nowrap",
-              !props.isComposerOwned && "max-w-48 sm:max-w-56",
+              props.compact
+                ? "max-w-42 shrink-0"
+                : !props.isComposerOwned && "max-w-48 sm:max-w-56",
               props.triggerClassName,
             )}
             disabled={props.disabled}
@@ -218,7 +245,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         <span
           className={cn("flex min-w-0 flex-1 items-center", size === "xs" ? "gap-1" : "gap-1.5")}
         >
-          {selectedEntries && props.triggerLabel === undefined ? (
+          {props.routingMode === "auto" ? (
+            <SparklesIcon className="size-4 shrink-0" aria-hidden="true" />
+          ) : selectedEntries && props.triggerLabel === undefined ? (
             <span className="flex shrink-0 items-center -space-x-1" aria-hidden="true">
               {selectedEntries
                 .slice(0, 3)
@@ -245,12 +274,14 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               driverKind={activeEntry.driverKind}
               displayName={activeEntry.displayName}
               accentColor={activeEntry.accentColor}
+              acpRegistryAgentId={activeEntry.acpRegistryAgentId}
+              acpRegistryIconUrl={activeEntry.acpRegistryIconUrl}
               showBadge={showInstanceBadge}
               className="size-4"
               iconClassName={cn("size-4", props.activeProviderIconClassName)}
               indicatorBackground={props.instanceIndicatorBackground ?? "var(--contrast-input)"}
               badgeClassName={cn(
-                "right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-3xs",
+                "right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-5xs",
                 size === "xs" && "shadow-none",
               )}
             />
@@ -264,7 +295,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                 />
               }
             >
-              {props.triggerLabel ?? multipleLabel ?? triggerTitle}
+              {props.routingMode === "auto"
+                ? "Auto"
+                : props.routingMode === "manual"
+                  ? `Manual · ${multipleLabel ?? triggerTitle}`
+                  : (props.triggerLabel ?? multipleLabel ?? triggerTitle)}
             </TooltipTrigger>
             <TooltipPopup side="top">{triggerTooltipContent}</TooltipPopup>
           </Tooltip>
@@ -284,30 +319,86 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         className="before:hidden"
         padding="none"
       >
-        <ModelPickerContent
-          activeInstanceId={activeInstanceId}
-          model={props.model}
-          {...(props.selectedModels !== undefined ? { selectedModels: props.selectedModels } : {})}
-          {...(props.onToggleModel
-            ? {
-                onToggleModel: (instanceId: ProviderInstanceId, model: string) => {
-                  if (!props.disabled) props.onToggleModel?.(instanceId, model);
-                },
-              }
-            : {})}
-          lockedProvider={props.lockedProvider}
-          lockedContinuationGroupKey={props.lockedContinuationGroupKey ?? null}
-          instanceEntries={props.instanceEntries}
-          {...(props.keybindings ? { keybindings: props.keybindings } : {})}
-          modelOptionsByInstance={props.modelOptionsByInstance}
-          terminalOpen={props.terminalOpen ?? false}
-          onRequestClose={() => setIsMenuOpen(false)}
-          {...(props.onOpenProviderSetup ? { onOpenProviderSetup: props.onOpenProviderSetup } : {})}
-          {...(props.getModelDisabledReason
-            ? { getModelDisabledReason: props.getModelDisabledReason }
-            : {})}
-          onInstanceModelChange={handleInstanceModelChange}
-        />
+        {props.routingMode ? (
+          <div
+            className="w-[min(32rem,calc(100vw-2rem))] space-y-3 border-b border-border p-4"
+            data-model-picker-content="true"
+          >
+            <div className="flex items-center gap-2" aria-label="Model routing mode">
+              {(["auto", "manual"] as const).map((mode) => (
+                <Button
+                  key={mode}
+                  size="sm"
+                  variant={props.routingMode === mode ? "default" : "outline"}
+                  aria-pressed={props.routingMode === mode}
+                  disabled={props.disabled}
+                  onClick={() => {
+                    if (!props.disabled) props.onRoutingModeChange?.(mode);
+                  }}
+                >
+                  {mode === "auto" ? "Auto" : "Manual"}
+                </Button>
+              ))}
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {props.routingMode === "auto"
+                ? "Auto sends one routed response using an eligible configured model. Manual comparison choices and options are saved for when you switch back. OpenRouter’s remote Auto is a separate model in Manual."
+                : "Choose the exact provider and model for this conversation. OpenRouter Auto delegates model selection remotely; other cards use the named model. Existing thread restrictions still apply."}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Requested and executed model identities appear in each turn’s route readout.
+            </p>
+            {props.routingMode === "auto" ? (
+              <p className="break-all text-xs text-muted-foreground">
+                {selectedEntries !== undefined ? "Saved Manual choices: " : "Saved Manual choice: "}
+                {selectedEntries !== undefined
+                  ? selectedEntries
+                      .map(
+                        (selection) =>
+                          `${selection.entry?.displayName ?? selection.instanceId} · ${selection.label}`,
+                      )
+                      .join(", ") || "No comparison models selected"
+                  : `${activeEntry?.displayName ?? props.activeInstanceId} · ${props.model}`}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        {props.routingMode !== "auto" ? (
+          <>
+            <ModelPickerContent
+              showCards={props.routingMode === "manual"}
+              activeInstanceId={activeInstanceId}
+              model={props.model}
+              {...(props.selectedModels !== undefined
+                ? { selectedModels: props.selectedModels }
+                : {})}
+              {...(props.onToggleModel
+                ? {
+                    onToggleModel: (instanceId: ProviderInstanceId, model: string) => {
+                      if (!props.disabled) props.onToggleModel?.(instanceId, model);
+                    },
+                  }
+                : {})}
+              lockedProvider={props.lockedProvider}
+              lockedContinuationGroupKey={props.lockedContinuationGroupKey ?? null}
+              instanceEntries={props.instanceEntries}
+              {...(props.keybindings ? { keybindings: props.keybindings } : {})}
+              modelOptionsByInstance={props.modelOptionsByInstance}
+              terminalOpen={props.terminalOpen ?? false}
+              onRequestClose={() => setIsMenuOpen(false)}
+              {...(props.onOpenProviderSetup
+                ? { onOpenProviderSetup: props.onOpenProviderSetup }
+                : {})}
+              {...(props.getModelDisabledReason
+                ? { getModelDisabledReason: props.getModelDisabledReason }
+                : {})}
+              onInstanceModelChange={handleInstanceModelChange}
+            />
+            {props.selectedModels === undefined ? (
+              <ChatGptSharingControl provider={activeEntry?.snapshot ?? null} />
+            ) : null}
+          </>
+        ) : null}
       </PopoverPopup>
     </Popover>
   );

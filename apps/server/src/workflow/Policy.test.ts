@@ -1,5 +1,6 @@
 import {
   ProjectId,
+  EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -535,3 +536,185 @@ describe("generic workflow policy", () => {
     expect(resumed.runs[0]?.pausedAt).toBeNull();
   });
 });
+
+it("saved task configuration cannot become an executable workflow role", () => {
+  const profile: AgentProfile = {
+    ...BUILTIN_AGENT_PROFILES[0]!,
+    id: "saved-task-input",
+    projectId,
+    origin: "custom",
+    taskConfiguration: {
+      ownerId: "owner",
+      commandId: "save-input",
+      environmentId: EnvironmentId.make("environment-1"),
+      modelSelection: { instanceId: ProviderInstanceId.make("codex-work"), model: "gpt-5.4" },
+    },
+  };
+  const configured: WorkflowTemplate = {
+    ...template,
+    projectId,
+    origin: "custom",
+    id: "configured-template",
+    stages: template.stages.map((stage, index) =>
+      index === 0 ? { ...stage, profileId: profile.id, profileVersion: profile.version } : stage,
+    ),
+  };
+  expect(() =>
+    validateTemplate(configured, { ...emptyWorkflowCatalog(), profiles: [profile] }),
+  ).toThrow("unavailable");
+  expect(() =>
+    validateTemplate(
+      { ...configured, stages: template.stages },
+      { ...emptyWorkflowCatalog(), profiles: [profile] },
+    ),
+  ).not.toThrow();
+});
+
+it("retains distinct bounded gate occurrences through exhausted revision history", () => {
+  let catalog = dispatched();
+  let explicitDispatches = 1;
+  for (const attempt of [1, 2, 3]) {
+    const id = `revised-artifact-${attempt}`;
+    catalog = applyWorkflowMutation(catalog, projectId, {
+      type: "artifact.propose",
+      artifact: {
+        ...artifact(),
+        id,
+        attempt,
+        sourceOutcome: "completed",
+      },
+    });
+    catalog = applyWorkflowMutation(catalog, projectId, {
+      type: "decision.record",
+      decision: {
+        id: `agent-decision-${attempt}`,
+        runId: "run-1",
+        stageId: "discovery",
+        attempt,
+        artifactId: id,
+        value: "approve",
+        createdAt: at,
+      },
+    });
+    expect(catalog.runs[0]!.currentStageId).toBe("build_gate");
+    expect(catalog.runs[0]!.attempts.at(-1)?.attempt).toBe(attempt);
+    expect(catalog.runs[0]!.attempts.at(-1)?.status).toBe("pending");
+    const revision = {
+      type: "decision.record" as const,
+      decision: {
+        id: `gate-revision-${attempt}`,
+        runId: "run-1",
+        stageId: "build_gate",
+        attempt,
+        artifactId: null,
+        value: "request_revision" as const,
+        createdAt: at,
+      },
+    };
+    if (attempt === 3) {
+      expect(() => applyWorkflowMutation(catalog, projectId, revision)).toThrow("attempt limit");
+      break;
+    }
+    catalog = applyWorkflowMutation(catalog, projectId, revision);
+    expect(catalog.runs[0]!.attempts.at(-1)?.attempt).toBe(attempt + 1);
+    expect(catalog.runs[0]!.attempts.at(-1)?.status).toBe("pending");
+    expect(explicitDispatches).toBe(attempt);
+    // No revision decision dispatches work. A separate explicit start binds the new attempt.
+    catalog = applyWorkflowMutation(catalog, projectId, {
+      type: "stage.dispatch",
+      runId: "run-1",
+      stageId: "discovery",
+      attempt: attempt + 1,
+      threadId: ThreadId.make(`revised-thread-${attempt + 1}`),
+      messageId: MessageId.make(`revised-message-${attempt + 1}`),
+      routeBinding: route,
+      at,
+    });
+    explicitDispatches++;
+  }
+  catalog = applyWorkflowMutation(catalog, projectId, {
+    type: "decision.record",
+    decision: {
+      id: "last-gate-approval",
+      runId: "run-1",
+      stageId: "build_gate",
+      attempt: 3,
+      artifactId: null,
+      value: "approve",
+      createdAt: at,
+    },
+  });
+  expect(catalog.runs[0]!.currentStageId).toBe("architecture");
+  expect(catalog.runs[0]!.attempts.at(-1)?.status).toBe("pending");
+  expect(
+    catalog.runs[0]!.attempts.filter((entry) => entry.stageId === "build_gate").map(
+      (entry) => entry.attempt,
+    ),
+  ).toEqual([1, 2, 3]);
+  expect(catalog.runs[0]!.artifacts.map((entry) => entry.status)).toEqual([
+    "accepted",
+    "accepted",
+    "accepted",
+  ]);
+  expect(explicitDispatches).toBe(3);
+});
+
+it.each([
+  { limit: "gate", gate: 1, agent: 3 },
+  { limit: "stage", gate: 3, agent: 1 },
+])(
+  "refuses an unreturnable revision when the $limit occurrence limit is exhausted",
+  ({ limit, gate, agent }) => {
+    let catalog = dispatched();
+    const limited = {
+      ...template,
+      id: "limited-flow",
+      origin: "custom" as const,
+      projectId,
+      stages: template.stages.map((stage) =>
+        stage.id === "build_gate"
+          ? { ...stage, maxAttempts: gate }
+          : stage.id === "discovery"
+            ? { ...stage, maxAttempts: agent }
+            : stage,
+      ),
+    };
+    catalog = {
+      ...catalog,
+      templates: [limited],
+      runs: catalog.runs.map((run) => ({ ...run, templateId: limited.id })),
+    };
+    catalog = applyWorkflowMutation(catalog, projectId, {
+      type: "artifact.propose",
+      artifact: artifact(),
+    });
+    catalog = applyWorkflowMutation(catalog, projectId, {
+      type: "decision.record",
+      decision: {
+        id: "first-approval",
+        runId: "run-1",
+        stageId: "discovery",
+        attempt: 1,
+        artifactId: "artifact-1",
+        value: "approve",
+        createdAt: at,
+      },
+    });
+    expect(() =>
+      applyWorkflowMutation(catalog, projectId, {
+        type: "decision.record",
+        decision: {
+          id: "over-gate-limit",
+          runId: "run-1",
+          stageId: "build_gate",
+          attempt: 1,
+          artifactId: null,
+          value: "request_revision",
+          createdAt: at,
+        },
+      }),
+    ).toThrow(`${limit} attempt limit`);
+    expect(catalog.runs[0]!.currentStageId).toBe("build_gate");
+    expect(catalog.runs[0]!.attempts).toHaveLength(2);
+  },
+);

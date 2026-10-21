@@ -9,6 +9,9 @@ import {
   DEFAULT_OBSERVATION_RETENTION_DAYS,
   FORBIDDEN_OBSERVATION_FIELD_NAMES,
   HYBRID_ROUTER_POLICY_VERSION,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
+  LOCAL_TASK_CLASSIFIER_VERSION,
+  LocalTaskProfile,
   TURN_OUTCOME_OBSERVATION_VERSION,
   TurnOutcomeObservationV0,
   emptyCostMeasurement,
@@ -21,6 +24,8 @@ import {
 
 const decodeObservation = (input: unknown) =>
   Schema.decodeUnknownExit(TurnOutcomeObservationV0)(input, { onExcessProperty: "error" });
+const decodeLocalProfile = Schema.decodeUnknownExit(LocalTaskProfile);
+const decodeObservationSync = Schema.decodeUnknownSync(TurnOutcomeObservationV0);
 const encodeObservation = Schema.encodeUnknownSync(TurnOutcomeObservationV0);
 
 const sampleObservation = {
@@ -104,4 +109,29 @@ describe("router evaluation contracts", () => {
       expect(decoded.value.evidence.reworkProxies[0]?.labeledAs).toBe("proxy");
     }
   });
+});
+
+it("keeps legacy observation JSON unchanged and bounds local profile telemetry", () => {
+  const legacy = decodeObservationSync(sampleObservation);
+  expect(legacy.localTaskProfile).toBeUndefined();
+  expect(encodeObservation(legacy)).toEqual(sampleObservation);
+  const profile = {
+    classifierVersion: LOCAL_TASK_CLASSIFIER_VERSION,
+    category: "debugging",
+    source: "local-heuristic",
+  };
+  expect(Exit.isSuccess(decodeLocalProfile(profile))).toBe(true);
+  for (const invalid of [
+    { ...profile, source: "provider" },
+    { ...profile, classifierVersion: "x".repeat(65) },
+    { ...profile, rawPrompt: "never recorded" },
+    { ...profile, confidence: 0.9 },
+  ])
+    expect(Exit.isFailure(decodeLocalProfile(invalid, { onExcessProperty: "error" }))).toBe(true);
+  const next = decodeObservationSync({
+    ...sampleObservation,
+    policyVersion: HYBRID_TASK_ROUTER_POLICY_VERSION,
+    localTaskProfile: profile,
+  });
+  expect(Object.keys(next.localTaskProfile!)).toEqual(["classifierVersion", "category", "source"]);
 });

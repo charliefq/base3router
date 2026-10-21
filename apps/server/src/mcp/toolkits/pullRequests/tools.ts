@@ -1,8 +1,18 @@
 import {
+  ListThreadPullRequestsParameters,
+  ListThreadPullRequestsResult,
+  PullRequestThreadNotFoundError,
+  PullRequestListFailedError,
+} from "./read.ts";
+export {
+  ListThreadPullRequestsResult,
+  PullRequestThreadNotFoundError,
+  PullRequestListFailedError,
+} from "./read.ts";
+import {
+  McpActionGateBlockedError,
   McpCapabilityUnavailableError,
   PositiveInt,
-  PullRequestState,
-  ThreadPullRequestLinkSource,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -10,15 +20,13 @@ import * as Tool from "effect/unstable/ai/Tool";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
-import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { ActionGateService } from "../../../actionGate/ActionGateService.ts";
+import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
+import * as ProjectService from "../../../project/ProjectService.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
-  OrchestrationEngine.OrchestrationEngineService,
-  ProjectionSnapshotQuery.ProjectionSnapshotQuery,
-  ActionGateService,
+  Orchestrator.OrchestratorV2,
+  ProjectService.ProjectService,
 ];
 
 const REGISTER_EVERY_PR =
@@ -83,15 +91,6 @@ export class PullRequestHostRequiredError extends Schema.TaggedError<PullRequest
   }
 }
 
-export class PullRequestThreadNotFoundError extends Schema.TaggedError<PullRequestThreadNotFoundError>()(
-  "PullRequestThreadNotFoundError",
-  { threadId: Schema.String },
-) {
-  override get message(): string {
-    return `Thread ${this.threadId} was not found.`;
-  }
-}
-
 export class PullRequestLinkFailedError extends Schema.TaggedError<PullRequestLinkFailedError>()(
   "PullRequestLinkFailedError",
   { cause: Schema.Defect() },
@@ -110,16 +109,8 @@ export class PullRequestUnlinkFailedError extends Schema.TaggedError<PullRequest
   }
 }
 
-export class PullRequestListFailedError extends Schema.TaggedError<PullRequestListFailedError>()(
-  "PullRequestListFailedError",
-  { cause: Schema.Defect() },
-) {
-  override get message(): string {
-    return "Could not list the pull request.";
-  }
-}
-
 export const PullRequestToolError = Schema.Union([
+  McpActionGateBlockedError,
   McpCapabilityUnavailableError,
   PullRequestUrlInvalidError,
   PullRequestTargetIncompleteError,
@@ -156,39 +147,8 @@ export const UnlinkPullRequestResult = Schema.Struct({
 });
 export type UnlinkPullRequestResult = typeof UnlinkPullRequestResult.Type;
 
-export const ThreadPullRequestEntry = Schema.Struct({
-  ...PullRequestIdentity,
-  source: ThreadPullRequestLinkSource,
-  state: Schema.NullOr(PullRequestState),
-  title: Schema.NullOr(Schema.String),
-  headBranch: Schema.NullOr(Schema.String),
-  baseBranch: Schema.NullOr(Schema.String),
-  isDraft: Schema.NullOr(Schema.Boolean),
-  stack: Schema.NullOr(
-    Schema.Struct({
-      kind: Schema.Literals(["native", "derived"]),
-      /** 1-based, bottom of the stack first. */
-      position: Schema.Int,
-      size: Schema.Int,
-    }),
-  ),
-});
-export type ThreadPullRequestEntry = typeof ThreadPullRequestEntry.Type;
-
-export const ListThreadPullRequestsResult = Schema.Struct({
-  pullRequests: Schema.Array(ThreadPullRequestEntry),
-  chains: Schema.Array(
-    Schema.Struct({
-      kind: Schema.Literals(["native", "derived"]),
-      /** Bottom to top. */
-      numbers: Schema.Array(Schema.Int),
-    }),
-  ),
-});
-export type ListThreadPullRequestsResult = typeof ListThreadPullRequestsResult.Type;
-
 const LinkPullRequestTool = Tool.make("link_pull_request", {
-  description: `${REGISTER_EVERY_PR} Links a pull request to this thread so Base3Router tracks it, shows its status beside the thread, and settles the thread when it merges. Pass the URL, or repository plus number. Linking an already-linked pull request succeeds with alreadyLinked=true.`,
+  description: `${REGISTER_EVERY_PR} Links a pull request to this thread so T3 Code tracks it, shows its status beside the thread, and settles the thread when it merges. Pass the URL, or repository plus number. Linking an already-linked pull request succeeds with alreadyLinked=true.`,
   parameters: PullRequestTargetInput,
   success: LinkPullRequestResult,
   failure: PullRequestToolError,
@@ -215,6 +175,7 @@ const UnlinkPullRequestTool = Tool.make("unlink_pull_request", {
   .annotate(Tool.OpenWorld, false);
 
 const ListThreadPullRequestsTool = Tool.make("list_thread_pull_requests", {
+  parameters: ListThreadPullRequestsParameters,
   description: `List the pull requests linked to this thread with their last known host state, and how they chain into stacks (bottom to top). ${REGISTER_EVERY_PR}`,
   success: ListThreadPullRequestsResult,
   failure: PullRequestToolError,

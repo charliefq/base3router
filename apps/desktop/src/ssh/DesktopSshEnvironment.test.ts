@@ -30,7 +30,7 @@ describe("sshEnvironment", () => {
     assert.equal(cause.message, "Failed to present SSH password prompt for devbox.");
     assert.equal(
       DesktopSshEnvironment.toSshPasswordPromptError(cause).message,
-      "Base3Router window is not available for SSH authentication.",
+      "B3R window is not available for SSH authentication.",
     );
   });
 

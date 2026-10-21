@@ -128,11 +128,12 @@ export const timingFromClock = (input: {
 };
 
 export const effectivePolicyVersion = (input: {
+  readonly hybridPolicyVersion?: string;
   readonly usedHybridRanking?: boolean;
   readonly modelRoutePolicyVersion?: string;
 }): string =>
   input.usedHybridRanking === true
-    ? HYBRID_ROUTER_POLICY_VERSION
+    ? (input.hybridPolicyVersion ?? HYBRID_ROUTER_POLICY_VERSION)
     : (input.modelRoutePolicyVersion ?? MODEL_ROUTER_POLICY_VERSION);
 
 export type ClassifyTurnTerminalInput = {
@@ -313,7 +314,7 @@ export type TerminalWriteKind = "inserted" | "idempotent" | "enriched" | "replac
 export type TerminalWriteResult = {
   readonly kind: TerminalWriteKind;
   readonly observation: TurnOutcomeObservationV0;
-  readonly reason?: "success_after_failure" | "conflicting_terminal";
+  readonly reason?: "success_after_failure" | "conflicting_terminal" | "conflicting_profile";
 };
 
 const preferKnown = <T extends { readonly status: "known" | "unknown" }>(
@@ -388,6 +389,16 @@ export const mergeTerminalWrite = (
   if (existing === undefined) {
     return { kind: "inserted", observation: incoming };
   }
+  const originalProfile = existing.localTaskProfile;
+  const nextProfile = incoming.localTaskProfile;
+  if (
+    nextProfile !== undefined &&
+    (originalProfile === undefined ||
+      originalProfile.classifierVersion !== nextProfile.classifierVersion ||
+      originalProfile.category !== nextProfile.category ||
+      originalProfile.source !== nextProfile.source)
+  )
+    return { kind: "rejected", observation: existing, reason: "conflicting_profile" };
   if (existing.terminalCategory === incoming.terminalCategory) {
     const observation = withEnrichedFacts(existing, incoming);
     const unchanged =
@@ -423,6 +434,7 @@ export const mergeTerminalWrite = (
         ...incoming,
         recordedAt: existing.recordedAt,
         policyVersion: existing.policyVersion,
+        ...(originalProfile === undefined ? {} : { localTaskProfile: originalProfile }),
         evidence: existing.evidence,
         timing: enrichTiming(existing.timing, incoming.timing),
         usage: enrichUsage(existing.usage, incoming.usage),

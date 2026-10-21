@@ -1,26 +1,29 @@
 import {
-  CommandId,
-  EventId,
   ProjectId,
   ThreadId,
   MessageId,
   TurnId,
   ProviderDriverKind,
   ProviderInstanceId,
-  type OrchestrationCommand,
-  type OrchestrationEvent,
+  type WorkflowMutation,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./Builtins.ts";
 import { initialWorkflowRun } from "./Policy.ts";
-import { projectWorkflowEvent } from "./Projection.ts";
-import { proposeWorkflowArtifact } from "./Workflow.ts";
+import { projectWorkflowEvent, type WorkflowRecordedEvent } from "./Projection.ts";
+import {
+  performWorkflowAction,
+  proposeWorkflowArtifact,
+  type WorkflowRecordCommand,
+} from "./Workflow.ts";
 
+const encodeText = Schema.encodeSync(Schema.fromJsonString(Schema.Struct({ text: Schema.String })));
 const projectId = ProjectId.make("project-1");
 const threadId = ThreadId.make("thread-1");
 const messageId = MessageId.make("user-1");
@@ -34,20 +37,10 @@ const route = {
   source: "explicit" as const,
   gate: { decision: "ALLOW" as const, reasonCodes: ["ACTION_ALLOWED" as const] },
 };
-const event = (
-  sequence: number,
-  mutation: Extract<OrchestrationEvent, { type: "workflow.recorded" }>["payload"]["mutation"],
-): OrchestrationEvent => ({
+const event = (sequence: number, mutation: WorkflowMutation): WorkflowRecordedEvent => ({
   sequence,
-  eventId: EventId.make(`event-${sequence}`),
   type: "workflow.recorded",
-  aggregateKind: "project",
-  aggregateId: projectId,
-  occurredAt: at,
-  commandId: CommandId.make(`command-${sequence}`),
-  causationEventId: null,
-  correlationId: null,
-  metadata: {},
+  commandId: `command-${sequence}`,
   payload: { projectId, mutation },
 });
 
@@ -60,7 +53,7 @@ layer("workflow artifact extraction", (it) => {
         const sql = yield* SqlClient.SqlClient;
         yield* runMigrations({ toMigrationInclusive: 56 });
         yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at) VALUES (${projectId}, 'Project', '/tmp/workflow-repo', '[]', ${at}, ${at})`;
-        yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at) VALUES (${threadId}, ${projectId}, 'Thread', '{"instanceId":"codex-work","model":"gpt-5.4"}', 'approval-required', 'default', ${at}, ${at})`;
+        yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json) VALUES (${threadId}, ${projectId}, 'Thread', 'codex', 'approval-required', 'default', ${at}, ${at}, '{}')`;
         yield* projectWorkflowEvent(
           event(1, {
             type: "run.start",
@@ -86,10 +79,10 @@ layer("workflow artifact extraction", (it) => {
             at,
           }),
         );
-        yield* sql`INSERT INTO projection_turns (thread_id, turn_id, pending_message_id, assistant_message_id, state, requested_at, checkpoint_files_json) VALUES (${threadId}, ${TurnId.make("turn-1")}, ${messageId}, 'assistant-1', 'running', ${at}, '[]')`;
-        yield* sql`INSERT INTO projection_thread_messages (message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at) VALUES ('assistant-1', ${threadId}, ${TurnId.make("turn-1")}, 'assistant', ${"# Product\nOne useful product. Token sk-secretvalue1234. Inspect /home/example/private and /tmp/workflow-repo/src/app.ts.\n\n# Current evidence with URLs and dates\n[Source](https://example.org/article?secret=abc) dated 2026-09-28."}, 0, ${at}, ${at})`;
-        const commands: OrchestrationCommand[] = [];
-        const dispatch = (command: OrchestrationCommand) =>
+        yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, payload_json) VALUES ('turn-1', ${threadId}, 1, 'codex', 'running', ${at}, '{"userMessageId":"user-1"}')`;
+        yield* sql`INSERT INTO orchestration_v2_projection_messages (message_id, thread_id, run_id, role, streaming, created_at, updated_at, payload_json) VALUES ('assistant-1', ${threadId}, 'turn-1', 'assistant', 0, ${at}, ${at}, ${encodeText({ text: "# Product\nOne useful product. Token sk-secretvalue1234. Inspect /home/example/private and /tmp/workflow-repo/src/app.ts.\n\n# Current evidence with URLs and dates\n[Source](https://example.org/article?secret=abc) dated 2026-09-28." })})`;
+        const commands: WorkflowRecordCommand[] = [];
+        const dispatch = (command: WorkflowRecordCommand) =>
           Effect.sync(() => {
             commands.push(command);
             return { sequence: 3 };
@@ -103,7 +96,7 @@ layer("workflow artifact extraction", (it) => {
         const unsettled = yield* Effect.exit(proposeWorkflowArtifact(input, dispatch));
         assert.equal(unsettled._tag, "Failure");
         assert.equal(commands.length, 0);
-        yield* sql`UPDATE projection_turns SET state = 'completed' WHERE thread_id = ${threadId}`;
+        yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed' WHERE thread_id = ${threadId}`;
         const artifact = yield* proposeWorkflowArtifact(input, dispatch);
         assert.equal(commands.length, 1);
         assert.equal(artifact.sourceTurnId, TurnId.make("turn-1"));
@@ -123,3 +116,65 @@ layer("workflow artifact extraction", (it) => {
       }),
   );
 });
+
+it.effect.each(["failed", "interrupted", "cancelled"] as const)(
+  "preserves settled %s source outcome and cannot approve it as completed",
+  (outcome) =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO projection_projects(project_id,title,workspace_root,scripts_json,created_at,updated_at) VALUES (${projectId},'Fixture','/tmp','[]',${at},${at})`;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads(thread_id,project_id,title,default_provider,runtime_mode,interaction_mode,created_at,updated_at,payload_json) VALUES (${threadId},${projectId},'Fixture','codex','approval-required','default',${at},${at},'{}')`;
+      yield* projectWorkflowEvent(
+        event(1, {
+          type: "run.start",
+          run: initialWorkflowRun({
+            runId: "run-1",
+            projectId,
+            template: BUILTIN_WORKFLOW_TEMPLATES[0]!,
+            originThreadId: null,
+            originMessageId: null,
+            at,
+          }),
+        }),
+      );
+      yield* projectWorkflowEvent(
+        event(2, {
+          type: "stage.dispatch",
+          runId: "run-1",
+          stageId: "discovery",
+          attempt: 1,
+          threadId,
+          messageId,
+          routeBinding: route,
+          at,
+        }),
+      );
+      yield* sql`INSERT INTO orchestration_v2_projection_runs(run_id,thread_id,ordinal,provider,status,requested_at,payload_json) VALUES ('source-run',${threadId},1,'codex',${outcome},${at},'{"userMessageId":"user-1"}')`;
+      const artifact = yield* proposeWorkflowArtifact(
+        { projectId, runId: "run-1", artifactId: "failed-artifact", commandId: "propose-failed" },
+        () => Effect.succeed({ sequence: 1 }),
+      );
+      assert.equal(artifact.sourceOutcome, outcome);
+      assert.isTrue(
+        artifact.sections.every((section) => section.missing && section.content === "Unknown"),
+      );
+      const approved = yield* Effect.exit(
+        performWorkflowAction(
+          {
+            type: "decision.record",
+            projectId,
+            commandId: "approve-failed",
+            decisionId: "failed-decision",
+            runId: "run-1",
+            stageId: "discovery",
+            attempt: 1,
+            artifactId: artifact.id,
+            value: "approve",
+          },
+          () => Effect.succeed({ sequence: 1 }),
+        ),
+      );
+      assert.equal(approved._tag, "Failure");
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);

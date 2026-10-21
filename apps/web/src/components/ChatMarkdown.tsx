@@ -20,6 +20,7 @@ import {
   MessageSquareWarningIcon,
   Minimize2Icon,
   OctagonAlertIcon,
+  PlayIcon,
   PresentationIcon,
   SparklesIcon,
   TriangleAlertIcon,
@@ -88,6 +89,8 @@ import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
 import { parseComposerContextHref } from "@t3tools/shared/composerContextReferences";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
 import remarkGfm from "remark-gfm";
+import type { Processor } from "unified";
+import { isWindowsAbsolutePath } from "@t3tools/shared/path";
 import { remarkGithubAlerts } from "../markdown-github-alerts";
 import {
   artifactTemplateFromHastProperties,
@@ -215,6 +218,7 @@ interface ChatMarkdownProps {
   parseRawHtml?: boolean;
   /** Append a prompt that invokes a newly created artifact-template skill. */
   onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
+  onRunShellCommand?: ((command: string) => void) | undefined;
   /** Directory that anchors relative links and images; defaults to `cwd`. Set
       to the file's own directory when rendering a markdown file. */
   imageBaseDir?: string | undefined;
@@ -488,6 +492,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
 
 const CHAT_MARKDOWN_REMARK_PLUGINS = [
   remarkGfm,
+  remarkKeepWindowsPathDestinations,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
   remarkCodexDirectives,
@@ -497,6 +502,7 @@ const CHAT_MARKDOWN_REMARK_PLUGINS = [
 
 const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS = [
   remarkGfm,
+  remarkKeepWindowsPathDestinations,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
   remarkCodexDirectives,
@@ -585,6 +591,23 @@ function extractPreCodeMeta(node: unknown): string | undefined {
   return typeof meta === "string" && meta.trim().length > 0 ? meta.trim() : undefined;
 }
 
+function isClosedCodeFence(node: ReactMarkdownExtraProps["node"], text: string): boolean {
+  const start = node?.position?.start.offset;
+  const end = node?.position?.end.offset;
+  if (start === undefined || end === undefined) return false;
+  const source = text.slice(start, end);
+  const opening = /^(?:`{3,}|~{3,})/.exec(source)?.[0];
+  // One class for the blockquote prefix: nested quantifiers here backtrack
+  // exponentially on code lines that start with many `> ` markers.
+  const closing = /(?:^|\n)[ \t>]*(`{3,}|~{3,})[ \t\r]*$/.exec(source)?.[1];
+  return (
+    opening !== undefined &&
+    closing !== undefined &&
+    opening[0] === closing[0] &&
+    closing.length >= opening.length
+  );
+}
+
 type MarkdownAstNode = {
   type?: string;
   meta?: unknown;
@@ -612,6 +635,36 @@ function remarkPreserveCodeMeta() {
 
     visit(tree);
   };
+}
+
+interface DestinationCompileContext {
+  readonly stack: ReadonlyArray<{ readonly type: string; url?: string }>;
+  resume(): string;
+  sliceSerialize(token: unknown): string;
+}
+
+function keepWindowsPathDestination(this: DestinationCompileContext, token: unknown) {
+  const decoded = this.resume();
+  const authored = this.sliceSerialize(token);
+  const node = this.stack.at(-1);
+  // Character references still need decoding, so those destinations keep the parsed URL.
+  if (node)
+    node.url = isWindowsAbsolutePath(authored) && !authored.includes("&") ? authored : decoded;
+}
+
+/**
+ * CommonMark reads the `\.` in `C:\me\.t3\shot.png` as an escape, even in a link
+ * destination. Every backslash in a Windows path is a separator, so link, image, and
+ * definition destinations that are Windows paths keep the text as written.
+ */
+function remarkKeepWindowsPathDestinations(this: Processor) {
+  const data = this.data();
+  (data.fromMarkdownExtensions ??= []).push({
+    exit: {
+      resourceDestinationString: keepWindowsPathDestination,
+      definitionDestinationString: keepWindowsPathDestination,
+    },
+  });
 }
 
 /**
@@ -920,12 +973,16 @@ function MarkdownCodeBlock({
   language,
   fenceTitle,
   theme,
+  onRunShellCommand,
+  isStreaming,
   children,
 }: {
   code: string;
   language: string;
   fenceTitle: string | null;
   theme: "light" | "dark";
+  onRunShellCommand?: ((command: string) => void) | undefined;
+  isStreaming: boolean;
   children: ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
@@ -933,6 +990,17 @@ function MarkdownCodeBlock({
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wrapLabel = wrapped ? "Disable line wrap" : "Wrap lines";
   const copyLabel = copied ? "Copied" : "Copy code";
+  const command = code.trim();
+  const canRun =
+    onRunShellCommand !== undefined &&
+    !isStreaming &&
+    /^(?:sh|bash|zsh|fish|shell|powershell|pwsh)$/.test(language) &&
+    code.endsWith("\n") &&
+    command.length > 0 &&
+    !command.endsWith("\\") &&
+    // Control and invisible format characters (bidi overrides, zero-width) can
+    // make the rendered command differ from what the terminal would receive.
+    !/[\p{Cc}\p{Cf}]/u.test(code.slice(0, -1));
 
   const handleCopy = useCallback(() => {
     if (typeof navigator === "undefined" || navigator.clipboard == null) {
@@ -1004,6 +1072,24 @@ function MarkdownCodeBlock({
             </TooltipTrigger>
             <TooltipPopup side="top">{wrapLabel}</TooltipPopup>
           </Tooltip>
+          {canRun ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost-muted"
+                    size="icon-xs"
+                    onClick={() => onRunShellCommand(command)}
+                    aria-label="Run in terminal"
+                  />
+                }
+              >
+                <PlayIcon className="size-3" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">Run in terminal</TooltipPopup>
+            </Tooltip>
+          ) : null}
           <Tooltip>
             <TooltipTrigger
               render={
@@ -2244,6 +2330,7 @@ function useChatMarkdownState({
   isStreaming = false,
   skills = EMPTY_MARKDOWN_SKILLS,
   onUseArtifactTemplate,
+  onRunShellCommand,
   imageBaseDir,
   onImageExpand,
   renderContextReference,
@@ -2650,6 +2737,7 @@ function useChatMarkdownState({
       markdownFileLinkMetaByHref,
       onTaskListChange,
       onUseArtifactTemplate,
+      onRunShellCommand,
       openChangeRequestLink,
       openDeferredMarkdownLink,
       openExternalLinkInPreview,
@@ -2680,6 +2768,7 @@ function useChatMarkdownState({
       markdownFileLinkMetaByHref,
       onTaskListChange,
       onUseArtifactTemplate,
+      onRunShellCommand,
       openChangeRequestLink,
       openDeferredMarkdownLink,
       openExternalLinkInPreview,
@@ -3211,7 +3300,9 @@ const CHAT_MARKDOWN_COMPONENTS = {
     return <MarkdownDetails open={detailsOpen}>{children}</MarkdownDetails>;
   },
   pre: function MarkdownPre({ node, children, ...props }) {
-    const { resolvedTheme, diffThemeName, isStreaming } = use(ChatMarkdownRendererContext);
+    const { resolvedTheme, diffThemeName, isStreaming, onRunShellCommand, text } = use(
+      ChatMarkdownRendererContext,
+    );
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
       return <pre {...props}>{children}</pre>;
@@ -3225,6 +3316,12 @@ const CHAT_MARKDOWN_COMPONENTS = {
         language={language}
         fenceTitle={fenceTitle}
         theme={resolvedTheme}
+        onRunShellCommand={
+          onRunShellCommand && !isStreaming && isClosedCodeFence(node, text)
+            ? onRunShellCommand
+            : undefined
+        }
+        isStreaming={isStreaming}
       >
         <RenderErrorBoundary
           resetKeys={[codeBlock.code, language, diffThemeName, isStreaming]}

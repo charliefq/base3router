@@ -349,6 +349,18 @@ export const MemoryDeleteRequest = Schema.Struct({
 });
 export type MemoryDeleteRequest = typeof MemoryDeleteRequest.Type;
 
+export const MemoryEnqueueEligibleRequest = Schema.Struct({
+  turnText: BoundedContent,
+  projectId: Schema.optional(ProjectId),
+  threadId: Schema.optional(ThreadId),
+});
+export type MemoryEnqueueEligibleRequest = typeof MemoryEnqueueEligibleRequest.Type;
+
+export const MemoryEnqueueEligibleResult = Schema.Struct({
+  ok: Schema.Literal(true),
+});
+export type MemoryEnqueueEligibleResult = typeof MemoryEnqueueEligibleResult.Type;
+
 export const MemoryClearScopeRequest = Schema.Struct({
   scopeKind: MemoryScopeKind,
   projectId: Schema.optional(ProjectId),

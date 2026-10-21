@@ -11,9 +11,15 @@ import {
   WORKFLOW_MAX_ARTIFACT_CHARS,
   WORKFLOW_MAX_RECORDS,
   WorkflowRun as WorkflowRunSchema,
+  WorkflowRunBrief,
   shouldAcceptCursorCloudRunnerUpdate,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { WorkflowRevisionFeedback } from "@t3tools/contracts";
+import { workflowRevisionArtifact, workflowRevisionSource } from "@t3tools/shared/workflowRevision";
+const validRevisionFeedback = Schema.is(WorkflowRevisionFeedback);
+const validRunBrief = Schema.is(WorkflowRunBrief);
+const sameRevisionSource = Schema.toEquivalence(WorkflowRevisionFeedback.fields.source);
 
 import { BUILTIN_AGENT_PROFILES, BUILTIN_WORKFLOW_TEMPLATES } from "./Builtins.ts";
 
@@ -31,15 +37,18 @@ const reject = (message: string): never => {
   throw new WorkflowPolicyError(message);
 };
 
-export const availableProfiles = (
+const availableProfiles = (
   catalog: WorkflowCatalog,
   projectId: string,
 ): ReadonlyArray<AgentProfile> => [
   ...BUILTIN_AGENT_PROFILES,
-  ...catalog.profiles.filter((profile) => profile.projectId === projectId),
+  // Saved task input does not become an executable workflow role.
+  ...catalog.profiles.filter(
+    (profile) => profile.projectId === projectId && !profile.taskConfiguration,
+  ),
 ];
 
-export const availableTemplates = (
+const availableTemplates = (
   catalog: WorkflowCatalog,
   projectId: string,
 ): ReadonlyArray<WorkflowTemplate> => [
@@ -142,6 +151,7 @@ const nextAttempt = (
 });
 
 export function initialWorkflowRun(input: {
+  readonly brief?: string;
   readonly runId: WorkflowRun["id"];
   readonly projectId: WorkflowRun["projectId"];
   readonly template: WorkflowTemplate;
@@ -149,8 +159,11 @@ export function initialWorkflowRun(input: {
   readonly originMessageId: WorkflowRun["originatingMessageId"];
   readonly at: string;
 }): WorkflowRun {
+  if (input.brief !== undefined && !validRunBrief(input.brief))
+    reject("Run brief must be nonblank, well-formed plain text within 2000 UTF-16 code units.");
   const first = input.template.stages[0] ?? reject("Workflow template has no first stage.");
   return {
+    ...(input.brief !== undefined ? { brief: input.brief } : {}),
     id: input.runId,
     projectId: input.projectId,
     templateId: input.template.id,
@@ -328,6 +341,7 @@ export function applyWorkflowMutation(
       if (template.status !== "active") reject("Workflow template version is unavailable.");
       validateTemplate(template, catalog);
       const expected = initialWorkflowRun({
+        ...(run.brief !== undefined ? { brief: run.brief } : {}),
         runId: run.id,
         projectId: run.projectId,
         template,
@@ -474,15 +488,36 @@ export function applyWorkflowMutation(
         (!artifact || artifact.status !== "proposed" || attempt.status !== "proposed")
       )
         reject("Review the current proposed artifact first.");
+      if (
+        decision.value === "approve" &&
+        artifact?.sourceOutcome !== undefined &&
+        artifact.sourceOutcome !== "completed"
+      )
+        reject("Failed or interrupted output cannot be approved as completed work.");
       if (stage.type !== "agent" && decision.artifactId !== null)
         reject("A human gate cannot claim a provider artifact.");
       if (stage.type === "human_gate" && attempt.status !== "pending")
         reject("Human gate has already been decided.");
+      if (decision.revisionFeedback !== undefined) {
+        if (
+          decision.value !== "request_revision" ||
+          !validRevisionFeedback(decision.revisionFeedback)
+        )
+          reject("Invalid revision feedback.");
+        const source = workflowRevisionArtifact(run, template, stage.id, attempt.attempt);
+        if (
+          !source ||
+          !sameRevisionSource(decision.revisionFeedback.source, workflowRevisionSource(source))
+        )
+          reject("Revision source is stale or belongs to another occurrence.");
+      }
       if (decision.value === "request_revision") {
         const target =
           (stage.type === "human_gate"
             ? template.stages[template.stages.findIndex((entry) => entry.id === stage.id) - 1]
             : stage) ?? reject("There is no preceding stage to revise.");
+        if (stage.type === "human_gate" && attempt.attempt >= stage.maxAttempts)
+          reject("The gate attempt limit has been reached.");
         const previous = run.attempts.findLast((entry) => entry.stageId === target.id);
         const number = (previous?.attempt ?? 0) + 1;
         if (number > target.maxAttempts) reject("The stage attempt limit has been reached.");
@@ -493,7 +528,10 @@ export function applyWorkflowMutation(
           decisions: [...run.decisions, decision],
           attempts: [
             ...run.attempts,
-            nextAttempt(target, number, decision.createdAt, previous ?? null),
+            {
+              ...nextAttempt(target, number, decision.createdAt, previous ?? null),
+              revisionDecisionId: decision.id,
+            },
           ],
         };
         return { ...catalog, runs: catalog.runs.map((entry) => (entry === run ? updated : entry)) };
@@ -502,6 +540,13 @@ export function applyWorkflowMutation(
         decision.value === "approve"
           ? template.stages.find((entry) => entry.id === stage.nextStageId)
           : undefined;
+      // A revised upstream stage re-enters its gate as a new occurrence. Reusing
+      // attempt 1 would alias its old decision and command receipts.
+      const nextNumber = next
+        ? (run.attempts.findLast((entry) => entry.stageId === next.id)?.attempt ?? 0) + 1
+        : 0;
+      if (next && nextNumber > next.maxAttempts)
+        reject("The next stage attempt limit has been reached.");
       const updated: WorkflowRun = {
         ...run,
         status: decision.value === "reject" ? "rejected" : next ? "active" : "completed",
@@ -523,7 +568,7 @@ export function applyWorkflowMutation(
                 } as typeof entry)
               : entry,
           ),
-          ...(next ? [nextAttempt(next, 1, decision.createdAt, attempt)] : []),
+          ...(next ? [nextAttempt(next, nextNumber, decision.createdAt, attempt)] : []),
         ],
       };
       return { ...catalog, runs: catalog.runs.map((entry) => (entry === run ? updated : entry)) };

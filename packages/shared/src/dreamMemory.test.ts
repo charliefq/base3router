@@ -99,6 +99,7 @@ describe("dream memory actor and isolation", () => {
     expect(
       scopeAllowsRead(projectMemory, { environmentId: env, actorId: actor, projectId: project }),
     ).toBe(true);
+    expect(scopeAllowsRead(projectMemory, { environmentId: env, actorId: actor })).toBe(true);
   });
 });
 

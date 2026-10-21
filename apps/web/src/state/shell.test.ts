@@ -9,10 +9,7 @@ import * as Option from "effect/Option";
 import { Atom, AtomRegistry } from "effect/unstable/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  createAllEnvironmentProjectSnapshotsReadyAtom,
-  createEnvironmentShellSnapshotReadyAtom,
-} from "./shell";
+import { createAllEnvironmentProjectSnapshotsReadyAtom } from "./shell";
 
 const LOCAL = EnvironmentId.make("local");
 const REMOTE = EnvironmentId.make("remote");
@@ -24,10 +21,11 @@ function shellState(status: EnvironmentShellState["status"]): EnvironmentShellSt
       status === "empty"
         ? Option.none()
         : Option.some({
+            schemaVersion: 1,
             snapshotSequence: 1,
-            updatedAt: "2026-09-04T00:00:00.000Z",
             projects: [],
             threads: [],
+            archivedThreads: [],
           }),
     error: Option.none(),
   };
@@ -133,29 +131,6 @@ describe("project snapshot readiness", () => {
     registry.set(shells(LOCAL), shellState("live"));
     expect(registry.get(ready)).toBe(false);
     registry.set(catalog, catalogState([LOCAL]));
-    expect(registry.get(ready)).toBe(true);
-    registry.dispose();
-  });
-});
-
-describe("environment shell snapshot readiness", () => {
-  it("tracks only the selected environment snapshot", () => {
-    const shells = Atom.family((_environmentId: EnvironmentId) =>
-      Atom.make<EnvironmentShellState>(shellState("empty")),
-    );
-    const ready = createEnvironmentShellSnapshotReadyAtom({
-      environmentId: REMOTE,
-      shellStateValueAtom: shells,
-    });
-    const registry = AtomRegistry.make();
-
-    registry.set(shells(LOCAL), shellState("live"));
-    expect(registry.get(ready)).toBe(false);
-
-    registry.set(shells(REMOTE), shellState("live"));
-    expect(registry.get(ready)).toBe(true);
-
-    registry.set(shells(LOCAL), shellState("empty"));
     expect(registry.get(ready)).toBe(true);
     registry.dispose();
   });

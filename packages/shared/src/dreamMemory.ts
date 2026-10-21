@@ -173,11 +173,9 @@ export const scopeAllowsRead = (
   if (record.scope.environmentId !== viewer.environmentId) return false;
   if (record.scope.kind === "personal") return record.scope.actorId === viewer.actorId;
   if (record.scope.kind === "project" || record.scope.kind === "thread") {
-    return (
-      record.scope.projectId !== undefined &&
-      viewer.projectId !== undefined &&
-      record.scope.projectId === viewer.projectId
-    );
+    if (record.scope.projectId === undefined) return false;
+    if (viewer.projectId !== undefined) return record.scope.projectId === viewer.projectId;
+    return true;
   }
   return true;
 };

@@ -10,8 +10,24 @@ and mode selections, unless the destination project has its own model default.
 Its branch and workspace mode come from your configured defaults. To continue in
 an existing worktree, use **New thread in this worktree** from the branch toolbar.
 
-When you change a new thread's project, Base3Router stays in the current environment
+When you change a new thread's project, T3 Code stays in the current environment
 if that project exists there. Otherwise it selects an environment that has it.
+
+### Start without a project
+
+A thread does not need a project. To start one without a project, click **or
+start without a project** under a new thread's heading, pick **No project** from
+the project menu in that heading or from **New thread in...** in the command
+palette, or press `mod+alt+n`. On mobile, pick **No project** from the project
+list. To move a draft into a project, pick the project in the heading.
+
+Each thread without a project works in its own folder under `~/.t3/scratch` (the
+`scratch` folder of your T3 data directory), named after its date, the first words
+of its first message, and a short id, like
+`2026-09-25-convert-these-pngs-to-webp-a1b2c3d4`. Deleting a thread keeps its
+folder, so the files the agent wrote stay until you delete them. Branch, worktree, and diff controls stay hidden because
+these folders are not Git repositories. This is unavailable when the data
+directory itself sits inside a Git checkout.
 
 ### Start in the background
 
@@ -80,9 +96,28 @@ position, so using **Un-settle** returns it to the top. Pinning and snoozing pre
 position until you move it again. Thread activity does not change the order. The settled shelf
 continues to use settlement time.
 
-If dragging is unavailable for one environment, update the Base3Router server running in that
+If dragging is unavailable for one environment, update the T3 Code server running in that
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
+
+To generate a fresh title from the conversation, open a thread's menu and choose
+**Regenerate title**. The action is unavailable while title generation is in progress
+or when the connected environment needs a server update.
+
+Agents connected through B3R can use the same server-owned metadata workflow to
+rename a thread, regenerate its title, or link and unlink a pull request. These changes
+appear on web, desktop, and mobile without requiring the originating browser to remain
+open.
+
+### Fold working threads (beta)
+
+On web and desktop, turn on **Settings → General → Working section (beta)** to move threads that
+are working or monitoring into a collapsed **Working** section at the bottom of the sidebar. A
+thread returns to the top of the active list when it finishes, fails, or needs an approval or
+answer. Pinned threads stay in the pinned section.
+
+While this is on, the active list is ordered by when each thread last came back to you, so you
+cannot drag to reorder it. Your saved order returns when you turn it off.
 
 ## Settle finished work
 
@@ -90,7 +125,9 @@ Choose **Settle thread** from its menu to move finished work out of the active l
 without deleting the conversation. **Un-settle thread** restores it to active work
 and prevents automatic settlement until new activity resumes the usual rules.
 Manually settling an idle thread dismisses unanswered async questions without
-sending an answer or restarting the agent.
+sending an answer or restarting the agent. Settling also closes the thread's
+terminals that wait at an idle prompt, and keeps their output. A terminal that
+runs a command, such as a dev server, stays open.
 
 By default, environments settle inactive threads after three days and settle
 threads whose pull request merged. A closed pull request can also settle an idle
@@ -98,6 +135,11 @@ thread. Work in progress, pending questions or approvals, and live background wo
 prevent automatic settlement. An open pull request does not prevent inactivity
 settlement, but an old closed or merged pull request does not settle work you
 resumed after it closed.
+
+To keep one thread out of the settled shelf no matter how long it sits idle, open its menu,
+choose **Auto-settle behavior**, and pick **Disabled**. The current option is checked. Pick
+**Enabled** to return to the usual rules. Manual settle, snooze, and archive still work while it
+is disabled.
 
 Change these rules in **Settings → General** on web and desktop, or **Settings → Thread behavior** on mobile.
 They continue to run when your apps are closed. On web and desktop, choose an environment at the
@@ -131,7 +173,122 @@ for custom configuration.
 
 ## Inspect agent work
 
-On web and desktop, use **Agents** to follow work delegated to subagents.
+**Limited** means the provider stopped on a usage or rate limit. The conversation
+keeps the provider's explanation. Retry after the limit resets, or switch to
+another provider instance.
+On web and desktop, press **Resume** in an empty composer to continue a limited
+or interrupted turn manually.
+Queued messages stay saved while the limit blocks the thread. They run after
+the continuation finishes. If the queue was held by a restart, resume it then.
+
+When the provider reports a reset time, choose **Resume at reset** to schedule a
+continuation. You can cancel it from the thread. Enable **Auto-resume limited
+threads** in **Settings → General** on web and desktop, or **Settings → Thread
+behavior** on mobile, to schedule limit stops by default.
+The environment must be running when the reset arrives; it resumes overdue
+continuations after a restart. Sending a new message, archiving, or settling the
+thread prevents a pending continuation from starting.
+
+Choose **Snooze until reset** to hide the thread until its allowance returns.
+Snooze and auto-resume are independent: snooze alone wakes the thread without
+sending a message; enabling both wakes and continues it. **Wake now** cancels
+the snooze. Enable **Snooze limited threads** in thread behavior settings to
+snooze limit stops by default. Providers without a reset time offer manual
+retry and the normal snooze choices.
+
+On web and desktop, open **Agents → Create agent**, select a ready provider and
+project, then create its conversation. **Connect your agent** opens provider
+settings for the supported adapters. Opening a conversation does not start work.
+The directory keeps saved agent and task records readable while a provider needs
+setup.
+
+Use the model control inside the composer to choose **Auto** or **Manual**.
+Auto uses local task classification and eligible configured models. Manual binds
+the provider and model you select; choosing OpenRouter's Auto model delegates
+model selection to OpenRouter remotely. Switching modes retains your saved
+Manual choice. Read each turn's route details to compare the requested and
+executed model identities.
+
+Auto recognizes a limited set of explicit Chinese and mixed-language requests for
+coding, debugging, summaries, writing, research and data analysis. Unsupported or
+conflicting wording can remain unknown; a heuristic category does not establish model
+quality. When task-conditioned routing is selected, it requires eight matching
+current-classifier outcomes for each eligible model. A classifier update keeps old
+observations in history but excludes them from the new task cohort, so Auto uses
+its baseline until current-version coverage is sufficient. This does not activate
+a different routing policy.
+
+To start a governed task, open **Tasks**, choose its project and a ready provider,
+then select **Create governed task**. Explicitly choose its exact model before
+reviewing the goal, acceptance criteria and
+brakes before creating it. If that model becomes unavailable, choose an available
+model and review again. Creation records the contract and configured selection
+without starting work.
+Use **Prepare first instructions** to write the task’s first message. Choose ordinary
+Manual or Auto, review the exact instructions, current contract and limits, then
+explicitly start. This opens the same task conversation without another Send. Auto
+chooses its actual route when starting; a preview does not lock that choice.
+
+In **Tasks**, select a task and use **Open complete output** to read its complete
+attributable persisted assistant text beside Goal, Redirect and Acceptance criteria.
+Reading, closing or reloading records no judgment and starts no work. Output without
+complete current attribution is unavailable. Acceptance still needs its separate
+confirmation; revision requests still need a separately reviewed explicit Start.
+Refresh or changed evidence requires a fresh review. The conversation remains available
+for history.
+
+For a completed revision, compare its recorded predecessor, saved requested changes
+and current output in Tasks. Each output shows the criteria recorded for that run.
+Use the conversation link when a recorded pair is unavailable.
+
+For a first task message, you can also choose one ordinary UTF-8 **.txt** reference file.
+Upload and review do not start work. Review its name, type, size and content hash alongside
+instructions and the current contract, then explicitly Start. This first slice uses the
+Codex file transport. Auto can choose a different eligible model at dispatch; if the actual
+target cannot receive the file, the launch is blocked without dropping it or switching modes.
+You can select an existing instruction-only skill and the file in either order, then review
+them together. Changing either input retires the entire review. The complete instructions,
+skill context and file path must fit the input limit; shorten instructions and review again
+if they do not. File content remains untrusted evidence and the skill grants no added authority.
+Removing the file or changing task/session facts retires its review. After an uncertain Start,
+keep the original identity and use status recovery rather than uploading or starting again.
+Recorded input delivery is separate from provider completion and owner acceptance.
+
+For a first task message, you can optionally select **Evidence-grounded summary** or
+**Structured comparison** as an instruction-only task skill. Choose Manual or Auto, then review
+its exact instructions, version and content hash alongside the routing choice and task contract.
+Auto chooses an eligible model at Start; its preview remains advisory. If that actual model
+cannot receive the instructions, the launch is blocked without dropping the skill or switching
+to Manual. Selection and
+review start nothing; only your explicit Start includes those instructions. The review
+expires after five minutes and must be repeated if the instructions, routing choice, preferred
+model, authenticated session or task facts change. These skills grant no tools, permissions or extra budget. Result provenance shows
+selection and input delivery separately; adapter acceptance means input delivery, not
+successful work or task acceptance.
+
+For a request
+such as “Summarize the saved pull requests linked to this task,” review the suggested
+read and model, then explicitly confirm execution. This reads saved PR state without
+refreshing GitHub and keeps your saved Manual model choice. This saved-PR operation
+is a separate reviewed action. You can also open instructions as a conversation
+draft instead of starting from Tasks. A successful
+read does not mean the model finished or the task was accepted. Return to **Tasks**
+and refresh to read the recorded execution status and result. If no provider is
+ready, existing tasks remain readable and **Set up a provider** opens the
+configuration page.
+
+If starting loses its reply, use **Read original launch status** to recover the
+original command and recorded result. An unknown outcome stays unknown; it does
+not resend the instructions. Keep recovery storage until the outcome is resolved.
+
+You can also ask “Which saved PRs are open?” or “Which saved PRs are drafts?”
+Review the interpreted question before confirming. Open state and draft flags are
+separate saved facts; missing values remain unknown. These answers do not refresh
+GitHub or establish CI, approval, mergeability, or merge readiness.
+
+Subagent threads started by the agent can't take messages; message the parent
+thread instead. When such a subagent needs an approval or an answer, the parent
+thread asks for it.
 
 Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it
@@ -143,3 +300,11 @@ Choose **Snooze → Custom…** from a thread's menu to pick a date and time in 
 local time zone, or a duration in minutes, hours, or days. Durations start when
 you confirm; one day means 24 hours. On web and desktop, you can also snooze
 several selected threads together. Choose **Wake thread** to bring a thread back early.
+
+### Use an accepted output in a new task
+
+For an owned task’s current accepted revision, use **Use this output in a new task** to prepare one independent task in the same project and environment. The source must be idle with a completed, attributable plain-text output linked to its accepted revision. Outputs lacking that link are unavailable for handoff. Choose the destination’s own title, Goal, Redirect, Acceptance, Brake and exact model or saved configuration, then review and create it. Creation starts no provider work.
+
+Review the complete source text separately from the new task’s instructions, choose Manual or Auto, and explicitly Start. Source references are limited to 16,000 UTF-16 code units and 64 KiB UTF-8; larger outputs reject without shortening. Complete reference plus instructions must also fit the native input limit. This handoff currently requires a text-capable Codex target; an unsupported actual Auto target rejects without fallback. A changed source requires fresh review; the original destination never silently switches to a different output. This handoff cannot combine a file or instruction skill.
+
+The source is untrusted context. Its permissions, tools, budget and approval do not transfer. Delivery, provider completion and owner acceptance remain separate evidence. If creation or Start has an uncertain outcome, recover its original command identity; do not create a replacement or resend automatically.

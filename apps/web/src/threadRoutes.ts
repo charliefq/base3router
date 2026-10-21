@@ -2,6 +2,13 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import type { DraftId } from "./composerDraftStore";
 
+declare module "@tanstack/react-router" {
+  interface HistoryState {
+    /** Keep scheduled-run inspection from falling through to automatic draft creation. */
+    scheduledTaskInspection?: ScopedThreadRef;
+  }
+}
+
 export type ThreadRouteTarget =
   | {
       kind: "server";
@@ -22,21 +29,20 @@ export type ThreadRouteRenderState = "loading" | "ready" | "missing";
 
 export function resolveThreadRouteRenderState(input: {
   bootstrapComplete: boolean;
-  serverThreadShellExists: boolean;
-  serverThreadDetailExists: boolean;
-  serverThreadDetailDeleted: boolean;
+  serverThreadExists: boolean;
+  serverThreadDeleted: boolean;
   draftThreadExists: boolean;
 }): ThreadRouteRenderState {
   if (!input.bootstrapComplete) {
     return "loading";
   }
-  if (input.serverThreadDetailExists || input.draftThreadExists) {
+  if (input.draftThreadExists) {
     return "ready";
   }
-  if (input.serverThreadDetailDeleted) {
+  if (input.serverThreadDeleted) {
     return "missing";
   }
-  return input.serverThreadShellExists ? "loading" : "missing";
+  return input.serverThreadExists ? "ready" : "missing";
 }
 
 export function buildThreadRouteParams(ref: ScopedThreadRef): {

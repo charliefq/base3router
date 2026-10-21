@@ -1,85 +1,99 @@
-import type {
-  WorkflowActionInput,
-  WorkflowCursorCloudCancelInput,
-  WorkflowCursorCloudFollowUpInput,
-  WorkflowCursorCloudRefreshInput,
-  WorkflowDispatchStageInput,
-  WorkflowProposeArtifactInput,
-  WorkflowReadInput,
-  WorkflowReadRunInput,
-  WorkflowStagePreviewInput,
-} from "@t3tools/contracts";
+import { WS_METHODS } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 import { Atom } from "effect/unstable/reactivity";
 
+import { writeConfiguration } from "../operations/commands.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
-import * as Workflow from "../operations/workflow.ts";
-import { createAtomCommandScheduler, createEnvironmentCommand } from "./runtime.ts";
+import {
+  createEnvironmentCommand,
+  createEnvironmentRpcCommand,
+  createEnvironmentRpcQueryAtomFamily,
+} from "./runtime.ts";
 
 export function createWorkflowEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
-  const scheduler = createAtomCommandScheduler();
+  const catalog = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:workflow:catalog",
+    tag: WS_METHODS.workflowCatalog,
+  });
   return {
-    catalog: createEnvironmentCommand(runtime, {
-      label: "environment-data:workflow:catalog",
-      execute: (input: typeof WorkflowReadInput.Type) => Workflow.catalog(input),
-      scheduler,
-      concurrency: {
-        mode: "latest",
-        key: ({ environmentId, input }) => `${environmentId}:${input.projectId}`,
-      },
+    catalog,
+    configurationAction: createEnvironmentCommand(runtime, {
+      label: "environment-data:workflow:configuration-action",
+      execute: writeConfiguration,
     }),
-    readRun: createEnvironmentCommand(runtime, {
+    templateCommandStatus: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:workflow:template-command-status",
+      tag: WS_METHODS.workflowTemplateCommandStatus,
+    }),
+    configurationStatus: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:workflow:configuration-status",
+      tag: WS_METHODS.workflowConfigurationStatus,
+    }),
+    readCatalog: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:workflow:read-catalog",
+      tag: WS_METHODS.workflowCatalog,
+    }),
+    readRun: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:workflow:read-run",
-      execute: (input: typeof WorkflowReadRunInput.Type) => Workflow.readRun(input),
-      scheduler,
-      concurrency: {
-        mode: "latest",
-        key: ({ environmentId, input }) => `${environmentId}:${input.runId}`,
-      },
+      tag: WS_METHODS.workflowReadRun,
     }),
-    action: createEnvironmentCommand(runtime, {
+    action: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:workflow:action",
-      execute: (input: WorkflowActionInput) => Workflow.action(input),
-      scheduler,
+      tag: WS_METHODS.workflowAction,
+      onSuccess: (target, registry) =>
+        Effect.sync(() => {
+          registry.refresh(
+            catalog({
+              environmentId: target.environmentId,
+              input: { projectId: target.input.projectId },
+            }),
+          );
+        }),
     }),
-    previewStage: createEnvironmentCommand(runtime, {
-      label: "environment-data:workflow:preview-stage",
-      execute: (input: typeof WorkflowStagePreviewInput.Type) => Workflow.previewStage(input),
-      scheduler,
-      concurrency: {
-        mode: "latest",
-        key: ({ environmentId, input }) => `${environmentId}:${input.runId}`,
-      },
+    stagePreview: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:workflow:stage-preview",
+      tag: WS_METHODS.workflowStagePreview,
     }),
-    dispatchStage: createEnvironmentCommand(runtime, {
+    reconcileDispatch: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:workflow:reconcile-dispatch",
+      tag: WS_METHODS.workflowReconcileDispatch,
+      onSuccess: (target, registry) =>
+        Effect.sync(() =>
+          registry.refresh(
+            catalog({
+              environmentId: target.environmentId,
+              input: { projectId: target.input.projectId },
+            }),
+          ),
+        ),
+    }),
+    dispatchStage: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:workflow:dispatch-stage",
-      execute: (input: typeof WorkflowDispatchStageInput.Type) => Workflow.dispatchStage(input),
-      scheduler,
+      tag: WS_METHODS.workflowDispatchStage,
+      onSuccess: (target, registry) =>
+        Effect.sync(() => {
+          registry.refresh(
+            catalog({
+              environmentId: target.environmentId,
+              input: { projectId: target.input.projectId },
+            }),
+          );
+        }),
     }),
-    proposeArtifact: createEnvironmentCommand(runtime, {
+    proposeArtifact: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:workflow:propose-artifact",
-      execute: (input: typeof WorkflowProposeArtifactInput.Type) => Workflow.proposeArtifact(input),
-      scheduler,
-    }),
-    cursorCloudFollowUp: createEnvironmentCommand(runtime, {
-      label: "environment-data:workflow:cursor-cloud-follow-up",
-      execute: (input: WorkflowCursorCloudFollowUpInput) => Workflow.cursorCloudFollowUp(input),
-      scheduler,
-    }),
-    cursorCloudCancel: createEnvironmentCommand(runtime, {
-      label: "environment-data:workflow:cursor-cloud-cancel",
-      execute: (input: WorkflowCursorCloudCancelInput) => Workflow.cursorCloudCancel(input),
-      scheduler,
-    }),
-    cursorCloudRefresh: createEnvironmentCommand(runtime, {
-      label: "environment-data:workflow:cursor-cloud-refresh",
-      execute: (input: WorkflowCursorCloudRefreshInput) => Workflow.cursorCloudRefresh(input),
-      scheduler,
-      concurrency: {
-        mode: "latest",
-        key: ({ environmentId, input }) => `${environmentId}:${input.runId}:${input.attempt}`,
-      },
+      tag: WS_METHODS.workflowProposeArtifact,
+      onSuccess: (target, registry) =>
+        Effect.sync(() => {
+          registry.refresh(
+            catalog({
+              environmentId: target.environmentId,
+              input: { projectId: target.input.projectId },
+            }),
+          );
+        }),
     }),
   };
 }

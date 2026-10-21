@@ -85,38 +85,23 @@ export function measureRestingComposerControls(
 ): RestingComposerControlsMeasurement | null {
   const gap = Number.parseFloat(getComputedStyle(controls).columnGap) || 0;
   const picker = controls.querySelector<HTMLElement>("[data-chat-provider-model-picker]");
-  const routerCluster = controls.querySelector<HTMLElement>("[data-model-router-cluster]");
   const leadingControl =
-    picker ??
-    routerCluster ??
-    controls.querySelector<HTMLElement>('[data-chat-provider-unavailable="true"]');
+    picker ?? controls.querySelector<HTMLElement>('[data-chat-provider-unavailable="true"]');
   if (!leadingControl) return null;
   // Separators are display:none on phone widths; a hidden one takes no gap.
   const separator = controls.querySelector<HTMLElement>("[data-resting-controls-separator]");
   const separatorWidth = separator ? elementOuterWidth(separator) : 0;
   const overflow = controls.querySelector<HTMLElement>("[data-resting-controls-overflow]");
   const separatorAndGapWidth = separatorWidth > 0 ? separatorWidth + gap : 0;
-  const pickerNaturalWidth = picker ? providerModelPickerNaturalWidth(picker) : 0;
-  const pickerMinimumWidth = picker ? providerModelPickerMinimumWidth(picker) : 0;
-  const routerWidth = routerCluster ? elementOuterWidth(routerCluster) : 0;
-  const leadingFallbackWidth =
-    picker === null && routerCluster === null ? elementOuterWidth(leadingControl) : 0;
-  const fixedClusterGap = picker && routerCluster ? gap : 0;
   const blocks = Array.from(controls.querySelectorAll<HTMLElement>("[data-resting-block]"));
   const widths = blocks.map(controlBlockWidths);
   return {
     gap,
     naturalFixedWidth:
-      pickerNaturalWidth +
-      routerWidth +
-      leadingFallbackWidth +
-      fixedClusterGap +
+      (picker ? providerModelPickerNaturalWidth(picker) : elementOuterWidth(leadingControl)) +
       separatorAndGapWidth,
     minimumFixedWidth:
-      pickerMinimumWidth +
-      routerWidth +
-      leadingFallbackWidth +
-      fixedClusterGap +
+      (picker ? providerModelPickerMinimumWidth(picker) : elementOuterWidth(leadingControl)) +
       separatorAndGapWidth,
     blockWidths: widths.map((width) => width.natural),
     iconOnlyBlockWidths: widths.map((width) => width.iconOnly),

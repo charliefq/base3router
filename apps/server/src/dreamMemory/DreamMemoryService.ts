@@ -261,8 +261,7 @@ const make = Effect.gen(function* () {
     const projectOk =
       record.scope.kind === "project" || record.scope.kind === "thread"
         ? record.scope.projectId !== undefined &&
-          viewer.projectId !== undefined &&
-          record.scope.projectId === viewer.projectId
+          (viewer.projectId === undefined || record.scope.projectId === viewer.projectId)
         : true;
     if (record.scope.environmentId !== viewer.environmentId || !personalOk || !projectOk) {
       return Effect.fail(
@@ -274,6 +273,13 @@ const make = Effect.gen(function* () {
     }
     return Effect.succeed(record);
   };
+
+  const recordDeletedSource = (fingerprint: string, environmentId: EnvironmentId, nowIso: string) =>
+    sql`
+      INSERT INTO dream_deleted_sources (source_fingerprint, environment_id, deleted_at)
+      VALUES (${fingerprint}, ${environmentId}, ${nowIso})
+      ON CONFLICT(source_fingerprint) DO NOTHING
+    `.pipe(Effect.asVoid);
 
   const retentionExpiry = (nowIso: string, retentionDays: number) =>
     DateTime.formatIso(
@@ -350,13 +356,17 @@ const make = Effect.gen(function* () {
           if (filter.projectId !== undefined && record.scope.projectId !== filter.projectId) {
             return false;
           }
+          if (filter.threadId !== undefined && record.scope.threadId !== filter.threadId) {
+            return false;
+          }
           if (record.scope.kind === "personal") return record.scope.actorId === viewer.actorId;
           if (record.scope.kind === "environment") return true;
-          return (
-            record.scope.projectId !== undefined &&
-            viewer.projectId !== undefined &&
-            record.scope.projectId === viewer.projectId
-          );
+          if (record.scope.projectId === undefined) return false;
+          // Generic pairing is one environment-local principal. A viewer
+          // without projectId may list project/thread records in this
+          // environment; a project-bound viewer stays inside that project.
+          if (viewer.projectId !== undefined) return record.scope.projectId === viewer.projectId;
+          return true;
         }),
       })),
       Effect.mapError(toPersistenceError("DreamMemoryService.list")),
@@ -447,11 +457,7 @@ const make = Effect.gen(function* () {
       yield* put(deleted);
       const fingerprint = current.provenance[0]?.sourceFingerprint;
       if (fingerprint !== undefined) {
-        yield* sql`
-          INSERT INTO dream_deleted_sources (source_fingerprint, environment_id, deleted_at)
-          VALUES (${fingerprint}, ${viewer.environmentId}, ${nowIso})
-          ON CONFLICT(source_fingerprint) DO NOTHING
-        `.pipe(Effect.asVoid);
+        yield* recordDeletedSource(fingerprint, viewer.environmentId, nowIso);
       }
       yield* appendAudit("memory.deleted", viewer.environmentId, nowIso, {
         memoryId: deleted.memoryId,
@@ -676,7 +682,14 @@ const make = Effect.gen(function* () {
               (record.scope.threadId === threadId ||
                 record.provenance.some((ref) => ref.threadId === threadId)),
           ),
-          (record) => put(tombstoneMemory(record, nowIso)),
+          (record) =>
+            Effect.gen(function* () {
+              yield* put(tombstoneMemory(record, nowIso));
+              const fingerprint = record.provenance[0]?.sourceFingerprint;
+              if (fingerprint !== undefined) {
+                yield* recordDeletedSource(fingerprint, environmentId, nowIso);
+              }
+            }),
           { concurrency: 1, discard: true },
         ),
       ),

@@ -40,6 +40,16 @@ const writeTextFile = Effect.fn("CodexHomeLayout.test.writeTextFile")(function* 
 });
 
 it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
+  it.effect("disabled conflicting shadow paths still fail before any filesystem access", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDir("t3-disabled-layout-invalid-");
+      const layout = yield* resolveCodexHomeLayout(
+        decodeCodexSettings({ enabled: false, homePath: home, shadowHomePath: home }),
+      );
+      const error = yield* materializeCodexShadowHome(layout, { enabled: false }).pipe(Effect.flip);
+      expect(error).toBeInstanceOf(CodexShadowHomePathConflictError);
+    }),
+  );
   describe("resolveCodexHomeLayout", () => {
     it.effect("uses direct CODEX_HOME when no shadow home is configured", () =>
       Effect.gen(function* () {

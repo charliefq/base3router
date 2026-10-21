@@ -103,7 +103,7 @@ describe("openrouter guidance contracts", () => {
     const settings = decodeSettings({});
     expect(settings.openRouter.guidanceMode).toBe("off");
     expect(settings.openRouter.shadowConsent).toBe(false);
-    expect(settings.providers.openrouter.enabled).toBe(false);
+    expect("openrouter" in settings.providers).toBe(false);
 
     const bound = decodeBinding({
       policyVersion: "dispatcher.phase-1a.v1",

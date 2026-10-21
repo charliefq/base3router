@@ -235,6 +235,14 @@ export const ActionGateRespondApprovalResult = Schema.Struct({
 });
 export type ActionGateRespondApprovalResult = typeof ActionGateRespondApprovalResult.Type;
 
+export const ActionGateAuthorizeToolRequest = Schema.Struct({
+  toolName: BoundedSlug,
+  args: Schema.Unknown,
+  threadId: ThreadId,
+  retry: Schema.optional(Schema.Boolean),
+});
+export type ActionGateAuthorizeToolRequest = typeof ActionGateAuthorizeToolRequest.Type;
+
 export class ActionGateError extends Schema.TaggedError<ActionGateError>()("ActionGateError", {
   reason: Schema.Literals([
     "not_found",

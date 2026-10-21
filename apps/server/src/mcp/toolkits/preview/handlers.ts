@@ -7,7 +7,6 @@ import {
   PreviewAutomationRecordingTransferError,
   PreviewAutomationRecordingDesktopUpdateRequiredError,
   PreviewAutomationRecordingArtifact,
-  McpActionGateBlockedError,
   type ToolActivityIcon,
   type ThreadId,
   type PreviewAutomationOperation,
@@ -20,7 +19,6 @@ import {
   type PreviewTabId,
 } from "@t3tools/contracts";
 
-import { ActionGateService } from "../../../actionGate/ActionGateService.ts";
 import {
   parseAttachmentUuid,
   parseAttachmentFileExtension,
@@ -29,8 +27,8 @@ import {
 } from "../../../attachmentStore.ts";
 import { resolveAttachmentRelativePath } from "../../../attachmentPaths.ts";
 import * as ServerConfig from "../../../config.ts";
-import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { withAllowedMcpTool } from "../../McpActionAuthorization.ts";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
 
@@ -53,23 +51,6 @@ export function normalizePreviewOpenInput(
   };
 }
 
-const PREVIEW_TOOL_BY_OPERATION: Record<PreviewAutomationOperation, string> = {
-  status: "preview_status",
-  open: "preview_open",
-  navigate: "preview_navigate",
-  snapshot: "preview_snapshot",
-  click: "preview_click",
-  type: "preview_type",
-  press: "preview_press",
-  scroll: "preview_scroll",
-  evaluate: "preview_evaluate",
-  waitFor: "preview_wait_for",
-  recordingStart: "preview_recording_start",
-  recordingStop: "preview_recording_stop",
-  resize: "preview_resize",
-  setColorScheme: "preview_set_appearance",
-};
-
 const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   operation: PreviewAutomationOperation,
   input: unknown,
@@ -77,51 +58,43 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   tabId?: PreviewTabId,
 ): Effect.fn.Return<
   { result: A; toolIcon?: ToolActivityIcon },
-  import("@t3tools/contracts").PreviewAutomationError | McpActionGateBlockedError,
-  | McpInvocationContext.McpInvocationContext
-  | PreviewAutomationBroker.PreviewAutomationBroker
-  | ActionGateService
+  import("@t3tools/contracts").PreviewAutomationError,
+  McpInvocationContext.McpInvocationContext | PreviewAutomationBroker.PreviewAutomationBroker
 > {
   const scope = yield* McpInvocationContext.requireMcpCapability("preview");
-  return yield* withAllowedMcpTool(
-    PREVIEW_TOOL_BY_OPERATION[operation],
+  const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+  let targetTabId = tabId;
+  const result = yield* broker.invoke<A>({
+    onTargetTab: (resolvedTabId) => {
+      targetTabId = resolvedTabId;
+    },
+    scope,
+    operation,
     input,
-    Effect.gen(function* () {
-      const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
-      let targetTabId = tabId;
-      const result = yield* broker.invoke<A>({
-        onTargetTab: (resolvedTabId) => {
-          targetTabId = resolvedTabId;
-        },
-        scope,
-        operation,
-        input,
-        ...(timeoutMs === undefined ? {} : { timeoutMs }),
-        ...(tabId === undefined ? {} : { tabId }),
-      });
-      if (["status", "open", "navigate", "snapshot"].includes(operation)) return { result };
-      const statusTabId =
-        (operation !== "evaluate" && typeof result === "object" && result !== null
-          ? (result as { tabId?: PreviewTabId }).tabId
-          : undefined) ?? targetTabId;
-      const page = yield* broker
-        .invoke<PreviewAutomationStatus>({
-          scope,
-          operation: "status",
-          input: {},
-          timeoutMs: 500,
-          updateCurrentTab: false,
-          ...(statusTabId === undefined ? {} : { tabId: statusTabId }),
-        })
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-      return {
-        result,
-        ...(page?.url && /^https?:\/\//i.test(page.url) && page.url.length <= 4096
-          ? { toolIcon: { _tag: "website" as const, pageUrl: page.url } }
-          : {}),
-      };
-    }),
-  );
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(tabId === undefined ? {} : { tabId }),
+  });
+  if (["status", "open", "navigate", "snapshot"].includes(operation)) return { result };
+  const statusTabId =
+    (operation !== "evaluate" && typeof result === "object" && result !== null
+      ? (result as { tabId?: PreviewTabId }).tabId
+      : undefined) ?? targetTabId;
+  const page = yield* broker
+    .invoke<PreviewAutomationStatus>({
+      scope,
+      operation: "status",
+      input: {},
+      timeoutMs: 500,
+      updateCurrentTab: false,
+      ...(statusTabId === undefined ? {} : { tabId: statusTabId }),
+    })
+    .pipe(Effect.orElseSucceed(() => null));
+  return {
+    result,
+    ...(page?.url && /^https?:\/\//i.test(page.url) && page.url.length <= 4096
+      ? { toolIcon: { _tag: "website" as const, pageUrl: page.url } }
+      : {}),
+  };
 });
 
 const invokeTargeted = <A extends object>(
@@ -203,10 +176,11 @@ export const claimPreviewRecording = Effect.fn("PreviewToolkit.claimRecording")(
     yield* fileSystem.rename(currentPath, finalPath);
   }).pipe(
     // Another stop may already have claimed this exact upload for this thread.
-    Effect.catch((cause) =>
-      cause._tag !== "PreviewAutomationRecordingTransferError" && cause.reason._tag === "NotFound"
-        ? validateFile(finalPath)
-        : Effect.fail(cause),
+    Effect.catchIf(
+      (cause) =>
+        cause._tag !== "PreviewAutomationRecordingTransferError" &&
+        cause.reason._tag === "NotFound",
+      () => validateFile(finalPath),
     ),
     Effect.mapError((cause) => new PreviewAutomationRecordingTransferError({ threadId, cause })),
   );
@@ -215,47 +189,103 @@ export const claimPreviewRecording = Effect.fn("PreviewToolkit.claimRecording")(
 });
 
 const handlers = {
-  preview_status: (input) => invokeTargeted<PreviewAutomationStatus>("status", input ?? {}),
+  preview_status: (input) =>
+    withAllowedMcpTool(
+      "preview_status",
+      input,
+      invokeTargeted<PreviewAutomationStatus>("status", input ?? {}),
+    ),
   preview_open: (input) =>
-    invokeTargeted<PreviewAutomationStatus>("open", normalizePreviewOpenInput(input)),
+    withAllowedMcpTool(
+      "preview_open",
+      input,
+      invokeTargeted<PreviewAutomationStatus>("open", normalizePreviewOpenInput(input)),
+    ),
   preview_navigate: (input) =>
-    invokeTargeted<PreviewAutomationStatus>("navigate", input, input.timeoutMs),
+    withAllowedMcpTool(
+      "preview_navigate",
+      input,
+      invokeTargeted<PreviewAutomationStatus>("navigate", input, input.timeoutMs),
+    ),
   preview_resize: (input) =>
-    invokeTargeted<PreviewAutomationResizeResult>("resize", input, input.timeoutMs),
+    withAllowedMcpTool(
+      "preview_resize",
+      input,
+      invokeTargeted<PreviewAutomationResizeResult>("resize", input, input.timeoutMs),
+    ),
   preview_set_appearance: (input) =>
-    invokeTargeted<PreviewAutomationSetColorSchemeResult>("setColorScheme", input),
+    withAllowedMcpTool(
+      "preview_set_appearance",
+      input,
+      invokeTargeted<PreviewAutomationSetColorSchemeResult>("setColorScheme", input),
+    ),
   preview_snapshot: (input) => {
     // Output selection and saving are MCP-only; the browser still produces a complete snapshot.
     const { includeImage: _includeImage, save: _save, ...operationInput } = input ?? {};
-    return invokeTargeted<PreviewAutomationSnapshot>("snapshot", operationInput);
+    return withAllowedMcpTool(
+      "preview_snapshot",
+      input,
+      invokeTargeted<PreviewAutomationSnapshot>("snapshot", operationInput),
+    );
   },
-  preview_click: (input) => invokeTargeted<object>("click", input, input.timeoutMs),
-  preview_type: (input) => invokeTargeted<object>("type", input, input.timeoutMs),
-  preview_press: (input) => invokeTargeted<object>("press", input),
-  preview_scroll: (input) => invokeTargeted<object>("scroll", input),
-  preview_evaluate: ({ tabId, ...input }) =>
-    invoke<unknown>("evaluate", input, undefined, tabId).pipe(
-      Effect.map(({ result, toolIcon }) => ({
-        value: result ?? null,
-        ...(toolIcon ? { toolIcon } : {}),
-      })),
+  preview_click: (input) =>
+    withAllowedMcpTool(
+      "preview_click",
+      input,
+      invokeTargeted<object>("click", input, input.timeoutMs),
     ),
-  preview_wait_for: (input) => invokeTargeted<object>("waitFor", input, input.timeoutMs),
+  preview_type: (input) =>
+    withAllowedMcpTool(
+      "preview_type",
+      input,
+      invokeTargeted<object>("type", input, input.timeoutMs),
+    ),
+  preview_press: (input) =>
+    withAllowedMcpTool("preview_press", input, invokeTargeted<object>("press", input)),
+  preview_scroll: (input) =>
+    withAllowedMcpTool("preview_scroll", input, invokeTargeted<object>("scroll", input)),
+  preview_evaluate: (input) => {
+    const { tabId, ...rest } = input;
+    return withAllowedMcpTool(
+      "preview_evaluate",
+      input,
+      invoke<unknown>("evaluate", rest, undefined, tabId).pipe(
+        Effect.map(({ result, toolIcon }) => ({
+          value: result ?? null,
+          ...(toolIcon ? { toolIcon } : {}),
+        })),
+      ),
+    );
+  },
+  preview_wait_for: (input) =>
+    withAllowedMcpTool(
+      "preview_wait_for",
+      input,
+      invokeTargeted<object>("waitFor", input, input.timeoutMs),
+    ),
   preview_recording_start: (input) =>
-    invokeTargeted<PreviewAutomationRecordingStatus>("recordingStart", input ?? {}),
+    withAllowedMcpTool(
+      "preview_recording_start",
+      input,
+      invokeTargeted<PreviewAutomationRecordingStatus>("recordingStart", input ?? {}),
+    ),
   preview_recording_stop: (input) =>
-    Effect.gen(function* () {
-      const scope = yield* McpInvocationContext.requireMcpCapability("preview");
-      const { tabId, ...operationInput } = input;
-      const response = yield* invoke<unknown>(
-        "recordingStop",
-        { ...operationInput, transferToEnvironment: true },
-        PREVIEW_RECORDING_STOP_TIMEOUT_MS,
-        tabId,
-      );
-      const artifact = yield* claimPreviewRecording(scope.threadId, response.result);
-      return { ...artifact, ...(response.toolIcon ? { toolIcon: response.toolIcon } : {}) };
-    }),
+    withAllowedMcpTool(
+      "preview_recording_stop",
+      input,
+      Effect.gen(function* () {
+        const scope = yield* McpInvocationContext.requireMcpCapability("preview");
+        const { tabId, ...operationInput } = input;
+        const response = yield* invoke<unknown>(
+          "recordingStop",
+          { ...operationInput, transferToEnvironment: true },
+          PREVIEW_RECORDING_STOP_TIMEOUT_MS,
+          tabId,
+        );
+        const artifact = yield* claimPreviewRecording(scope.threadId, response.result);
+        return { ...artifact, ...(response.toolIcon ? { toolIcon: response.toolIcon } : {}) };
+      }),
+    ),
 } satisfies Parameters<typeof PreviewToolkit.toLayer>[0];
 
 const { preview_snapshot, ...standardHandlers } = handlers;

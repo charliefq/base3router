@@ -69,6 +69,28 @@ const runShell = (script: string) => {
 
 const sh = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
+// Polls for up to five seconds until a background holder has taken effect.
+const awaitHolder = (condition: string) =>
+  `i=0; until ${condition}; do i=$((i + 1)); [ "$i" -lt 500 ] || exit 1; sleep 0.01; done`;
+
+// Holds a cache busy the way a running server does: the holder's argv[0] is the
+// runtime entry, which the prune and install scripts look for in /proc cmdline.
+// It reads a pipe the script keeps open on fd 7, so it exits with the script
+// instead of outliving it on a timer.
+const holdRuntimeBusy = (entry: string) =>
+  [
+    `exec 7> >(exec -a ${entry} cat >/dev/null 2>&1)`,
+    awaitHolder(`grep -qF -- ${entry} /proc/[0-9]*/cmdline 2>/dev/null`),
+  ].join("\n");
+
+// Holds a cache's install lock the way a concurrent install does, and likewise
+// releases it when the script exits.
+const holdInstallLock = (lock: string) =>
+  [
+    `exec 6> >(exec 9> ${lock}; flock -x 9; cat >/dev/null 2>&1)`,
+    awaitHolder(`! flock -n ${lock} true`),
+  ].join("\n");
+
 const readField = (stdout: string, field: string) => {
   const line = stdout.split("\n").find((candidate) => candidate.startsWith(`${field}:`));
   if (line === undefined) throw new Error(`missing ${field} in fixture output: ${stdout}`);
@@ -160,7 +182,7 @@ describe("WSL runtime cache", () => {
 
   it("installs through a temporary directory and only reuses valid completed caches", () => {
     const script = buildWslRuntimeInstallScript(
-      "/mnt/c/Program Files/T3 Code/wsl-runtime.tar.gz",
+      "/mnt/c/Program Files/B3R/wsl-runtime.tar.gz",
       "1.2.3-x64",
       "b".repeat(64),
     );
@@ -180,7 +202,7 @@ describe("WSL runtime cache", () => {
     // The release archive wraps everything in one `t3-<version>-linux-x64/`
     // directory; stripping it puts the executable at `$runtime_root/t3`.
     expect(script).toContain(
-      "tar -xzf '/mnt/c/Program Files/T3 Code/wsl-runtime.tar.gz' -C \"$runtime_tmp\" --strip-components=1",
+      "tar -xzf '/mnt/c/Program Files/B3R/wsl-runtime.tar.gz' -C \"$runtime_tmp\" --strip-components=1",
     );
     expect(script).toContain('if ! runtime_entry_runs "$runtime_tmp"; then');
     expect(script).toContain('mv -T "$runtime_tmp" "$runtime_root"');
@@ -196,14 +218,14 @@ describe("WSL runtime cache", () => {
 
   it("verifies the archive digest before extracting, and only on a cache miss", () => {
     const script = buildWslRuntimeInstallScript(
-      "/mnt/c/Program Files/T3 Code/wsl-runtime.tar.gz",
+      "/mnt/c/Program Files/B3R/wsl-runtime.tar.gz",
       "1.2.3-x64",
       "b".repeat(64),
     );
 
     const expected = "b".repeat(64);
     expect(script).toContain(
-      "archive_sha=$(sha256sum '/mnt/c/Program Files/T3 Code/wsl-runtime.tar.gz' | cut -d ' ' -f 1)",
+      "archive_sha=$(sha256sum '/mnt/c/Program Files/B3R/wsl-runtime.tar.gz' | cut -d ' ' -f 1)",
     );
     expect(script).toContain(`if [ "$archive_sha" != '${expected}' ]; then`);
 
@@ -225,7 +247,7 @@ describe("WSL runtime cache", () => {
   // the install path has to refuse too.
   it("moves an in-use runtime aside instead of deleting it under a live backend", () => {
     const script = buildWslRuntimeInstallScript(
-      "/mnt/c/Program Files/T3 Code/wsl-runtime.tar.gz",
+      "/mnt/c/Program Files/B3R/wsl-runtime.tar.gz",
       "sha256-" + "c".repeat(64),
       "b".repeat(64),
     );
@@ -254,7 +276,7 @@ describe("WSL runtime cache", () => {
 
   it("treats a runtime whose executable no longer runs as a cache miss", () => {
     const script = buildWslRuntimeInstallScript(
-      "/mnt/c/Program Files/T3 Code/wsl-runtime.tar.gz",
+      "/mnt/c/Program Files/B3R/wsl-runtime.tar.gz",
       "1.2.3-x64",
       "b".repeat(64),
     );
@@ -279,7 +301,7 @@ describe("WSL runtime cache", () => {
   // The digest the install records is what turns that into a miss.
   it("re-hashes the executable against the digest the install recorded", () => {
     const script = buildWslRuntimeInstallScript(
-      "/mnt/c/Program Files/T3 Code/wsl-runtime.tar.gz",
+      "/mnt/c/Program Files/B3R/wsl-runtime.tar.gz",
       "1.2.3-x64",
       "b".repeat(64),
     );
@@ -309,7 +331,7 @@ describe("WSL runtime cache", () => {
 
   it("refuses to mark an archive whose executable does not run as ready", () => {
     const script = buildWslRuntimeInstallScript(
-      "/mnt/c/Program Files/T3 Code/wsl-runtime.tar.gz",
+      "/mnt/c/Program Files/B3R/wsl-runtime.tar.gz",
       "1.2.3-x64",
       "b".repeat(64),
     );
@@ -712,9 +734,7 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
         `runtime_root=${sh(fixture.runtimeRoot)}`,
         `runtime_parent=${sh(fixture.runtimeParent)}`,
         'rm "$runtime_root/.t3code-wsl-runtime-ready"',
-        'sh -c "sleep 30" "$runtime_root/t3" >/dev/null 2>&1 &',
-        "active_pid=$!",
-        "sleep 0.1",
+        holdRuntimeBusy('"$runtime_root/t3"'),
         fixture.installScript(),
         'stale=$(find "$runtime_parent" -maxdepth 1 -type d -name ".sha256-*.stale.*" -print -quit)',
         'test -n "$stale"',
@@ -723,8 +743,6 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
         "export HOME",
         buildWslRuntimePruneScript(fixture.runtimeId),
         'test ! -e "$stale"',
-        "kill $active_pid",
-        "wait $active_pid 2>/dev/null || true",
       ].join("\n"),
     );
 
@@ -750,15 +768,8 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
         'touch -d "4 minutes ago" "$runtime_parent/sha256-active"',
         'touch -d "3 minutes ago" "$runtime_parent/sha256-old"',
         'touch -d "2 minutes ago" "$runtime_parent/sha256-locked"',
-        'sh -c "sleep 30" "$runtime_parent/sha256-active/t3" >/dev/null 2>&1 &',
-        "active_pid=$!",
-        "(",
-        '  exec 9> "$runtime_parent/.sha256-locked.install.lock"',
-        "  flock -x 9",
-        "  sleep 30",
-        ") >/dev/null 2>&1 &",
-        "lock_pid=$!",
-        "sleep 0.1",
+        holdRuntimeBusy('"$runtime_parent/sha256-active/t3"'),
+        holdInstallLock('"$runtime_parent/.sha256-locked.install.lock"'),
         `HOME="$home"`,
         "export HOME",
         buildWslRuntimePruneScript("sha256-current"),
@@ -769,9 +780,6 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
         'test -d "$runtime_parent/versions"',
         'test ! -e "$runtime_parent/sha256-old"',
         'test ! -e "$runtime_parent/sha256-markerless"',
-        "kill $active_pid $lock_pid",
-        "wait $active_pid 2>/dev/null || true",
-        "wait $lock_pid 2>/dev/null || true",
         'rm -rf "$work"',
       ].join("\n"),
     );

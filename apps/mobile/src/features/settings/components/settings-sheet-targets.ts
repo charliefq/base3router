@@ -1,4 +1,6 @@
 export type SettingsSheetTarget =
+  | "SettingsCollaborationAgents"
+  | "SettingsCollaborationTasks"
   | "SettingsEnvironments"
   | "SettingsNotifications"
   | "SettingsThreads"
@@ -11,7 +13,10 @@ export type SettingsSheetTarget =
   | "SettingsEnvironmentSourceControl"
   | "SettingsEnvironmentAgentBehavior"
   | "SettingsEnvironmentMaintenance"
+  | "SettingsProviderAccounts"
   | "SettingsKeyboard"
+  | "SettingsFollowUp"
+  | "SettingsScheduledTasks"
   | "SettingsProjectGrouping"
   | "SettingsClientStorage"
   | "SettingsDiagnostics"

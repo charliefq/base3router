@@ -1,60 +1,65 @@
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
+import { ProviderInstanceId, RunId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import { resolveHandoffEndpoints, type HandoffTimelineRun } from "./handoff.ts";
 
-import { dispatcherHandoffTargetOptions } from "./handoff.ts";
-
-const provider = (
-  overrides: Partial<ServerProvider> & Pick<ServerProvider, "instanceId" | "driver">,
-): ServerProvider => ({
-  instanceId: overrides.instanceId,
-  driver: overrides.driver,
-  displayName: overrides.displayName,
-  enabled: overrides.enabled ?? true,
-  installed: overrides.installed ?? true,
-  version: null,
-  status: overrides.status ?? "ready",
-  auth: overrides.auth ?? { status: "authenticated" },
-  checkedAt: "2026-09-26T00:00:00Z",
-  availability: overrides.availability,
-  unavailableReason: overrides.unavailableReason,
-  models: overrides.models ?? [
-    { slug: "model-1", name: "Model 1", isCustom: false, capabilities: null },
-  ],
-  slashCommands: [],
-  skills: [],
+const from = ProviderInstanceId.make("codex_personal");
+const to = ProviderInstanceId.make("claudeAgent");
+const item = {
+  runId: RunId.make("target"),
+  fromProviderInstanceIds: [from],
+  toProviderInstanceId: to,
+};
+const run = (
+  id: string,
+  ordinal: number,
+  instanceId: ProviderInstanceId,
+  model: string,
+): HandoffTimelineRun => ({
+  id: RunId.make(id),
+  ordinal,
+  providerInstanceId: instanceId,
+  modelSelection: { instanceId, model },
 });
 
-describe("dispatcher handoff target presentation", () => {
-  it("excludes the source instance and requires a real available runner", () => {
-    const source = ProviderInstanceId.make("codex-work");
-    const options = dispatcherHandoffTargetOptions(
-      [
-        provider({ instanceId: source, driver: ProviderDriverKind.make("codex") }),
-        provider({
-          instanceId: ProviderInstanceId.make("claude-work"),
-          driver: ProviderDriverKind.make("claudeAgent"),
-          displayName: "Claude Work",
-        }),
-        provider({
-          instanceId: ProviderInstanceId.make("cursor-api-model"),
-          driver: ProviderDriverKind.make("cursor"),
-          installed: false,
-          unavailableReason: "/private/provider/path",
-        }),
-      ],
-      source,
-    );
+describe("handoff endpoints shared by web and mobile", () => {
+  it("preserves stamped models including several models from the same provider", () => {
+    const fromModelSelections = [
+      { instanceId: from, model: "source-a" },
+      { instanceId: from, model: "source-b" },
+    ];
+    expect(
+      resolveHandoffEndpoints({ ...item, fromModelSelections, toModel: "destination" }, [
+        run("target", 2, to, "later-model"),
+      ]),
+    ).toEqual({
+      from: fromModelSelections,
+      to: { instanceId: to, model: "destination" },
+    });
+  });
 
-    expect(options.map((option) => option.target.instanceId)).not.toContain(source);
-    expect(options[0]).toMatchObject({
-      providerLabel: "Claude Work",
-      available: true,
-      unavailableReason: null,
+  it("recovers legacy models from the handoff run and latest earlier source run", () => {
+    const runs = [
+      run("later", 4, from, "wrong-later-model"),
+      run("old", 1, from, "old-model"),
+      run("target", 3, to, "destination"),
+      run("source", 2, from, "source-model"),
+    ];
+    expect(resolveHandoffEndpoints(item, runs)).toEqual({
+      from: [{ instanceId: from, model: "source-model" }],
+      to: { instanceId: to, model: "destination" },
     });
-    expect(options[1]).toMatchObject({
-      available: false,
-      unavailableReason: "Runner not installed",
+  });
+
+  it("retains provider identities when historical runs are not loaded", () => {
+    expect(resolveHandoffEndpoints(item, [])).toEqual({
+      from: [{ instanceId: from, model: undefined }],
+      to: { instanceId: to, model: undefined },
     });
-    expect(JSON.stringify(options)).not.toContain("/private/provider/path");
+  });
+
+  it("does not borrow a target model from another provider", () => {
+    expect(
+      resolveHandoffEndpoints(item, [run("target", 2, from, "wrong-model")]).to.model,
+    ).toBeUndefined();
   });
 });

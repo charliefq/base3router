@@ -1,0 +1,190 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import { expect, it } from "vite-plus/test";
+
+import {
+  checkEvidence,
+  EVIDENCE_SCHEMA_VERSION,
+  GATES,
+  PRESERVATION_MATRIX,
+  argvFor,
+  type EvidenceDocument,
+  type GateEvidence,
+} from "./internal-beta-acceptance-lib.ts";
+
+const passingGates = (): GateEvidence[] =>
+  GATES.map((gate) => {
+    const mapped = argvFor(gate.command, "/workspace");
+    return {
+      id: gate.id,
+      requirementIds: [...gate.requirementIds],
+      title: gate.title,
+      requiredLocal: gate.requiredLocal,
+      status: gate.requiredLocal ? "PASS" : "BLOCKED",
+      argv: "argv" in mapped ? [...mapped.argv] : [],
+      exitCode: gate.requiredLocal ? 0 : null,
+      evidencePath: null,
+      detail: gate.requiredLocal ? "ok" : "external",
+    };
+  });
+
+const validDocument = (overrides: Partial<EvidenceDocument> = {}): EvidenceDocument => ({
+  schemaVersion: EVIDENCE_SCHEMA_VERSION,
+  sha: "abc123",
+  dirty: false,
+  recordedAt: "2026-10-04T00:00:00.000Z",
+  gates: passingGates(),
+  verdict: "LOCAL_STABILIZATION_VERIFIED",
+  ...overrides,
+});
+
+it("does not extract commands from Markdown", () => {
+  const mapped = argvFor(
+    { kind: "vp-test", files: ["apps/server/src/actionGate/ActionGateService.test.ts"] },
+    "/workspace",
+  );
+  expect("argv" in mapped).toBe(true);
+  if ("argv" in mapped) {
+    expect(mapped.argv[0]).toBe("vp");
+    expect(mapped.argv.includes("test")).toBe(true);
+  }
+});
+
+it("rejects missing evidence", () => {
+  const checked = checkEvidence({ evidence: null, currentSha: "abc123", dirty: false });
+  expect(checked.ok).toBe(false);
+  expect(checked.verdict).toBe("STABILIZATION_BLOCKED");
+  expect(checked.detail).toContain("missing");
+});
+
+it("rejects stale evidence for a different SHA", () => {
+  const checked = checkEvidence({
+    evidence: validDocument({ sha: "old" }),
+    currentSha: "abc123",
+    dirty: false,
+  });
+  expect(checked.ok).toBe(false);
+  expect(checked.detail).toContain("does not match tree");
+});
+
+it("rejects failed required local gates even when the document claims verified", () => {
+  const gates = passingGates().map((gate) =>
+    gate.id === "L-lease-terminal" ? { ...gate, status: "FAIL" as const } : gate,
+  );
+  const checked = checkEvidence({
+    evidence: validDocument({ gates, verdict: "LOCAL_STABILIZATION_VERIFIED" }),
+    currentSha: "abc123",
+    dirty: false,
+  });
+  expect(checked.ok).toBe(false);
+  expect(checked.detail).toContain("L-lease-terminal");
+});
+
+it("rejects evidence that omits a required local gate", () => {
+  const checked = checkEvidence({
+    evidence: validDocument({ gates: passingGates().filter((gate) => gate.id !== "L-mcp-ask") }),
+    currentSha: "abc123",
+    dirty: false,
+  });
+  expect(checked.ok).toBe(false);
+  expect(checked.detail).toContain("L-mcp-ask");
+});
+
+it("keeps production browser, routing, workflow, lease cleanup, and sustained workload required", () => {
+  const required = new Set(GATES.filter((gate) => gate.requiredLocal).map((gate) => gate.id));
+  expect(required.has("L-production-browser")).toBe(true);
+  expect(required.has("L-auto-manual")).toBe(true);
+  expect(required.has("L-workflow")).toBe(true);
+  expect(required.has("L-lease-terminal")).toBe(true);
+  expect(required.has("L-workload")).toBe(true);
+  expect(required.has("L-ui-lab")).toBe(false);
+  const autoManual = GATES.find((gate) => gate.id === "L-auto-manual");
+  expect(
+    autoManual?.command.kind === "vp-test" &&
+      autoManual.command.files.some((file) => file.includes("Base3Policy.dispatch.test.ts")),
+  ).toBe(true);
+  const workflow = GATES.find((gate) => gate.id === "L-workflow");
+  expect(
+    workflow?.command.kind === "vp-test" &&
+      workflow.command.files.some((file) => file.includes("Workflow.rpc.test.ts")),
+  ).toBe(true);
+  const lease = GATES.find((gate) => gate.id === "L-lease-terminal");
+  expect(
+    lease?.command.kind === "vp-test" &&
+      lease.command.files.some((file) => file.includes("Base3Policy.continuingProvider.test.ts")),
+  ).toBe(true);
+  const workload = GATES.find((gate) => gate.id === "L-workload");
+  expect(
+    workload?.command.kind === "vp-test" &&
+      workload.command.files.some((file) =>
+        file.includes("ConcurrencyBudget.sustainedWorkload.test.ts"),
+      ),
+  ).toBe(true);
+});
+
+it("keeps L-ui-lab structural-only and live/native gates blocked", () => {
+  const uiLab = GATES.find((gate) => gate.id === "L-ui-lab");
+  expect(uiLab?.requiredLocal).toBe(false);
+  expect(uiLab?.command.kind).toBe("node-script");
+  const live = argvFor({ kind: "external", gate: "live-provider" }, "/workspace");
+  const native = argvFor({ kind: "external", gate: "native-signing" }, "/workspace");
+  expect("blocked" in live).toBe(true);
+  expect("blocked" in native).toBe(true);
+  if ("blocked" in live) {
+    expect(live.blocked).toContain("Live paid-provider");
+  }
+  if ("blocked" in native) {
+    expect(native.blocked).toContain("Native install/signing");
+  }
+});
+
+it("freezes the preservation matrix distinctions for Task 3A", () => {
+  const byId = new Map(PRESERVATION_MATRIX.map((row) => [row.id, row]));
+  expect(byId.get("ui-lab-structural")?.kind).toBe("structural-only");
+  expect(byId.get("fake-transports")?.notes).toContain("fake");
+  expect(byId.get("openrouter-no-driver")?.kind).toBe("unsupported");
+  expect(byId.get("cursor-cloud-fail-closed")?.kind).toBe("unsupported");
+  expect(byId.get("unconfirmed-lease-pin")?.kind).toBe("limitation");
+  expect(byId.get("live-provider")?.kind).toBe("blocked");
+  expect(byId.get("native-signing")?.kind).toBe("blocked");
+  expect(byId.get("ask-expiry-deadline")?.notes).toContain("harness fixture");
+  expect(byId.get("ask-expiry-deadline")?.notes).toContain("not a user-facing journey");
+  const covered = [
+    "routing-outcome-capture",
+    "workflow-human-decisions",
+    "governed-dispatch",
+    "terminal-confirmed-leases",
+    "schema-import-recovery",
+    "production-browser-journeys",
+    "sustained-workload",
+  ];
+  for (const id of covered) {
+    expect(byId.get(id)?.kind).toBe("covered");
+  }
+  const requiredIds = new Set(GATES.filter((gate) => gate.requiredLocal).map((gate) => gate.id));
+  for (const row of PRESERVATION_MATRIX.filter((item) => item.kind === "covered")) {
+    expect(row.gateIds.some((gateId) => requiredIds.has(gateId))).toBe(true);
+  }
+});
+
+it("accepts valid SHA-bound evidence for the current tree", () => {
+  const checked = checkEvidence({
+    evidence: validDocument(),
+    currentSha: "abc123",
+    dirty: false,
+  });
+  expect(checked.ok).toBe(true);
+  expect(checked.verdict).toBe("LOCAL_STABILIZATION_VERIFIED");
+});
+
+it("round-trips a fixture evidence file", () => {
+  const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-acceptance-"));
+  const path = NodePath.join(dir, "evidence.json");
+  NodeFS.writeFileSync(path, `${JSON.stringify(validDocument(), null, 2)}\n`);
+  const parsed = JSON.parse(NodeFS.readFileSync(path, "utf8")) as EvidenceDocument;
+  const checked = checkEvidence({ evidence: parsed, currentSha: "abc123", dirty: false });
+  expect(checked.ok).toBe(true);
+  NodeFS.rmSync(dir, { recursive: true, force: true });
+});

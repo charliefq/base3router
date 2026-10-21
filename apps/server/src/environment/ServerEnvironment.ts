@@ -10,7 +10,6 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
@@ -19,27 +18,10 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { readAgentActivityPublishingActive } from "../cloud/config.ts";
 import { resolveServerSelfUpdateCapability } from "../cloud/selfUpdate.ts";
 import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
-import { isCursorCloudConfigured } from "../cursorCloud/CursorCloudCredentials.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
-import {
-  openRouterCapabilitySnapshot,
-  resolveOpenRouterApiKey,
-} from "../openRouter/OpenRouterCredentials.ts";
-import {
-  OpenRouterCatalogService,
-  type OpenRouterCatalogFreshness,
-} from "../openRouter/OpenRouterCatalogService.ts";
-import { ServerSettingsService } from "../serverSettings.ts";
-import { RouterEvaluationService } from "../routerEvaluation/RouterEvaluationService.ts";
-import {
-  DEFAULT_OBSERVATION_RETENTION_DAYS,
-  DEFAULT_ROUTER_EVALUATION_SETTINGS,
-  DEFAULT_DREAM_MEMORY_SETTINGS,
-  MODEL_ROUTER_POLICY_VERSION,
-} from "@t3tools/contracts";
 
 export class ServerEnvironmentIdPersistenceError extends Schema.TaggedError<ServerEnvironmentIdPersistenceError>()(
   "ServerEnvironmentIdPersistenceError",
@@ -145,13 +127,12 @@ const makeIdentity = Effect.gen(function* () {
       });
       yield* fileSystem.writeFileString(tempPath, `${value}\n`);
       // Publish the completed file without replacing an ID created by another process.
-      yield* fileSystem
-        .link(tempPath, destinationPath)
-        .pipe(
-          Effect.catch((cause) =>
-            cause.reason._tag === "AlreadyExists" ? Effect.void : Effect.fail(cause),
-          ),
-        );
+      yield* fileSystem.link(tempPath, destinationPath).pipe(
+        Effect.catchIf(
+          (cause) => cause.reason._tag === "AlreadyExists",
+          () => Effect.void,
+        ),
+      );
       if (mode === "recover") {
         // Keep the recovery ID so delayed initializers also publish the same winner.
         yield* fileSystem.remove(tempPath);
@@ -239,6 +220,7 @@ export const make = Effect.gen(function* () {
       questionAttachments: true,
       fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },
       pullRequests: true,
+      pullRequestChecks: true,
       inlineMessageContext: true,
       requiredWorktreeBootstrap: true,
       threadSettlement: true,
@@ -251,25 +233,23 @@ export const make = Effect.gen(function* () {
       environmentThemes: true,
       usageLimitSources: true,
       usagePriceOverrides: true,
-      dispatcherRoutePreview: serverConfig.dispatcherEnabled === true,
-      dispatcherTaskHandoff: serverConfig.dispatcherEnabled === true,
-      workflowOs: serverConfig.dispatcherEnabled === true,
-      cursorCloudRunner: serverConfig.dispatcherEnabled === true && isCursorCloudConfigured(),
       threadPinning: true,
       threadPinReorder: true,
       threadActiveReorder: true,
+      threadAutoSettleOptOut: true,
       threadTitleRegeneration: true,
+      threadVisitedTracking: true,
       threadPullRequests: true,
       pullRequestStackActions: true,
       threadPullRequestLinking: true,
+      serverResolvedCommandContext: true,
       environmentIcon: true,
       projectCloneTracking: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
+      // V2 restart recovery uses the environment-owned opt-in. The old
+      // per-update request flag is not wired into the V2 update RPC path.
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate
-        ? {
-            serverSelfUpdateProgress: true,
-            serverUpdateThreadContinuation: true,
-          }
+        ? { serverSelfUpdateProgress: true }
         : {}),
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
     },
@@ -280,70 +260,12 @@ export const make = Effect.gen(function* () {
     // The publish opt-in and relay link change at runtime (`t3 connect
     // publish`, the client settings toggle), so the capability is read per
     // descriptor request rather than baked in at startup.
-    getDescriptor: Effect.gen(function* () {
-      const agentActivityPublishing = yield* readAgentActivityPublishingActive(secrets);
-      const settingsService = yield* Effect.serviceOption(ServerSettingsService);
-      const settings = Option.isSome(settingsService)
-        ? yield* settingsService.value.getSettings.pipe(
-            Effect.catch(() => Effect.succeed(undefined)),
-          )
-        : undefined;
-      const catalog = yield* Effect.serviceOption(OpenRouterCatalogService);
-      const priors: OpenRouterCatalogFreshness = Option.isSome(catalog)
-        ? yield* catalog.value.freshness.pipe(
-            Effect.catch(() =>
-              Effect.succeed({ status: "unknown" as const } satisfies OpenRouterCatalogFreshness),
-            ),
-          )
-        : { status: "unknown" as const };
-      const evaluation = yield* Effect.serviceOption(RouterEvaluationService);
-      const evaluationSettings = settings?.routerEvaluation ?? DEFAULT_ROUTER_EVALUATION_SETTINGS;
-      const observationCount = Option.isSome(evaluation)
-        ? yield* evaluation.value
-            .observationCount(environmentId)
-            .pipe(Effect.catch(() => Effect.succeed(0)))
-        : 0;
-      const activePolicyVersion = Option.isSome(evaluation)
-        ? yield* evaluation.value
-            .activePolicyVersion(environmentId)
-            .pipe(Effect.catch(() => Effect.succeed(MODEL_ROUTER_POLICY_VERSION)))
-        : MODEL_ROUTER_POLICY_VERSION;
-      return {
+    getDescriptor: readAgentActivityPublishingActive(secrets).pipe(
+      Effect.map((agentActivityPublishing) => ({
         ...descriptor,
-        capabilities: {
-          ...descriptor.capabilities,
-          agentActivityPublishing,
-          openRouterGuidance: openRouterCapabilitySnapshot({
-            ...(settings !== undefined ? { settings: settings.openRouter } : {}),
-            credentialPresent:
-              resolveOpenRouterApiKey({
-                ...(settings !== undefined
-                  ? { providerInstances: settings.providerInstances }
-                  : {}),
-              }) !== undefined,
-            marketPriorFreshness: priors.status,
-            ...(priors.asOf !== undefined ? { marketPriorAsOf: priors.asOf } : {}),
-          }),
-          routerEvaluation: {
-            available: true,
-            measurementEnabled: evaluationSettings.measurementEnabled,
-            retentionDays: evaluationSettings.retentionDays ?? DEFAULT_OBSERVATION_RETENTION_DAYS,
-            challengerShadowEnabled: evaluationSettings.challengerShadowEnabled,
-            activePolicyVersion,
-            observationCount,
-          },
-          dreamMemory: {
-            available: true,
-            enabled: (settings?.dreamMemory ?? DEFAULT_DREAM_MEMORY_SETTINGS).enabled,
-            captureMode: (settings?.dreamMemory ?? DEFAULT_DREAM_MEMORY_SETTINGS).captureMode,
-          },
-          concurrencyBudget: {
-            available: true,
-            topology: "process-local",
-          },
-        },
-      };
-    }),
+        capabilities: { ...descriptor.capabilities, agentActivityPublishing },
+      })),
+    ),
   });
 });
 

@@ -1,0 +1,11 @@
+2026-01-01T10:00:00.0000000Z ##[group]Run actions/checkout@v6
+2026-01-01T10:00:01.0000000Z ##[endgroup]
+2026-01-01T10:00:02.0000000Z ##[group]Checking out the ref
+2026-01-01T10:00:03.0000000Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/12/merge
+2026-01-01T10:00:04.0000000Z HEAD is now at ccccccc Merge bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb into aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+2026-01-01T10:00:05.0000000Z ##[endgroup]
+2026-01-01T10:00:06.0000000Z [command]/usr/bin/git log -1 --format=%H
+2026-01-01T10:00:07.0000000Z cccccccccccccccccccccccccccccccccccccccc
+2026-01-01T10:00:08.0000000Z ##[group]Run tests
+2026-01-01T10:00:09.0000000Z synthetic fixture only
+2026-01-01T10:00:10.0000000Z ##[endgroup]

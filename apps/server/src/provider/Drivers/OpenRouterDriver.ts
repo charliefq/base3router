@@ -1,159 +1,181 @@
 import {
-  OPENROUTER_AUTO_SLUG,
-  OPENROUTER_DRIVER_KIND,
-  OpenRouterSettings,
+  OpenRouterExecutionSettings,
+  ProviderSetupError,
+  TextGenerationError,
+  type ServerProvider,
 } from "@t3tools/contracts";
-import { ProviderDriverKind } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-
-import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
-import { makeOpenRouterTextGeneration } from "../../textGeneration/OpenRouterTextGeneration.ts";
-import { resolveOpenRouterApiKey } from "../../openRouter/OpenRouterCredentials.ts";
-import { makeOpenRouterAdapter } from "../Layers/OpenRouterAdapter.ts";
-import { ProviderDriverError } from "../Errors.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import * as Stream from "effect/Stream";
+import * as PubSub from "effect/PubSub";
+import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import {
-  defaultProviderContinuationIdentity,
-  type ProviderDriver,
-  type ProviderInstance,
-} from "../ProviderDriver.ts";
-import { withInstanceIdentity } from "./instanceIdentity.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
-import {
-  haveProviderSnapshotSettingsChanged,
-  makeProviderSnapshotSettingsSource,
-  type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
-import { buildServerProvider, type ServerProviderDraft } from "../providerSnapshot.ts";
+  makeOpenRouterAdapter,
+  OPENROUTER_DRIVER,
+} from "../../orchestration-v2/Adapters/OpenRouterAdapterV2.ts";
+import * as ProviderCredentialStore from "../ProviderCredentialStore.ts";
+import * as ProviderAuthFlow from "../ProviderAuthFlow.ts";
+import { defaultProviderContinuationIdentity, type ProviderDriver } from "../ProviderDriver.ts";
 
-const decodeOpenRouterSettings = Schema.decodeSync(OpenRouterSettings);
-const DRIVER_KIND = ProviderDriverKind.make(OPENROUTER_DRIVER_KIND);
-const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
-  provider: DRIVER_KIND,
-  packageName: null,
-});
+export type OpenRouterDriverEnv = ServerSecretStore.ServerSecretStore | Crypto.Crypto;
+const decode = Schema.decodeSync(OpenRouterExecutionSettings);
 
-const PRESENTATION = {
-  displayName: "OpenRouter",
-  supportsConversationRollback: false,
-  badgeLabel: "Teacher/Shadow",
-  showInteractionModeToggle: false,
-} as const;
-
-export type OpenRouterDriverEnv =
-  | BackgroundPolicy.BackgroundPolicy
-  | Crypto.Crypto
-  | ServerSettingsService;
-
-const buildSnapshot = (
-  settings: OpenRouterSettings,
-  apiKeyPresent: boolean,
-): Effect.Effect<ServerProviderDraft> =>
-  Effect.gen(function* () {
-    const checkedAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
-    return buildServerProvider({
-      driver: DRIVER_KIND,
-      presentation: PRESENTATION,
-      enabled: settings.enabled,
-      checkedAt,
-      models: [
-        {
-          slug: OPENROUTER_AUTO_SLUG,
-          name: "OpenRouter Auto",
-          isCustom: false,
-          isDefault: true,
-          capabilities: null,
-        },
-      ],
-      probe: {
-        installed: true,
-        version: null,
-        status: apiKeyPresent ? "ready" : "warning",
-        auth: {
-          status: apiKeyPresent ? "authenticated" : "unauthenticated",
-          type: "api-key",
-          label: apiKeyPresent ? "API key configured" : "API key missing",
-        },
-        ...(apiKeyPresent
-          ? {}
-          : { message: "Set OPENROUTER_API_KEY on this instance or the server environment." }),
-      },
-    });
-  });
-
-export const OpenRouterDriver: ProviderDriver<OpenRouterSettings, OpenRouterDriverEnv> = {
-  driverKind: DRIVER_KIND,
-  metadata: {
-    displayName: "OpenRouter",
-    supportsMultipleInstances: true,
-  },
-  configSchema: OpenRouterSettings,
-  defaultConfig: (): OpenRouterSettings => decodeOpenRouterSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+export const OpenRouterDriver: ProviderDriver<OpenRouterExecutionSettings, OpenRouterDriverEnv> = {
+  driverKind: OPENROUTER_DRIVER,
+  metadata: { displayName: "OpenRouter (text)", supportsMultipleInstances: true },
+  configSchema: OpenRouterExecutionSettings,
+  defaultConfig: () => decode({}),
+  create: ({ instanceId, enabled, config, displayName, accentColor }) =>
     Effect.gen(function* () {
-      const serverSettings = yield* ServerSettingsService;
-      const processEnv = mergeProviderInstanceEnvironment(environment);
-      const apiKey = resolveOpenRouterApiKey({ environment, processEnv });
-      const continuationIdentity = defaultProviderContinuationIdentity({
-        driverKind: DRIVER_KIND,
-        instanceId,
-      });
-      const stampIdentity = withInstanceIdentity({
-        instanceId,
-        driverKind: DRIVER_KIND,
-        displayName,
-        accentColor,
-        continuationGroupKey: continuationIdentity.continuationKey,
-      });
-      const effectiveConfig = { ...config, enabled } satisfies OpenRouterSettings;
-      const adapter = yield* makeOpenRouterAdapter({
-        instanceId,
-        apiKey,
-        ...(effectiveConfig.apiEndpoint.trim().length > 0
-          ? { baseUrl: effectiveConfig.apiEndpoint }
-          : {}),
-      });
-      const textGeneration = yield* makeOpenRouterTextGeneration(effectiveConfig, apiKey);
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
-      const snapshot = yield* makeManagedServerProvider<
-        ProviderSnapshotSettings<OpenRouterSettings>
-      >({
-        resolveMaintenance: () => Effect.succeed(MAINTENANCE_CAPABILITIES),
-        getSettings: snapshotSettings.getSettings,
-        streamSettings: snapshotSettings.streamSettings,
-        haveSettingsChanged: haveProviderSnapshotSettingsChanged,
-        initialSnapshot: () =>
-          buildSnapshot(effectiveConfig, apiKey !== undefined).pipe(Effect.map(stampIdentity)),
-        checkProvider: buildSnapshot(effectiveConfig, apiKey !== undefined).pipe(
-          Effect.map(stampIdentity),
+      const store = yield* ProviderCredentialStore.make("openrouter", instanceId);
+      // No ambient environment key: guidance credentials never confer execution access.
+      const apiKey = store.get.pipe(
+        Effect.map((bytes) =>
+          Option.isSome(bytes) ? new TextDecoder().decode(bytes.value) : null,
         ),
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: `Failed to build OpenRouter snapshot: ${cause.message ?? String(cause)}`,
-              cause,
-            }),
-        ),
+        Effect.orElseSucceed(() => null),
       );
-      const instance: ProviderInstance = {
+      const models = [
+        ...new Set([
+          "openrouter/auto",
+          ...config.customModels.map((entry) => (typeof entry === "string" ? entry : entry.slug)),
+        ]),
+      ].filter((slug) => /^[\w./:@+-]{1,256}$/.test(slug));
+      const continuationIdentity = defaultProviderContinuationIdentity({
+        driverKind: OPENROUTER_DRIVER,
         instanceId,
-        driverKind: DRIVER_KIND,
+      });
+      const getSnapshot = Effect.gen(function* () {
+        const configured = enabled && config.executionEnabled && (yield* apiKey) !== null;
+        return {
+          instanceId,
+          driver: OPENROUTER_DRIVER,
+          ...(displayName ? { displayName } : {}),
+          ...(accentColor ? { accentColor } : {}),
+          continuation: { groupKey: continuationIdentity.continuationKey },
+          enabled,
+          installed: true,
+          version: null,
+          status: !enabled ? "disabled" : configured ? "ready" : "error",
+          auth: { status: configured ? "authenticated" : "unauthenticated" },
+          checkedAt: DateTime.formatIso(yield* DateTime.now),
+          message: configured
+            ? "Text execution configured; credentials have not been probed. OpenRouter Auto selects remotely; B3R heuristic Auto excludes this provider."
+            : "Enable text execution and save an API key in Settings > Providers. No provider requests are made until a task is explicitly sent.",
+          supportsTextGeneration: false,
+          supportsTextTasks: true,
+          supportsConversationRollback: false,
+          showInteractionModeToggle: false,
+          setup: {
+            canAuthenticate: true,
+            canInstall: false,
+            documentationUrl: "https://openrouter.ai/docs/quickstart",
+          },
+          models: configured
+            ? models.map((slug) => ({
+                slug,
+                name:
+                  slug === "openrouter/auto" ? "OpenRouter Auto (remote model selection)" : slug,
+                isCustom: slug !== "openrouter/auto",
+                isDefault: slug === "openrouter/auto",
+                capabilities: null,
+                inputModalities: ["text"],
+              }))
+            : [],
+          slashCommands: [],
+          skills: [],
+        } satisfies ServerProvider;
+      });
+      const changes = yield* PubSub.unbounded<ServerProvider>();
+      const refresh = getSnapshot.pipe(Effect.tap((snapshot) => PubSub.publish(changes, snapshot)));
+      const setupError = () =>
+        new ProviderSetupError({
+          instanceId,
+          operation: "authenticate",
+          detail: "Unable to save OpenRouter credentials. Retry in provider settings.",
+        });
+      const auth = yield* ProviderAuthFlow.make({
+        instanceId,
+        credentialBinding: store.binding,
+        methods: Effect.succeed([
+          {
+            id: "api-key",
+            name: "Save API key (no probe)",
+            description:
+              "Stored only in this environment's secret store. Saving does not verify access or spend limits.",
+            type: "credentials",
+          },
+        ]),
+        authenticate: (_method, context) =>
+          Effect.gen(function* () {
+            const key = yield* Deferred.make<string>();
+            yield* context.setInteraction(
+              {
+                type: "credentials",
+                id: "api-key",
+                fields: [{ name: "apiKey", label: "OpenRouter API key", secret: true }],
+              },
+              (response) =>
+                response.type === "credentials" &&
+                typeof response.values.apiKey === "string" &&
+                /^[!-~]{1,4096}$/.test(response.values.apiKey)
+                  ? Deferred.succeed(key, response.values.apiKey).pipe(Effect.asVoid)
+                  : Effect.fail(setupError()),
+            );
+            const value = yield* Deferred.await(key);
+            yield* store.set(new TextEncoder().encode(value)).pipe(Effect.mapError(setupError));
+            yield* refresh;
+          }),
+        logout: store.remove.pipe(
+          Effect.tap(() => refresh),
+          Effect.mapError(setupError),
+        ),
+      });
+      const unavailable = (
+        operation:
+          | "generateCommitMessage"
+          | "generatePrContent"
+          | "generateBranchName"
+          | "generateThreadTitle",
+      ) =>
+        Effect.fail(
+          new TextGenerationError({
+            operation,
+            detail: "OpenRouter is available only for explicitly dispatched text tasks.",
+          }),
+        );
+      return {
+        instanceId,
+        driverKind: OPENROUTER_DRIVER,
         continuationIdentity,
         displayName,
-        ...(accentColor !== undefined ? { accentColor } : {}),
+        accentColor,
         enabled,
-        snapshot,
-        adapter,
-        textGeneration,
+        auth,
+        snapshot: {
+          resolveMaintenance: () =>
+            Effect.succeed({ provider: OPENROUTER_DRIVER, packageName: null, update: null }),
+          getSnapshot,
+          refresh,
+          streamChanges: Stream.fromPubSub(changes),
+          applyUsageLimits: () => Effect.void,
+        },
+        orchestrationAdapter: makeOpenRouterAdapter({
+          instanceId,
+          enabled: enabled && config.executionEnabled,
+          models,
+          apiKey,
+        }),
+        textGeneration: {
+          generateCommitMessage: () => unavailable("generateCommitMessage"),
+          generatePrContent: () => unavailable("generatePrContent"),
+          generateBranchName: () => unavailable("generateBranchName"),
+          generateThreadTitle: () => unavailable("generateThreadTitle"),
+        },
       };
-      return instance;
     }),
 };

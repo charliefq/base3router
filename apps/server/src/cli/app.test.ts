@@ -20,8 +20,7 @@ import * as Layer from "effect/Layer";
 import { Command } from "effect/unstable/cli";
 import { afterEach, describe, expect, vi } from "vite-plus/test";
 
-import { makeCli } from "../bin.ts";
-import { ModelRouterAvailabilityLive } from "../orchestration/Services/ModelRouterAvailability.ts";
+import { makeCli } from "../binCli.ts";
 
 vi.mock("node:os", async (importOriginal) => {
   const os = await importOriginal<typeof import("node:os")>();
@@ -36,7 +35,6 @@ const runCli = (args: ReadonlyArray<string>, env: Record<string, string> = {}) =
       Layer.mergeAll(
         NodeServices.layer,
         NetService.layer,
-        ModelRouterAvailabilityLive,
         ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
       ),
     ),
@@ -180,7 +178,7 @@ describe("t3 app", () => {
           _tag: "DesktopAppUnreachableError",
           candidateAddresses: [expect.any(String)],
           workspaceRoot: yield* HostProcessWorkingDirectory,
-          message: expect.stringContaining("Could not reach the Base3Router desktop app."),
+          message: expect.stringContaining("Could not reach the T3 Code desktop app."),
           cause: { code: "ENOENT" },
         });
         expect(yield* pathExists(baseDir)).toBe(false);
@@ -258,8 +256,9 @@ describe("t3 app", () => {
     ),
   );
 
-  for (const responseKind of ["failure", "invalid"] as const) {
-    it.effect(`never falls back after the default desktop sends a ${responseKind} response`, () =>
+  it.effect.each(["failure", "invalid"] as const)(
+    "never falls back after the default desktop sends a %s response",
+    (responseKind) =>
       withTempDirectory("t3-app-response-test-", (root) =>
         Effect.gen(function* () {
           vi.mocked(NodeOS.homedir).mockReturnValue(root);
@@ -304,6 +303,5 @@ describe("t3 app", () => {
           }
         }).pipe(Effect.scoped),
       ),
-    );
-  }
+  );
 });

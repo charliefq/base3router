@@ -16,9 +16,8 @@ export const runtimeModeConfig: Record<
     icon: PenLineIcon,
   },
   auto: {
-    label: "Access Auto",
-    description:
-      "Supported providers approve routine actions; others still ask. This is access policy, not Auto Route.",
+    label: "Auto",
+    description: "Supported providers approve routine actions; others still ask.",
     icon: SparklesIcon,
   },
   "full-access": {

@@ -1,6 +1,6 @@
 # Remote access
 
-Connect a phone, browser, or another desktop app to Base3Router running on a different
+Connect a phone, browser, or another desktop app to T3 Code running on a different
 machine. That machine must stay running and reachable while you work.
 
 ## T3 Connect
@@ -121,13 +121,13 @@ scheme uses HTTP, so include `https://` when your server uses HTTPS.
 ## Desktop-managed SSH
 
 In the desktop app, open **Settings → Connections → Add environment**, choose
-**SSH**, and enter a host or SSH alias such as `user@example.com`. Base3Router starts
+**SSH**, and enter a host or SSH alias such as `user@example.com`. T3 Code starts
 or reuses a server there and opens the port forward for you. Projects, provider
 credentials, and agent work stay on the remote machine.
 
 The remote host must be Linux or an Apple Silicon Mac with `curl` or `wget`,
 `tar`, `sha256sum` or `shasum`, and [provider setup](./install.md#providers).
-The first launch downloads Base3Router's server to `~/.t3/runtime` on the host, so
+The first launch downloads T3 Code's server to `~/.t3/runtime` on the host, so
 it takes longer than later ones.
 Provider CLIs must be on the `PATH` of a non-interactive login shell there;
 check with:
@@ -137,7 +137,7 @@ ssh user@example.com 'sh -lc "command -v claude codex"'
 ```
 
 If SSH reconnecting fails after an app update, retry the launch once. Removing
-the connection stops a server that Base3Router launched; a server that was already
+the connection stops a server that T3 Code launched; a server that was already
 running is left alone.
 
 For Antigravity's Google callback on a remote host, see
@@ -156,7 +156,14 @@ expires.
 To remove an environment from T3 Connect, open your account menu's **T3 Connect**
 page, or **Settings → T3 Connect** on mobile, and choose **Deregister**. This
 revokes its cloud access and frees its host space even when the environment is
-offline or has been wiped.
+offline or has been wiped. Removing an environment from a device's connection
+settings only forgets it on that device; it stays registered to your account.
+
+When idle tunnel cleanup is enabled, T3 Connect removes a linked environment's
+tunnel after it stays offline for several minutes. The environment stays linked
+and keeps the same address. When the host starts again or wakes, T3 Connect
+creates a replacement tunnel on its own. You do not need to pair again. Cleanup
+usually runs five to ten minutes after the tunnel goes down.
 
 On a command-line host, `t3 connect unlink` disables exposure while retaining
 your login; `t3 connect logout` also clears that login. Background-service
@@ -174,9 +181,9 @@ when SSH closes, see [background-service troubleshooting](./background-service.m
 
 | Error                                                     | Recovery                                                                                                                                    |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `environment_link_limit_exceeded` or managed tunnel limit | Deregister an unused environment, then restart Base3Router on the host.                                                                     |
+| `environment_link_limit_exceeded` or managed tunnel limit | Deregister an unused environment, then restart T3 Code on the host.                                                                         |
 | `auth_invalid` or `invalid_bearer`                        | Run `t3 connect login`. If credentials were revoked, run `t3 connect logout`, then `t3 connect` again. Restart the server after signing in. |
-| Expired or invalid link proof                             | Check the host's date and time, update Base3Router, then restart it.                                                                        |
+| Expired or invalid link proof                             | Check the host's date and time, update T3 Code, then restart it.                                                                            |
 | HTTP 403 without a recognized error                       | Check relay access, proxies, and firewall rules. Keep any Cloudflare Ray ID for a bug report.                                               |
 | HTTP 408, 429, or 5xx                                     | Check network and relay availability. Startup retries temporary failures for up to ten minutes.                                             |
 
@@ -186,13 +193,13 @@ foreground server, stop it and run `t3 serve` again with your usual options.
 Include the diagnostic message and trace ID when reporting a persistent failure.
 
 For a connection that still fails after linking, check the date and time on both
-devices. For server version warnings, follow [Updating Base3Router](./updating.md).
+devices. For server version warnings, follow [Updating T3 Code](./updating.md).
 
 ## Using the Desktop App as a Remote Only
 
 If a computer should only drive work running elsewhere, turn off its local environment. In the
 desktop app, open **Settings → Connections** and switch off **Local
-environment**. Base3Router restarts without a local server: no local agents or terminals run, WSL
+environment**. T3 Code restarts without a local server: no local agents or terminals run, WSL
 backends stay off, and other devices can no longer connect to this computer. Your projects,
 history, and saved connections are kept, and you keep working through pairing, T3 Connect, or SSH.
 

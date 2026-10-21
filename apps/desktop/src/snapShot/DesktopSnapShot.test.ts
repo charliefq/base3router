@@ -938,9 +938,9 @@ it.effect.each(["win32", "darwin", "linux"] as const)(
     const bounds = { x: 10, y: 20, width: 800, height: 600 };
     const t3 = {
       id: 42,
-      title: "T3 Code",
+      title: "B3R",
       appIdentifier: "com.t3tools.T3Code.desktop",
-      owner: { name: "T3 Code", processId: 123 },
+      owner: { name: "B3R", processId: 123 },
       bounds,
       png: Buffer.from([1, 2, 3]),
     };
@@ -1614,7 +1614,7 @@ it.effect(
     focusedWindowMock.mockReturnValue(undefined);
     const destination = {
       getBounds: () => ({ x: 0, y: 0, width: 1000, height: 800 }),
-      getTitle: () => "T3 Code",
+      getTitle: () => "B3R",
       isDestroyed: () => false,
       isVisible: () => true,
       isMinimized: () => false,
@@ -1630,7 +1630,7 @@ it.effect(
         const warning = logs.find(
           (message) =>
             Array.isArray(message) &&
-            message[0] === "The compositor could not activate Base3Router after the snapshot",
+            message[0] === "The compositor could not activate B3R after the snapshot",
         );
         assert.strictEqual(Array.isArray(warning) ? warning[1] : undefined, activationFailure);
         const pending = yield* decodePendingMetadata(saved);
@@ -3159,10 +3159,7 @@ it.effect("flags revoked macOS permissions on read and re-registers once they re
 
       mediaAccessStatusMock.mockReturnValue("denied");
       const revoked = yield* service.state;
-      assert.equal(
-        revoked.message,
-        "Allow Screen Recording in System Settings, then restart Base3Router.",
-      );
+      assert.equal(revoked.message, "Allow Screen Recording in System Settings, then restart B3R.");
       assert.deepEqual(revoked.macPermissions, { screenRecording: false, accessibility: true });
 
       accessibilityTrustedMock.mockReturnValue(false);
@@ -3172,10 +3169,7 @@ it.effect("flags revoked macOS permissions on read and re-registers once they re
         snapShotIncludeAccessibility: false,
       });
       const blocked = yield* service.state;
-      assert.equal(
-        blocked.message,
-        "Allow Screen Recording in System Settings, then restart Base3Router.",
-      );
+      assert.equal(blocked.message, "Allow Screen Recording in System Settings, then restart B3R.");
       assert.isFalse(blocked.shortcutRegistered);
 
       mediaAccessStatusMock.mockReturnValue("granted");
@@ -3873,13 +3867,14 @@ it.effect("waits to apply settings while permissions are pending", () => {
   ).pipe(Effect.provide(layer));
 });
 
-for (const fails of [false, true]) {
-  it.effect(`tests macOS capture without publishing it and cleans up, failure=${fails}`, () => {
+it.effect.each([false, true])(
+  "tests macOS capture without publishing it and cleans up, failure=%s",
+  (fails) => {
     const active = {
       platform: "macos",
       id: 42,
       title: "Setup",
-      owner: { name: "T3 Code", processId: 123, path: "/Applications/T3 Code.app" },
+      owner: { name: "B3R", processId: 123, path: "/Applications/B3R.app" },
       bounds: { x: 0, y: 0, width: 800, height: 600 },
     };
     activeWindowMock.mockReset().mockResolvedValue(active);
@@ -3915,8 +3910,8 @@ for (const fails of [false, true]) {
         }),
       ),
     );
-  });
-}
+  },
+);
 
 it.effect("rejects macOS test capture on other platforms", () =>
   Effect.scoped(

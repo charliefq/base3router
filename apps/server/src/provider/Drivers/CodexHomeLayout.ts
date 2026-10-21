@@ -319,6 +319,7 @@ const ensureShadowAuthIsPrivate = Effect.fn("CodexHomeLayout.ensureShadowAuthIsP
 
 export const materializeCodexShadowHome = Effect.fn("materializeCodexShadowHome")(function* (
   layout: CodexHomeLayout,
+  options: { readonly enabled: boolean } = { enabled: true },
 ) {
   if (layout.mode !== "authOverlay") return;
   const effectiveHomePath = layout.effectiveHomePath;
@@ -329,6 +330,9 @@ export const materializeCodexShadowHome = Effect.fn("materializeCodexShadowHome"
       effectiveHomePath,
     });
   }
+
+  // Disabled instances still reject invalid layouts, without touching account homes.
+  if (!options.enabled) return;
 
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

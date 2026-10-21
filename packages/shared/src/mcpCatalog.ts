@@ -157,6 +157,17 @@ export const FIRST_PARTY_DEVICE_TOOLS: ReadonlyArray<FirstPartyMcpToolSpec> = [
   },
 ];
 
+/** Only recorded status is classified here; worktree mutation/list tools remain unclassified. */
+export const FIRST_PARTY_WORKSPACE_READ_TOOLS: ReadonlyArray<FirstPartyMcpToolSpec> = [
+  {
+    name: "t3_worktree_status",
+    capability: "custom",
+    riskClass: "read-only-local",
+    sideEffectClass: "read",
+    idempotent: true,
+  },
+];
+
 export const FIRST_PARTY_PULL_REQUEST_TOOLS: ReadonlyArray<FirstPartyMcpToolSpec> = [
   {
     name: "list_thread_pull_requests",
@@ -252,6 +263,12 @@ export const mcpServerDescriptor = (input: {
 
 export const firstPartyMcpCatalog = (freshness: string): ReadonlyArray<McpServerDescriptorV0> => [
   mcpServerDescriptor({
+    serverId: "t3-code",
+    name: "Recorded workspace",
+    tools: FIRST_PARTY_WORKSPACE_READ_TOOLS,
+    freshness,
+  }),
+  mcpServerDescriptor({
     serverId: "t3-preview",
     name: "Preview",
     tools: FIRST_PARTY_PREVIEW_TOOLS,
@@ -275,6 +292,7 @@ export const FIRST_PARTY_MCP_TOOL_NAMES: ReadonlyArray<string> = [
   ...FIRST_PARTY_PREVIEW_TOOLS,
   ...FIRST_PARTY_DEVICE_TOOLS,
   ...FIRST_PARTY_PULL_REQUEST_TOOLS,
+  ...FIRST_PARTY_WORKSPACE_READ_TOOLS,
 ].map((tool) => tool.name);
 
 export type FakeMcpToolSpec = FirstPartyMcpToolSpec & {

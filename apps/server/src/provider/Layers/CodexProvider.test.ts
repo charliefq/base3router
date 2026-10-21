@@ -1,6 +1,10 @@
 import { assert, it } from "@effect/vitest";
 
-import { applyPreferredCodexDefaultModel, mapCodexModelCapabilities } from "./CodexProvider.ts";
+import {
+  applyPreferredCodexDefaultModel,
+  mapCodexModelCapabilities,
+  parseCodexModelListResponse,
+} from "./CodexProvider.ts";
 
 it("maps current Codex model capability fields", () => {
   const capabilities = mapCodexModelCapabilities({
@@ -81,6 +85,11 @@ it("uses standard routing when the catalog has no default service tier", () => {
         name: "Fast",
         description: "1.5x speed, increased usage",
       },
+      {
+        id: "ultrafast",
+        name: "Ultrafast",
+        description: "The fastest available responses for latency-sensitive work.",
+      },
     ],
     supportedReasoningEfforts: [],
   });
@@ -96,6 +105,11 @@ it("uses standard routing when the catalog has no default service tier", () => {
           id: "priority",
           label: "Fast",
           description: "1.5x speed, increased usage",
+        },
+        {
+          id: "ultrafast",
+          label: "Ultrafast",
+          description: "Even faster, more expensive",
         },
       ],
       currentValue: "default",
@@ -161,3 +175,23 @@ it("ignores custom models that shadow a preferred slug", () => {
 
   assert.deepStrictEqual(models.find((model) => model.isDefault)?.slug, "gpt-5.4");
 });
+
+// Missing protocol metadata must never acquire the protocol documentation's example default.
+it.each([undefined, [], ["text"], ["text", "image"]] as const)(
+  "preserves native modality declaration %j",
+  (inputModalities) => {
+    const model = {
+      defaultReasoningEffort: "medium" as const,
+      description: "",
+      displayName: "Fixture",
+      hidden: false,
+      id: "fixture",
+      isDefault: true,
+      model: "fixture",
+      supportedReasoningEfforts: [],
+      ...(inputModalities === undefined ? {} : { inputModalities }),
+    };
+    const [snapshot] = parseCodexModelListResponse({ data: [model], nextCursor: null });
+    assert.deepStrictEqual(snapshot?.inputModalities, inputModalities);
+  },
+);

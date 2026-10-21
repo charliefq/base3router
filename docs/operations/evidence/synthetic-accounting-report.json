@@ -1,0 +1,77 @@
+{
+  "label": "SYNTHETIC_ACCOUNTING_VERIFIED",
+  "synthetic": true,
+  "notModelPerformance": true,
+  "notAutoVsManualComparison": true,
+  "baselineSha": "55a1ea4f496eadea161c0e88822b375e42a0f127",
+  "commitSha": null,
+  "definitions": {
+    "attempt": "One provider turn on a governed task tree.",
+    "snapshot": "turnTokenUsage replaces the same turn. Input includes cache. Output includes reasoning.",
+    "incremental": "A later incremental report adds to that turn.",
+    "contextWindow": "tokenUsage.usedTokens is not task consumption.",
+    "missing": "Unknown stays null. It is not stored or displayed as zero.",
+    "cost": "Provider-reported cost only. No price table.",
+    "acceptance": "Human accept of the current contract revision. Provider completion is not acceptance.",
+    "perAccepted": "All cohort consumption divided by accepted tasks. Undefined when none are accepted.",
+    "partial": "Any missing usage category or cost makes the total partial."
+  },
+  "expected": {
+    "attempted": 5,
+    "accepted": 2,
+    "rejected": 1,
+    "unfinished": 2,
+    "coverage": "partial",
+    "reported": {
+      "inputTokens": 269,
+      "cachedInputTokens": 56,
+      "cacheCreationTokens": 10,
+      "outputTokens": 64,
+      "reasoningTokens": 9,
+      "reportedCostUsd": 13
+    },
+    "reportedBillableTokens": 324,
+    "perAccepted": {
+      "defined": true,
+      "reportedInputTokens": 134.5,
+      "reportedOutputTokens": 32,
+      "reportedCachedInputTokens": 28,
+      "reportedCacheCreationTokens": 5,
+      "reportedReasoningTokens": 4.5,
+      "reportedCostUsdKnown": 6.5,
+      "reportedBillableTokens": 162,
+      "inputTokens": null,
+      "outputTokens": null,
+      "reportedCostUsd": null
+    }
+  },
+  "observed": {
+    "attempted": 5,
+    "accepted": 2,
+    "rejected": 1,
+    "unfinished": 2,
+    "coverage": "partial",
+    "reported": {
+      "inputTokens": 269,
+      "outputTokens": 64,
+      "cachedInputTokens": 56,
+      "cacheCreationTokens": 10,
+      "reasoningTokens": 9,
+      "reportedCostUsd": 13
+    },
+    "reportedBillableTokens": 324,
+    "perAccepted": {
+      "defined": true,
+      "reportedInputTokens": 134.5,
+      "reportedOutputTokens": 32,
+      "reportedCachedInputTokens": 28,
+      "reportedCacheCreationTokens": 5,
+      "reportedReasoningTokens": 4.5,
+      "reportedCostUsdKnown": 6.5,
+      "reportedBillableTokens": 162,
+      "inputTokens": null,
+      "outputTokens": null,
+      "reportedCostUsd": null
+    }
+  }
+}

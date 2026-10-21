@@ -1,3 +1,4 @@
+import * as NodeCrypto from "node:crypto";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -7,6 +8,9 @@ import * as Schema from "effect/Schema";
 
 import {
   type EnvironmentId,
+  type LocalTaskProfile,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
+  type EnvironmentRouterPolicyCommand,
   type ObservationId,
   type ReworkSignalV0,
   type RouterActivatePolicyRequest,
@@ -37,6 +41,7 @@ import {
   buildEvaluationDataset,
   calculateEvaluationMetrics,
   evidenceFromObservations,
+  evidenceForLocalTask,
 } from "@t3tools/shared/routerEvaluation";
 import type { LocalModelEvidence } from "@t3tools/shared/hybridRouter";
 import {
@@ -56,6 +61,23 @@ import {
 export class RouterEvaluationService extends Context.Service<
   RouterEvaluationService,
   {
+    readonly control: (
+      environmentId: EnvironmentId,
+      input: EnvironmentRouterPolicyCommand,
+      now: string,
+      actor: string,
+    ) => Effect.Effect<RouterPolicyStatus, RouterEvaluationError>;
+    readonly status: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<RouterPolicyStatus, RouterEvaluationError>;
+    readonly existingRoutingSnapshot: (
+      environmentId: EnvironmentId,
+      localTaskProfile?: LocalTaskProfile,
+    ) => Effect.Effect<Option.Option<RouterPolicyRuntimeSnapshot>, RouterEvaluationError>;
+    readonly routingSnapshot: (
+      environmentId: EnvironmentId,
+      localTaskProfile?: LocalTaskProfile,
+    ) => Effect.Effect<RouterPolicyRuntimeSnapshot, RouterEvaluationError>;
     readonly insights: (
       environmentId: EnvironmentId,
       settings: {
@@ -77,6 +99,7 @@ export class RouterEvaluationService extends Context.Service<
       input: RouterSubmitFeedbackRequest,
       now: string,
       actor?: string,
+      taskResultFingerprint?: string,
     ) => Effect.Effect<RouterSubmitFeedbackResult, RouterEvaluationError>;
     readonly recordReworkProxy: (
       environmentId: EnvironmentId,
@@ -96,6 +119,7 @@ export class RouterEvaluationService extends Context.Service<
       authorized: boolean,
       now: string,
       actor?: string,
+      expectedRevision?: number,
     ) => Effect.Effect<RouterPolicyMutationResult, RouterEvaluationError>;
     readonly shadow: (
       environmentId: EnvironmentId,
@@ -103,6 +127,7 @@ export class RouterEvaluationService extends Context.Service<
       authorized: boolean,
       now: string,
       actor?: string,
+      expectedRevision?: number,
     ) => Effect.Effect<RouterPolicyMutationResult, RouterEvaluationError>;
     readonly rollback: (
       environmentId: EnvironmentId,
@@ -110,6 +135,7 @@ export class RouterEvaluationService extends Context.Service<
       authorized: boolean,
       now: string,
       actor?: string,
+      expectedRevision?: number,
     ) => Effect.Effect<RouterPolicyMutationResult, RouterEvaluationError>;
     readonly evidenceMap: (
       environmentId: EnvironmentId,
@@ -132,17 +158,65 @@ export class RouterEvaluationService extends Context.Service<
   }
 >()("t3/routerEvaluation/RouterEvaluationService") {}
 
+const isEvaluationError = Schema.is(RouterEvaluationError);
 const toEvalError = (cause: unknown): RouterEvaluationError =>
-  Schema.is(RouterEvaluationError)(cause)
+  isEvaluationError(cause)
     ? cause
     : new RouterEvaluationError({
         reason: "malformed_policy",
         detail: cause instanceof Error ? cause.message : "Observation store failed.",
       });
 
+const scopedPolicyId = (environmentId: EnvironmentId, version: string) =>
+  RouterPolicyId.make(
+    `${isBaselinePolicyVersion(version) ? baselinePolicyId : version === HYBRID_TASK_ROUTER_POLICY_VERSION ? "policy-hybrid-router-task-v2" : "policy-hybrid-router-v1"}-${NodeCrypto.createHash("sha256").update(`${environmentId}:${version}`).digest("hex")}`,
+  );
+
+type RouterPolicyStatus = {
+  readonly environmentId: EnvironmentId;
+  readonly policies: ReadonlyArray<RouterPolicySnapshotV0>;
+  readonly active: RouterPolicySnapshotV0;
+  readonly revision: number;
+};
+type RouterPolicyRuntimeSnapshot = RouterPolicyStatus & {
+  readonly challengerPolicy?: RouterPolicySnapshotV0;
+  readonly taskEvidenceByTarget: ReadonlyMap<string, LocalModelEvidence>;
+  readonly challengerEnabled: boolean;
+  readonly evidenceByTarget: ReadonlyMap<string, LocalModelEvidence>;
+};
+
+export function routingPolicyInput(snapshot: RouterPolicyRuntimeSnapshot) {
+  const shadow = snapshot.challengerPolicy;
+  return {
+    activePolicyVersion: snapshot.active.policyVersion,
+    weights: snapshot.active.weights,
+    shrinkageK: snapshot.active.shrinkageK,
+    minSampleRate: snapshot.active.minSampleRate,
+    challengerEnabled: snapshot.challengerEnabled,
+    evidenceByTarget:
+      snapshot.active.policyVersion === HYBRID_TASK_ROUTER_POLICY_VERSION
+        ? snapshot.taskEvidenceByTarget
+        : snapshot.evidenceByTarget,
+    ...(shadow === undefined
+      ? {}
+      : {
+          shadowPolicy: {
+            policyVersion: shadow.policyVersion,
+            weights: shadow.weights,
+            shrinkageK: shadow.shrinkageK,
+            minSampleRate: shadow.minSampleRate,
+            evidenceByTarget:
+              shadow.policyVersion === HYBRID_TASK_ROUTER_POLICY_VERSION
+                ? snapshot.taskEvidenceByTarget
+                : snapshot.evidenceByTarget,
+          },
+        }),
+  };
+}
+
 const baselineSnapshot = (environmentId: EnvironmentId, now: string): RouterPolicySnapshotV0 => ({
   version: ROUTER_POLICY_SNAPSHOT_VERSION,
-  policyId: baselinePolicyId,
+  policyId: scopedPolicyId(environmentId, MODEL_ROUTER_POLICY_VERSION),
   policyVersion: MODEL_ROUTER_POLICY_VERSION,
   state: "active",
   environmentId,
@@ -157,10 +231,11 @@ const hybridCandidateSnapshot = (
   environmentId: EnvironmentId,
   now: string,
   provenance: { readonly sourceDatasetHash: string; readonly evaluationRecordId: string },
+  policyVersion: string = HYBRID_ROUTER_POLICY_VERSION,
 ): RouterPolicySnapshotV0 => ({
   version: ROUTER_POLICY_SNAPSHOT_VERSION,
-  policyId: RouterPolicyId.make("policy-hybrid-router-v1"),
-  policyVersion: HYBRID_ROUTER_POLICY_VERSION,
+  policyId: scopedPolicyId(environmentId, policyVersion),
+  policyVersion,
   state: "candidate",
   environmentId,
   createdAt: now,
@@ -171,6 +246,12 @@ const hybridCandidateSnapshot = (
   minSampleRate: HYBRID_MIN_SAMPLE_RATE,
   recencyDecayImplemented: false,
 });
+
+const encodeTaskResultAudit = Schema.encodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({ kind: Schema.String, taskResultFingerprint: Schema.String }),
+  ),
+);
 
 const make = Effect.gen(function* () {
   const store = yield* ObservationRepository;
@@ -221,32 +302,150 @@ const make = Effect.gen(function* () {
     );
 
   const ensureDefaults = (environmentId: EnvironmentId, now: string) =>
-    Effect.gen(function* () {
-      const policies = yield* store.listPolicies(environmentId);
-      const provenance = yield* datasetProvenance(environmentId);
-      if (policies.length === 0) {
-        yield* store.upsertPolicy(baselineSnapshot(environmentId, now));
-        yield* store.upsertPolicy(hybridCandidateSnapshot(environmentId, now, provenance));
-        return;
-      }
-      if (!policies.some((policy) => isBaselinePolicyVersion(policy.policyVersion))) {
-        yield* store.upsertPolicy(baselineSnapshot(environmentId, now));
-      }
-      const candidate = policies.find(
-        (policy) => policy.policyVersion === HYBRID_ROUTER_POLICY_VERSION,
+    store.transaction(
+      Effect.gen(function* () {
+        const policies = yield* store.listPolicies(environmentId);
+        if (policies.filter((policy) => policy.state === "active").length > 1)
+          return yield* new RouterEvaluationError({
+            reason: "malformed_policy",
+            detail: "Multiple active policies; policy repair is required.",
+          });
+        const provenance = yield* datasetProvenance(environmentId);
+        if (!policies.some((policy) => isBaselinePolicyVersion(policy.policyVersion))) {
+          yield* store.upsertPolicy({
+            ...baselineSnapshot(environmentId, now),
+            state: policies.some((policy) => policy.state === "active") ? "retired" : "active",
+          });
+          yield* appendAudit({
+            environmentId,
+            eventType: "policy_activated",
+            recordedAt: now,
+            idempotencyKey: `initialize:${scopedPolicyId(environmentId, MODEL_ROUTER_POLICY_VERSION)}`,
+            detail: "Initialize baseline V0 only; no Hybrid activation.",
+          });
+        }
+        if (!policies.some((policy) => policy.policyVersion === HYBRID_TASK_ROUTER_POLICY_VERSION))
+          yield* store.upsertPolicy(
+            hybridCandidateSnapshot(
+              environmentId,
+              now,
+              provenance,
+              HYBRID_TASK_ROUTER_POLICY_VERSION,
+            ),
+          );
+        const candidate = policies.find(
+          (policy) => policy.policyVersion === HYBRID_ROUTER_POLICY_VERSION,
+        );
+        if (candidate === undefined) {
+          yield* store.upsertPolicy(hybridCandidateSnapshot(environmentId, now, provenance));
+        }
+      }),
+    );
+
+  const policyRevision = (environmentId: EnvironmentId) =>
+    store
+      .listEvents(environmentId)
+      .pipe(
+        Effect.map((events) =>
+          events
+            .filter((event) => event.eventType.startsWith("policy_"))
+            .reduce((revision, event) => Math.max(revision, event.sequence), 0),
+        ),
       );
-      if (
-        candidate !== undefined &&
-        candidate.state === "candidate" &&
-        (candidate.sourceDatasetHash === undefined || candidate.evaluationRecordId === undefined)
-      ) {
-        yield* store.upsertPolicy({
-          ...candidate,
-          sourceDatasetHash: provenance.sourceDatasetHash,
-          evaluationRecordId: provenance.evaluationRecordId,
+  const validateMutation = (
+    environmentId: EnvironmentId,
+    authorized: boolean,
+    confirmed: boolean,
+    expectedRevision?: number,
+  ) =>
+    Effect.gen(function* () {
+      if (!authorized)
+        return yield* new RouterEvaluationError({
+          reason: "unauthorized_activation",
+          detail: "Operator permission is required.",
         });
-      }
+      if (!confirmed)
+        return yield* new RouterEvaluationError({
+          reason: "confirmation_required",
+          detail: "Explicit confirmation is required.",
+        });
+      if (
+        expectedRevision !== undefined &&
+        expectedRevision !== (yield* policyRevision(environmentId))
+      )
+        return yield* new RouterEvaluationError({
+          reason: "illegal_transition",
+          detail: "Policy status changed; refresh before confirming.",
+        });
     });
+  const readStatus = (environmentId: EnvironmentId, initialize = true) =>
+    Effect.gen(function* () {
+      if (initialize) yield* ensureDefaults(environmentId, "1970-01-01T00:00:00.000Z");
+      const policies = yield* store.listPolicies(environmentId);
+      const active = policies.filter((policy) => policy.state === "active");
+      if (active.length !== 1)
+        return yield* new RouterEvaluationError({
+          reason: "malformed_policy",
+          detail: "Exactly one active policy is required.",
+        });
+      return {
+        environmentId,
+        policies,
+        active: active[0]!,
+        revision: yield* policyRevision(environmentId),
+      };
+    });
+  const status: RouterEvaluationService["Service"]["status"] = (environmentId) =>
+    store.transaction(readStatus(environmentId)).pipe(Effect.mapError(toEvalError));
+  const evidenceSnapshot = (snapshot: RouterPolicyStatus, localTaskProfile?: LocalTaskProfile) =>
+    Effect.gen(function* () {
+      const environmentId = snapshot.environmentId;
+      const shadows = snapshot.policies.filter((policy) => policy.state === "shadow");
+      if (shadows.length > 1)
+        return yield* new RouterEvaluationError({
+          reason: "malformed_policy",
+          detail: "Multiple shadow policies; repair is required.",
+        });
+      const challengerPolicy = shadows[0];
+      const records = yield* store.listByEnvironment(environmentId);
+      return {
+        ...(challengerPolicy === undefined ? {} : { challengerPolicy }),
+        ...snapshot,
+        challengerEnabled: snapshot.policies.some((policy) => policy.state === "shadow"),
+        evidenceByTarget: evidenceFromObservations(records),
+        taskEvidenceByTarget: evidenceForLocalTask({
+          records,
+          environmentId,
+          ...(localTaskProfile === undefined ? {} : { profile: localTaskProfile }),
+        }),
+      };
+    });
+  const routingSnapshot: RouterEvaluationService["Service"]["routingSnapshot"] = (
+    environmentId,
+    localTaskProfile,
+  ) =>
+    store
+      .transaction(
+        readStatus(environmentId).pipe(
+          Effect.flatMap((snapshot) => evidenceSnapshot(snapshot, localTaskProfile)),
+        ),
+      )
+      .pipe(Effect.mapError(toEvalError));
+  const existingRoutingSnapshot: RouterEvaluationService["Service"]["existingRoutingSnapshot"] = (
+    environmentId,
+    localTaskProfile,
+  ) =>
+    store
+      .transaction(
+        Effect.gen(function* () {
+          if ((yield* store.listPolicies(environmentId)).length === 0)
+            return Option.none<RouterPolicyRuntimeSnapshot>();
+          return Option.some(
+            yield* evidenceSnapshot(yield* readStatus(environmentId, false), localTaskProfile),
+          );
+        }),
+      )
+      .pipe(Effect.mapError(toEvalError));
 
   const insights: RouterEvaluationService["Service"]["insights"] = (environmentId, settings) =>
     Effect.gen(function* () {
@@ -271,7 +470,9 @@ const make = Effect.gen(function* () {
         policies.find((policy) => policy.state === "active") ??
         baselineSnapshot(environmentId, "1970-01-01T00:00:00.000Z");
       const candidate = policies.find(
-        (policy) => policy.state === "candidate" || policy.state === "shadow",
+        (policy) =>
+          policy.policyVersion === HYBRID_ROUTER_POLICY_VERSION &&
+          (policy.state === "candidate" || policy.state === "shadow"),
       );
       const metrics = calculateEvaluationMetrics(records);
       const coverage = metrics[0] ?? {
@@ -352,50 +553,60 @@ const make = Effect.gen(function* () {
     input,
     now,
     actor,
+    taskResultFingerprint,
   ) =>
-    Effect.gen(function* () {
-      const existing = yield* store.get(input.observationId);
-      if (Option.isNone(existing) || existing.value.environmentId !== environmentId) {
-        return yield* new RouterEvaluationError({
-          reason: "not_found",
-          detail: "Observation not found in this environment.",
-        });
-      }
-      const already = existing.value.evidence.explicitFeedback.some(
-        (entry) => entry.kind === input.kind && entry.recordedAt === now,
-      );
-      if (already) {
-        return { observationId: input.observationId, recorded: true };
-      }
-      const next = {
-        ...existing.value,
-        evidence: {
-          ...existing.value.evidence,
-          explicitFeedback: [
-            ...existing.value.evidence.explicitFeedback,
-            {
-              kind: input.kind,
-              ...(input.reasonCategory !== undefined
-                ? { reasonCategory: input.reasonCategory }
-                : {}),
-              recordedAt: now,
-              freeTextIncluded: false as const,
+    store
+      .transaction(
+        Effect.gen(function* () {
+          const existing = yield* store.get(input.observationId);
+          if (Option.isNone(existing) || existing.value.environmentId !== environmentId) {
+            return yield* new RouterEvaluationError({
+              reason: "not_found",
+              detail: "Observation not found in this environment.",
+            });
+          }
+          if (existing.value.evidence.explicitFeedback.length > 0) {
+            return {
+              observationId: input.observationId,
+              recorded:
+                existing.value.evidence.explicitFeedback.length === 1 &&
+                existing.value.evidence.explicitFeedback[0]?.kind === input.kind,
+            };
+          }
+          const next = {
+            ...existing.value,
+            evidence: {
+              ...existing.value.evidence,
+              explicitFeedback: [
+                ...existing.value.evidence.explicitFeedback,
+                {
+                  kind: input.kind,
+                  ...(input.reasonCategory !== undefined
+                    ? { reasonCategory: input.reasonCategory }
+                    : {}),
+                  recordedAt: now,
+                  freeTextIncluded: false as const,
+                },
+              ].slice(-8),
             },
-          ].slice(-8),
-        },
-      };
-      yield* store.replaceEvidence(next);
-      yield* appendAudit({
-        environmentId,
-        eventType: "explicit_feedback",
-        recordedAt: now,
-        idempotencyKey: `feedback:${input.observationId}:${input.kind}`,
-        observationId: input.observationId,
-        ...(actor !== undefined ? { actor } : {}),
-        detail: input.kind,
-      });
-      return { observationId: input.observationId, recorded: true };
-    }).pipe(Effect.mapError(toEvalError));
+          };
+          yield* store.replaceEvidence(next);
+          yield* appendAudit({
+            environmentId,
+            eventType: "explicit_feedback",
+            recordedAt: now,
+            idempotencyKey: `feedback:${input.observationId}:${input.kind}`,
+            observationId: input.observationId,
+            ...(actor !== undefined ? { actor } : {}),
+            detail:
+              taskResultFingerprint === undefined
+                ? input.kind
+                : yield* encodeTaskResultAudit({ kind: input.kind, taskResultFingerprint }),
+          });
+          return { observationId: input.observationId, recorded: true };
+        }),
+      )
+      .pipe(Effect.mapError(toEvalError));
 
   const recordReworkProxy: RouterEvaluationService["Service"]["recordReworkProxy"] = (
     environmentId,
@@ -436,7 +647,7 @@ const make = Effect.gen(function* () {
       yield* ensureDefaults(environmentId, "1970-01-01T00:00:00.000Z");
       const policies = yield* store.listPolicies(environmentId);
       return { policies };
-    }).pipe(Effect.mapError(toEvalError));
+    }).pipe(store.transaction, Effect.mapError(toEvalError));
 
   const inspectPolicy: RouterEvaluationService["Service"]["inspectPolicy"] = (
     environmentId,
@@ -459,8 +670,10 @@ const make = Effect.gen(function* () {
     authorized,
     now,
     actor,
+    expectedRevision,
   ) =>
     Effect.gen(function* () {
+      yield* validateMutation(environmentId, authorized, input.confirmActivation, expectedRevision);
       yield* ensureDefaults(environmentId, now);
       const candidate = yield* store.getPolicy(input.policyId);
       if (Option.isNone(candidate) || candidate.value.environmentId !== environmentId) {
@@ -485,12 +698,12 @@ const make = Effect.gen(function* () {
         environmentId,
         eventType: "policy_activated",
         recordedAt: now,
-        idempotencyKey: `activate:${result.active.policyId}:${now}`,
+        idempotencyKey: `activate:${result.active.policyId}:${yield* store.nextEventSequence(environmentId)}`,
         ...(actor !== undefined ? { actor } : {}),
         detail: result.active.policyVersion,
       });
       return result;
-    }).pipe(Effect.mapError(toEvalError));
+    }).pipe(store.transaction, Effect.mapError(toEvalError));
 
   const shadow: RouterEvaluationService["Service"]["shadow"] = (
     environmentId,
@@ -498,8 +711,10 @@ const make = Effect.gen(function* () {
     authorized,
     now,
     actor,
+    expectedRevision,
   ) =>
     Effect.gen(function* () {
+      yield* validateMutation(environmentId, authorized, input.confirmShadow, expectedRevision);
       yield* ensureDefaults(environmentId, now);
       const candidate = yield* store.getPolicy(input.policyId);
       if (Option.isNone(candidate) || candidate.value.environmentId !== environmentId) {
@@ -508,6 +723,11 @@ const make = Effect.gen(function* () {
           detail: "Candidate policy not found.",
         });
       }
+      if ((yield* store.listPolicies(environmentId)).some((policy) => policy.state === "shadow"))
+        return yield* new RouterEvaluationError({
+          reason: "illegal_transition",
+          detail: "This environment already has a shadow policy.",
+        });
       const result = yield* shadowPolicy({
         candidate: candidate.value,
         confirmShadow: input.confirmShadow,
@@ -520,12 +740,12 @@ const make = Effect.gen(function* () {
         environmentId,
         eventType: "policy_shadowed",
         recordedAt: now,
-        idempotencyKey: `shadow:${result.active.policyId}:${now}`,
+        idempotencyKey: `shadow:${result.active.policyId}:${yield* store.nextEventSequence(environmentId)}`,
         ...(actor !== undefined ? { actor } : {}),
         detail: result.active.policyVersion,
       });
       return result;
-    }).pipe(Effect.mapError(toEvalError));
+    }).pipe(store.transaction, Effect.mapError(toEvalError));
 
   const rollback: RouterEvaluationService["Service"]["rollback"] = (
     environmentId,
@@ -533,8 +753,10 @@ const make = Effect.gen(function* () {
     authorized,
     now,
     actor,
+    expectedRevision,
   ) =>
     Effect.gen(function* () {
+      yield* validateMutation(environmentId, authorized, input.confirmRollback, expectedRevision);
       yield* ensureDefaults(environmentId, now);
       const policies = yield* store.listPolicies(environmentId);
       const current = policies.find((policy) => policy.state === "active");
@@ -548,13 +770,23 @@ const make = Effect.gen(function* () {
         current.priorActivePolicyId === undefined
           ? null
           : (policies.find((policy) => policy.policyId === current.priorActivePolicyId) ?? null);
+      if (
+        (prior ?? policies.find((policy) => isBaselinePolicyVersion(policy.policyVersion)))
+          ?.policyId === current.policyId
+      )
+        return yield* new RouterEvaluationError({
+          reason: "illegal_transition",
+          detail: "The baseline is already active; there is no prior policy to restore.",
+        });
       const result = yield* rollbackPolicy({
         currentActive: current,
         prior,
         confirmRollback: input.confirmRollback,
         authorized,
         now,
-        baseline: baselineSnapshot(environmentId, now),
+        baseline:
+          policies.find((policy) => isBaselinePolicyVersion(policy.policyVersion)) ??
+          baselineSnapshot(environmentId, now),
         ...(actor !== undefined ? { actor } : {}),
       });
       yield* store.upsertPolicy(result.active);
@@ -563,19 +795,69 @@ const make = Effect.gen(function* () {
         environmentId,
         eventType: "policy_rolled_back",
         recordedAt: now,
-        idempotencyKey: `rollback:${result.active.policyId}:${now}`,
+        idempotencyKey: `rollback:${result.active.policyId}:${yield* store.nextEventSequence(environmentId)}`,
         ...(actor !== undefined ? { actor } : {}),
         detail: result.active.policyVersion,
       });
       return result;
-    }).pipe(Effect.mapError(toEvalError));
+    }).pipe(store.transaction, Effect.mapError(toEvalError));
 
   const evidenceMap: RouterEvaluationService["Service"]["evidenceMap"] = (environmentId) =>
     store
       .listByEnvironment(environmentId)
       .pipe(Effect.map(evidenceFromObservations), Effect.mapError(toEvalError));
 
+  const control: RouterEvaluationService["Service"]["control"] = (
+    environmentId,
+    input,
+    now,
+    actor,
+  ) =>
+    store
+      .transaction(
+        Effect.gen(function* () {
+          switch (input.action) {
+            case "shadow":
+              yield* shadow(
+                environmentId,
+                { policyId: input.policyId, confirmShadow: input.confirm },
+                true,
+                now,
+                actor,
+                input.expectedRevision,
+              );
+              break;
+            case "activate":
+              yield* activate(
+                environmentId,
+                { policyId: input.policyId, confirmActivation: input.confirm },
+                true,
+                now,
+                actor,
+                input.expectedRevision,
+              );
+              break;
+            case "rollback":
+              yield* rollback(
+                environmentId,
+                { confirmRollback: input.confirm },
+                true,
+                now,
+                actor,
+                input.expectedRevision,
+              );
+              break;
+          }
+          return yield* readStatus(environmentId);
+        }),
+      )
+      .pipe(Effect.mapError(toEvalError));
+
   return {
+    control,
+    status,
+    routingSnapshot,
+    existingRoutingSnapshot,
     insights,
     exportObservations,
     deleteObservations,
@@ -608,87 +890,4 @@ const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(RouterEvaluationService, make).pipe(
   Layer.provide(observationRepositoryLayer),
-);
-
-const emptyCoverage = {
-  id: "coverage",
-  numerator: 0,
-  denominator: 0,
-  sampleCount: 0,
-  status: "unknown" as const,
-  provenance: "unknown" as const,
-  unit: "rate" as const,
-};
-
-/** Empty insights, for suites that only need the RPC surface to resolve. */
-export const layerTest = Layer.succeed(
-  RouterEvaluationService,
-  RouterEvaluationService.of({
-    insights: (_environmentId, settings) =>
-      Effect.succeed({
-        observationCount: 0,
-        coverage: emptyCoverage,
-        activePolicyVersion: MODEL_ROUTER_POLICY_VERSION,
-        challengerEnabled: settings.challengerShadowEnabled,
-        measurementEnabled: settings.measurementEnabled,
-        retentionDays: settings.retentionDays,
-        freshness: "empty",
-        metrics: [],
-        mixedProvenanceWarning: false,
-        insufficientData: true,
-      }),
-    exportObservations: () =>
-      Effect.succeed({
-        manifest: {
-          version: "router-evaluation-dataset.v0",
-          synthetic: false,
-          recordCount: 0,
-          trainCount: 0,
-          evaluationCount: 0,
-          schemaVersion: "turn-outcome-observation.v0",
-          filters: {},
-          datasetHash: "empty",
-          holdout: "temporal_last_20_percent",
-        },
-        records: [],
-      }),
-    deleteObservations: () => Effect.succeed({ deleted: 0 }),
-    submitFeedback: (_environmentId, input) =>
-      Effect.succeed({ observationId: input.observationId, recorded: true }),
-    recordReworkProxy: () => Effect.void,
-    listPolicies: () => Effect.succeed({ policies: [] }),
-    inspectPolicy: () =>
-      Effect.fail(
-        new RouterEvaluationError({
-          reason: "malformed_policy",
-          detail: "Test layer has no stored policies.",
-        }),
-      ),
-    activate: () =>
-      Effect.fail(
-        new RouterEvaluationError({
-          reason: "unauthorized_activation",
-          detail: "Test layer cannot activate a policy.",
-        }),
-      ),
-    shadow: () =>
-      Effect.fail(
-        new RouterEvaluationError({
-          reason: "unauthorized_activation",
-          detail: "Test layer cannot shadow a policy.",
-        }),
-      ),
-    rollback: () =>
-      Effect.fail(
-        new RouterEvaluationError({
-          reason: "unauthorized_activation",
-          detail: "Test layer cannot roll back a policy.",
-        }),
-      ),
-    evidenceMap: () => Effect.succeed(new Map()),
-    recordObservation: () => Effect.void,
-    latestObservationForThread: () => Effect.succeed(Option.none()),
-    observationCount: () => Effect.succeed(0),
-    activePolicyVersion: () => Effect.succeed(MODEL_ROUTER_POLICY_VERSION),
-  }),
 );

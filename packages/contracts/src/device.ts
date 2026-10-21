@@ -14,6 +14,7 @@
  */
 import { Schema } from "effect";
 
+import { McpActionGateBlockedError } from "./actionGate.ts";
 import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const DevicePlatform = Schema.Literals(["ios", "android"]);
@@ -562,6 +563,7 @@ export class DeviceToolUnavailableError extends Schema.TaggedError<DeviceToolUna
 }
 
 export const DeviceToolError = Schema.Union([
+  McpActionGateBlockedError,
   DeviceToolUnavailableError,
   DeviceHostUnavailableError,
   DevicePlatformUnavailableError,

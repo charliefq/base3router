@@ -45,6 +45,11 @@ export const MODEL_ROUTER_REASON_CODES = [
   "METRICS_UNKNOWN",
   "REQUIRED_CAPABILITY_MISSING",
   "CONSTRAINT_EXCLUDED",
+  "CONSTRAINT_METADATA_UNKNOWN",
+  "ESTIMATED_COST_LIMIT_EXCEEDED",
+  "ESTIMATED_COST_UNKNOWN",
+  "ESTIMATED_LATENCY_LIMIT_EXCEEDED",
+  "ESTIMATED_LATENCY_UNKNOWN",
   "PROVIDER_INSTANCE_NOT_FOUND",
   "PROVIDER_UNAVAILABLE",
   "PROVIDER_DISABLED",
@@ -119,6 +124,14 @@ export const MODEL_ROUTER_DEFAULT_POLICY: ModelRouterPolicy = {
 };
 
 export const ModelRouterConstraints = Schema.Struct({
+  /** Hard limit over caller-declared catalog estimates, not verified provider spend. */
+  maxCostUsd: Schema.optional(
+    Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0)),
+  ),
+  /** Hard limit over caller-declared catalog estimates, not observed execution latency. */
+  maxLatencyMs: Schema.optional(
+    Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0)),
+  ),
   requiredCapabilities: Schema.optional(BoundedCapabilityList),
   allowedInstanceIds: Schema.optional(BoundedInstanceIdList),
   excludedInstanceIds: Schema.optional(BoundedInstanceIdList),
@@ -208,6 +221,41 @@ export const ModelRouterAvailabilityCooldown = Schema.Struct({
 });
 export type ModelRouterAvailabilityCooldown = typeof ModelRouterAvailabilityCooldown.Type;
 
+/** Additive persisted facts from the V0 ranking; absent on historical or replacement selectors. */
+const SelectionDimension = Schema.Struct({
+  weight: Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0)),
+  complete: Schema.Boolean,
+  participation: Schema.Literals(["weighted", "zero-weight", "incomplete"]),
+});
+export const ModelRouterSelectionBasis = Schema.Struct({
+  version: Schema.Literal("model-router.v0.selection-basis.v1"),
+  selectedTarget: Schema.NullOr(ModelRouterTarget),
+  outcome: Schema.Literals([
+    "score",
+    "tie",
+    "single",
+    "none",
+    "manual-accepted",
+    "manual-rejected",
+    "manual-missing",
+    "unknown",
+  ]),
+  eligibleCount: NonNegativeInt,
+  consideredEligibleCount: NonNegativeInt,
+  excludedCount: NonNegativeInt,
+  dimensions: Schema.Struct({
+    quality: SelectionDimension,
+    costUsd: SelectionDimension,
+    latencyMs: SelectionDimension,
+  }),
+  selectedScore: Schema.NullOr(Schema.Number.check(Schema.isFinite())),
+  runnerUpScore: Schema.NullOr(Schema.Number.check(Schema.isFinite())),
+  tieBreak: Schema.Array(Schema.Literals(["preferred", "driver", "instance", "model"])).check(
+    Schema.isMaxLength(4),
+  ),
+});
+export type ModelRouterSelectionBasis = typeof ModelRouterSelectionBasis.Type;
+
 export const ModelRouterDecision = Schema.Struct({
   policyVersion: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
   mode: ModelRouterMode,
@@ -222,6 +270,7 @@ export const ModelRouterDecision = Schema.Struct({
   ),
   reasonCodes: BoundedReasonCodes,
   explanation: BoundedExplanation,
+  selectionBasis: Schema.optional(ModelRouterSelectionBasis),
   estimatedCostUsd: ModelRouterMetricValue,
   estimatedLatencyMs: ModelRouterMetricValue,
   estimatedQuality: ModelRouterMetricValue,

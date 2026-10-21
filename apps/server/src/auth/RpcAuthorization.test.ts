@@ -4,6 +4,7 @@ import {
   AuthRelayReadScope,
   AuthRelayWriteScope,
   WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -34,6 +35,37 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("requires operate permission to respond to a workflow decision", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.workflowCatalog)).toBe(AuthOrchestrationReadScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.workflowReadRun)).toBe(AuthOrchestrationReadScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.workflowStagePreview)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.workflowAction)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.workflowDispatchStage)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.workflowProposeArtifact)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
+  it("requires operate permission for ActionGate and Dream Memory mutations", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.actionGateAuthorizeTool)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.actionGateRespondApproval)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.memorySave)).toBe(AuthOrchestrationOperateScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.memoryDelete)).toBe(AuthOrchestrationOperateScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.memoryEnqueueEligible)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
   it("allows relay status reads without granting relay installation access", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.cloudGetRelayClientStatus)).toBe(
       AuthRelayReadScope,
@@ -47,35 +79,6 @@ describe("RPC authorization scopes", () => {
     );
   });
 
-  it("allows route preview with orchestration read access", () => {
-    expect(requiredScopeForRpcMethod(WS_METHODS.dispatcherRoutePreview)).toBe(
-      AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.dispatcherHandoffPreview)).toBe(
-      AuthOrchestrationReadScope,
-    );
-  });
-
-  it("requires read access for workflow inspection and operate access for every workflow mutation", () => {
-    for (const method of [
-      WS_METHODS.workflowCatalog,
-      WS_METHODS.workflowReadRun,
-      WS_METHODS.workflowStagePreview,
-      WS_METHODS.workflowCursorCloudRefresh,
-    ]) {
-      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
-    }
-    for (const method of [
-      WS_METHODS.workflowAction,
-      WS_METHODS.workflowDispatchStage,
-      WS_METHODS.workflowProposeArtifact,
-      WS_METHODS.workflowCursorCloudFollowUp,
-      WS_METHODS.workflowCursorCloudCancel,
-    ]) {
-      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
-    }
-  });
-
   it("requires write access to import agent session history", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.agentSessionsScan)).toBe(
       AuthOrchestrationReadScope,
@@ -85,45 +88,42 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("separates ACP Registry discovery from provisioning", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverSearchAcpRegistry)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverPrepareAcpRegistryAgent)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverUninstallAcpRegistryManagedBinary)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverAcceptAcpRegistryUrlAuth)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverListAcpRegistrySessions)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverImportAcpRegistrySession)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverLogoutAcpRegistry)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
   it("reads the reviewer menu under the same scope as the pull request it belongs to", () => {
     // The candidate list is a read like the detail beside it, and asking somebody for a review is
     // a write like every other pull request operation.
+    expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsChecks)).toBe(
+      AuthOrchestrationReadScope,
+    );
     expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsReviewerCandidates)).toBe(
       requiredScopeForRpcMethod(WS_METHODS.pullRequestsDetail),
     );
     expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsRequestReviewers)).toBe(
       requiredScopeForRpcMethod(WS_METHODS.pullRequestsComment),
     );
-  });
-
-  it("requires read for Router Insights and operate for policy mutations", () => {
-    expect(requiredScopeForRpcMethod(WS_METHODS.routerGetInsights)).toBe(
-      AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.routerExportObservations)).toBe(
-      AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.routerListPolicies)).toBe(
-      AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.routerInspectPolicy)).toBe(
-      AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.actionGateGetGovernance)).toBe(
-      AuthOrchestrationReadScope,
-    );
-    expect(requiredScopeForRpcMethod(WS_METHODS.actionGateRespondApproval)).toBe(
-      AuthOrchestrationOperateScope,
-    );
-    for (const method of [
-      WS_METHODS.routerDeleteObservations,
-      WS_METHODS.routerSubmitFeedback,
-      WS_METHODS.routerActivatePolicy,
-      WS_METHODS.routerShadowPolicy,
-      WS_METHODS.routerRollbackPolicy,
-    ]) {
-      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
-    }
   });
 
   it("rejects unknown RPC method names", () => {
@@ -147,4 +147,16 @@ it("requires operate permission for tool updates even alongside a read-only chec
     AuthOrchestrationOperateScope,
   );
   expect(requiredScopeForDeviceList({ updateTool: "hub" })).toBe(AuthOrchestrationOperateScope);
+});
+
+it("keeps Tasks eligibility a read and decisions on the existing operate boundary", () => {
+  expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.getAgentsCreationStatus)).toBe(
+    AuthOrchestrationOperateScope,
+  );
+  expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.getTaskReview)).toBe(
+    AuthOrchestrationReadScope,
+  );
+  expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.dispatchCommand)).toBe(
+    AuthOrchestrationOperateScope,
+  );
 });

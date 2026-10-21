@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import {
   AVAILABLE_CONNECTION_STATE,
   connectionProjectionPhase,
@@ -23,22 +24,6 @@ import { isHostedStaticApp } from "../hostedPairing";
 export const shellEnvironment = createShellEnvironmentAtoms(connectionAtomRuntime);
 export const environmentShell = createEnvironmentShellAtoms(connectionAtomRuntime);
 export const environmentSnapshotAtom = createEnvironmentSnapshotAtom(environmentShell.stateAtom);
-
-export function createEnvironmentShellSnapshotReadyAtom(input: {
-  readonly environmentId: EnvironmentId;
-  readonly shellStateValueAtom: (environmentId: EnvironmentId) => Atom.Atom<EnvironmentShellState>;
-}) {
-  return Atom.make((get) =>
-    Option.isSome(get(input.shellStateValueAtom(input.environmentId)).snapshot),
-  ).pipe(Atom.withLabel(`web-environment-shell-snapshot-ready:${input.environmentId}`));
-}
-
-export const environmentShellSnapshotReadyAtom = Atom.family((environmentId: EnvironmentId) =>
-  createEnvironmentShellSnapshotReadyAtom({
-    environmentId,
-    shellStateValueAtom: environmentShell.stateValueAtom,
-  }),
-);
 
 export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
   const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
@@ -98,3 +83,16 @@ export const allEnvironmentProjectSnapshotsReadyAtom =
     shellStateValueAtom: environmentShell.stateValueAtom,
     requiresPrimaryEnvironment: !isHostedStaticApp(),
   });
+
+const emptyEnvironmentShell = Atom.make<EnvironmentShellState>({
+  status: "empty",
+  snapshot: Option.none(),
+  error: Option.none(),
+});
+export function useEnvironmentShellState(
+  environmentId: EnvironmentId | null,
+): EnvironmentShellState {
+  return useAtomValue(
+    environmentId === null ? emptyEnvironmentShell : environmentShell.stateValueAtom(environmentId),
+  );
+}

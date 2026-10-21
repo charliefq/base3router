@@ -1,3 +1,4 @@
+import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
 import {
   DISPATCHER_MAX_CANDIDATES,
   DISPATCHER_POLICY_VERSION,
@@ -15,10 +16,9 @@ import {
   type EnvironmentId,
   type MessageId,
   ModelSelection,
-  type OrchestrationCommand,
   OrchestrationDispatchCommandError,
-  type OrchestrationMessage,
   ProjectId,
+  type ProviderDriverKind,
   type ServerProvider,
   ThreadId,
   type ModelRouterAvailabilityCooldown,
@@ -28,12 +28,14 @@ import {
   type OpenRouterGuidanceSettings,
   ProviderInstanceId,
   type HybridRouteDecisionV1,
+  type LocalTaskProfile,
   TurnId,
 } from "@t3tools/contracts";
 import {
   applyModelRouterCooldowns,
   modelRouterCatalogForMode,
   modelRouterCatalogFromProviders,
+  manualModelRouterConstraintReasons,
   routeModel,
 } from "@t3tools/shared/modelRouter";
 import { routeHybridModel, type LocalModelEvidence } from "@t3tools/shared/hybridRouter";
@@ -87,7 +89,8 @@ const DispatcherThreadRows = Schema.Array(
   Schema.Struct({
     id: ThreadId,
     projectId: ProjectId,
-    modelSelection: Schema.fromJsonString(ModelSelection),
+    instanceId: Schema.NullOr(Schema.String),
+    model: Schema.NullOr(Schema.String),
     deletedAt: Schema.NullOr(Schema.String),
   }),
 );
@@ -125,16 +128,30 @@ export const readDispatcherProjectedState = Effect.fn("Dispatcher.readDispatcher
           SELECT
             thread_id AS "id",
             project_id AS "projectId",
-            model_selection_json AS "modelSelection",
+            json_extract(payload_json, '$.modelSelection.instanceId') AS "instanceId",
+            json_extract(payload_json, '$.modelSelection.model') AS "model",
             deleted_at AS "deletedAt"
-          FROM projection_threads
+          FROM orchestration_v2_projection_threads
           WHERE thread_id = ${input.threadId}
           LIMIT 1
         `;
-
+    const threads = yield* decodeDispatcherThreadRows(threadRows);
     return {
       projects: yield* decodeDispatcherProjectRows(projectRows),
-      threads: yield* decodeDispatcherThreadRows(threadRows),
+      threads: threads.flatMap((thread) => {
+        if (thread.instanceId === null || thread.model === null) return [];
+        return [
+          {
+            id: thread.id,
+            projectId: thread.projectId,
+            modelSelection: {
+              instanceId: ProviderInstanceId.make(thread.instanceId),
+              model: thread.model,
+            },
+            deletedAt: thread.deletedAt,
+          },
+        ];
+      }),
     } satisfies DispatcherProjectedState;
   },
 );
@@ -199,25 +216,6 @@ export const persistDispatcherTaskRoute = Effect.fn("Dispatcher.persistDispatche
   },
 );
 
-export const updateDispatcherTaskRouteBinding = Effect.fn(
-  "Dispatcher.updateDispatcherTaskRouteBinding",
-)(function* (input: {
-  readonly threadId: ThreadId;
-  readonly messageId: MessageId;
-  readonly binding: DispatcherTaskRouteBindingType;
-}): Effect.fn.Return<void, ProjectionRepositoryError, SqlClient.SqlClient> {
-  const sql = yield* SqlClient.SqlClient;
-  const bindingJson = yield* encodeDispatcherTaskRoute(input.binding).pipe(
-    Effect.mapError(toPersistenceDecodeError("Dispatcher.updateTaskRoute:encodeBinding")),
-  );
-  yield* sql`
-    UPDATE projection_dispatcher_task_routes
-    SET binding_json = ${bindingJson}
-    WHERE thread_id = ${input.threadId}
-      AND message_id = ${input.messageId}
-  `.pipe(Effect.mapError(toPersistenceSqlError("Dispatcher.updateTaskRoute:update")));
-});
-
 export const readDispatcherTaskRoute = Effect.fn("Dispatcher.readDispatcherTaskRoute")(
   function* (input: {
     readonly threadId: ThreadId;
@@ -256,10 +254,43 @@ export const deleteDispatcherTaskRoutesByThread = Effect.fn(
   `.pipe(Effect.mapError(toPersistenceSqlError("Dispatcher.deleteTaskRoutesByThread:query")));
 });
 
+export interface DispatcherTurnMessage {
+  readonly id?: MessageId;
+  readonly messageId: MessageId;
+  readonly role?: string;
+  readonly text: string;
+  readonly attachments?: ReadonlyArray<unknown>;
+  readonly context?: {
+    readonly records?: ReadonlyArray<{ readonly kind: string; readonly [key: string]: unknown }>;
+  };
+}
+
+/**
+ * Structural turn command. V2 does not have `thread.turn.start`; route binding
+ * still accepts the stabilization command shape and V2 `message.dispatch`.
+ */
+export interface DispatcherTurnStartCommand {
+  readonly type: string;
+  readonly threadId: ThreadId;
+  readonly message: DispatcherTurnMessage;
+  readonly routeBinding?: DispatcherTaskRouteBindingType;
+  readonly routingMode?: "auto" | "manual";
+  readonly modelSelection?: ModelSelection;
+  readonly modelRouteConstraints?: Parameters<typeof routeModel>[0]["constraints"];
+  readonly openRouterGuidanceMode?: OpenRouterGuidanceMode;
+  readonly bootstrap?: {
+    readonly createThread?: {
+      readonly modelSelection?: ModelSelection;
+      readonly projectId?: ProjectId;
+    };
+  };
+  readonly [key: string]: unknown;
+}
+
 export interface DispatcherMessageMetadata {
   readonly id: MessageId;
   readonly threadId: ThreadId;
-  readonly role: OrchestrationMessage["role"];
+  readonly role: string;
   readonly attachmentCount: number;
   readonly composerContextKinds: ReadonlyArray<string>;
 }
@@ -704,10 +735,26 @@ function taskRouteBindingFromModelRoute(input: {
   };
 }
 
+export function bindingForExplicitTarget(input: {
+  readonly instanceId: ModelSelection["instanceId"];
+  readonly model: string;
+  readonly driver: ProviderDriverKind;
+}): DispatcherTaskRouteBindingType {
+  return {
+    policyVersion: DISPATCHER_POLICY_VERSION,
+    target: { instanceId: input.instanceId, model: input.model },
+    driver: input.driver,
+    modelFamily: normalizeModelFamily(input.model),
+    fallbackIndex: 0,
+    source: "explicit",
+    gate: { decision: "ALLOW", reasonCodes: ["ACTION_ALLOWED"] },
+  };
+}
+
 function applySelectedModelSelection(
-  command: Extract<OrchestrationCommand, { readonly type: "thread.turn.start" }>,
+  command: DispatcherTurnStartCommand,
   target: DispatcherRouteTarget,
-): Extract<OrchestrationCommand, { readonly type: "thread.turn.start" }> {
+): DispatcherTurnStartCommand {
   const previous = command.modelSelection ?? command.bootstrap?.createThread?.modelSelection;
   const modelSelection: ModelSelection = {
     instanceId: target.instanceId,
@@ -733,6 +780,86 @@ function applySelectedModelSelection(
   };
 }
 
+export function calculateDispatcherModelRoute(input: {
+  readonly mode: "auto" | "manual";
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly preferredTargets: ReadonlyArray<import("@t3tools/contracts").ModelRouterTarget>;
+  readonly preferredModelSelection?: ModelSelection;
+  readonly constraints?: import("@t3tools/contracts").ModelRouterConstraints;
+  readonly message?: Pick<DispatcherTurnMessage, "attachments" | "context">;
+  readonly cooldowns?: ReadonlyArray<ModelRouterAvailabilityCooldown>;
+  readonly nowMs: number;
+  readonly localTaskProfile: LocalTaskProfile;
+  readonly hybrid?: Omit<
+    import("@t3tools/shared/hybridRouter").HybridRouterInput,
+    | "mode"
+    | "catalog"
+    | "preferredTargets"
+    | "constraints"
+    | "manualOverride"
+    | "executionStatus"
+    | "localTaskProfile"
+  >;
+  readonly executionStatus?: "bound" | "not-started";
+}) {
+  const base = {
+    mode: input.mode,
+    catalog: applyModelRouterCooldowns(
+      modelRouterCatalogForMode(modelRouterCatalogFromProviders(input.providers), input.mode),
+      input.cooldowns ?? [],
+      input.nowMs,
+    ),
+    task: {
+      attachmentCount: input.message?.attachments?.length ?? 0,
+      composerContextKinds: [
+        ...new Set((input.message?.context?.records ?? []).map((record) => record.kind)),
+      ].sort(),
+      // Typed image facts cannot be removed by caller constraints or a replacement selector.
+      requiredCapabilities:
+        input.mode === "auto" &&
+        (input.message?.attachments?.some(
+          (attachment) =>
+            attachment !== null &&
+            typeof attachment === "object" &&
+            "type" in attachment &&
+            attachment.type === "image",
+        ) ||
+          input.message?.context?.records?.some((record) => record.kind === "image"))
+          ? ["vision" as const]
+          : [],
+    },
+    preferredTargets: input.preferredTargets,
+    ...(input.constraints === undefined ? {} : { constraints: input.constraints }),
+    ...(input.mode === "manual" && input.preferredModelSelection
+      ? {
+          manualOverride: {
+            instanceId: input.preferredModelSelection.instanceId,
+            model: input.preferredModelSelection.model,
+          },
+        }
+      : {}),
+    executionStatus: input.executionStatus ?? ("bound" as const),
+  };
+  const effectiveInput = { ...input.hybrid, ...base, localTaskProfile: input.localTaskProfile };
+  const routedDecision = input.hybrid ? routeHybridModel(effectiveInput) : null;
+  const decision = routedDecision?.decision ?? routeModel(base);
+  return {
+    decision: decision.task.requiredCapabilities.includes("vision")
+      ? {
+          ...decision,
+          explanation:
+            `Image input required; only declared image-input support is eligible. ${decision.explanation}`.slice(
+              0,
+              512,
+            ),
+        }
+      : decision,
+    hybrid: routedDecision?.hybrid,
+    manualConstraintReasons:
+      input.mode === "manual" ? manualModelRouterConstraintReasons(effectiveInput) : [],
+  };
+}
+
 /**
  * Adds the server-owned route fact before the command enters the decider.
  * Provider snapshots are cached presentation state; this function never asks
@@ -742,7 +869,7 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
   "Dispatcher.bindDispatcherTurnStartCommand",
 )(
   function* (
-    command: OrchestrationCommand,
+    command: DispatcherTurnStartCommand,
     dependencies: {
       readonly enabled: boolean;
       readonly environmentId: Effect.Effect<EnvironmentId, Error>;
@@ -756,18 +883,28 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
         readonly credentialPresent: boolean;
         readonly instanceId: ProviderInstanceId;
       };
+      readonly localTaskProfile?: LocalTaskProfile;
       readonly hybrid?: {
+        readonly shadowPolicy?: NonNullable<
+          import("@t3tools/shared/hybridRouter").HybridRouterInput["shadowPolicy"]
+        >;
+        readonly weights?: import("@t3tools/contracts").RouterPolicyWeightsV1;
+        readonly shrinkageK?: number;
+        readonly minSampleRate?: number;
+        readonly policyLoadFailure?: string;
         readonly activePolicyVersion: string;
         readonly challengerEnabled: boolean;
         readonly evidenceByTarget: ReadonlyMap<string, LocalModelEvidence>;
       };
     },
-  ): Effect.fn.Return<OrchestrationCommand, OrchestrationDispatchCommandError> {
+  ): Effect.fn.Return<DispatcherTurnStartCommand, OrchestrationDispatchCommandError> {
     if (command.type !== "thread.turn.start") return command;
     if (command.routeBinding !== undefined) return command;
     const routingMode = command.routingMode;
     if (!dependencies.enabled && routingMode === undefined) return command;
 
+    const localTaskProfile =
+      dependencies.localTaskProfile ?? classifyLocalTask(command.message.text);
     const createThread = command.bootstrap?.createThread;
     const preferredModelSelection = command.modelSelection ?? createThread?.modelSelection;
 
@@ -818,64 +955,34 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
             ]
           : []),
       ];
-      const routedDecision = dependencies.hybrid
-        ? routeHybridModel({
-            mode: routingMode,
-            catalog: applyModelRouterCooldowns(
-              modelRouterCatalogForMode(
-                modelRouterCatalogFromProviders(resolution.providers),
-                routingMode,
-              ),
-              dependencies.availabilityCooldowns ?? [],
-              dependencies.availabilityNowMs ?? (yield* Clock.currentTimeMillis),
-            ),
-            preferredTargets,
-            ...(command.modelRouteConstraints === undefined
-              ? {}
-              : { constraints: command.modelRouteConstraints }),
-            ...(routingMode === "manual" && preferredModelSelection !== undefined
-              ? {
-                  manualOverride: {
-                    instanceId: preferredModelSelection.instanceId,
-                    model: preferredModelSelection.model,
-                  },
-                }
-              : {}),
-            executionStatus: "bound",
-            activePolicyVersion: dependencies.hybrid.activePolicyVersion,
-            challengerEnabled: dependencies.hybrid.challengerEnabled,
-            evidenceByTarget: dependencies.hybrid.evidenceByTarget,
-          })
-        : null;
-      const decision =
-        routedDecision?.decision ??
-        routeModel({
-          mode: routingMode,
-          catalog: applyModelRouterCooldowns(
-            modelRouterCatalogForMode(
-              modelRouterCatalogFromProviders(resolution.providers),
-              routingMode,
-            ),
-            dependencies.availabilityCooldowns ?? [],
-            dependencies.availabilityNowMs ?? (yield* Clock.currentTimeMillis),
-          ),
-          preferredTargets,
-          ...(command.modelRouteConstraints === undefined
-            ? {}
-            : { constraints: command.modelRouteConstraints }),
-          ...(routingMode === "manual" && preferredModelSelection !== undefined
-            ? {
-                manualOverride: {
-                  instanceId: preferredModelSelection.instanceId,
-                  model: preferredModelSelection.model,
-                },
-              }
-            : {}),
-          executionStatus: "bound",
+      const calculation = calculateDispatcherModelRoute({
+        mode: routingMode,
+        message: command.message,
+        providers: resolution.providers,
+        preferredTargets,
+        nowMs: dependencies.availabilityNowMs ?? (yield* Clock.currentTimeMillis),
+        localTaskProfile,
+        ...(preferredModelSelection === undefined ? {} : { preferredModelSelection }),
+        ...(command.modelRouteConstraints === undefined
+          ? {}
+          : { constraints: command.modelRouteConstraints }),
+        ...(dependencies.availabilityCooldowns === undefined
+          ? {}
+          : { cooldowns: dependencies.availabilityCooldowns }),
+        ...(dependencies.hybrid === undefined ? {} : { hybrid: dependencies.hybrid }),
+      });
+      const decision = calculation.decision;
+      const routedDecision = calculation;
+      if (routingMode === "manual" && calculation.manualConstraintReasons.length > 0) {
+        return yield* new OrchestrationDispatchCommandError({
+          message: `Manual Route denied turn start (${calculation.manualConstraintReasons.join(",")}). No model was selected.`,
         });
+      }
       if (routingMode === "auto" && decision.selected === null) {
         return yield* new OrchestrationDispatchCommandError({
-          message: `Auto Route could not select a model (${decision.reasonCodes.join(",")}).`,
+          message: decision.task.requiredCapabilities.includes("vision")
+            ? "Auto Route requires declared image-input support. No available model meets the image requirement and constraints; choose an available model that declares image input, adjust constraints, or remove the image."
+            : `Auto Route could not select a model (${decision.reasonCodes.join(",")}).`,
         });
       }
       const routed =
@@ -894,11 +1001,21 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
             message: `Auto Route denied turn start (${decision.reasonCodes.join(",")}).`,
           });
         }
-        return routed;
+        const explicit = explicitManualBinding({
+          command: routed,
+          providers: resolution.providers,
+          preferred: preferredModelSelection,
+        });
+        if (explicit !== null) {
+          return { ...routed, routeBinding: { ...explicit, localTaskProfile } };
+        }
+        return yield* new OrchestrationDispatchCommandError({
+          message: "Manual Route could not bind the selected provider instance.",
+        });
       }
       const nowIso = yield* Effect.map(DateTime.now, DateTime.formatIso);
       const phase12Binding = withPhase12Binding({
-        binding: routeBinding,
+        binding: { ...routeBinding, localTaskProfile },
         providers: resolution.providers,
         nowIso,
         turnId: TurnId.make(command.message.messageId),
@@ -970,7 +1087,7 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
     return {
       ...command,
       routeBinding: withPhase12Binding({
-        binding: routeBinding,
+        binding: { ...routeBinding, localTaskProfile },
         providers: resolution.providers,
         nowIso,
         turnId: TurnId.make(command.message.messageId),
@@ -993,14 +1110,42 @@ export const bindDispatcherTurnStartCommand = Effect.fn(
   ),
 );
 
+function explicitManualBinding(input: {
+  readonly command: DispatcherTurnStartCommand;
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly preferred: ModelSelection | undefined;
+}): DispatcherTaskRouteBindingType | null {
+  const preferred = input.preferred;
+  if (preferred === undefined) return null;
+  const provider = input.providers.find(
+    (candidate) => candidate.instanceId === preferred.instanceId,
+  );
+  if (provider === undefined) return null;
+  return bindingForExplicitTarget({
+    instanceId: preferred.instanceId,
+    model: preferred.model,
+    driver: provider.driver,
+  });
+}
+
 export function summarizeDispatcherMessage(input: {
   readonly threadId: ThreadId;
-  readonly message: OrchestrationMessage;
+  readonly message: {
+    readonly id: MessageId;
+    readonly text?: string;
+    readonly role?: string;
+    readonly attachments?: ReadonlyArray<unknown>;
+    readonly context?: {
+      readonly version?: number;
+      readonly records?: ReadonlyArray<{ readonly kind: string; readonly [key: string]: unknown }>;
+    };
+    readonly [key: string]: unknown;
+  };
 }): DispatcherMessageMetadata {
   return {
     id: input.message.id,
     threadId: input.threadId,
-    role: input.message.role,
+    role: input.message.role ?? "user",
     attachmentCount: input.message.attachments?.length ?? 0,
     composerContextKinds: [
       ...new Set((input.message.context?.records ?? []).map((record) => record.kind)),

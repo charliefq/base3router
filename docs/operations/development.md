@@ -76,8 +76,7 @@ Put that value in the main checkout's gitignored `.env`:
 T3CODE_DEV_AUTH_TOKEN=<the value generated above>
 ```
 
-The `t3.json` Setup Worktree commands on Unix and Windows link that file to each worktree's
-`.env`. The dev runner reads repository env files at startup. `.env.local` and inherited process
+The `t3.json` Setup Worktree action links that file to each worktree's `.env`. The dev runner reads repository env files at startup. `.env.local` and inherited process
 environment values override `.env`, so no per-worktree export is needed after setup.
 
 For a manual worktree or launcher without that link, export the same fixed value instead:
@@ -97,24 +96,130 @@ startup and keeps its own SQLite data, signing key, and revocation state. Deskto
 servers ignore the value. See [environment authentication](../internals/environment-auth.md#reusable-dev-credential)
 for the security model.
 
-### Base3Router UI Lab
+## Verify the disposable production journey
 
-Use this for Auto Route and Control Center UI work without a desktop DMG or live provider
-credentials. It is a Vite-only page (`apps/web/lab.html`) gated by `T3CODE_UI_LAB=1` and is
-not part of the production bundle or app navigation.
+Build the web client and package the server before starting the local fixture:
 
 ```sh
-vp run ui-lab:accept
+vp run --filter @t3tools/web build
+node apps/server/scripts/cli.ts build
+node scripts/local-product-runtime.ts start --output /tmp/b3r-local-product-evidence
 ```
 
-That command starts the lab Vite server, waits until `/lab.html` is ready, runs the Playwright
-acceptance suite, shuts the server down, and writes:
+Run the launcher in its own terminal. It prints the isolated root and localhost
+origin; pairing material stays in that root's private log. In another terminal:
 
-- HTML report: `apps/web/playwright-report/index.html`
-- Screenshots: `apps/web/playwright-results/screenshots/`
+```sh
+node scripts/local-product-check.ts --journey --output /tmp/b3r-local-product-evidence
+node scripts/local-product-check.ts --lifecycle --output /tmp/b3r-local-product-evidence
+```
 
-`vp run ui-lab` keeps the lab at `http://127.0.0.1:45733/lab.html` for interactive work. Open a
-scenario with `?scenario=failover-success` (see `apps/web/src/lab/scenarios.ts`).
+This uses the built production server, normal authentication and shared client
+HTTP/WebSocket contracts. The only enabled provider is a deterministic local
+fixture. The launcher gives it fresh home, project and data directories and
+blocks non-loopback Node traffic. It does not activate a real provider. Journey
+and lifecycle modes refuse to rerun on a root with retained original commands;
+use `--read-originals` to inspect original statuses instead of replacing an
+uncertain Start. This inspection does not certify restart recovery.
+
+Use the printed root for process control; the launcher retains its child handle:
+
+```sh
+node scripts/local-product-runtime.ts restart --runtime <printed-root> --output /tmp/b3r-local-product-evidence
+node scripts/local-product-check.ts --recover --output /tmp/b3r-local-product-evidence
+node scripts/local-product-check.ts --inflight --output /tmp/b3r-local-product-evidence
+node scripts/local-product-runtime.ts restart --crash --runtime <printed-root> --output /tmp/b3r-local-product-evidence
+node scripts/local-product-check.ts --recover --output /tmp/b3r-local-product-evidence
+node scripts/local-product-runtime.ts cleanup --runtime <printed-root>
+```
+
+Restart in its own terminal too. Before signalling the server, restart saves a
+checkpoint of the original command hashes, receipts, native-start count and task
+readouts. Recovery requires that pre-restart checkpoint and fails on replay,
+receipt loss, changed run/output/route, or admission of the unsubmitted original.
+The crash-held original must retain its run identity, cancel without a completed
+result, and add no native starts. Observation and review timestamps may refresh.
+Cleanup waits for confirmed child exit before removing only that disposable
+root. Keep private logs, auth material and raw
+provider journals out of shared evidence. These checks prove the local protocol
+journey and recovery; they do not prove browser interaction, desktop/mobile
+installation, remote TLS, or real-provider readiness. For a locally extracted
+server package, `start --entrypoint <package>/dist/bin.mjs` can use a path below
+`/tmp/b3r-local-product-package-*`; its declared runtime dependencies must already
+be installed. A package run using cached dependencies is not an installer test.
+
+## Inspect startup with providers disabled
+
+Use a fresh disposable base directory. Before the first server launch, write
+`userdata/settings.json` with these existing settings:
+
+```json
+{
+  "providers": {
+    "codex": { "enabled": false },
+    "claudeAgent": { "enabled": false },
+    "cursor": { "enabled": false },
+    "grok": { "enabled": false },
+    "opencode": { "enabled": false },
+    "antigravity": { "enabled": false },
+    "pi": { "enabled": false }
+  },
+  "providerInstances": {}
+}
+```
+
+Validate the file with the existing `ServerSettings` schema before launch; invalid
+settings can fall back to enabled defaults. Existing explicit instances have
+their own enable flags, so do not overlay this example onto retained settings.
+Set `T3CODE_TELEMETRY_ENABLED=false` in the child environment. Installer
+construction and passive status reads do not discover executables; enabled
+resolution and explicit setup still do. Disabled Codex instances do not
+materialize configured account shadow homes, and disabled telemetry does not
+acquire an identity or schedule sending.
+
+These gates do not isolate inherited homes, login-shell profiles or background
+metadata traffic. A no-provider/no-account verification also needs fresh child
+HOME/USERPROFILE, CODEX_HOME, XDG and application-data directories, an allowlisted
+environment, and process/filesystem guards that block attempts before execution
+or account access. Do not read or copy credentials into the fixture. Keep the
+listener loopback-only and pairing output private. Verify the exact source SHA
+and successful build command exits before starting the built entrypoint.
+
+Guarded Linux HTTP verification is separate from browser interaction, Windows
+startup and real-provider readiness. A successful shell page response is not an
+authenticated API or AI-task result. No safe Windows no-account launch recipe is
+established by this procedure; the earlier owner handoff snippet remains
+withdrawn pending platform-specific verification.
+
+## Build a registry-dependent Node package
+
+After the web and server build above, create a new artifact directory:
+
+```sh
+node scripts/build-node-package.ts --output-dir /tmp/t3-node-artifact
+```
+
+The tarball contains the built server/client, registry-resolvable runtime
+externals, and the existing native-build, patch and override policy. It omits
+repository scripts and workspace dependencies. This delivery builds Linux
+x64/glibc only; the builder rejects Windows, macOS and ARM hosts before staging
+or invoking npm. It also requires a positively reported glibc runtime; musl or
+unidentified libc hosts fail before output writes. It records the target in the artifact README. Registry access
+and pnpm 11 are required; the artifact includes neither Node nor installed
+dependencies.
+
+Use the [local Node package instructions](../user/install.md#local-node-package)
+to extract and install into a fresh directory. Keep `NODE_PATH` unset. To verify
+without real providers, extract below a fresh
+`/tmp/b3r-portable-node-install-*/package` directory, give the install a fresh
+HOME/cache/config, and use its installed `dist/bin.mjs` with the existing local
+fixture launcher `--entrypoint`. The launcher checks every installed dependency
+and symlink resolves within the installed tree before boot. Continue the
+journey/lifecycle/checkpointed restart steps above. The installation command may
+use the existing `vp install --prod` tooling; the runtime must not link checkout
+`node_modules`. Preserve the shipped native-build/patch policy. Registry or native
+build/download failures are prerequisites to report, not permission to approve
+extra scripts or substitute cached repository links.
 
 ## Checks
 

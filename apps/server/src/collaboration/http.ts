@@ -1,0 +1,179 @@
+import * as DateTime from "effect/DateTime";
+import { PolicyExecutionContext } from "../policy/executionContext.ts";
+import {
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  CollaborationCommand,
+  EnvironmentHttpApi,
+  isProviderAvailable,
+  isProviderTaskExecutionCapable,
+  type ServerProvider,
+} from "@t3tools/contracts";
+import * as Layer from "effect/Layer";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+
+import {
+  annotateEnvironmentRequest,
+  failEnvironmentInternal,
+  failEnvironmentInvalidRequest,
+  requireEnvironmentScope,
+} from "../auth/http.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import {
+  collaborationExecutionGate,
+  sealCollaborationCommand,
+  type CollaborationProviderFact,
+} from "./admit.ts";
+import {
+  TaskResultFeedbackService,
+  taskResultFeedbackLayer,
+  readCollaborationSnapshot,
+  submitCollaborationCommand,
+} from "./store.ts";
+
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as CollaborationThreads from "./CollaborationThreads.ts";
+import * as RouterEvaluation from "../routerEvaluation/RouterEvaluationService.ts";
+
+const decodeCommand = Schema.decodeUnknownEffect(CollaborationCommand);
+
+const providerFact = (provider: ServerProvider): CollaborationProviderFact => ({
+  id: provider.instanceId,
+  displayName: provider.displayName ?? provider.driver,
+  capabilities: provider.models.map((model) => model.slug),
+  executable:
+    provider.installed &&
+    provider.enabled &&
+    provider.status === "ready" &&
+    isProviderAvailable(provider) &&
+    isProviderTaskExecutionCapable(provider) &&
+    provider.models.length > 0,
+});
+
+const directoryHttpApiLayer = HttpApiBuilder.group(
+  EnvironmentHttpApi,
+  "collaboration",
+  Effect.fnUntraced(function* (handlers) {
+    const sql = yield* SqlClient.SqlClient;
+    const collaborationThreads = yield* CollaborationThreads.CollaborationThreads;
+    const projects = yield* ProjectStore.ProjectStoreV2;
+    const providers = yield* ProviderRegistry;
+    const environment = yield* ServerEnvironment.ServerEnvironment;
+
+    const factsFor = (principalId: string, command: CollaborationCommand) =>
+      Effect.gen(function* () {
+        const projectRows = yield* projects.listShells();
+        const threadRows = command.threadId
+          ? yield* sql<{ readonly threadId: string; readonly projectId: string }>`
+              SELECT thread_id AS threadId, project_id AS projectId
+              FROM orchestration_v2_projection_threads
+              WHERE thread_id = ${command.threadId}
+              LIMIT 1
+            `
+          : [];
+        const configured = yield* providers.getProviders;
+        return {
+          principalId,
+          projectIds: projectRows.map((project) => project.id),
+          providers: configured.map(providerFact),
+          threads: threadRows.map((thread) => ({
+            id: thread.threadId,
+            projectId: thread.projectId,
+          })),
+          executionGate: collaborationExecutionGate,
+        };
+      });
+
+    return handlers
+      .handle(
+        "snapshot",
+        Effect.fn("environment.collaboration.snapshot")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          const principal = yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* readCollaborationSnapshot(sql, principal.subject, {
+            environmentId: yield* environment.getEnvironmentId,
+            canOperate: principal.scopes.has(AuthOrchestrationOperateScope),
+          }).pipe(Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)));
+        }),
+      )
+      .handle(
+        "openThread",
+        Effect.fn("environment.collaboration.openThread")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          const principal = yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* collaborationThreads
+            .open(principal.subject, args.payload)
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)));
+        }),
+      )
+      .handle(
+        "command",
+        Effect.fn("environment.collaboration.command")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          const principal = yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          const command = yield* decodeCommand(args.payload).pipe(
+            Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
+          );
+          const sealed = yield* factsFor(principal.subject, command).pipe(
+            Effect.map((facts) => sealCollaborationCommand(command, facts)),
+            Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
+          );
+          if (sealed.outcome === "rejected") {
+            const snapshot = yield* readCollaborationSnapshot(sql, principal.subject).pipe(
+              Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
+            );
+            return {
+              outcome: "rejected" as const,
+              code: sealed.code,
+              detail: sealed.detail,
+              idempotent: false,
+              gateDecision: "DENY" as const,
+              snapshot,
+            };
+          }
+          return yield* submitCollaborationCommand(sql, sealed.command).pipe(
+            Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
+          );
+        }),
+      );
+  }),
+).pipe(Layer.provide(CollaborationThreads.layer));
+
+export const taskResultFeedbackHttpApiLayer = HttpApiBuilder.group(
+  EnvironmentHttpApi,
+  "taskResultFeedback",
+  Effect.fnUntraced(function* (handlers) {
+    const feedback = yield* TaskResultFeedbackService;
+    const feedbackRequest = <I, E>(
+      run: (input: I) => Effect.Effect<import("@t3tools/contracts").TaskResultFeedbackState, E>,
+    ) =>
+      Effect.fn("environment.collaboration.taskFeedback")(function* (args: {
+        endpoint: { name: string };
+        payload: I;
+      }) {
+        yield* annotateEnvironmentRequest(args.endpoint.name);
+        const principal = yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+        return yield* run(args.payload).pipe(
+          Effect.provideService(PolicyExecutionContext, {
+            kind: "session",
+            actorId: principal.subject,
+            sessionId: principal.sessionId,
+            scopes: [...principal.scopes],
+            ...(principal.expiresAt ? { expiresAt: DateTime.formatIso(principal.expiresAt) } : {}),
+          }),
+          Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
+        );
+      });
+    return handlers
+      .handle("readTaskResultFeedback", feedbackRequest(feedback.read))
+      .handle("submitTaskResultFeedback", feedbackRequest(feedback.submit));
+  }),
+).pipe(Layer.provide(taskResultFeedbackLayer));
+export const collaborationHttpApiLayer = Layer.merge(
+  directoryHttpApiLayer,
+  taskResultFeedbackHttpApiLayer.pipe(Layer.provide(RouterEvaluation.layer)),
+);

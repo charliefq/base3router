@@ -1,0 +1,1947 @@
+import { classifyLocalTask } from "@t3tools/shared/routerEvaluation";
+import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
+import * as Etag from "effect/unstable/http/Etag";
+import { assert, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
+import * as ModelRouter from "@t3tools/shared/modelRouter";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
+import {
+  withAgentsTaskCreationFixture,
+  agentsCreationCommand,
+  agentsCreationProvider,
+  eligibleCapProviders,
+} from "../collaboration/testkit/agentsTaskCreationFixture.ts";
+import {
+  AuthOrchestrationOperateScope,
+  EnvironmentId,
+  EnvironmentHttpApi,
+  EnvironmentAuthenticatedAuth,
+  EnvironmentAuthenticatedPrincipal,
+  AuthSessionId,
+  AuthOrchestrationReadScope,
+  EnvironmentRouterPolicyStatus,
+  EnvironmentRouterPolicyCommandResult,
+  EnvironmentRouterPolicyCommand,
+  HYBRID_ROUTER_POLICY_VERSION,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
+  HYBRID_MIN_SAMPLE_RATE,
+  MODEL_ROUTER_POLICY_VERSION,
+  ObservationId,
+  RouterEvaluationError,
+  TURN_OUTCOME_OBSERVATION_VERSION,
+  UNKNOWN_TASK_PROFILE,
+  emptyTiming,
+  emptyUsageMeasurement,
+  emptyCostMeasurement,
+  emptyOutcomeEvidence,
+  CommandId,
+  DispatcherTaskRouteBinding,
+  MessageId,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ProviderThreadId,
+  ProviderTurnId,
+  ThreadId,
+  ModelSelection,
+  ModelRouterConstraints,
+  OrchestrationV2Command,
+  type OrchestrationV2ProviderThread,
+  type ServerProvider,
+  type ChatAttachment,
+  type OrchestrationV2ThreadProjection,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
+import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
+import type {
+  ProviderAdapterV2Event,
+  ProviderAdapterV2Shape,
+} from "../orchestration-v2/ProviderAdapter.ts";
+import { makeOrchestratorV2ReplayLayerWithRegistry } from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
+import { checkpointWorkspace } from "../orchestration-v2/testkit/ReplayFixtureWorkspace.ts";
+import { argumentHash, authorizeDispatch, Base3PolicyDeniedError } from "./Base3PolicyGate.ts";
+import { PolicyExecutionContext } from "./executionContext.ts";
+import * as RouterEvaluation from "../routerEvaluation/RouterEvaluationService.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import { routerPolicyHttpApiLayer } from "../routerEvaluation/http.ts";
+const decodePolicyStatus = Schema.decodeUnknownSync(EnvironmentRouterPolicyStatus);
+const decodePolicyResult = Schema.decodeUnknownSync(EnvironmentRouterPolicyCommandResult);
+const encodePolicyControl = Schema.encodeSync(
+  Schema.fromJsonString(EnvironmentRouterPolicyCommand),
+);
+class PolicyControlFixtureApi extends HttpApi.make("environment").add(
+  EnvironmentHttpApi.groups.routerPolicy,
+) {}
+const policyEnvironment = EnvironmentId.make("policy-control-disposable");
+const instanceId = ProviderInstanceId.make("fake-routing-provider");
+const driver = ProviderDriverKind.make("codex");
+const a: ModelSelection = { instanceId, model: "gpt-5.4" };
+const b: ModelSelection = {
+  instanceId: ProviderInstanceId.make("fake-manual-provider"),
+  model: "gpt-5.3-codex",
+};
+const capabilities = CodexProviderCapabilitiesV2;
+const encodeModelSelection = Schema.encodeEffect(Schema.fromJsonString(ModelSelection));
+const decodeLinkedAttempt = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Struct({ providerTurnId: Schema.NullOr(Schema.String) })),
+);
+const decodeRoute = Schema.decodeEffect(Schema.fromJsonString(DispatcherTaskRouteBinding));
+const isDispatchError = Schema.is(Orchestrator.OrchestratorDispatchError);
+const isPreviouslyRejected = Schema.is(Orchestrator.OrchestratorCommandPreviouslyRejectedError);
+const isPolicyDenied = Schema.is(Base3PolicyDeniedError);
+const decodeCommand = Schema.decodeEffect(OrchestrationV2Command);
+const decodeUnknownCommand = Schema.decodeUnknownSync(OrchestrationV2Command);
+const session = {
+  kind: "session" as const,
+  actorId: "routing-user",
+  sessionId: "routing-session",
+  scopes: [AuthOrchestrationOperateScope],
+};
+const provider: ServerProvider = {
+  instanceId,
+  driver,
+  enabled: true,
+  installed: true,
+  version: null,
+  status: "ready",
+  auth: { status: "authenticated" },
+  checkedAt: "2026-10-12T00:00:00.000Z",
+  models: [a, b].map((selection) => ({
+    slug: selection.model,
+    name: selection.model,
+    isCustom: false,
+    capabilities: null,
+  })),
+  slashCommands: [],
+  skills: [],
+};
+function makeAdapter(
+  started: Ref.Ref<ReadonlyArray<ModelSelection>>,
+  instanceId: ProviderInstanceId,
+  resultText?: string,
+  delivered?: Ref.Ref<ReadonlyArray<ReadonlyArray<ChatAttachment>>>,
+): ProviderAdapterV2Shape {
+  return {
+    instanceId: instanceId,
+    driver: driver,
+    getCapabilities: () => Effect.succeed(capabilities),
+    planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
+    openSession: (sessionInput) =>
+      Effect.gen(function* () {
+        const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+        const now = yield* DateTime.now;
+        return {
+          instanceId: instanceId,
+          driver: driver,
+          providerSessionId: sessionInput.providerSessionId,
+          providerSession: {
+            id: sessionInput.providerSessionId,
+            driver: driver,
+            providerInstanceId: instanceId,
+            status: "ready",
+            cwd: sessionInput.runtimePolicy.cwd ?? "/fallback",
+            model: sessionInput.modelSelection.model,
+            capabilities: capabilities,
+            createdAt: now,
+            updatedAt: now,
+            lastError: null,
+          },
+          events: Stream.fromQueue(events),
+          ensureThread: (threadInput) =>
+            Effect.gen(function* () {
+              const createdAt = yield* DateTime.now;
+              return {
+                id: ProviderThreadId.make(`provider-thread:handoff:${threadInput.threadId}`),
+                driver: driver,
+                providerInstanceId: instanceId,
+                providerSessionId: sessionInput.providerSessionId,
+                appThreadId: threadInput.threadId,
+                ownerNodeId: null,
+                nativeThreadRef: {
+                  driver: driver,
+                  nativeId: `native-thread:handoff:${threadInput.threadId}`,
+                  strength: "strong",
+                },
+                nativeConversationHeadRef: null,
+                status: "idle",
+                firstRunOrdinal: null,
+                lastRunOrdinal: null,
+                handoffIds: [],
+                forkedFrom: null,
+                createdAt,
+                updatedAt: createdAt,
+              } satisfies OrchestrationV2ProviderThread;
+            }),
+          resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
+          startTurn: (input) =>
+            Effect.gen(function* () {
+              yield* Ref.update(started, (models) => [...models, input.modelSelection]);
+              if (delivered)
+                yield* Ref.update(delivered, (messages) => [
+                  ...messages,
+                  input.message.attachments,
+                ]);
+              const occurredAt = yield* DateTime.now;
+              const providerTurnId = ProviderTurnId.make(
+                `provider-turn:handoff:${input.attemptId}`,
+              );
+              yield* Queue.offer(events, {
+                type: "provider_turn.updated",
+                driver: driver,
+                providerTurn: {
+                  id: providerTurnId,
+                  providerThreadId: input.providerThread.id,
+                  nodeId: input.rootNodeId,
+                  runAttemptId: input.attemptId,
+                  nativeTurnRef: {
+                    driver: driver,
+                    nativeId: `native:${providerTurnId}`,
+                    strength: "strong",
+                  },
+                  ordinal: input.providerTurnOrdinal,
+                  status: "completed",
+                  startedAt: occurredAt,
+                  completedAt: occurredAt,
+                },
+              });
+              if (resultText !== undefined) {
+                const ids = yield* IdAllocator.IdAllocatorV2.pipe(
+                  Effect.provide(IdAllocator.layer),
+                );
+                const ref = {
+                  driver,
+                  nativeId: `eligible-output:${input.attemptId}`,
+                  strength: "strong" as const,
+                };
+                const nodeId = ids.derive.nodeFromProviderItem({
+                  driver,
+                  nativeItemId: ref.nativeId,
+                });
+                yield* Queue.offer(events, {
+                  type: "node.updated",
+                  driver,
+                  node: {
+                    id: nodeId,
+                    threadId: input.threadId,
+                    runId: input.runId,
+                    parentNodeId: input.rootNodeId,
+                    rootNodeId: input.rootNodeId,
+                    kind: "assistant_message",
+                    status: "completed",
+                    countsForRun: false,
+                    providerThreadId: input.providerThread.id,
+                    providerTurnId,
+                    nativeItemRef: ref,
+                    runtimeRequestId: null,
+                    checkpointScopeId: null,
+                    startedAt: occurredAt,
+                    completedAt: occurredAt,
+                  },
+                });
+                yield* Queue.offer(events, {
+                  type: "turn_item.updated",
+                  driver,
+                  turnItem: {
+                    id: ids.derive.turnItemFromProviderItem({ driver, nativeItemId: ref.nativeId }),
+                    messageId: ids.derive.messageFromProviderItem({
+                      driver,
+                      nativeItemId: ref.nativeId,
+                    }),
+                    threadId: input.threadId,
+                    runId: input.runId,
+                    nodeId,
+                    providerThreadId: input.providerThread.id,
+                    providerTurnId,
+                    nativeItemRef: ref,
+                    parentItemId: null,
+                    ordinal: 1,
+                    type: "assistant_message",
+                    status: "completed",
+                    title: null,
+                    startedAt: occurredAt,
+                    completedAt: occurredAt,
+                    updatedAt: occurredAt,
+                    text: `${resultText} [run=${input.runId}; attempt=${input.attemptId}]`,
+                    streaming: false,
+                  },
+                });
+              }
+              yield* Queue.offer(events, {
+                type: "turn.terminal",
+                driver: driver,
+                providerThreadId: input.providerThread.id,
+                providerTurnId,
+                runOrdinal: input.runOrdinal,
+                status: "completed",
+                failure: null,
+                threadDisposition: "reusable",
+              });
+            }),
+          steerTurn: () => Effect.void,
+          interruptTurn: () => Effect.void,
+          respondToRuntimeRequest: () => Effect.void,
+          readThreadSnapshot: () => Effect.die("unused readThreadSnapshot"),
+          rollbackThread: () => Effect.die("unused rollbackThread"),
+          forkThread: () => Effect.die("unused forkThread"),
+        };
+      }),
+  };
+}
+
+interface BoundTargetScenario {
+  readonly image?: "supported" | "unsupported" | "unknown";
+  readonly revokeImage?: "capability" | "availability";
+  readonly name: string;
+  readonly mode: "auto" | "manual";
+  readonly queued: boolean;
+  readonly sameTarget: boolean;
+  readonly omitted: boolean;
+  readonly options: boolean;
+  readonly constraints?: ModelRouterConstraints;
+  readonly unknownEstimates?: boolean;
+  readonly denied?: boolean;
+  readonly expectedTarget?: ModelSelection;
+  readonly rejectionReason?: string;
+}
+
+const imageAttachments: ReadonlyArray<ChatAttachment> = [
+  {
+    type: "image",
+    id: "image-fixture-original",
+    name: "private-image.png",
+    mimeType: "image/png",
+    sizeBytes: 12,
+  },
+];
+const scenarios: ReadonlyArray<BoundTargetScenario> = [
+  ...(["capability", "availability"] as const).map((revokeImage): BoundTargetScenario => ({
+    name: `image loses ${revokeImage} before dequeue`,
+    image: "supported",
+    revokeImage,
+    mode: "auto",
+    queued: true,
+    sameTarget: false,
+    omitted: false,
+    options: false,
+    expectedTarget: b,
+  })),
+  ...[false, true].flatMap((queued) =>
+    (["supported", "unsupported", "unknown"] as const).map((image): BoundTargetScenario => ({
+      name: `image ${image} ${queued ? "queued" : "immediate"}`,
+      mode: "auto",
+      queued,
+      image,
+      sameTarget: false,
+      omitted: false,
+      options: false,
+      expectedTarget: b,
+      denied: image !== "supported",
+    })),
+  ),
+  {
+    name: "manual required vision rejected",
+    mode: "manual",
+    queued: false,
+    sameTarget: false,
+    omitted: false,
+    options: true,
+    constraints: { requiredCapabilities: ["vision"] },
+    unknownEstimates: true,
+    denied: true,
+    rejectionReason: "REQUIRED_CAPABILITY_MISSING",
+  },
+  ...[
+    { name: "instance allow mismatch", constraints: { allowedInstanceIds: [a.instanceId] } },
+    { name: "instance exclude match", constraints: { excludedInstanceIds: [b.instanceId] } },
+    {
+      name: "driver allow mismatch",
+      constraints: { allowedDrivers: [ProviderDriverKind.make("claudeAgent")] },
+    },
+    { name: "driver exclude match", constraints: { excludedDrivers: [driver] } },
+    { name: "model allow mismatch", constraints: { allowedModels: [a.model] } },
+    { name: "model exclude match", constraints: { excludedModels: [b.model] } },
+    { name: "empty instance allow", constraints: { allowedInstanceIds: [] } },
+    { name: "empty driver allow", constraints: { allowedDrivers: [] } },
+    { name: "empty model allow", constraints: { allowedModels: [] } },
+    {
+      name: "overlapping model lists",
+      constraints: { allowedModels: [b.model], excludedModels: [b.model] },
+    },
+  ].flatMap((row) =>
+    [false, true].map((queued): BoundTargetScenario => ({
+      ...row,
+      name: `manual ${row.name}${queued ? " queued" : ""}`,
+      mode: "manual",
+      queued,
+      sameTarget: false,
+      omitted: false,
+      options: true,
+      unknownEstimates: true,
+      denied: true,
+      rejectionReason: "CONSTRAINT_EXCLUDED",
+    })),
+  ),
+  {
+    name: "manual required vision rejected queued",
+    mode: "manual",
+    queued: true,
+    sameTarget: false,
+    omitted: false,
+    options: true,
+    unknownEstimates: true,
+    denied: true,
+    constraints: { requiredCapabilities: ["vision"] },
+    rejectionReason: "REQUIRED_CAPABILITY_MISSING",
+  },
+  {
+    name: "manual explicit metadata allowed",
+    mode: "manual",
+    queued: false,
+    sameTarget: false,
+    omitted: false,
+    options: true,
+    unknownEstimates: true,
+    constraints: {
+      requiredCapabilities: ["tools", "code", "code"],
+      allowedInstanceIds: [b.instanceId, b.instanceId],
+      excludedInstanceIds: [a.instanceId],
+      allowedDrivers: [driver],
+      excludedDrivers: [ProviderDriverKind.make("claudeAgent")],
+      allowedModels: [b.model],
+      excludedModels: [a.model],
+    },
+  },
+  {
+    name: "manual empty excludes and capabilities",
+    mode: "manual",
+    queued: true,
+    sameTarget: false,
+    omitted: false,
+    options: true,
+    unknownEstimates: true,
+    constraints: {
+      requiredCapabilities: [],
+      excludedInstanceIds: [],
+      excludedDrivers: [],
+      excludedModels: [],
+    },
+  },
+  {
+    name: "auto allows the other target",
+    mode: "auto",
+    queued: false,
+    sameTarget: false,
+    omitted: false,
+    options: true,
+    unknownEstimates: true,
+    constraints: { allowedModels: [a.model], excludedInstanceIds: [b.instanceId] },
+    expectedTarget: a,
+  },
+  { name: "auto", mode: "auto", queued: false, sameTarget: false, omitted: false, options: false },
+  {
+    name: "manual",
+    mode: "manual",
+    queued: false,
+    sameTarget: false,
+    omitted: false,
+    options: false,
+  },
+  {
+    name: "queued auto",
+    mode: "auto",
+    queued: true,
+    sameTarget: false,
+    omitted: false,
+    options: false,
+  },
+  {
+    name: "manual options",
+    mode: "manual",
+    queued: false,
+    sameTarget: false,
+    omitted: false,
+    options: true,
+  },
+  {
+    name: "auto same target options",
+    mode: "auto",
+    queued: false,
+    sameTarget: true,
+    omitted: false,
+    options: true,
+  },
+  {
+    name: "manual inherited options",
+    mode: "manual",
+    queued: false,
+    sameTarget: false,
+    omitted: true,
+    options: true,
+  },
+  {
+    name: "auto inherited same target options",
+    mode: "auto",
+    queued: false,
+    sameTarget: true,
+    omitted: true,
+    options: true,
+  },
+  {
+    name: "auto changed target drops options",
+    mode: "auto",
+    queued: false,
+    sameTarget: false,
+    omitted: false,
+    options: true,
+  },
+  ...[
+    { name: "auto cost limit", mode: "auto", constraints: { maxCostUsd: 0.1 } },
+    { name: "auto latency limit", mode: "auto", constraints: { maxLatencyMs: 0.1 } },
+    { name: "auto both limits", mode: "auto", constraints: { maxCostUsd: 0.1, maxLatencyMs: 0.1 } },
+    {
+      name: "queued auto cost limit",
+      mode: "auto",
+      constraints: { maxCostUsd: 0.1 },
+      queued: true,
+    },
+    {
+      name: "manual equality",
+      mode: "manual",
+      constraints: { maxCostUsd: 0.1, maxLatencyMs: 0.1 },
+    },
+    {
+      name: "manual cost exceeded",
+      mode: "manual",
+      constraints: { maxCostUsd: 0.05 },
+      denied: true,
+    },
+    {
+      name: "manual latency exceeded",
+      mode: "manual",
+      constraints: { maxLatencyMs: 0.09 },
+      denied: true,
+    },
+    {
+      name: "auto cost unknown",
+      mode: "auto",
+      constraints: { maxCostUsd: 1 },
+      unknownEstimates: true,
+      denied: true,
+    },
+    {
+      name: "auto latency unknown",
+      mode: "auto",
+      constraints: { maxLatencyMs: 1000 },
+      unknownEstimates: true,
+      denied: true,
+    },
+    {
+      name: "manual cost unknown",
+      mode: "manual",
+      constraints: { maxCostUsd: 1 },
+      unknownEstimates: true,
+      denied: true,
+    },
+    {
+      name: "manual latency unknown",
+      mode: "manual",
+      constraints: { maxLatencyMs: 1000 },
+      unknownEstimates: true,
+      denied: true,
+    },
+  ].map((row): BoundTargetScenario => ({
+    queued: false,
+    sameTarget: false,
+    omitted: false,
+    options: false,
+    ...row,
+    mode: row.mode as "auto" | "manual",
+  })),
+];
+
+it.live.each(scenarios)(
+  "server-bound $name preserves target, options, grant and replay",
+  ({
+    name,
+    image,
+    revokeImage,
+    mode,
+    queued,
+    sameTarget,
+    omitted,
+    options,
+    constraints,
+    unknownEstimates,
+    denied,
+    expectedTarget,
+    rejectionReason,
+  }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace(`bound-target-${name}`);
+        const sourceSelection: ModelSelection = {
+          ...(sameTarget ? a : b),
+          ...(options
+            ? {
+                options: [
+                  { id: "reasoningEffort", value: "high" },
+                  { id: "serviceTier", value: "fast" },
+                ],
+              }
+            : {}),
+        };
+        // FIXTURE estimates only: production provider snapshots have no declared metrics.
+        // Keep the real catalog builder/router; inject known estimates at this test seam.
+        if (constraints !== undefined && !unknownEstimates) {
+          const buildCatalog = ModelRouter.modelRouterCatalogFromProviders;
+          const estimates = new Map([
+            [
+              `${a.instanceId}\u0000${a.model}`,
+              {
+                quality: { status: "known" as const, value: 1 },
+                costUsd: { status: "known" as const, value: 0.2 },
+                latencyMs: { status: "known" as const, value: 0.2 },
+              },
+            ],
+            [
+              `${b.instanceId}\u0000${b.model}`,
+              {
+                quality: { status: "known" as const, value: 0 },
+                costUsd: { status: "known" as const, value: 0.1 },
+                latencyMs: { status: "known" as const, value: 0.1 },
+              },
+            ],
+          ]);
+          yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              vi
+                .spyOn(ModelRouter, "modelRouterCatalogFromProviders")
+                .mockImplementation((providers, capabilities) =>
+                  buildCatalog(providers, capabilities, estimates),
+                ),
+            ),
+            (spy) => Effect.sync(() => spy.mockRestore()),
+          );
+        }
+        const rawFixtureProviders =
+          constraints === undefined
+            ? [provider, { ...provider, instanceId: b.instanceId }]
+            : [
+                { ...provider, models: provider.models.filter((model) => model.slug === a.model) },
+                {
+                  ...provider,
+                  instanceId: b.instanceId,
+                  models: provider.models.filter((model) => model.slug === b.model),
+                },
+              ];
+        const fixtureProviders =
+          image === undefined
+            ? rawFixtureProviders
+            : rawFixtureProviders.map((p) => ({
+                ...p,
+                models: p.models.map((m) => ({
+                  ...m,
+                  ...(image === "unknown"
+                    ? {}
+                    : {
+                        inputModalities:
+                          p.instanceId === b.instanceId &&
+                          m.slug === b.model &&
+                          image === "supported"
+                            ? ["text", "image"]
+                            : ["text"],
+                      }),
+                })),
+              }));
+        if (constraints !== undefined && !unknownEstimates && mode === "auto") {
+          const unconstrained = ModelRouter.routeModel({
+            mode: "auto",
+            catalog: ModelRouter.modelRouterCatalogFromProviders(fixtureProviders),
+            preferredTargets: [a],
+          });
+          assert.deepEqual(
+            unconstrained.selected?.target,
+            a,
+            "same fixture estimates prefer a without limits",
+          );
+        }
+        const currentProviders = yield* Ref.make(fixtureProviders);
+        const delivered = yield* Ref.make<ReadonlyArray<ReadonlyArray<ChatAttachment>>>([]);
+        const started = yield* Ref.make<ReadonlyArray<ModelSelection>>([]);
+        const database = SqlitePersistenceMemory;
+        const runtime = Layer.mergeAll(
+          database,
+          Layer.mock(ProviderRegistry)({
+            getProviders: Ref.get(currentProviders),
+          }),
+          makeOrchestratorV2ReplayLayerWithRegistry(
+            { name: `bound-target-${name}` },
+            ProviderAdapterRegistry.makeLayer([
+              makeAdapter(
+                started,
+                a.instanceId,
+                image ? "Image fake result" : undefined,
+                delivered,
+              ),
+              makeAdapter(
+                started,
+                b.instanceId,
+                image ? "Image fake result" : undefined,
+                delivered,
+              ),
+            ]),
+            { databaseLayer: database, runEffectWorker: !queued },
+          ),
+        );
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const threadId = ThreadId.make(`thread:${mode}`);
+          const projectId = ProjectId.make(`project:${mode}`);
+          const now = DateTime.formatIso(yield* DateTime.now);
+          const defaultSelectionJson = yield* encodeModelSelection(a);
+          yield* sql`INSERT INTO projection_projects (project_id,title,workspace_root,default_model_selection_json,scripts_json,created_at,updated_at) VALUES (${projectId},'Routing fixture',${cwd},${defaultSelectionJson},'[]',${now},${now})`;
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make(`create:${mode}`),
+            threadId,
+            projectId,
+            title: "Routing fixture",
+            modelSelection: sourceSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: cwd,
+            createdBy: "user",
+            creationSource: "web",
+          });
+          const command = {
+            type: "message.dispatch" as const,
+            commandId: CommandId.make(`dispatch:${mode}`),
+            threadId,
+            messageId: MessageId.make(`message:${mode}`),
+            text: image ? "" : "Inspect this fixture.",
+            attachments: image ? imageAttachments : [],
+            ...(omitted ? {} : { modelSelection: sourceSelection }),
+            routingMode: mode,
+            ...(constraints === undefined ? {} : { modelRouteConstraints: constraints }),
+            dispatchMode: {
+              type: queued ? ("queue_after_active" as const) : ("start_immediately" as const),
+            },
+            createdBy: "user" as const,
+            creationSource: "web" as const,
+          };
+          const decoded = yield* decodeCommand(command);
+          assert.equal(decoded.type, "message.dispatch");
+          if (decoded.type !== "message.dispatch") return;
+          assert.deepEqual(
+            decoded.modelRouteConstraints,
+            constraints,
+            "wire decode retains exact constraints",
+          );
+          if (queued) {
+            yield* orchestrator.dispatch({
+              ...command,
+              commandId: CommandId.make("active-foreground"),
+              messageId: MessageId.make("active-foreground"),
+              routingMode: "manual",
+              modelRouteConstraints: undefined,
+              dispatchMode: { type: "start_immediately" },
+            });
+          }
+          if (denied) {
+            const priorRuns = (yield* orchestrator.getThreadProjection(threadId)).runs;
+            const priorLeases =
+              yield* sql`SELECT lease_id FROM base3_capacity_leases WHERE thread_id=${threadId} AND released_at IS NULL`;
+            assert.equal(priorRuns.length, queued ? 1 : 0);
+            const error = yield* Effect.flip(orchestrator.dispatch(decoded));
+            assert.isTrue(isDispatchError(error));
+            if (!isDispatchError(error)) return;
+            assert.isTrue(isPolicyDenied(error.cause));
+            if (!isPolicyDenied(error.cause)) return;
+            assert.equal(error.cause.reason, "binding");
+            assert.include(error.cause.message, "Route");
+            if (rejectionReason) assert.include(error.cause.message, rejectionReason);
+            const replayed = yield* Effect.flip(orchestrator.dispatch(decoded));
+            assert.isTrue(isPreviouslyRejected(replayed));
+            assert.deepEqual(yield* Ref.get(started), []);
+            assert.deepEqual((yield* orchestrator.getThreadProjection(threadId)).runs, priorRuns);
+            const effects = yield* sql<{
+              count: number;
+            }>`SELECT count(*) AS count FROM orchestration_v2_effect_outbox WHERE command_id=${command.commandId}`;
+            const grants = yield* sql<{
+              count: number;
+            }>`SELECT count(*) AS count FROM base3_execution_grants WHERE message_id=${command.messageId}`;
+            const routes = yield* sql<{
+              count: number;
+            }>`SELECT count(*) AS count FROM projection_dispatcher_task_routes WHERE message_id=${command.messageId}`;
+            assert.equal(effects[0]?.count, 0);
+            assert.equal(grants[0]?.count, 0);
+            assert.equal(routes[0]?.count, 0);
+            assert.deepEqual(
+              yield* sql`SELECT lease_id FROM base3_capacity_leases WHERE thread_id=${threadId} AND released_at IS NULL`,
+              priorLeases,
+            );
+            return;
+          }
+          const completed = queued
+            ? null
+            : yield* orchestrator.streamDomainEvents.pipe(
+                Stream.filter(
+                  (event) => event.type === "run.updated" && event.payload.status === "completed",
+                ),
+                Stream.take(1),
+                Stream.runDrain,
+                Effect.forkScoped,
+              );
+          const receipt = yield* orchestrator.dispatch(decoded);
+          if (completed !== null) {
+            yield* worker.drain();
+            yield* Fiber.join(completed);
+            yield* worker.drain();
+          }
+          const expectedIdentity =
+            expectedTarget ??
+            (constraints !== undefined ? b : mode === "auto" && !sameTarget ? a : sourceSelection);
+          const expected =
+            expectedIdentity.instanceId === sourceSelection.instanceId &&
+            expectedIdentity.model === sourceSelection.model
+              ? sourceSelection
+              : expectedIdentity;
+          assert.deepEqual(
+            command.modelSelection,
+            omitted ? undefined : sourceSelection,
+            "the client input is never mutated",
+          );
+          assert.deepEqual(yield* Ref.get(started), queued ? [] : [expected]);
+          const projection = yield* orchestrator.getThreadProjection(threadId);
+          const run = projection.runs.find(
+            (candidate) => candidate.userMessageId === command.messageId,
+          );
+          assert.deepEqual(run?.modelSelection, expected);
+          if (queued) assert.equal(run?.status, "queued");
+          const routes = yield* sql<{
+            binding: string;
+          }>`SELECT binding_json AS binding FROM projection_dispatcher_task_routes WHERE thread_id=${threadId} AND message_id=${command.messageId}`;
+          const route = yield* decodeRoute(routes[0]?.binding ?? "{}");
+          assert.deepEqual(
+            { instanceId: route.target.instanceId, model: route.target.model },
+            { instanceId: expected.instanceId, model: expected.model },
+          );
+          if (image) {
+            assert.deepEqual(route.modelRoute?.task.requiredCapabilities, ["vision"]);
+            assert.equal(route.modelRoute?.task.attachmentCount, 1);
+            assert.deepEqual(yield* Ref.get(delivered), queued ? [] : [imageAttachments]);
+          }
+          const grants = yield* sql<{
+            hash: string;
+          }>`SELECT argument_hash AS hash FROM base3_execution_grants WHERE grant_id=${`grant:message:${threadId}:${command.messageId}`}`;
+          assert.equal(
+            grants[0]?.hash,
+            argumentHash({
+              text: command.text,
+              model: expected.model,
+              instanceId: expected.instanceId,
+              attachmentIds: command.attachments.map((attachment) => attachment.id),
+              ...(expected.options === undefined ? {} : { options: expected.options }),
+              ...(constraints === undefined ? {} : { modelRouteConstraints: constraints }),
+            }),
+          );
+          if (image === undefined && constraints === undefined && mode === "auto" && !sameTarget) {
+            const staleTarget = yield* Effect.flip(
+              authorizeDispatch(command).pipe(
+                Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
+              ),
+            );
+            assert.equal(staleTarget.reason, "argument-mismatch");
+          }
+          if (expected.options !== undefined) {
+            const changed = yield* Effect.flip(
+              authorizeDispatch({
+                ...command,
+                modelSelection: { ...expected, options: [{ id: "reasoningEffort", value: "low" }] },
+              }).pipe(
+                Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
+              ),
+            );
+            assert.equal(changed.reason, "argument-mismatch");
+          }
+          if (constraints !== undefined) {
+            assert.deepEqual(route.modelRoute?.selected?.target, {
+              instanceId: expected.instanceId,
+              model: expected.model,
+            });
+            assert.deepEqual(
+              route.modelRoute?.executed?.target,
+              route.modelRoute?.selected?.target,
+            );
+            if (mode === "auto" && !unknownEstimates) {
+              const excluded = route.modelRoute?.candidates.find(
+                (candidate) =>
+                  candidate.target.instanceId === a.instanceId &&
+                  candidate.target.model === a.model,
+              );
+              assert.equal(excluded?.eligible, false);
+              if (constraints.maxCostUsd !== undefined)
+                assert.include([...(excluded?.reasonCodes ?? [])], "ESTIMATED_COST_LIMIT_EXCEEDED");
+              if (constraints.maxLatencyMs !== undefined)
+                assert.include(
+                  [...(excluded?.reasonCodes ?? [])],
+                  "ESTIMATED_LATENCY_LIMIT_EXCEEDED",
+                );
+            }
+            const effective = { ...decoded, modelSelection: expected };
+            yield* authorizeDispatch(effective).pipe(
+              Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
+            );
+            for (const replacement of [
+              undefined,
+              {},
+              { maxCostUsd: 10 },
+              { maxLatencyMs: 10000 },
+            ]) {
+              const changed = yield* Effect.flip(
+                authorizeDispatch({ ...effective, modelRouteConstraints: replacement }).pipe(
+                  Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
+                ),
+              );
+              assert.equal(changed.reason, "argument-mismatch");
+            }
+            const alternateTarget =
+              expected.instanceId === a.instanceId && expected.model === a.model ? b : a;
+            const changedTarget = yield* Effect.flip(
+              authorizeDispatch({ ...effective, modelSelection: alternateTarget }).pipe(
+                Effect.provideService(PolicyExecutionContext, { kind: "server-continuation" }),
+              ),
+            );
+            assert.equal(changedTarget.reason, "argument-mismatch");
+            const changedIdentity = yield* Effect.flip(
+              orchestrator.dispatch({
+                ...decoded,
+                commandId: CommandId.make(`changed:${mode}`),
+                modelRouteConstraints: undefined,
+                modelSelection: alternateTarget,
+                routingMode: "manual",
+              }),
+            );
+            assert.isTrue(isDispatchError(changedIdentity));
+            if (!isDispatchError(changedIdentity)) return;
+            assert.isTrue(isPolicyDenied(changedIdentity.cause));
+            if (!isPolicyDenied(changedIdentity.cause)) return;
+            assert.equal(changedIdentity.cause.reason, "binding-immutable");
+          }
+          const replay = yield* orchestrator.dispatch(decoded);
+          if (!queued) yield* worker.drain();
+          assert.equal(replay.sequence, receipt.sequence);
+          assert.deepEqual(yield* Ref.get(started), queued ? [] : [expected]);
+          const after = yield* sql<{
+            binding: string;
+          }>`SELECT binding_json AS binding FROM projection_dispatcher_task_routes WHERE thread_id=${threadId} AND message_id=${command.messageId}`;
+          assert.deepEqual(after, routes);
+          const afterGrants = yield* sql<{
+            hash: string;
+          }>`SELECT argument_hash AS hash FROM base3_execution_grants WHERE grant_id=${`grant:message:${threadId}:${command.messageId}`}`;
+          assert.deepEqual(afterGrants, grants);
+          const assertImageResult = (projection: OrchestrationV2ThreadProjection) => {
+            const imageRun = projection.runs.find((r) => r.userMessageId === command.messageId);
+            assert.isDefined(imageRun);
+            const attempt = projection.attempts.find((a) => a.runId === imageRun?.id);
+            const turn = projection.providerTurns.find((t) => t.runAttemptId === attempt?.id);
+            const output = projection.turnItems.find(
+              (item) => item.runId === imageRun?.id && item.type === "assistant_message",
+            );
+            assert.isDefined(output);
+            if (!output || output.type !== "assistant_message")
+              throw new Error("Missing image result");
+            assert.equal(
+              output.text,
+              `Image fake result [run=${imageRun?.id}; attempt=${attempt?.id}]`,
+            );
+            assert.equal(output.providerTurnId, turn?.id);
+            assert.equal(output.providerThreadId, imageRun?.providerThreadId);
+            assert.equal(attempt?.providerTurnId, turn?.id);
+            assert.deepEqual(imageRun?.modelSelection, expected);
+          };
+          if (image && !queued) assertImageResult(projection);
+          if (queued) {
+            if (revokeImage) {
+              yield* Ref.update(currentProviders, (ps) =>
+                ps.map((p) =>
+                  p.instanceId !== b.instanceId
+                    ? p
+                    : revokeImage === "availability"
+                      ? { ...p, availability: "unavailable" as const }
+                      : {
+                          ...p,
+                          models: p.models.map((m) => ({ ...m, inputModalities: ["text"] })),
+                        },
+                ),
+              );
+            }
+            const finished = yield* orchestrator.streamDomainEvents.pipe(
+              Stream.filter(
+                (event) =>
+                  event.type === "run.updated" &&
+                  (event.payload.status === "completed" || event.payload.status === "failed"),
+              ),
+              Stream.take(2),
+              Stream.runDrain,
+              Effect.forkScoped,
+            );
+            yield* EffectWorker.runDaemonWithOptions({ concurrency: 1 }).pipe(Effect.forkScoped);
+            yield* Fiber.join(finished);
+            yield* worker.drain();
+            if (revokeImage) {
+              assert.deepEqual(yield* Ref.get(started), [sourceSelection]);
+              const revoked = yield* sql<{
+                revoked_at: string | null;
+              }>`SELECT revoked_at FROM base3_execution_grants WHERE message_id=${command.messageId}`;
+              assert.isString(revoked[0]?.revoked_at);
+              assert.equal(
+                (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+                  (r) => r.userMessageId === command.messageId,
+                )?.status,
+                "failed",
+              );
+              yield* orchestrator.dispatch(decoded);
+              yield* worker.drain();
+              assert.deepEqual(yield* Ref.get(started), [sourceSelection]);
+              return;
+            }
+            assert.deepEqual(yield* Ref.get(started), [sourceSelection, expected]);
+            const finalRun = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+              (candidate) => candidate.userMessageId === command.messageId,
+            );
+            assert.equal(finalRun?.status, "completed");
+            assert.deepEqual(finalRun?.modelSelection, expected);
+            if (image) {
+              assert.deepEqual(yield* Ref.get(delivered), [imageAttachments, imageAttachments]);
+              assertImageResult(yield* orchestrator.getThreadProjection(threadId));
+            }
+            const queuedReplay = yield* orchestrator.dispatch(decoded);
+            yield* worker.drain();
+            assert.equal(queuedReplay.sequence, receipt.sequence);
+            assert.deepEqual(yield* Ref.get(started), [sourceSelection, expected]);
+          }
+        }).pipe(Effect.provide(runtime), Effect.provideService(PolicyExecutionContext, session));
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it("decodes finite non-negative dispatch limits and rejects invalid numeric values", () => {
+  const command = {
+    type: "message.dispatch",
+    commandId: "limits-schema",
+    threadId: "limits-schema",
+    messageId: "limits-schema",
+    text: "Fixture only",
+    attachments: [],
+    dispatchMode: { type: "start_immediately" },
+    createdBy: "user",
+    creationSource: "web",
+  };
+  for (const key of ["maxCostUsd", "maxLatencyMs"]) {
+    for (const value of [-1, Infinity, NaN, "1"]) {
+      assert.throws(() =>
+        decodeUnknownCommand({ ...command, modelRouteConstraints: { [key]: value } }),
+      );
+    }
+  }
+  const limits = { maxCostUsd: 0, maxLatencyMs: 0 };
+  const decoded = decodeUnknownCommand({ ...command, modelRouteConstraints: limits });
+  assert.equal(decoded.type, "message.dispatch");
+  if (decoded.type === "message.dispatch") assert.deepEqual(decoded.modelRouteConstraints, limits);
+});
+
+it.live.each([0, 1, 24])(
+  "policy control with %i observations per target: HTTP → shadow → active → real V2 bind → rollback",
+  (recordCount) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace("policy-control-whole-flow");
+        const fixtureProviders = [
+          { ...provider, models: provider.models.filter((model) => model.slug === a.model) },
+          {
+            ...provider,
+            instanceId: b.instanceId,
+            models: provider.models.filter((model) => model.slug === b.model),
+          },
+        ];
+        const started = yield* Ref.make<ReadonlyArray<ModelSelection>>([]);
+        const database = SqlitePersistenceMemory;
+        const runtime = Layer.mergeAll(
+          database,
+          RouterEvaluation.layer.pipe(Layer.provide(database)),
+          Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed(fixtureProviders) }),
+          Layer.succeed(ServerEnvironment.ServerEnvironment, {
+            getEnvironmentId: Effect.succeed(policyEnvironment),
+            getDescriptor: Effect.die("Not used"),
+          }),
+          makeOrchestratorV2ReplayLayerWithRegistry(
+            { name: "policy-control-whole-flow" },
+            ProviderAdapterRegistry.makeLayer([
+              makeAdapter(started, a.instanceId),
+              makeAdapter(started, b.instanceId),
+            ]),
+            { databaseLayer: database, runEffectWorker: true },
+          ),
+        );
+        yield* Effect.gen(function* () {
+          const evaluation = yield* RouterEvaluation.RouterEvaluationService;
+          const routes = HttpApiBuilder.layer(PolicyControlFixtureApi).pipe(
+            Layer.provide(routerPolicyHttpApiLayer),
+            Layer.provide(Layer.succeed(RouterEvaluation.RouterEvaluationService, evaluation)),
+            Layer.provide(
+              Layer.succeed(ServerEnvironment.ServerEnvironment, {
+                getEnvironmentId: Effect.succeed(policyEnvironment),
+                getDescriptor: Effect.die("Not used"),
+              }),
+            ),
+            Layer.provide(
+              Layer.succeed(EnvironmentAuthenticatedAuth, (effect) =>
+                effect.pipe(
+                  Effect.provideService(EnvironmentAuthenticatedPrincipal, {
+                    sessionId: AuthSessionId.make("policy-fixture-session"),
+                    subject: "fixture-operator",
+                    method: "browser-session-cookie",
+                    scopes: new Set([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
+                  }),
+                ),
+              ),
+            ),
+            Layer.provideMerge(
+              HttpPlatform.layer.pipe(
+                Layer.provideMerge(NodeServices.layer),
+                Layer.provideMerge(Etag.layerWeak),
+              ),
+            ),
+            Layer.provide(NodeServices.layer),
+          );
+          const web = yield* Effect.acquireRelease(
+            Effect.sync(() => HttpRouter.toWebHandler(routes, { disableLogger: true })),
+            (web) => Effect.promise(() => web.dispose()),
+          );
+          const status = () =>
+            Effect.promise(async () => {
+              const response = await web.handler(new Request("http://fixture/api/router-policy"));
+              assert.equal(response.status, 200);
+              return decodePolicyStatus(await response.json());
+            });
+          const control = (input: EnvironmentRouterPolicyCommand) =>
+            Effect.promise(async () => {
+              const response = await web.handler(
+                new Request("http://fixture/api/router-policy/command", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: encodePolicyControl(input),
+                }),
+              );
+              assert.equal(response.status, 200);
+              const result = decodePolicyResult(await response.json());
+              assert.equal(result.outcome, "applied");
+              if (result.outcome !== "applied") throw new Error(result.error.detail);
+              return result.status;
+            });
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const sql = yield* SqlClient.SqlClient;
+          const projectId = ProjectId.make("policy-fixture-project");
+          const now = DateTime.formatIso(yield* DateTime.now);
+          const defaultJson = yield* encodeModelSelection(a);
+          yield* sql`INSERT INTO projection_projects (project_id,title,workspace_root,default_model_selection_json,scripts_json,created_at,updated_at) VALUES (${projectId},'Policy fixture',${cwd},${defaultJson},'[]',${now},${now})`;
+          const runAuto = (
+            label: string,
+            expected: ModelSelection,
+            hybrid: boolean,
+            loadFailure = false,
+            mode: "auto" | "manual" = "auto",
+          ) =>
+            Effect.gen(function* () {
+              const threadId = ThreadId.make(`policy-thread-${label}`);
+              const messageId = MessageId.make(`policy-message-${label}`);
+              yield* orchestrator.dispatch({
+                type: "thread.create",
+                commandId: CommandId.make(`policy-create-${label}`),
+                threadId,
+                projectId,
+                title: "Policy fixture",
+                modelSelection: a,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: null,
+                worktreePath: cwd,
+                createdBy: "user",
+                creationSource: "web",
+              });
+              const completed = yield* orchestrator.streamDomainEvents.pipe(
+                Stream.filter(
+                  (event) =>
+                    event.type === "run.updated" &&
+                    event.payload.threadId === threadId &&
+                    event.payload.status === "completed",
+                ),
+                Stream.take(1),
+                Stream.runDrain,
+                Effect.forkScoped,
+              );
+              const messageCommand = {
+                type: "message.dispatch",
+                commandId: CommandId.make(`policy-dispatch-${label}`),
+                threadId,
+                messageId,
+                text: "Disposable policy fixture",
+                attachments: [],
+                routingMode: mode,
+                modelSelection: a,
+                dispatchMode: { type: "start_immediately" },
+                createdBy: "user",
+                creationSource: "web",
+              } as const;
+              yield* orchestrator.dispatch(messageCommand).pipe(
+                Effect.provideService(
+                  RouterEvaluation.RouterEvaluationService,
+                  loadFailure
+                    ? {
+                        ...evaluation,
+                        routingSnapshot: () =>
+                          Effect.fail(
+                            new RouterEvaluationError({
+                              reason: "malformed_policy",
+                              detail: "Fixture load failure",
+                            }),
+                          ),
+                      }
+                    : evaluation,
+                ),
+              );
+              yield* worker.drain();
+              yield* Fiber.join(completed);
+              yield* worker.drain();
+              const run = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+                (entry) => entry.userMessageId === messageId,
+              );
+              assert.deepEqual(run?.modelSelection, expected);
+              const row = (yield* sql<{
+                binding: string;
+              }>`SELECT binding_json AS binding FROM projection_dispatcher_task_routes WHERE message_id = ${messageId}`)[0]!;
+              const binding = yield* decodeRoute(row.binding);
+              assert.deepEqual(
+                { instanceId: binding.target.instanceId, model: binding.target.model },
+                expected,
+              );
+              assert.deepEqual(binding.modelRoute?.selected?.target, expected);
+              assert.deepEqual(binding.modelRoute?.executed?.target, expected);
+              assert.equal(binding.hybrid?.usedHybridRanking ?? false, hybrid);
+              if (loadFailure && mode === "auto") {
+                assert.equal(binding.hybrid?.fallbackToV0, true);
+                assert.include(binding.hybrid?.fallbackReason ?? "", "unavailable");
+              }
+              if (label === "active" && recordCount < HYBRID_MIN_SAMPLE_RATE) {
+                assert.equal(binding.hybrid?.fallbackToV0, true);
+                assert.include(binding.hybrid?.fallbackReason ?? "", "Insufficient");
+              }
+              assert.deepEqual(
+                binding.modelRoute?.estimatedCostUsd,
+                binding.modelRoute?.selected?.metrics.costUsd,
+              );
+              assert.deepEqual(
+                binding.modelRoute?.estimatedLatencyMs,
+                binding.modelRoute?.selected?.metrics.latencyMs,
+              );
+              assert.equal(
+                binding.modelRoute?.fallbacks.every(
+                  (fallback) => fallback.target.instanceId !== expected.instanceId,
+                ),
+                true,
+              );
+              const grant = (yield* sql<{
+                hash: string;
+              }>`SELECT argument_hash AS hash FROM base3_execution_grants WHERE grant_id=${`grant:message:${threadId}:${messageId}`}`)[0]!;
+              assert.equal(
+                grant.hash,
+                argumentHash({
+                  text: "Disposable policy fixture",
+                  model: expected.model,
+                  instanceId: expected.instanceId,
+                  attachmentIds: [],
+                }),
+              );
+            });
+          const initial = yield* status();
+          const candidate = initial.policies.find(
+            (policy) => policy.policyVersion === HYBRID_ROUTER_POLICY_VERSION,
+          )!;
+          yield* runAuto("baseline", a, false);
+          // Synthetic, persisted local evidence only. No adapter or provider calls generate these measurements.
+          for (const selection of [a, b])
+            for (let index = 0; index < recordCount; index++)
+              yield* evaluation.recordObservation({
+                version: TURN_OUTCOME_OBSERVATION_VERSION,
+                observationId: ObservationId.make(
+                  `policy-fixture-${selection.instanceId}-${index}`,
+                ),
+                environmentId: policyEnvironment,
+                recordedAt: now,
+                policyVersion: MODEL_ROUTER_POLICY_VERSION,
+                routingMode: "auto",
+                instanceId: selection.instanceId,
+                model: selection.model,
+                taskProfile: UNKNOWN_TASK_PROFILE,
+                timing: emptyTiming(),
+                usage: emptyUsageMeasurement(),
+                cost: emptyCostMeasurement(),
+                providerAttempts: 1,
+                fallbackCount: 0,
+                cancelled: false,
+                timedOut: false,
+                finishReason: selection === b ? "stop" : "error",
+                terminalCategory: selection === b ? "success" : "provider_failure",
+                evidence: emptyOutcomeEvidence(),
+              });
+          const shadow = yield* control({
+            action: "shadow",
+            policyId: candidate.policyId,
+            expectedRevision: initial.revision,
+            confirm: true,
+          });
+          yield* runAuto("shadow", a, false);
+          const active = yield* control({
+            action: "activate",
+            policyId: candidate.policyId,
+            expectedRevision: shadow.revision,
+            confirm: true,
+          });
+          yield* runAuto(
+            "active",
+            recordCount >= HYBRID_MIN_SAMPLE_RATE ? b : a,
+            recordCount >= HYBRID_MIN_SAMPLE_RATE,
+          );
+          yield* runAuto("load-failure", a, false, true);
+          yield* runAuto("manual", a, false, false, "manual");
+          const rollback = yield* control({
+            action: "rollback",
+            expectedRevision: active.revision,
+            confirm: true,
+          });
+          assert.equal(rollback.active.policyId, initial.active.policyId);
+          yield* runAuto("rollback", a, false);
+          assert.deepEqual(yield* Ref.get(started), [
+            a,
+            a,
+            recordCount >= HYBRID_MIN_SAMPLE_RATE ? b : a,
+            a,
+            a,
+            a,
+          ]);
+        }).pipe(Effect.provide(runtime), Effect.provideService(PolicyExecutionContext, session));
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live(
+  "task-conditioned policy crosses debugging A / writing B through real V2 and persisted observations",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace("task-conditioned-crossover");
+        const started = yield* Ref.make<ReadonlyArray<ModelSelection>>([]);
+        const database = SqlitePersistenceMemory;
+        const fixtureEnvironment = Layer.succeed(ServerEnvironment.ServerEnvironment, {
+          getEnvironmentId: Effect.succeed(policyEnvironment),
+          getDescriptor: Effect.die("Not used"),
+        });
+        const evaluationLayer = RouterEvaluation.layer.pipe(Layer.provide(database));
+        const providers = [
+          { ...provider, models: provider.models.filter((model) => model.slug === a.model) },
+          {
+            ...provider,
+            instanceId: b.instanceId,
+            models: provider.models.filter((model) => model.slug === b.model),
+          },
+        ];
+        const runtime = Layer.mergeAll(
+          database,
+          evaluationLayer,
+          fixtureEnvironment,
+          Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed(providers) }),
+          makeOrchestratorV2ReplayLayerWithRegistry(
+            { name: "task-conditioned-crossover" },
+            ProviderAdapterRegistry.makeLayer([
+              makeAdapter(started, a.instanceId),
+              makeAdapter(started, b.instanceId),
+            ]),
+            { databaseLayer: database, runEffectWorker: true },
+          ).pipe(Layer.provide(Layer.mergeAll(evaluationLayer, fixtureEnvironment))),
+        );
+        yield* Effect.gen(function* () {
+          const evaluation = yield* RouterEvaluation.RouterEvaluationService;
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const sql = yield* SqlClient.SqlClient;
+          const now = DateTime.formatIso(yield* DateTime.now);
+          const projectId = ProjectId.make("task-conditioned-project");
+          const defaultJson = yield* encodeModelSelection(a);
+          yield* sql`INSERT INTO projection_projects (project_id,title,workspace_root,default_model_selection_json,scripts_json,created_at,updated_at) VALUES (${projectId},'Task-conditioned fixture',${cwd},${defaultJson},'[]',${now},${now})`;
+          const texts = {
+            debugging: "debug this exception, fixture text must not become telemetry",
+            writing: "draft an email, fixture text must not become telemetry",
+          };
+          for (const category of ["debugging", "writing"] as const)
+            for (const selection of [a, b])
+              for (let index = 0; index < 24; index++) {
+                const success = category === "debugging" ? selection === a : selection === b;
+                yield* evaluation.recordObservation({
+                  version: TURN_OUTCOME_OBSERVATION_VERSION,
+                  observationId: ObservationId.make(
+                    `task-seed-${category}-${selection.instanceId}-${index}`,
+                  ),
+                  environmentId: policyEnvironment,
+                  recordedAt: now,
+                  policyVersion: MODEL_ROUTER_POLICY_VERSION,
+                  routingMode: "auto",
+                  instanceId: selection.instanceId,
+                  model: selection.model,
+                  taskProfile: UNKNOWN_TASK_PROFILE,
+                  localTaskProfile: classifyLocalTask(texts[category]),
+                  timing: emptyTiming(),
+                  usage: emptyUsageMeasurement(),
+                  cost: emptyCostMeasurement(),
+                  providerAttempts: 1,
+                  fallbackCount: 0,
+                  cancelled: false,
+                  timedOut: false,
+                  finishReason: success ? "stop" : "error",
+                  terminalCategory: success ? "success" : "provider_failure",
+                  evidence: emptyOutcomeEvidence(),
+                });
+              }
+          const initial = yield* evaluation.status(policyEnvironment);
+          const old = initial.policies.find(
+            (policy) => policy.policyVersion === HYBRID_ROUTER_POLICY_VERSION,
+          )!;
+          const task = initial.policies.find(
+            (policy) => policy.policyVersion === HYBRID_TASK_ROUTER_POLICY_VERSION,
+          )!;
+          const transition = (
+            action: "shadow" | "activate",
+            policyId: typeof task.policyId,
+            revision: number,
+          ) =>
+            evaluation.control(
+              policyEnvironment,
+              { action, policyId, expectedRevision: revision, confirm: true },
+              now,
+              "fixture-operator",
+            );
+          const run = (
+            label: string,
+            category: "debugging" | "writing",
+            expected: ModelSelection,
+            appliedPolicy: string,
+            expectedShadow?: ModelSelection,
+          ) =>
+            Effect.gen(function* () {
+              const text = texts[category];
+              const threadId = ThreadId.make(`task-conditioned-${label}`);
+              const messageId = MessageId.make(`task-conditioned-${label}`);
+              yield* orchestrator.dispatch({
+                type: "thread.create",
+                commandId: CommandId.make(`task-create-${label}`),
+                threadId,
+                projectId,
+                title: "Task-conditioned fixture",
+                modelSelection: a,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: null,
+                worktreePath: cwd,
+                createdBy: "user",
+                creationSource: "web",
+              });
+              const terminal = yield* orchestrator.streamDomainEvents.pipe(
+                Stream.filter(
+                  (event) =>
+                    event.type === "run.updated" &&
+                    event.payload.threadId === threadId &&
+                    event.payload.status === "completed",
+                ),
+                Stream.take(1),
+                Stream.runDrain,
+                Effect.forkScoped,
+              );
+              const command = {
+                type: "message.dispatch" as const,
+                commandId: CommandId.make(`task-dispatch-${label}`),
+                threadId,
+                messageId,
+                text,
+                attachments: [],
+                routingMode: "auto" as const,
+                modelSelection: a,
+                dispatchMode: { type: "start_immediately" as const },
+                createdBy: "user" as const,
+                creationSource: "web" as const,
+              };
+              yield* orchestrator.dispatch(command);
+              yield* worker.drain();
+              yield* Fiber.join(terminal);
+              yield* worker.drain();
+              const target = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+                (candidate) => candidate.userMessageId === messageId,
+              )?.modelSelection;
+              assert.deepEqual(target, expected);
+              const route = yield* decodeRoute(
+                (yield* sql<{
+                  binding: string;
+                }>`SELECT binding_json AS binding FROM projection_dispatcher_task_routes WHERE thread_id=${threadId} AND message_id=${messageId}`)[0]!
+                  .binding,
+              );
+              assert.deepEqual(route.target, expected);
+              assert.equal(route.modelRoute?.policyVersion, appliedPolicy);
+              assert.deepEqual(route.localTaskProfile, classifyLocalTask(text));
+              assert.deepEqual(Object.keys(route.localTaskProfile!), [
+                "classifierVersion",
+                "category",
+                "source",
+              ]);
+              if (expectedShadow) {
+                assert.deepEqual(route.hybrid?.challenger?.selected, expectedShadow);
+                assert.equal(
+                  route.hybrid?.challenger?.policyVersion,
+                  HYBRID_TASK_ROUTER_POLICY_VERSION,
+                );
+                assert.equal(route.hybrid?.challenger?.agreement, "disagreement");
+              }
+              if (appliedPolicy === HYBRID_TASK_ROUTER_POLICY_VERSION) {
+                assert.include(route.modelRoute?.explanation ?? "", `Local task ${category}`);
+                assert.notInclude(route.modelRoute?.explanation ?? "", "fixture text");
+                for (const explanation of [
+                  route.modelRoute?.explanation,
+                  route.hybrid?.explanation,
+                ]) {
+                  assert.include(
+                    explanation ?? "",
+                    `Policy: ${HYBRID_TASK_ROUTER_POLICY_VERSION}.`,
+                  );
+                  assert.notInclude(explanation ?? "", `Policy: ${HYBRID_ROUTER_POLICY_VERSION}.`);
+                }
+              }
+              const observationRow = (yield* sql<{
+                id: string;
+              }>`SELECT observation_id AS id FROM router_turn_observations WHERE thread_id=${threadId} AND message_id=${messageId}`)[0];
+              const observation = (yield* evaluation.exportObservations(
+                policyEnvironment,
+              )).records.find((record) => record.observationId === observationRow?.id);
+              assert.isDefined(
+                observation,
+                "real provider-turn ingestion must persist this observation",
+              );
+              assert.equal(observation?.policyVersion, appliedPolicy);
+              assert.deepEqual(observation?.localTaskProfile, route.localTaskProfile);
+              assert.deepEqual(observation?.taskProfile, UNKNOWN_TASK_PROFILE);
+              const previousStarts = yield* Ref.get(started);
+              yield* orchestrator.dispatch(command);
+              yield* worker.drain();
+              assert.deepEqual(yield* Ref.get(started), previousStarts);
+              const replayed = (yield* evaluation.exportObservations(
+                policyEnvironment,
+              )).records.find((record) => record.observationId === observation!.observationId);
+              assert.deepEqual(replayed?.localTaskProfile, observation?.localTaskProfile);
+            });
+          const oldShadow = yield* transition("shadow", old.policyId, initial.revision);
+          const oldActive = yield* transition("activate", old.policyId, oldShadow.revision);
+          yield* run("v1-debug", "debugging", a, HYBRID_ROUTER_POLICY_VERSION);
+          yield* run("v1-write", "writing", a, HYBRID_ROUTER_POLICY_VERSION);
+          const taskShadow = yield* transition("shadow", task.policyId, oldActive.revision);
+          yield* run("task-shadow", "writing", a, HYBRID_ROUTER_POLICY_VERSION, b);
+          const taskActive = yield* transition("activate", task.policyId, taskShadow.revision);
+          yield* run("task-debug", "debugging", a, HYBRID_TASK_ROUTER_POLICY_VERSION);
+          yield* run("task-write", "writing", b, HYBRID_TASK_ROUTER_POLICY_VERSION);
+          const restored = yield* evaluation.control(
+            policyEnvironment,
+            { action: "rollback", expectedRevision: taskActive.revision, confirm: true },
+            now,
+            "fixture-operator",
+          );
+          assert.equal(restored.active.policyId, old.policyId);
+          yield* run("rollback-write", "writing", a, HYBRID_ROUTER_POLICY_VERSION);
+          assert.deepEqual(yield* Ref.get(started), [a, a, a, a, b, a]);
+        }).pipe(Effect.provide(runtime), Effect.provideService(PolicyExecutionContext, session));
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live.each([
+  "control",
+  "immediate",
+  "queued",
+  "availability",
+  "constraints",
+  "saved-signed-out",
+  "saved-signed-out-race",
+] as const)(
+  "eligible cap governed disk SQLite preview and real worker %s preserve authorization and replay",
+  (mode) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "b3r-cap-a2-" });
+        const cwd = yield* checkpointWorkspace(`eligible-cap-${mode}`);
+        const started = yield* Ref.make<ReadonlyArray<ModelSelection>>([]);
+        const savedSignedOut = mode === "saved-signed-out" || mode === "saved-signed-out-race";
+        const antigravity: ServerProvider = {
+          ...agentsCreationProvider,
+          instanceId: ProviderInstanceId.make("antigravity"),
+          driver: ProviderDriverKind.make("antigravity"),
+          status: "error",
+          auth: { status: "unauthenticated" },
+        };
+        const manualSelection: ModelSelection = {
+          instanceId: antigravity.instanceId,
+          model: "fake-model",
+          options: [{ id: "effort", value: "high" }],
+        };
+        const antigravityCalls = vi.fn();
+        const expected = { instanceId: agentsCreationProvider.instanceId, model: "fake-model" };
+        yield* withAgentsTaskCreationFixture(
+          (f) =>
+            Effect.gen(function* () {
+              f.setProviders(
+                savedSignedOut
+                  ? [antigravity, agentsCreationProvider]
+                  : mode === "control"
+                    ? [agentsCreationProvider]
+                    : eligibleCapProviders(),
+              );
+              yield* f.sql`UPDATE projection_projects SET workspace_root=${cwd} WHERE project_id='project-a'`;
+              const { taskCreationReview, ...ordinaryCreate } = agentsCreationCommand(
+                `cap-${mode}`,
+              );
+              const c = {
+                ...ordinaryCreate,
+                ...(savedSignedOut ? {} : { taskCreationReview }),
+                ...(savedSignedOut ? { modelSelection: manualSelection } : {}),
+                taskContract: {
+                  goal: "Run the cap fixture",
+                  redirect: "Keep fixture scope",
+                  acceptance: "Owner checks the fake result",
+                  brake: { maxProviderStarts: 3, stopConditions: "Scope changed" },
+                },
+              };
+              yield* f.dispatch(c);
+              const task = (yield* f.readSnapshot()).tasks[0]!;
+              const marker = () =>
+                Effect.gen(function* () {
+                  const tables = yield* f.sql<{
+                    name: string;
+                  }>`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`;
+                  const contents = yield* Effect.forEach(tables, (t) =>
+                    f.sql.unsafe(`SELECT * FROM "${t.name.replaceAll('"', '""')}"`),
+                  );
+                  return { contents, changes: yield* f.sql`SELECT total_changes() AS changes` };
+                });
+              const before = yield* marker();
+              const preview = yield* f.previewAuto({
+                environmentId: "environment-a",
+                taskId: task.id,
+                projectId: c.projectId,
+                threadId: c.threadId,
+                revision: 1,
+                reference: task.review!.reference,
+                text: "Inspect the eligible cap fixture",
+                constraints: { allowedModels: ["fake-model"] },
+              });
+              assert.equal(preview.status, "available");
+              if (preview.status !== "available") throw new Error("Preview unavailable");
+              assert.deepEqual(yield* marker(), before);
+              assert.deepEqual(yield* Ref.get(started), []);
+              assert.deepEqual(preview.decision.selected?.target, expected);
+              assert.equal(
+                preview.decision.selectionBasis?.excludedCount,
+                savedSignedOut ? 1 : mode === "control" ? 0 : 32,
+              );
+              yield* Effect.log("Eligible cap preview zero-write disk SQLite", {
+                tables: before.contents.length,
+                totalChanges: before.changes,
+              });
+              if (mode === "availability")
+                f.setProviders(eligibleCapProviders().map((p) => ({ ...p, installed: false })));
+              if (mode === "saved-signed-out-race") f.setProviders([antigravity]);
+              const constraints =
+                mode === "constraints" ? { allowedModels: [] } : { allowedModels: ["fake-model"] };
+              const command = {
+                type: "message.dispatch" as const,
+                commandId: CommandId.make(`eligible-cap:${mode}`),
+                threadId: c.threadId,
+                messageId: MessageId.make(`eligible-cap:${mode}`),
+                text: "Inspect the eligible cap fixture",
+                attachments: [],
+                routingMode: "auto" as const,
+                ...(savedSignedOut ? { modelSelection: manualSelection } : {}),
+                modelRouteConstraints: constraints,
+                dispatchMode: {
+                  type:
+                    mode === "queued"
+                      ? ("queue_after_active" as const)
+                      : ("start_immediately" as const),
+                },
+                createdBy: "user" as const,
+                creationSource: "web" as const,
+              };
+              if (
+                mode === "availability" ||
+                mode === "constraints" ||
+                mode === "saved-signed-out-race"
+              ) {
+                const effects = yield* f.noExecution();
+                yield* Effect.flip(f.dispatch(command));
+                yield* Effect.flip(f.dispatch(command));
+                yield* f.worker.drain();
+                assert.deepEqual(yield* Ref.get(started), []);
+                assert.deepEqual(yield* f.noExecution(), effects);
+                assert.deepEqual(
+                  yield* f.sql`SELECT binding_json FROM projection_dispatcher_task_routes`,
+                  [],
+                );
+                assert.deepEqual(yield* f.sql`SELECT * FROM task_contract_admissions`, []);
+                assert.equal(antigravityCalls.mock.calls.length, 0);
+                return;
+              }
+              if (mode === "queued") {
+                // Admit a foreground run without starting the worker, then enqueue Auto behind it.
+                f.setProviders([agentsCreationProvider]);
+                yield* f.dispatch({
+                  ...command,
+                  routingMode: "manual",
+                  commandId: CommandId.make("cap-foreground"),
+                  messageId: MessageId.make("cap-foreground"),
+                  modelSelection: expected,
+                  dispatchMode: { type: "start_immediately" },
+                });
+                f.setProviders(eligibleCapProviders());
+              }
+              const finished = yield* f.orchestrator.streamDomainEvents.pipe(
+                Stream.filter(
+                  (event) => event.type === "run.updated" && event.payload.status === "completed",
+                ),
+                Stream.take(mode === "queued" ? 2 : 1),
+                Stream.runDrain,
+                Effect.forkScoped,
+              );
+              const receipt = yield* f.dispatch(command);
+              const beforeWorker = yield* f.orchestrator.getThreadProjection(c.threadId);
+              const admittedRun = beforeWorker.runs.find(
+                (r) => r.userMessageId === command.messageId,
+              )!;
+              assert.deepEqual(admittedRun.modelSelection, expected);
+              if (mode === "queued") assert.equal(admittedRun.status, "queued");
+              assert.deepEqual(yield* Ref.get(started), []);
+              yield* EffectWorker.runDaemonWithOptions({ concurrency: 1 }).pipe(
+                Effect.provideService(EffectWorker.OrchestrationEffectWorkerV2, f.worker),
+                Effect.forkScoped,
+              );
+              yield* Fiber.join(finished);
+              yield* f.worker.drain();
+              const projection = yield* f.orchestrator.getThreadProjection(c.threadId);
+              const run = projection.runs.find((r) => r.userMessageId === command.messageId)!;
+              assert.equal(run.status, "completed");
+              assert.deepEqual(run.modelSelection, expected);
+              const attempts = projection.attempts.filter((a) => a.runId === run.id);
+              assert.equal(attempts.length, 1);
+              assert.equal(attempts[0]!.status, "completed");
+              const routes = yield* f.sql<{
+                binding_json: string;
+              }>`SELECT binding_json FROM projection_dispatcher_task_routes WHERE message_id=${command.messageId}`;
+              const binding = yield* decodeRoute(routes[0]!.binding_json);
+              assert.deepEqual(binding.target, expected);
+              assert.deepEqual(
+                binding.modelRoute?.selected?.target,
+                preview.decision.selected?.target,
+              );
+              assert.equal(binding.modelRoute?.attemptBudget, 3);
+              const grants = yield* f.sql<{
+                argument_hash: string;
+              }>`SELECT argument_hash FROM base3_execution_grants WHERE message_id=${command.messageId}`;
+              assert.equal(grants.length, 1);
+              assert.equal(
+                grants[0]!.argument_hash,
+                argumentHash({
+                  text: command.text,
+                  model: expected.model,
+                  instanceId: expected.instanceId,
+                  attachmentIds: [],
+                  modelRouteConstraints: constraints,
+                  contractRevision: 1,
+                  maxProviderStarts: 3,
+                }),
+              );
+              const snapshot = yield* f.readSnapshot();
+              const result = snapshot.tasks[0]!.resultReadout;
+              assert.equal(result?.status, "available");
+              if (result?.status !== "available") throw new Error("No result evidence");
+              const assertReadoutIdentity = (actual: {
+                runId: string | null;
+                messageId: string;
+                attemptId: string | null;
+              }) =>
+                assert.deepEqual(
+                  { runId: actual.runId, messageId: actual.messageId, attemptId: actual.attemptId },
+                  { runId: run.id, messageId: command.messageId, attemptId: attempts[0]!.id },
+                );
+              assertReadoutIdentity(result);
+              const expectedText = `Eligible fake result [run=${run.id}; attempt=${attempts[0]!.id}]`;
+              const output = projection.turnItems.find(
+                (item) =>
+                  item.type === "assistant_message" &&
+                  item.runId === run.id &&
+                  item.text === expectedText,
+              );
+              assert.isDefined(
+                output,
+                "the fake adapter result reaches the real event/projector path",
+              );
+              const turn = projection.providerTurns.find(
+                (candidate) => candidate.runAttemptId === attempts[0]!.id,
+              );
+              assert.equal(turn?.status, "completed");
+              assert.equal(output?.providerTurnId, turn?.id);
+              assert.equal(output?.providerThreadId, run.providerThreadId);
+              assert.isDefined(output);
+              if (output === undefined || output.type !== "assistant_message" || turn === undefined)
+                throw new Error("No persisted output");
+              const node = projection.nodes.find((candidate) => candidate.id === output.nodeId);
+              assert.isDefined(node, "the emitted assistant node is persisted with its item");
+              if (node === undefined) throw new Error("No persisted assistant node");
+              const assertNodeOwnership = (actual: typeof node) => {
+                assert.equal(actual.kind, "assistant_message");
+                assert.equal(actual.status, "completed");
+                assert.equal(actual.threadId, c.threadId);
+                assert.equal(actual.runId, run.id);
+                assert.equal(actual.rootNodeId, run.rootNodeId);
+                assert.equal(actual.parentNodeId, run.rootNodeId);
+                assert.equal(actual.providerThreadId, run.providerThreadId);
+                assert.equal(actual.providerTurnId, turn.id);
+                assert.deepEqual(actual.nativeItemRef, output.nativeItemRef);
+              };
+              assertNodeOwnership(node);
+              assert.equal(turn.runAttemptId, attempts[0]!.id);
+              assert.equal(turn.nodeId, run.rootNodeId);
+              assert.equal(output.threadId, c.threadId);
+              assert.equal(output.runId, result.runId);
+              assert.equal(output.nativeItemRef?.nativeId, `eligible-output:${attempts[0]!.id}`);
+              const ids = yield* IdAllocator.IdAllocatorV2.pipe(Effect.provide(IdAllocator.layer));
+              const nativeItem = { driver, nativeItemId: `eligible-output:${attempts[0]!.id}` };
+              assert.equal(node.id, ids.derive.nodeFromProviderItem(nativeItem));
+              assert.equal(output.id, ids.derive.turnItemFromProviderItem(nativeItem));
+              assert.equal(output.messageId, ids.derive.messageFromProviderItem(nativeItem));
+              if (mode === "queued") {
+                const foreground = projection.runs.find(
+                  (r) => r.userMessageId === "cap-foreground",
+                )!;
+                const foregroundAttempt = projection.attempts.find(
+                  (a) => a.runId === foreground.id,
+                )!;
+                const foregroundOutput = projection.turnItems.find(
+                  (item) => item.type === "assistant_message" && item.runId === foreground.id,
+                )!;
+                if (foregroundOutput.type !== "assistant_message")
+                  throw new Error("No foreground assistant output");
+                const foregroundNode = projection.nodes.find(
+                  (n) => n.id === foregroundOutput.nodeId,
+                )!;
+                assert.equal(
+                  foregroundOutput.text,
+                  `Eligible fake result [run=${foreground.id}; attempt=${foregroundAttempt.id}]`,
+                );
+                assert.notEqual(foregroundOutput.text, output.text);
+                assert.notEqual(foregroundOutput.id, output.id);
+                assert.notEqual(foregroundOutput.messageId, output.messageId);
+                // A real sibling run has the same model and completed status. Substituting
+                // its identity or assistant node must fail these ownership assertions.
+                assert.throws(() => assertReadoutIdentity({ ...result, runId: foreground.id }));
+                assert.throws(() =>
+                  assertReadoutIdentity({ ...result, messageId: foreground.userMessageId }),
+                );
+                assert.throws(() =>
+                  assertReadoutIdentity({ ...result, attemptId: foregroundAttempt.id }),
+                );
+                assert.throws(() => assertNodeOwnership(foregroundNode));
+              }
+              // Only adapter events and the real worker may create this positive link.
+              assert.equal(result.content.status, "output");
+              if (result.content.status !== "output") throw new Error("No attributable output");
+              assert.equal(result.content.preview, expectedText);
+              assert.equal(result.providerTurnId, turn.id);
+              assert.equal(attempts[0]!.providerTurnId, turn.id);
+              const persistedAttempt = (yield* f.sql<{
+                provider_turn_id: string | null;
+                payload_json: string;
+              }>`SELECT provider_turn_id,payload_json FROM orchestration_v2_projection_run_attempts WHERE attempt_id=${attempts[0]!.id}`)[0]!;
+              assert.equal(persistedAttempt.provider_turn_id, turn.id);
+              const decodedAttempt = yield* decodeLinkedAttempt(persistedAttempt.payload_json);
+              assert.equal(decodedAttempt.providerTurnId, turn.id);
+
+              assert.equal(antigravityCalls.mock.calls.length, 0);
+              const starts = yield* Ref.get(started);
+              assert.deepEqual(
+                starts,
+                Array.from({ length: mode === "queued" ? 2 : 1 }, () => expected),
+              );
+              const admissions = yield* f.sql`SELECT * FROM task_contract_admissions`;
+              assert.equal(admissions.length, starts.length);
+              const replay = yield* f.dispatch(command);
+              yield* f.worker.drain();
+              assert.equal(replay.sequence, receipt.sequence);
+              assert.deepEqual(yield* Ref.get(started), starts);
+              assert.deepEqual(yield* f.sql`SELECT * FROM task_contract_admissions`, admissions);
+              assert.deepEqual(
+                yield* f.sql`SELECT argument_hash FROM base3_execution_grants WHERE message_id=${command.messageId}`,
+                grants,
+              );
+              assert.equal(antigravityCalls.mock.calls.length, 0);
+            }),
+          {
+            dbPath: path.join(directory, "state.sqlite"),
+            adapterRegistryLayer: ProviderAdapterRegistry.makeLayer([
+              makeAdapter(started, expected.instanceId, "Eligible fake result"),
+              {
+                ...makeAdapter(started, antigravity.instanceId),
+                driver: antigravity.driver,
+                getCapabilities: () =>
+                  Effect.sync(() => {
+                    antigravityCalls("capabilities");
+                    throw new Error("Antigravity must never be called");
+                  }),
+                openSession: () =>
+                  Effect.sync(() => {
+                    antigravityCalls("session");
+                    throw new Error("Antigravity must never be called");
+                  }),
+              },
+            ]),
+          },
+        );
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+);

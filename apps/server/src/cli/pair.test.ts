@@ -13,8 +13,7 @@ import * as Layer from "effect/Layer";
 import * as TestConsole from "effect/testing/TestConsole";
 import { Command } from "effect/unstable/cli";
 
-import { cli } from "../bin.ts";
-import { ModelRouterAvailabilityLive } from "../orchestration/Services/ModelRouterAvailability.ts";
+import { cli } from "../binCli.ts";
 import {
   SERVICE_LAUNCHER_CONTEXT_ENV,
   SERVICE_LAUNCHER_PROTOCOL,
@@ -33,11 +32,7 @@ import {
 
 import packageJson from "../../package.json" with { type: "json" };
 
-const CliRuntimeLayer = Layer.mergeAll(
-  NodeServices.layer,
-  NetService.layer,
-  ModelRouterAvailabilityLive,
-);
+const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 
 const baseState = {
   version: 1,
@@ -233,7 +228,7 @@ describe("t3 pair", () => {
       const rendered = String(
         typeof error === "object" && error !== null && "cause" in error ? error.cause : error,
       );
-      assert.include(rendered, "No running Base3Router server found.");
+      assert.include(rendered, "No running T3 Code server found.");
       assert.include(rendered, "npx t3 serve");
       assert.include(rendered, "npx t3 connect");
     }).pipe(Effect.provide(NodeServices.layer)),
@@ -264,7 +259,7 @@ describe("t3 pair", () => {
         const rendered = String(
           typeof error === "object" && error !== null && "cause" in error ? error.cause : error,
         );
-        assert.include(rendered, "No running Base3Router server found.");
+        assert.include(rendered, "No running T3 Code server found.");
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -290,7 +285,7 @@ describe("t3 pair", () => {
       const rendered = String(
         typeof error === "object" && error !== null && "cause" in error ? error.cause : error,
       );
-      assert.include(rendered, "No running Base3Router server found.");
+      assert.include(rendered, "No running T3 Code server found.");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

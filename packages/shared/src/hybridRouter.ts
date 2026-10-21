@@ -1,5 +1,9 @@
 import {
   type HybridRouteDecisionV1,
+  type LocalTaskProfile,
+  HYBRID_TASK_ROUTER_POLICY_VERSION,
+  MODEL_ROUTER_POLICY_VERSION,
+  LOCAL_TASK_CLASSIFIER_VERSION,
   type HybridScoreComponentV0,
   type MeasurementProvenance,
   type MeasurementSource,
@@ -41,10 +45,21 @@ export type LocalModelEvidence = {
 };
 
 export type HybridRouterInput = ModelRouterInput & {
+  readonly localTaskProfile?: LocalTaskProfile;
+  readonly shadowPolicy?: {
+    readonly policyVersion: string;
+    readonly weights: RouterPolicyWeightsV1;
+    readonly shrinkageK: number;
+    readonly minSampleRate: number;
+    readonly evidenceByTarget: ReadonlyMap<string, LocalModelEvidence>;
+  };
   readonly evidenceByTarget?: ReadonlyMap<string, LocalModelEvidence>;
   readonly weights?: RouterPolicyWeightsV1;
   readonly activePolicyVersion?: string;
   readonly challengerEnabled?: boolean;
+  readonly shrinkageK?: number;
+  readonly minSampleRate?: number;
+  readonly policyLoadFailure?: string;
 };
 
 export type HybridRouterOutput = {
@@ -61,8 +76,12 @@ const unknownMetric: ModelRouterMetricValue = MODEL_ROUTER_UNKNOWN_METRIC;
 const knownMetric = (value: number): ModelRouterMetricValue =>
   Number.isFinite(value) ? { status: "known", value } : unknownMetric;
 
-const shrink = (observed: number, n: number, prior: number, k = HYBRID_SHRINKAGE_K): number =>
-  (n / (n + k)) * observed + (k / (n + k)) * prior;
+const shrink = (
+  observed: number,
+  n: number,
+  prior: number,
+  k: number = HYBRID_SHRINKAGE_K,
+): number => (n / (n + k)) * observed + (k / (n + k)) * prior;
 
 const median = (values: ReadonlyArray<number>): number | undefined => {
   if (values.length === 0) return undefined;
@@ -118,6 +137,8 @@ const scoreCandidate = (
     readonly provenance: MeasurementProvenance;
   },
   latencyBounds: { readonly min: number; readonly max: number },
+  minSampleRate: number,
+  shrinkageK: number,
 ): Ranked => {
   const components: Array<HybridScoreComponentV0> = [];
   let score = 0;
@@ -141,9 +162,9 @@ const scoreCandidate = (
 
   const successTrials = evidence?.successTrials ?? 0;
   const successRate = evidence ? rate(evidence.successCount, evidence.successTrials) : undefined;
-  if (successTrials >= HYBRID_MIN_SAMPLE_RATE && successRate !== undefined) {
+  if (successTrials >= minSampleRate && successRate !== undefined) {
     const prior = marketPrior ?? 0.5;
-    const shrunk = shrink(successRate, successTrials, prior);
+    const shrunk = shrink(successRate, successTrials, prior, shrinkageK);
     score += weights.success * shrunk;
     components.push(
       component({
@@ -174,7 +195,7 @@ const scoreCandidate = (
 
   const latencyN = evidence?.latencySamples.length ?? 0;
   const latencyMedian = evidence ? median(evidence.latencySamples) : undefined;
-  if (latencyN >= HYBRID_MIN_SAMPLE_RATE && latencyMedian !== undefined) {
+  if (latencyN >= minSampleRate && latencyMedian !== undefined) {
     const inverted = invertNormalize(latencyMedian, latencyBounds.min, latencyBounds.max);
     score += weights.latency * inverted;
     components.push(
@@ -208,7 +229,7 @@ const scoreCandidate = (
   const costMedian = evidence ? median(evidence.costSamples) : undefined;
   const costProvenance = evidence?.costProvenance ?? "unknown";
   if (
-    costN >= HYBRID_MIN_SAMPLE_RATE &&
+    costN >= minSampleRate &&
     costMedian !== undefined &&
     costProvenance !== "unknown" &&
     costProvenance === costBounds.provenance
@@ -230,7 +251,7 @@ const scoreCandidate = (
     );
   } else {
     const incompatible =
-      costN >= HYBRID_MIN_SAMPLE_RATE &&
+      costN >= minSampleRate &&
       costProvenance !== "unknown" &&
       costProvenance !== costBounds.provenance;
     components.push(
@@ -257,8 +278,8 @@ const scoreCandidate = (
   const negativeRate = evidence
     ? rate(evidence.explicitNegative, evidence.explicitTotal)
     : undefined;
-  if (explicitTotal >= HYBRID_MIN_SAMPLE_RATE && positiveRate !== undefined) {
-    const shrunk = shrink(positiveRate, explicitTotal, 0.5);
+  if (explicitTotal >= minSampleRate && positiveRate !== undefined) {
+    const shrunk = shrink(positiveRate, explicitTotal, 0.5, shrinkageK);
     score += weights.explicitPositive * shrunk;
     components.push(
       component({
@@ -286,8 +307,8 @@ const scoreCandidate = (
       }),
     );
   }
-  if (explicitTotal >= HYBRID_MIN_SAMPLE_RATE && negativeRate !== undefined) {
-    const shrunk = shrink(negativeRate, explicitTotal, 0.5);
+  if (explicitTotal >= minSampleRate && negativeRate !== undefined) {
+    const shrunk = shrink(negativeRate, explicitTotal, 0.5, shrinkageK);
     score -= weights.explicitNegative * shrunk;
     components.push(
       component({
@@ -318,8 +339,8 @@ const scoreCandidate = (
 
   const reworkTrials = evidence?.reworkTrials ?? 0;
   const reworkRate = evidence ? rate(evidence.reworkProxies, evidence.reworkTrials) : undefined;
-  if (reworkTrials >= HYBRID_MIN_SAMPLE_RATE && reworkRate !== undefined) {
-    const shrunk = shrink(reworkRate, reworkTrials, 0.5);
+  if (reworkTrials >= minSampleRate && reworkRate !== undefined) {
+    const shrunk = shrink(reworkRate, reworkTrials, 0.5, shrinkageK);
     score -= weights.reworkProxy * shrunk;
     components.push(
       component({
@@ -352,8 +373,8 @@ const scoreCandidate = (
   const verifyRate = evidence
     ? rate(evidence.verificationPassed, evidence.verificationTrials)
     : undefined;
-  if (verifyTrials >= HYBRID_MIN_SAMPLE_RATE && verifyRate !== undefined) {
-    const shrunk = shrink(verifyRate, verifyTrials, 0.5);
+  if (verifyTrials >= minSampleRate && verifyRate !== undefined) {
+    const shrunk = shrink(verifyRate, verifyTrials, 0.5, shrinkageK);
     score += weights.verification * shrunk;
     components.push(
       component({
@@ -386,7 +407,9 @@ const scoreCandidate = (
 };
 
 const rankingUsable = (ranked: Ranked): boolean =>
-  ranked.components.some((entry) => entry.status === "used" && entry.id !== "market_prior");
+  ranked.components.some(
+    (entry) => entry.status === "used" && entry.id !== "market_prior" && entry.weight > 0,
+  );
 
 const agreement = (
   left: ModelRouterTarget | null,
@@ -431,7 +454,7 @@ const explain = (input: {
  * local evidence falls back to Router V0. Policy shadow never changes the
  * live decision.
  */
-export function routeHybridModel(input: HybridRouterInput): HybridRouterOutput {
+function routeHybridV1(input: HybridRouterInput): HybridRouterOutput {
   const v0 = routeModel(input);
   const weights = input.weights ?? DEFAULT_HYBRID_ROUTER_WEIGHTS;
   const evidenceByTarget = input.evidenceByTarget ?? new Map();
@@ -494,18 +517,24 @@ export function routeHybridModel(input: HybridRouterInput): HybridRouterOutput {
       weights,
       costBounds,
       latencyBounds,
+      input.minSampleRate ?? HYBRID_MIN_SAMPLE_RATE,
+      input.shrinkageK ?? HYBRID_SHRINKAGE_K,
     ),
   );
-  const sufficient = ranked.some(rankingUsable);
   ranked.sort((left, right) => {
     if (left.score !== right.score) return right.score - left.score;
     return compareModelRouterTieBreak(left.candidate, right.candidate);
   });
+  const sufficient = ranked[0] !== undefined && rankingUsable(ranked[0]);
   const hybridSelected = sufficient ? (ranked[0]?.candidate ?? null) : null;
   const selectedComponents = ranked[0]?.components ?? [];
 
-  const applyHybrid = activeIsHybrid && sufficient && hybridSelected !== null;
-  const fallbackToV0 = activeIsHybrid && !applyHybrid;
+  const applyHybrid =
+    input.policyLoadFailure === undefined &&
+    activeIsHybrid &&
+    sufficient &&
+    hybridSelected !== null;
+  const fallbackToV0 = input.policyLoadFailure !== undefined || (activeIsHybrid && !applyHybrid);
   const extraReasons: ReadonlyArray<ModelRouterReasonCode> = applyHybrid
     ? ["HYBRID_RANKED"]
     : fallbackToV0
@@ -513,21 +542,43 @@ export function routeHybridModel(input: HybridRouterInput): HybridRouterOutput {
       : input.challengerEnabled === true && sufficient
         ? ["POLICY_SHADOW_RECORDED"]
         : [];
-  const fallbackReason = applyHybrid
-    ? undefined
-    : fallbackToV0
-      ? "Insufficient local evidence; Router V0 was used."
-      : "Hybrid is not the active policy; Router V0 executed.";
+  const fallbackReason =
+    input.policyLoadFailure ??
+    (applyHybrid
+      ? undefined
+      : fallbackToV0
+        ? "Insufficient local evidence; Router V0 was used."
+        : "Hybrid is not the active policy; Router V0 executed.");
+  const { selectionBasis: _v0Basis, ...replacementBaseline } = v0;
   const decision: ModelRouterDecision = applyHybrid
     ? {
-        ...v0,
+        ...replacementBaseline,
         policyVersion: applyHybrid ? HYBRID_ROUTER_POLICY_VERSION : v0.policyVersion,
         selected: {
           ...hybridSelected,
           reasonCodes: uniqueReasons([...hybridSelected.reasonCodes, "HYBRID_RANKED", "SELECTED"]),
         },
-        reasonCodes: uniqueReasons([...v0.reasonCodes, ...extraReasons]),
-        executed: hybridSelected,
+        fallbacks: ranked.reduce<ModelRouterCandidate[]>((fallbacks, entry) => {
+          if (
+            entry.candidate.target.instanceId !== hybridSelected.target.instanceId &&
+            !fallbacks.some(
+              (candidate) => candidate.target.instanceId === entry.candidate.target.instanceId,
+            )
+          )
+            fallbacks.push({
+              ...entry.candidate,
+              reasonCodes: entry.candidate.reasonCodes.filter((code) => code !== "SELECTED"),
+            });
+          return fallbacks;
+        }, []),
+        estimatedCostUsd: hybridSelected.metrics.costUsd,
+        estimatedLatencyMs: hybridSelected.metrics.latencyMs,
+        estimatedQuality: hybridSelected.metrics.quality,
+        reasonCodes: uniqueReasons([...hybridSelected.reasonCodes, "SELECTED", ...extraReasons]),
+        executed: {
+          ...hybridSelected,
+          reasonCodes: uniqueReasons([...hybridSelected.reasonCodes, "HYBRID_RANKED", "SELECTED"]),
+        },
         explanation: explain({
           selected: hybridSelected,
           usedHybrid: true,
@@ -569,6 +620,105 @@ export function routeHybridModel(input: HybridRouterInput): HybridRouterOutput {
   };
 
   return { decision, hybrid };
+}
+
+const routePolicy = (input: HybridRouterInput): HybridRouterOutput => {
+  if (input.activePolicyVersion !== HYBRID_TASK_ROUTER_POLICY_VERSION) return routeHybridV1(input);
+  const baseline = routeModel(input);
+  const eligible = baseline.candidates.filter((candidate) => candidate.eligible);
+  const profile = input.localTaskProfile;
+  const known =
+    profile?.source === "local-heuristic" &&
+    profile.classifierVersion === LOCAL_TASK_CLASSIFIER_VERSION &&
+    profile.category !== "unknown";
+  const coverage =
+    known &&
+    eligible.length > 0 &&
+    eligible.every(
+      (candidate) =>
+        (input.evidenceByTarget?.get(modelRouterTargetKey(candidate.target))?.successTrials ?? 0) >=
+        HYBRID_MIN_SAMPLE_RATE,
+    );
+  const fallbackReason = !known
+    ? "Local task profile is unknown or unsupported; Router V0 was used."
+    : !coverage
+      ? "Task-conditioned coverage requires 8 matching outcome trials for every eligible candidate; Router V0 was used."
+      : undefined;
+  const result = routeHybridV1({
+    ...input,
+    activePolicyVersion: HYBRID_ROUTER_POLICY_VERSION,
+    ...(fallbackReason === undefined
+      ? {}
+      : { policyLoadFailure: input.policyLoadFailure ?? fallbackReason }),
+  });
+  if (input.mode === "manual") return result;
+  const appliedPolicyVersion = result.hybrid.usedHybridRanking
+    ? HYBRID_TASK_ROUTER_POLICY_VERSION
+    : result.decision.policyVersion;
+  const policyExplanation = result.hybrid.explanation.replace(
+    `Policy: ${HYBRID_ROUTER_POLICY_VERSION}.`,
+    `Policy: ${appliedPolicyVersion}.`,
+  );
+  const explanation =
+    `Local task ${profile?.category ?? "unknown"} (${profile?.classifierVersion ?? LOCAL_TASK_CLASSIFIER_VERSION}); ${policyExplanation}`.slice(
+      0,
+      512,
+    );
+  return {
+    decision: {
+      ...result.decision,
+      policyVersion: appliedPolicyVersion,
+      explanation,
+    },
+    hybrid: { ...result.hybrid, policyVersion: HYBRID_TASK_ROUTER_POLICY_VERSION, explanation },
+  };
+};
+
+/** Explicit active and shadow policies use independent weights and evidence. */
+export function routeHybridModel(input: HybridRouterInput): HybridRouterOutput {
+  if (!input.shadowPolicy || input.mode === "manual") return routePolicy(input);
+  const { shadowPolicy, ...liveInput } = input;
+  const live = routePolicy({ ...liveInput, challengerEnabled: false });
+  const shadow = routePolicy({
+    ...liveInput,
+    ...shadowPolicy,
+    activePolicyVersion: shadowPolicy.policyVersion,
+    challengerEnabled: false,
+  });
+  const supported =
+    shadowPolicy.policyVersion === HYBRID_ROUTER_POLICY_VERSION ||
+    shadowPolicy.policyVersion === HYBRID_TASK_ROUTER_POLICY_VERSION;
+  const selected = shadow.hybrid.usedHybridRanking
+    ? (shadow.decision.selected?.target ?? null)
+    : null;
+  const decision =
+    (liveInput.activePolicyVersion === undefined ||
+      liveInput.activePolicyVersion === MODEL_ROUTER_POLICY_VERSION) &&
+    live.decision.policyVersion === MODEL_ROUTER_POLICY_VERSION &&
+    shadow.hybrid.usedHybridRanking
+      ? {
+          ...live.decision,
+          reasonCodes: uniqueReasons([...live.decision.reasonCodes, "POLICY_SHADOW_RECORDED"]),
+        }
+      : live.decision;
+  return {
+    ...live,
+    decision,
+    hybrid: {
+      ...live.hybrid,
+      challenger: {
+        kind: "policy_shadow",
+        ...(supported ? { policyVersion: shadowPolicy.policyVersion } : {}),
+        selected,
+        agreement: selected
+          ? agreement(live.decision.selected?.target ?? null, selected)
+          : "inapplicable",
+        ...(shadow.hybrid.fallbackReason === undefined
+          ? {}
+          : { fallbackReason: shadow.hybrid.fallbackReason }),
+      },
+    },
+  };
 }
 
 export const emptyLocalEvidence = (): LocalModelEvidence => ({

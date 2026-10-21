@@ -15,7 +15,7 @@ import { ExecutionPlanV0 } from "./executionPlan.ts";
 import { McpRouterDecision } from "./mcpRouter.ts";
 import { ModelRouterDecision } from "./modelRouter.ts";
 import { OpenRouterTeacherObservationV0 } from "./openRouter.ts";
-import { HybridRouteDecisionV1 } from "./routerEvaluation.ts";
+import { HybridRouteDecisionV1, LocalTaskProfile } from "./routerEvaluation.ts";
 import { SkillRouterDecision } from "./skillRouter.ts";
 import { MemoryRetrievalTraceV0 } from "./dreamMemory.ts";
 import { ConcurrencyAdmissionTraceV0 } from "./concurrencyBudget.ts";
@@ -142,6 +142,7 @@ export const DispatcherTaskRouteBinding = Schema.Struct({
   source: DispatcherRouteCandidateSource,
   gate: ActionGateResult,
   modelRoute: Schema.optional(ModelRouterDecision),
+  localTaskProfile: Schema.optional(LocalTaskProfile),
   /** Phase 10 sanitized OpenRouter observation. Absent on pre-Phase-10 bindings. */
   openRouter: Schema.optional(OpenRouterTeacherObservationV0),
   /** Phase 11 Hybrid / policy-shadow decision. Absent on pre-Phase-11 bindings. */

@@ -1,4 +1,6 @@
 import * as Schema from "effect/Schema";
+import { TaskContractFields } from "./taskContract.ts";
+import { ModelSelection } from "./modelSelection.ts";
 
 import {
   IsoDateTime,
@@ -24,6 +26,19 @@ const WORKFLOW_MAX_STAGES = 12;
 const WORKFLOW_MAX_ATTEMPTS = 5;
 export const WORKFLOW_MAX_ARTIFACT_CHARS = 12_000;
 export const WORKFLOW_MAX_RECORDS = 1_024;
+export const WORKFLOW_REVISION_FEEDBACK_MAX_CHARS = 2_000;
+export const WORKFLOW_RUN_BRIEF_MAX_CHARS = 2_000;
+// UTF-16 code units, matching JS length and textarea maxLength. No normalization:
+// paired supplementary characters count two; lone surrogates/control bytes reject.
+/* eslint-disable no-control-regex -- These controls and lone surrogates are invalid plain-text input. */
+const invalidBriefCodePoints =
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\uD800-\uDFFF]/u;
+/* eslint-enable no-control-regex */
+export const WorkflowRunBrief = Schema.String.check(
+  Schema.isMaxLength(WORKFLOW_RUN_BRIEF_MAX_CHARS),
+  Schema.makeFilter((text) => text.trim().length > 0),
+  Schema.makeFilter((text) => !invalidBriefCodePoints.test(text)),
+);
 
 const Id = TrimmedNonEmptyString.check(
   Schema.isMaxLength(80),
@@ -48,6 +63,22 @@ export const WorkflowRunId = RecordId;
 export const WorkflowArtifactId = RecordId;
 export const WorkflowDecisionId = RecordId;
 
+export const WorkflowRevisionSource = Schema.Struct({
+  runId: WorkflowRunId,
+  stageId: WorkflowStageId,
+  attempt: Attempt,
+  artifactId: WorkflowArtifactId,
+});
+export type WorkflowRevisionSource = typeof WorkflowRevisionSource.Type;
+export const WorkflowRevisionFeedback = Schema.Struct({
+  text: Schema.String.check(
+    Schema.isMaxLength(WORKFLOW_REVISION_FEEDBACK_MAX_CHARS),
+    Schema.makeFilter((text) => text.trim().length > 0),
+  ),
+  source: WorkflowRevisionSource,
+});
+export type WorkflowRevisionFeedback = typeof WorkflowRevisionFeedback.Type;
+
 export const WorkflowCapabilityPreference = Schema.Literals([
   "web-research",
   "long-context-repository",
@@ -56,7 +87,30 @@ export const WorkflowCapabilityPreference = Schema.Literals([
   "independent-review",
 ]);
 
+const ConfigurationDraftBinding = Schema.Struct({
+  environmentId: EnvironmentId,
+  modelSelection: ModelSelection,
+});
+export const AgentConfigurationSnapshot = Schema.Struct({
+  id: AgentProfileId,
+  revision: Version,
+  name: Label,
+  projectId: ProjectId,
+  environmentId: EnvironmentId,
+  ownerId: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  instructions: Instruction,
+});
+export type AgentConfigurationSnapshot = typeof AgentConfigurationSnapshot.Type;
+
 export const AgentProfile = Schema.Struct({
+  taskConfiguration: Schema.optionalKey(
+    Schema.Struct({
+      ...ConfigurationDraftBinding.fields,
+      ownerId: TrimmedNonEmptyString,
+      commandId: RecordId,
+    }),
+  ),
   id: AgentProfileId,
   version: Version,
   projectId: Schema.NullOr(ProjectId),
@@ -110,6 +164,7 @@ export const WorkflowTemplate = Schema.Struct({
 export type WorkflowTemplate = typeof WorkflowTemplate.Type;
 
 export const WorkflowStageAttempt = Schema.Struct({
+  revisionDecisionId: Schema.optionalKey(WorkflowDecisionId),
   stageId: WorkflowStageId,
   attempt: Attempt,
   profileId: Schema.NullOr(AgentProfileId),
@@ -139,6 +194,13 @@ export const WorkflowArtifact = Schema.Struct({
   attempt: Attempt,
   kind: Id,
   sourceTurnId: Schema.NullOr(TurnId),
+  sourceOutcome: Schema.optionalKey(
+    Schema.Literals(["completed", "failed", "interrupted", "cancelled"]),
+  ),
+  sourceThreadId: Schema.optionalKey(ThreadId),
+  sourceMessageId: Schema.optionalKey(MessageId),
+  outputMessageId: Schema.optionalKey(Schema.NullOr(MessageId)),
+  sourceItemId: Schema.optionalKey(TrimmedNonEmptyString),
   profileId: Schema.NullOr(AgentProfileId),
   profileVersion: Schema.NullOr(Version),
   sections: Schema.Array(WorkflowArtifactSection).check(Schema.isMaxLength(20)),
@@ -152,6 +214,7 @@ export const WorkflowArtifact = Schema.Struct({
 export type WorkflowArtifact = typeof WorkflowArtifact.Type;
 
 export const WorkflowDecision = Schema.Struct({
+  revisionFeedback: Schema.optionalKey(WorkflowRevisionFeedback),
   id: WorkflowDecisionId,
   runId: WorkflowRunId,
   stageId: WorkflowStageId,
@@ -163,6 +226,7 @@ export const WorkflowDecision = Schema.Struct({
 export type WorkflowDecision = typeof WorkflowDecision.Type;
 
 export const WorkflowRun = Schema.Struct({
+  brief: Schema.optionalKey(WorkflowRunBrief),
   id: WorkflowRunId,
   projectId: ProjectId,
   templateId: WorkflowTemplateId,
@@ -182,6 +246,9 @@ export const WorkflowRun = Schema.Struct({
 export type WorkflowRun = typeof WorkflowRun.Type;
 
 export const WorkflowCatalog = Schema.Struct({
+  runBriefVersion: Schema.optionalKey(Schema.Literal(1)),
+  reusableTemplatesVersion: Schema.optionalKey(Schema.Literal(1)),
+  revisionFeedbackVersion: Schema.optionalKey(Schema.Literal(1)),
   profiles: Schema.Array(AgentProfile).check(Schema.isMaxLength(WORKFLOW_MAX_RECORDS)),
   templates: Schema.Array(WorkflowTemplate).check(Schema.isMaxLength(WORKFLOW_MAX_RECORDS)),
   runs: Schema.Array(WorkflowRun).check(Schema.isMaxLength(WORKFLOW_MAX_RECORDS)),
@@ -192,6 +259,7 @@ export const WorkflowReadInput = Schema.Struct({ projectId: ProjectId });
 export const WorkflowReadRunInput = Schema.Struct({ projectId: ProjectId, runId: WorkflowRunId });
 
 export const AgentProfileDraft = Schema.Struct({
+  taskConfiguration: Schema.optionalKey(ConfigurationDraftBinding),
   id: AgentProfileId,
   displayName: AgentProfile.fields.displayName,
   description: AgentProfile.fields.description,
@@ -211,6 +279,8 @@ export const WorkflowTemplateDraft = Schema.Struct({
   stages: WorkflowTemplate.fields.stages,
 });
 
+export type WorkflowTemplateDraft = typeof WorkflowTemplateDraft.Type;
+
 const WorkflowActionBase = {
   projectId: ProjectId,
   commandId: RecordId,
@@ -226,11 +296,13 @@ export const WorkflowActionInput = Schema.Union([
   Schema.Struct({
     ...WorkflowActionBase,
     type: Schema.Literal("profile.archive"),
+    expectedVersion: Schema.optionalKey(Version),
     profileId: AgentProfileId,
   }),
   Schema.Struct({
     ...WorkflowActionBase,
     type: Schema.Literal("profile.restore"),
+    expectedVersion: Schema.optionalKey(Version),
     profileId: AgentProfileId,
   }),
   Schema.Struct({
@@ -252,6 +324,7 @@ export const WorkflowActionInput = Schema.Union([
   Schema.Struct({
     ...WorkflowActionBase,
     type: Schema.Literal("run.start"),
+    brief: Schema.optionalKey(WorkflowRunBrief),
     runId: WorkflowRunId,
     templateId: WorkflowTemplateId,
     templateVersion: Version,
@@ -267,6 +340,7 @@ export const WorkflowActionInput = Schema.Union([
     attempt: Attempt,
     artifactId: Schema.NullOr(WorkflowArtifactId),
     value: WorkflowDecision.fields.value,
+    revisionFeedback: Schema.optionalKey(WorkflowRevisionFeedback),
   }),
   Schema.Struct({
     ...WorkflowActionBase,
@@ -282,11 +356,32 @@ export const WorkflowActionInput = Schema.Union([
 ]);
 export type WorkflowActionInput = typeof WorkflowActionInput.Type;
 
+export const WorkflowDispatchReview = Schema.Struct({
+  digest: TrimmedNonEmptyString,
+  expiresAt: IsoDateTime,
+  taskContract: TaskContractFields,
+});
+export const WorkflowReconcileDispatchInput = Schema.Struct({
+  environmentId: EnvironmentId,
+  projectId: ProjectId,
+  runId: WorkflowRunId,
+  stageId: WorkflowStageId,
+  attempt: Attempt,
+});
+export const WorkflowDispatchStatus = Schema.Struct({
+  status: Schema.Literals(["not-submitted", "unknown", "accepted"]),
+  dispatchId: Schema.NullOr(RecordId),
+  threadId: Schema.NullOr(ThreadId),
+  messageId: Schema.NullOr(MessageId),
+  run: Schema.NullOr(WorkflowRun),
+});
 export const WorkflowStagePreviewInput = Schema.Struct({
   environmentId: EnvironmentId,
   projectId: ProjectId,
   runId: WorkflowRunId,
   preferredRoute: Schema.optional(DispatcherRouteTarget),
+  taskContract: Schema.optionalKey(TaskContractFields),
+  additionalInstruction: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(2_000))),
   cursorCloudTarget: Schema.optionalKey(CursorCloudExecutionTarget),
 });
 export const WorkflowStagePreview = Schema.Struct({
@@ -295,6 +390,7 @@ export const WorkflowStagePreview = Schema.Struct({
   attempt: Attempt,
   packetText: TrimmedNonEmptyString.check(Schema.isMaxLength(16_000)),
   route: DispatcherRouteDecision,
+  review: Schema.optionalKey(WorkflowDispatchReview),
   cursorCloud: Schema.optionalKey(CursorCloudDispatchPreview),
 });
 export type WorkflowStagePreview = typeof WorkflowStagePreview.Type;
@@ -307,6 +403,7 @@ export const WorkflowDispatchStageInput = Schema.Struct({
   dispatchId: RecordId.check(Schema.isMaxLength(100)),
   target: DispatcherRouteTarget,
   additionalInstruction: Schema.String.check(Schema.isMaxLength(2_000)),
+  review: Schema.optionalKey(WorkflowDispatchReview),
   runnerKind: Schema.optionalKey(Schema.Literal("cursor-cloud")),
   cursorCloudTarget: Schema.optionalKey(CursorCloudExecutionTarget),
 });

@@ -17,6 +17,7 @@ import {
   ThreadId,
   type DispatcherRoutePreviewRequest,
   type ModelSelection,
+  type ModelRouterConstraints,
   type ServerProvider,
 } from "@t3tools/contracts";
 import { modelRouterDecisionOmitsSecrets } from "@t3tools/shared/modelRouter";
@@ -146,9 +147,9 @@ it.effect("reads only dispatcher-approved project and thread projection columns"
       VALUES
       ('dispatcher-project', 'Dispatcher', '/private/dispatcher', '{"instanceId":"codex_work","model":"gpt-5.4"}', '[]', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL),
       ('dispatcher-deleted', 'Deleted', '/private/deleted', NULL, '[]', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', '2026-09-24T00:01:00Z')`;
-    yield* sql`INSERT INTO projection_threads
-      (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at, deleted_at)
-      VALUES ('dispatcher-thread', 'dispatcher-project', 'Thread', '{"instanceId":"codex_work","model":"gpt-5.4"}', 'full-access', 'default', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', '2026-09-24T00:02:00Z')`;
+    yield* sql`INSERT INTO orchestration_v2_projection_threads
+      (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, deleted_at, payload_json)
+      VALUES ('dispatcher-thread', 'dispatcher-project', 'Thread', 'codex', 'full-access', 'default', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', '2026-09-24T00:02:00Z', '{"modelSelection":{"instanceId":"codex_work","model":"gpt-5.4"}}')`;
 
     const state = yield* readDispatcherProjectedState({
       threadId: ThreadId.make("dispatcher-thread"),
@@ -188,9 +189,9 @@ it.effect("binds the deterministic fallback before any provider work", () =>
       (project_id, title, workspace_root, default_model_selection_json, scripts_json, created_at, updated_at, deleted_at)
       VALUES
       ('project-a', 'Dispatcher', '/workspace/a', '{"instanceId":"project_provider","model":"project-model"}', '[]', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL)`;
-    yield* sql`INSERT INTO projection_threads
-      (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at, deleted_at)
-      VALUES ('thread-a', 'project-a', 'Thread', '{"instanceId":"thread_provider","model":"thread-model"}', 'full-access', 'default', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL)`;
+    yield* sql`INSERT INTO orchestration_v2_projection_threads
+      (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, deleted_at, payload_json)
+      VALUES ('thread-a', 'project-a', 'Thread', 'codex', 'full-access', 'default', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL, '{"modelSelection":{"instanceId":"thread_provider","model":"thread-model"}}')`;
 
     const command = {
       type: "thread.turn.start" as const,
@@ -252,9 +253,9 @@ it.effect("Auto Route rewrites turn start to the selected eligible model", () =>
       (project_id, title, workspace_root, default_model_selection_json, scripts_json, created_at, updated_at, deleted_at)
       VALUES
       ('project-a', 'Dispatcher', '/workspace/a', '{"instanceId":"project_provider","model":"project-model"}', '[]', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL)`;
-    yield* sql`INSERT INTO projection_threads
-      (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at, deleted_at)
-      VALUES ('thread-a', 'project-a', 'Thread', '{"instanceId":"thread_provider","model":"thread-model"}', 'full-access', 'default', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL)`;
+    yield* sql`INSERT INTO orchestration_v2_projection_threads
+      (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, deleted_at, payload_json)
+      VALUES ('thread-a', 'project-a', 'Thread', 'codex', 'full-access', 'default', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL, '{"modelSelection":{"instanceId":"thread_provider","model":"thread-model"}}')`;
 
     const command = {
       type: "thread.turn.start" as const,
@@ -312,9 +313,9 @@ it.effect("manual routing keeps the user model and still records a route decisio
       (project_id, title, workspace_root, default_model_selection_json, scripts_json, created_at, updated_at, deleted_at)
       VALUES
       ('project-a', 'Dispatcher', '/workspace/a', '{"instanceId":"project_provider","model":"project-model"}', '[]', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL)`;
-    yield* sql`INSERT INTO projection_threads
-      (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at, deleted_at)
-      VALUES ('thread-a', 'project-a', 'Thread', '{"instanceId":"thread_provider","model":"thread-model"}', 'full-access', 'default', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL)`;
+    yield* sql`INSERT INTO orchestration_v2_projection_threads
+      (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, deleted_at, payload_json)
+      VALUES ('thread-a', 'project-a', 'Thread', 'codex', 'full-access', 'default', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL, '{"modelSelection":{"instanceId":"thread_provider","model":"thread-model"}}')`;
 
     const command = {
       type: "thread.turn.start" as const,
@@ -356,6 +357,92 @@ it.effect("manual routing keeps the user model and still records a route decisio
   }).pipe(Effect.provide(SqlitePersistenceMemory)),
 );
 
+it.effect.each([
+  { name: "required capability", constraints: { requiredCapabilities: ["vision" as const] } },
+  {
+    name: "instance excluded",
+    constraints: { excludedInstanceIds: [ProviderInstanceId.make("thread_provider")] },
+  },
+  { name: "empty driver allow", constraints: { allowedDrivers: [] } },
+  { name: "model excluded", constraints: { excludedModels: ["custom-model"] } },
+  { name: "unknown driver", constraints: { allowedDrivers: [ProviderDriverKind.make("codex")] } },
+])("does not erase $name refusal with legacy explicit Manual fallback", (row) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const target: ModelSelection = {
+      ...selection("thread_provider", "custom-model"),
+      options: [{ id: "reasoningEffort", value: "high" }],
+    };
+    const command = {
+      type: "thread.turn.start" as const,
+      commandId: CommandId.make(`manual-constraint:${row.name}`),
+      threadId: threadA,
+      message: {
+        messageId: MessageId.make(`manual-constraint:${row.name}`),
+        text: "Keep this exact target",
+      },
+      modelSelection: target,
+      routingMode: "manual" as const,
+      modelRouteConstraints: row.constraints,
+    };
+    const denied = yield* bindDispatcherTurnStartCommand(command, {
+      enabled: true,
+      environmentId: Effect.succeed(environmentId),
+      providers: Effect.succeed([provider({ instanceId: "thread_provider", models: [] })]),
+      environmentDefaultModelSelection: Effect.succeed(null),
+      sql,
+    }).pipe(Effect.exit);
+    expect(Exit.isFailure(denied)).toBe(true);
+    expect(yield* sql`SELECT binding_json FROM projection_dispatcher_task_routes`).toEqual([]);
+  }).pipe(Effect.provide(SqlitePersistenceMemory)),
+);
+
+it.effect.each([
+  undefined,
+  {},
+  {
+    allowedInstanceIds: [ProviderInstanceId.make("thread_provider")],
+    allowedModels: ["custom-model"],
+    excludedDrivers: [],
+    requiredCapabilities: [],
+  },
+] as ReadonlyArray<ModelRouterConstraints | undefined>)(
+  "keeps compatible unknown-catalog Manual target and options for %j",
+  (constraints) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const target: ModelSelection = {
+        ...selection("thread_provider", "custom-model"),
+        options: [{ id: "reasoningEffort", value: "high" }],
+      };
+      const command = {
+        type: "thread.turn.start" as const,
+        commandId: CommandId.make("manual-legacy-compatible"),
+        threadId: threadA,
+        message: {
+          messageId: MessageId.make("manual-legacy-compatible"),
+          text: "Keep this exact target",
+        },
+        modelSelection: target,
+        routingMode: "manual" as const,
+        ...(constraints === undefined ? {} : { modelRouteConstraints: constraints }),
+      };
+      const bound = yield* bindDispatcherTurnStartCommand(command, {
+        enabled: true,
+        environmentId: Effect.succeed(environmentId),
+        providers: Effect.succeed([provider({ instanceId: "thread_provider", models: [] })]),
+        environmentDefaultModelSelection: Effect.succeed(null),
+        sql,
+      });
+      expect(bound.modelSelection).toEqual(target);
+      if (bound.type === "thread.turn.start")
+        expect(bound.routeBinding?.target).toEqual({
+          instanceId: target.instanceId,
+          model: target.model,
+        });
+    }).pipe(Effect.provide(SqlitePersistenceMemory)),
+);
+
 it.effect("OpenRouter Off and Shadow leave Auto Route execution unchanged", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -363,9 +450,9 @@ it.effect("OpenRouter Off and Shadow leave Auto Route execution unchanged", () =
       (project_id, title, workspace_root, default_model_selection_json, scripts_json, created_at, updated_at, deleted_at)
       VALUES
       ('project-a', 'Dispatcher', '/workspace/a', '{"instanceId":"opencode","model":"openai/gpt-5"}', '[]', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL)`;
-    yield* sql`INSERT INTO projection_threads
-      (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at, deleted_at)
-      VALUES ('thread-a', 'project-a', 'Thread', '{"instanceId":"opencode","model":"openai/gpt-5"}', 'full-access', 'default', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL)`;
+    yield* sql`INSERT INTO orchestration_v2_projection_threads
+      (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, deleted_at, payload_json)
+      VALUES ('thread-a', 'project-a', 'Thread', 'opencode', 'full-access', 'default', '2026-09-24T00:00:00Z', '2026-09-24T00:00:00Z', NULL, '{"modelSelection":{"instanceId":"opencode","model":"openai/gpt-5"}}')`;
 
     const command = {
       type: "thread.turn.start" as const,
@@ -783,3 +870,41 @@ it.effect("keeps a task route immutable across a database reload", () => {
     ),
   );
 });
+
+it.effect("eligible cap binds an eligible Auto target behind 33 disabled catalog models", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const command = {
+      type: "thread.turn.start" as const,
+      commandId: CommandId.make("eligible-cap-dispatcher"),
+      threadId: threadA,
+      message: {
+        messageId: MessageId.make("eligible-cap-dispatcher"),
+        text: "Choose the eligible model",
+      },
+      routingMode: "auto" as const,
+    };
+    const bound = yield* bindDispatcherTurnStartCommand(command, {
+      enabled: true,
+      environmentId: Effect.succeed(environmentId),
+      providers: Effect.succeed([
+        provider({
+          instanceId: "aaa-disabled",
+          driver: "codex",
+          enabled: false,
+          models: Array.from({ length: 33 }, (_, i) => `blocked-${i}`),
+        }),
+        provider({ instanceId: "zzz-ready", driver: "codex", models: ["ready"] }),
+      ]),
+      environmentDefaultModelSelection: Effect.succeed(null),
+      sql,
+    });
+    expect(bound.modelSelection).toEqual(selection("zzz-ready", "ready"));
+    expect(bound.routeBinding?.modelRoute?.selectionBasis).toMatchObject({
+      eligibleCount: 1,
+      excludedCount: 33,
+      consideredEligibleCount: 1,
+    });
+    expect(bound.routeBinding?.modelRoute?.attemptBudget).toBe(3);
+  }).pipe(Effect.provide(SqlitePersistenceMemory)),
+);

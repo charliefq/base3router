@@ -1,30 +1,29 @@
+import { readThreadPullRequests } from "./read.ts";
+export { listThreadPullRequests } from "./read.ts";
+import {
+  threadPullRequestsOf,
+  threadPullRequestKeysEqual,
+} from "@t3tools/shared/threadPullRequests";
 import {
   CommandId,
   pullRequestHostOf,
   type OrchestrationProjectShell,
-  type OrchestrationThreadShell,
+  type OrchestrationV2ThreadShell,
   type SourceControlProviderKind,
   type ThreadId,
-  type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import { changeRequestUrlFor, parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
-import {
-  normalizeThreadPullRequestKey,
-  resolveThreadPullRequestChains,
-  threadPullRequestKeyOf,
-  visibleThreadPullRequests,
-} from "@t3tools/shared/threadPullRequests";
+import { normalizeThreadPullRequestKey } from "@t3tools/shared/threadPullRequests";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
-import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
-import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
+import * as ProjectService from "../../../project/ProjectService.ts";
 import { withAllowedMcpTool } from "../../McpActionAuthorization.ts";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import {
-  type ListThreadPullRequestsResult,
   PullRequestLinkFailedError,
   PullRequestUrlInvalidError,
   PullRequestTargetIncompleteError,
@@ -34,7 +33,6 @@ import {
   type PullRequestTargetInput,
   PullRequestThreadNotFoundError,
   PullRequestsToolkit,
-  type ThreadPullRequestEntry,
 } from "./tools.ts";
 
 interface ResolvedTarget {
@@ -99,54 +97,10 @@ const resolveTarget = Effect.fn("PullRequestsToolkit.resolveTarget")(function* (
   } satisfies ResolvedTarget;
 });
 
-function entryOf(
-  link: ThreadPullRequestLink,
-  chains: ReturnType<typeof resolveThreadPullRequestChains>,
-): ThreadPullRequestEntry {
-  const key = threadPullRequestKeyOf(link);
-  let stack: ThreadPullRequestEntry["stack"] = null;
-  for (const chain of chains) {
-    if (chain.layers.length < 2) continue;
-    const index = chain.layers.findIndex((layer) => threadPullRequestKeyOf(layer) === key);
-    if (index !== -1) {
-      stack = { kind: chain.kind, position: index + 1, size: chain.layers.length };
-      break;
-    }
-  }
-  return {
-    host: normalizeThreadPullRequestKey(link).host,
-    repository: link.repository,
-    number: link.number,
-    url: link.url,
-    source: link.source,
-    state: link.snapshot?.state ?? null,
-    title: link.snapshot?.title ?? null,
-    headBranch: link.snapshot?.headBranch ?? null,
-    baseBranch: link.snapshot?.baseBranch ?? null,
-    isDraft: link.snapshot?.isDraft ?? null,
-    stack,
-  };
-}
-
-/** What the tools report from a thread shell; exported so the shape is testable without a layer. */
-export function listThreadPullRequests(
-  thread: Pick<OrchestrationThreadShell, "pullRequests">,
-): ListThreadPullRequestsResult {
-  const chains = resolveThreadPullRequestChains(thread.pullRequests);
-  return {
-    pullRequests: visibleThreadPullRequests(thread.pullRequests).map((link) =>
-      entryOf(link, chains),
-    ),
-    chains: chains.map((chain) => ({
-      kind: chain.kind,
-      numbers: chain.layers.map((layer) => layer.number),
-    })),
-  };
-}
-
 const make = Effect.gen(function* () {
-  const engine = yield* OrchestrationEngine.OrchestrationEngineService;
-  const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const engine = yield* Orchestrator.OrchestratorV2;
+
+  const projects = yield* ProjectService.ProjectService;
   const crypto = yield* Crypto.Crypto;
 
   const commandId = (tag: string, threadId: ThreadId) =>
@@ -162,8 +116,9 @@ const make = Effect.gen(function* () {
       | typeof PullRequestListFailedError,
   ) {
     const scope = yield* McpInvocationContext.requireMcpCapability("pull-requests");
-    const thread = yield* snapshots
-      .getThreadShellById(scope.threadId)
+    const thread = yield* engine
+      .getThreadShell(scope.threadId)
+      .pipe(Effect.map(Option.fromNullishOr))
       .pipe(Effect.mapError((cause) => new Failure({ cause })));
     if (Option.isNone(thread)) {
       return yield* new PullRequestThreadNotFoundError({ threadId: scope.threadId });
@@ -172,10 +127,10 @@ const make = Effect.gen(function* () {
   });
 
   const projectOf = (
-    thread: OrchestrationThreadShell,
+    thread: OrchestrationV2ThreadShell,
     Failure: typeof PullRequestLinkFailedError | typeof PullRequestUnlinkFailedError,
   ) =>
-    snapshots.getProjectShellById(thread.projectId).pipe(
+    projects.getShell(thread.projectId).pipe(
       Effect.map(Option.getOrUndefined),
       Effect.mapError((cause) => new Failure({ cause })),
     );
@@ -198,6 +153,11 @@ const make = Effect.gen(function* () {
           const thread = yield* requireThread(PullRequestLinkFailedError);
           const project = yield* projectOf(thread, PullRequestLinkFailedError);
           const target = yield* resolveTarget(input, project);
+          const existing = threadPullRequestsOf(thread).find((link) =>
+            threadPullRequestKeysEqual(link, target),
+          );
+          if (existing && existing.source !== "stack-dismissed")
+            return { ...target, alreadyLinked: true };
           const alreadyLinked = yield* engine
             .dispatch({
               type: "thread.pull-request.link",
@@ -213,15 +173,11 @@ const make = Effect.gen(function* () {
               Effect.as(false),
               // The decider rejects a second link of the same PR; for the agent that is
               // the outcome it asked for, not an error.
-              Effect.catchTags({ OrchestrationCommandInvariantError: () => Effect.succeed(true) }),
+
               Effect.catchCause(dispatchFailure(PullRequestLinkFailedError)),
             );
           return { ...target, alreadyLinked };
         }),
-      ).pipe(
-        Effect.catchTag("McpActionGateBlockedError", (error) =>
-          Effect.fail(new PullRequestLinkFailedError({ cause: error })),
-        ),
       ),
     unlink_pull_request: (input) =>
       withAllowedMcpTool(
@@ -231,6 +187,15 @@ const make = Effect.gen(function* () {
           const thread = yield* requireThread(PullRequestUnlinkFailedError);
           const project = yield* projectOf(thread, PullRequestUnlinkFailedError);
           const target = yield* resolveTarget(input, project);
+          if (
+            !threadPullRequestsOf(thread).some((link) => threadPullRequestKeysEqual(link, target))
+          )
+            return {
+              host: target.host,
+              repository: target.repository,
+              number: target.number,
+              wasLinked: false,
+            };
           const wasLinked = yield* engine
             .dispatch({
               type: "thread.pull-request.unlink",
@@ -242,7 +207,7 @@ const make = Effect.gen(function* () {
             })
             .pipe(
               Effect.as(true),
-              Effect.catchTags({ OrchestrationCommandInvariantError: () => Effect.succeed(false) }),
+
               Effect.catchCause(dispatchFailure(PullRequestUnlinkFailedError)),
             );
           return {
@@ -252,19 +217,13 @@ const make = Effect.gen(function* () {
             wasLinked,
           };
         }),
-      ).pipe(
-        Effect.catchTag("McpActionGateBlockedError", (error) =>
-          Effect.fail(new PullRequestUnlinkFailedError({ cause: error })),
-        ),
       ),
     list_thread_pull_requests: () =>
       withAllowedMcpTool(
         "list_thread_pull_requests",
         {},
-        requireThread(PullRequestListFailedError).pipe(Effect.map(listThreadPullRequests)),
-      ).pipe(
-        Effect.catchTag("McpActionGateBlockedError", (error) =>
-          Effect.fail(new PullRequestListFailedError({ cause: error })),
+        McpInvocationContext.requireMcpCapability("pull-requests").pipe(
+          Effect.flatMap((scope) => readThreadPullRequests(engine.getThreadShell, scope.threadId)),
         ),
       ),
   });
