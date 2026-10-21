@@ -116,6 +116,31 @@ it.effect(
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
+it.effect.each(["resolve", "start"] as const)(
+  "explicit %s preserves removal of an owned runtime when a local executable is preferred",
+  (operation) =>
+    Effect.gen(function* () {
+      const first = yield* makeHarness();
+      yield* first.installation.start;
+      expect((yield* terminalState(first.installation)).phase).toBe("succeeded");
+      const restarted = yield* makeHarness({
+        baseDir: first.baseDir,
+        local: { version: "0.156.1" },
+      });
+      expect((yield* restarted.installation.state).canRemove).toBe(false);
+      if (operation === "resolve") yield* restarted.installation.resolve();
+      else yield* restarted.installation.start;
+      expect(yield* restarted.installation.state).toMatchObject({
+        source: "local",
+        canRemove: true,
+      });
+      yield* restarted.installation.remove();
+      expect(yield* restarted.fs.exists(restarted.localBinaryPath)).toBe(true);
+      expect(yield* restarted.fs.exists(restarted.installation.managedDirectory)).toBe(false);
+      expect((yield* restarted.installation.state).canRemove).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect.each(["0.156.0", "0.156.1", "0.156.2", "0.157.0"])(
   "reuses installed Codex %s without downloading or taking ownership of it",
   (version) =>

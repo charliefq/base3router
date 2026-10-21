@@ -381,6 +381,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
   const resolve = Effect.fn("CodexInstallation.resolve")(function* () {
     const local = yield* resolveLocal();
     const executable = local ?? (yield* resolveManaged());
+    const canRemove = yield* fs.exists(managedDirectory);
     yield* SubscriptionRef.update(state, (current) =>
       isRunning(current)
         ? current
@@ -389,7 +390,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
             installedVersion: executable.version,
             executablePath: executable.executablePath,
             source: executable.source,
-            canRemove: executable.source === "managed",
+            canRemove,
           },
     );
     return executable;
@@ -397,6 +398,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
   const reuseLocal = Effect.fn("CodexInstallation.reuseLocal")(function* () {
     const local = yield* resolveLocal();
     if (!local) return false;
+    const canRemove = yield* fs.exists(managedDirectory);
     yield* SubscriptionRef.update(
       state,
       (current) =>
@@ -404,6 +406,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
           ...current,
           phase: "succeeded",
           source: "local",
+          canRemove,
           operationId: null,
           installedVersion: local.version,
           executablePath: local.executablePath,
