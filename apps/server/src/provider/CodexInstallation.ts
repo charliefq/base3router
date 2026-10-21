@@ -379,13 +379,17 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     Effect.orElseSucceed(() => null),
   );
   const resolve = Effect.fn("CodexInstallation.resolve")(function* () {
-    const local = yield* resolveLocal();
-    const executable = local ?? (yield* resolveManaged());
     const canRemove = yield* fs
       .exists(managedDirectory)
       .pipe(
         Effect.mapError(wrapFailure("resolve", "Could not inspect the managed Codex runtime.")),
       );
+    // Explicit resolution exposes owned-runtime recovery even when validation fails.
+    yield* SubscriptionRef.update(state, (current) =>
+      isRunning(current) ? current : { ...current, canRemove },
+    );
+    const local = yield* resolveLocal();
+    const executable = local ?? (yield* resolveManaged());
     yield* SubscriptionRef.update(state, (current) =>
       isRunning(current)
         ? current

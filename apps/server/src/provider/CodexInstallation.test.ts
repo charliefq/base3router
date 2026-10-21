@@ -324,13 +324,36 @@ it.effect("requires an update before running an older activated managed installa
       '{"version":"0.155.1"}',
     );
     const restarted = yield* makeHarness({ baseDir: first.baseDir });
-    expect((yield* Effect.flip(restarted.installation.resolve())).detail).toContain(
-      "outside the supported range",
-    );
+    expect((yield* restarted.installation.state).canRemove).toBe(false);
+    const error = yield* Effect.flip(restarted.installation.resolve());
+    expect(error).toBeInstanceOf(CodexInstallation.CodexInstallationError);
+    expect(error.detail).toContain("outside the supported range");
+    expect((yield* restarted.installation.state).canRemove).toBe(true);
     yield* restarted.installation.start;
     expect((yield* terminalState(restarted.installation)).phase).toBe("succeeded");
     expect((yield* restarted.installation.resolve()).version).toBe("0.156.1");
     expect(restarted.downloads()).toBe(1);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("keeps a corrupt owned runtime removable after explicit resolution fails", () =>
+  Effect.gen(function* () {
+    const first = yield* makeHarness();
+    yield* first.fs.makeDirectory(first.installation.managedDirectory, { recursive: true });
+    yield* first.fs.writeFileString(
+      `${first.installation.managedDirectory}/active.json`,
+      "synthetic invalid manifest",
+    );
+    const restarted = yield* makeHarness({ baseDir: first.baseDir });
+    expect((yield* restarted.installation.state).canRemove).toBe(false);
+    const error = yield* Effect.flip(restarted.installation.resolve());
+    expect(error).toBeInstanceOf(CodexInstallation.CodexInstallationError);
+    expect((yield* restarted.installation.state).canRemove).toBe(true);
+    expect(restarted.downloads()).toBe(0);
+    expect(yield* restarted.fs.exists(restarted.probeLog)).toBe(false);
+    yield* restarted.installation.remove();
+    expect(yield* restarted.fs.exists(restarted.installation.managedDirectory)).toBe(false);
+    expect((yield* restarted.installation.state).canRemove).toBe(false);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
