@@ -92,6 +92,30 @@ const terminalState = (installation: CodexInstallation.CodexInstallation["Servic
     Effect.map(Option.getOrThrow),
   );
 
+it.effect(
+  "construction and status observation never discover local executables, including restart",
+  () =>
+    Effect.gen(function* () {
+      const first = yield* makeHarness({ local: { version: "0.156.1" } });
+      expect((yield* first.installation.state).phase).toBe("idle");
+      yield* first.installation.changes.pipe(Stream.runHead);
+      expect(yield* first.fs.exists(first.probeLog)).toBe(false);
+      const restarted = yield* makeHarness({
+        baseDir: first.baseDir,
+        local: { version: "0.156.1" },
+      });
+      yield* restarted.installation.state;
+      yield* restarted.installation.changes.pipe(Stream.runHead);
+      expect(yield* restarted.fs.exists(restarted.probeLog)).toBe(false);
+      expect(restarted.downloads()).toBe(0);
+      expect((yield* restarted.installation.resolve()).source).toBe("local");
+      expect((yield* restarted.fs.readFileString(restarted.probeLog)).trim().split("\n")).toEqual([
+        "--version",
+        "app-server --help",
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect.each(["0.156.0", "0.156.1", "0.156.2", "0.157.0"])(
   "reuses installed Codex %s without downloading or taking ownership of it",
   (version) =>
@@ -343,6 +367,9 @@ it.effect("keeps an activated runtime when a later update fails verification", (
       baseDir: first.baseDir,
       options: { releaseAsset: { ...asset, version: "0.156.2", sha256: "0".repeat(64) } },
     });
+    // Passive startup state is unknown until an enabled caller explicitly resolves it.
+    expect((yield* update.installation.state).executablePath).toBeNull();
+    yield* update.installation.resolve();
     expect((yield* update.installation.state).executablePath).toBe(
       (yield* first.installation.resolve()).executablePath,
     );

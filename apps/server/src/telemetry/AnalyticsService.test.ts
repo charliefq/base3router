@@ -3,10 +3,13 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Clock from "effect/Clock";
 import * as Layer from "effect/Layer";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as HttpClient from "effect/unstable/http/HttpClient";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import * as ServerConfig from "../config.ts";
@@ -46,7 +49,84 @@ interface RecordedBatchBody {
   }>;
 }
 
-it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
+// Synthetic identity only: even enabled telemetry tests must never read the test runner's account.
+const syntheticIdentityServices = Layer.effect(
+  FileSystem.FileSystem,
+  Effect.map(FileSystem.FileSystem, (fs): FileSystem.FileSystem => ({
+    ...fs,
+    readFileString: (path, ...options) =>
+      path.endsWith("/.codex/auth.json") || path.endsWith("\\.codex\\auth.json")
+        ? Effect.succeed(JSON.stringify({ tokens: { account_id: "synthetic-analytics-account" } }))
+        : path.endsWith("/.claude.json") || path.endsWith("\\.claude.json")
+          ? Effect.succeed(JSON.stringify({ userID: "synthetic-analytics-user" }))
+          : fs.readFileString(path, ...options),
+  })),
+).pipe(Layer.provideMerge(NodeServices.layer));
+
+it.layer(syntheticIdentityServices)("AnalyticsService test", (it) => {
+  it.effect("invalid telemetry configuration is not treated as a disabled service", () =>
+    Effect.gen(function* () {
+      const result = yield* AnalyticsService.make.pipe(
+        Effect.provide(
+          ConfigProvider.layer(ConfigProvider.fromUnknown({ T3CODE_TELEMETRY_ENABLED: "invalid" })),
+        ),
+        Effect.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-invalid-analytics-" })),
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make(() => Effect.die("Invalid analytics must not send")),
+        ),
+        Effect.exit,
+      );
+      assert.equal(result._tag, "Failure");
+    }),
+  );
+  it.effect(
+    "disabled construction, record and flush perform no identity reads or timer scheduling",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const accountReads: string[] = [];
+        const clock = yield* Clock.Clock;
+        let sleeps = 0;
+        const guardedFs = {
+          ...fs,
+          readFileString: (...args: Parameters<typeof fs.readFileString>) => {
+            const [path] = args;
+            if (path.endsWith("auth.json") || path.endsWith(".claude.json"))
+              accountReads.push(path);
+            return fs.readFileString(...args);
+          },
+        };
+        const config = ServerConfig.layerTest(process.cwd(), {
+          prefix: "t3-disabled-analytics-inert-",
+        });
+        yield* Effect.gen(function* () {
+          const analytics = yield* AnalyticsService.make;
+          yield* analytics.record("disabled.synthetic");
+          yield* analytics.flush;
+          assert.deepEqual(accountReads, []);
+          yield* Effect.yieldNow;
+          assert.equal(sleeps, 0);
+        }).pipe(
+          Effect.provide(config),
+          Effect.provide(
+            ConfigProvider.layer(ConfigProvider.fromUnknown({ T3CODE_TELEMETRY_ENABLED: false })),
+          ),
+          Effect.provideService(FileSystem.FileSystem, guardedFs),
+          Effect.provideService(
+            HttpClient.HttpClient,
+            HttpClient.make(() => Effect.die("Disabled analytics must not send")),
+          ),
+          Effect.provideService(Clock.Clock, {
+            ...clock,
+            sleep: () =>
+              Effect.sync(() => {
+                sleeps++;
+              }).pipe(Effect.andThen(Effect.never)),
+          }),
+        );
+      }),
+  );
   it.effect("flush drains all buffered events across multiple batches", () =>
     Effect.gen(function* () {
       const capturedRequests: Array<RecordedBatchRequest> = [];

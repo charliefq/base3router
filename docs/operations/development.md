@@ -148,6 +148,49 @@ server package, `start --entrypoint <package>/dist/bin.mjs` can use a path below
 `/tmp/b3r-local-product-package-*`; its declared runtime dependencies must already
 be installed. A package run using cached dependencies is not an installer test.
 
+## Inspect startup with providers disabled
+
+Use a fresh disposable base directory. Before the first server launch, write
+`userdata/settings.json` with these existing settings:
+
+```json
+{
+  "providers": {
+    "codex": { "enabled": false },
+    "claudeAgent": { "enabled": false },
+    "cursor": { "enabled": false },
+    "grok": { "enabled": false },
+    "opencode": { "enabled": false },
+    "antigravity": { "enabled": false },
+    "pi": { "enabled": false }
+  },
+  "providerInstances": {}
+}
+```
+
+Validate the file with the existing `ServerSettings` schema before launch; invalid
+settings can fall back to enabled defaults. Existing explicit instances have
+their own enable flags, so do not overlay this example onto retained settings.
+Set `T3CODE_TELEMETRY_ENABLED=false` in the child environment. Installer
+construction and passive status reads do not discover executables; enabled
+resolution and explicit setup still do. Disabled Codex instances do not
+materialize configured account shadow homes, and disabled telemetry does not
+acquire an identity or schedule sending.
+
+These gates do not isolate inherited homes, login-shell profiles or background
+metadata traffic. A no-provider/no-account verification also needs fresh child
+HOME/USERPROFILE, CODEX_HOME, XDG and application-data directories, an allowlisted
+environment, and process/filesystem guards that block attempts before execution
+or account access. Do not read or copy credentials into the fixture. Keep the
+listener loopback-only and pairing output private. Verify the exact source SHA
+and successful build command exits before starting the built entrypoint.
+
+Guarded Linux HTTP verification is separate from browser interaction, Windows
+startup and real-provider readiness. A successful shell page response is not an
+authenticated API or AI-task result. No safe Windows no-account launch recipe is
+established by this procedure; the earlier owner handoff snippet remains
+withdrawn pending platform-specific verification.
+
 ## Build a registry-dependent Node package
 
 After the web and server build above, create a new artifact directory:

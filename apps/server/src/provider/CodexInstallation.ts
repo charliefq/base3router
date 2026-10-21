@@ -380,7 +380,19 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
   );
   const resolve = Effect.fn("CodexInstallation.resolve")(function* () {
     const local = yield* resolveLocal();
-    return local ?? (yield* resolveManaged());
+    const executable = local ?? (yield* resolveManaged());
+    yield* SubscriptionRef.update(state, (current) =>
+      isRunning(current)
+        ? current
+        : {
+            ...current,
+            installedVersion: executable.version,
+            executablePath: executable.executablePath,
+            source: executable.source,
+            canRemove: executable.source === "managed",
+          },
+    );
+    return executable;
   });
   const reuseLocal = Effect.fn("CodexInstallation.reuseLocal")(function* () {
     const local = yield* resolveLocal();
@@ -694,36 +706,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     ),
   );
 
-  yield* Effect.gen(function* () {
-    const canRemove = yield* fs.exists(managedDirectory);
-    yield* SubscriptionRef.update(state, (current) => ({ ...current, canRemove }));
-    if (yield* reuseLocal()) return;
-    if (!(yield* fs.exists(activePath))) return;
-    const active = yield* readRecord(activePath, ActiveRelease);
-    const installed = yield* completedRelease(active.version);
-    yield* SubscriptionRef.update(
-      state,
-      (current) =>
-        ({
-          ...current,
-          installedVersion: installed.version,
-          executablePath: installed.executablePath,
-          source: "managed",
-        }) satisfies ProviderInstallState,
-    );
-  }).pipe(
-    Effect.catch(() =>
-      SubscriptionRef.update(
-        state,
-        (current) =>
-          ({
-            ...current,
-            phase: "failed",
-            message: "The managed Codex runtime is incomplete. Remove it and reinstall.",
-          }) satisfies ProviderInstallState,
-      ),
-    ),
-  );
+  // Construction and status reads are inert; enabled resolution or explicit setup discovers executables.
 
   return CodexInstallation.of({
     managedDirectory,

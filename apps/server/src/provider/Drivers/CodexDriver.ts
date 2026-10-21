@@ -160,7 +160,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
       });
-      yield* materializeCodexShadowHome(homeLayout).pipe(
+      yield* materializeCodexShadowHome(homeLayout, { enabled }).pipe(
         Effect.mapError(
           (cause) =>
             new ProviderDriverError({

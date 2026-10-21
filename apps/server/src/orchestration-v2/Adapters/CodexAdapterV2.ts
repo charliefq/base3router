@@ -1454,7 +1454,7 @@ export const createCodexAdapterV2 = (
     const serverConfig = yield* ServerConfig;
     const homeLayout = yield* resolveCodexHomeLayout(config);
 
-    yield* materializeCodexShadowHome(homeLayout).pipe(
+    yield* materializeCodexShadowHome(homeLayout, { enabled }).pipe(
       Effect.mapError(
         (cause) =>
           new ProviderAdapterDriverCreateError({

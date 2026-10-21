@@ -91,6 +91,63 @@ const noSpawn = ChildProcessSpawner.make(() =>
 const encodeCredentials = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 it.layer(testLayer)("CodexDriver", (it) => {
+  it.effect.each(["existing", "managed"] as const)(
+    "disabled %s construction and refresh do not touch configured account homes",
+    (setupMode) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-disabled-codex-sentinel-" });
+        const home = NodePath.join(root, "shared-account"),
+          shadow = NodePath.join(root, "shadow");
+        yield* fs.makeDirectory(home, { recursive: true });
+        yield* fs.writeFileString(
+          NodePath.join(home, "auth.json"),
+          "synthetic sentinel, not credentials",
+        );
+        const touched: string[] = [];
+        const guardedFs = new Proxy(fs, {
+          get(target, key, receiver) {
+            const method = Reflect.get(target, key, receiver);
+            if (typeof method !== "function") return method;
+            return (...args: unknown[]) => {
+              if (
+                typeof args[0] === "string" &&
+                (args[0].startsWith(home) || args[0].startsWith(shadow))
+              )
+                touched.push(String(key));
+              return Reflect.apply(method, target, args);
+            };
+          },
+        });
+        for (const suffix of ["first", "restart"]) {
+          yield* Effect.gen(function* () {
+            const instance = yield* CodexDriver.create({
+              instanceId: ProviderInstanceId.make(`disabled-shadow-${setupMode}-${suffix}`),
+              displayName: "Disabled sentinel",
+              enabled: false,
+              environment: [],
+              config: {
+                ...CodexDriver.defaultConfig(),
+                setupMode,
+                homePath: home,
+                shadowHomePath: shadow,
+              },
+            });
+            expect((yield* instance.snapshot.getSnapshot).enabled).toBe(false);
+            expect((yield* instance.snapshot.refresh).enabled).toBe(false);
+          }).pipe(
+            Effect.scoped,
+            Effect.provideService(FileSystem.FileSystem, guardedFs),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
+          );
+        }
+        expect(touched).toEqual([]);
+        expect(yield* fs.readFileString(NodePath.join(home, "auth.json"))).toBe(
+          "synthetic sentinel, not credentials",
+        );
+        expect(yield* fs.exists(shadow)).toBe(false);
+      }),
+  );
   it.effect("disconnect refreshes a restored managed account while its auth flow is idle", () =>
     Effect.gen(function* () {
       const instanceId = ProviderInstanceId.make("restored-managed-account");
