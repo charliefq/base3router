@@ -237,6 +237,10 @@ confirmation; revision requests still need a separately reviewed explicit Start.
 Refresh or changed evidence requires a fresh review. The conversation remains available
 for history.
 
+For a completed revision, compare its recorded predecessor, saved requested changes
+and current output in Tasks. Each output shows the criteria recorded for that run.
+Use the conversation link when a recorded pair is unavailable.
+
 For a first task message, you can also choose one ordinary UTF-8 **.txt** reference file.
 Upload and review do not start work. Review its name, type, size and content hash alongside
 instructions and the current contract, then explicitly Start. This first slice uses the

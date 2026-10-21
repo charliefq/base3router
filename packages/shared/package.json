@@ -503,6 +503,10 @@
       "types": "./src/agentConfiguration.ts",
       "import": "./src/agentConfiguration.ts"
     },
+    "./taskResultComparison": {
+      "types": "./src/taskResultComparison.ts",
+      "import": "./src/taskResultComparison.ts"
+    },
     "./taskRevisionRequest": {
       "types": "./src/taskRevisionRequest.ts",
       "import": "./src/taskRevisionRequest.ts"

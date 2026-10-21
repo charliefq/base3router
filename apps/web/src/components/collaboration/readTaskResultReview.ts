@@ -16,7 +16,7 @@ import {
   taskResultReviewFacts,
 } from "@t3tools/shared/taskRevisionRequest";
 type Result<A> = { readonly _tag: "Success"; readonly value: A } | { readonly _tag: "Failure" };
-export async function readTaskResultReview(
+export async function readTaskResultEvidence(
   props: {
     task: CollaborationTask;
     environmentId: EnvironmentId;
@@ -30,7 +30,6 @@ export async function readTaskResultReview(
     environmentId: EnvironmentId;
     input: { threadId: ThreadId };
   }) => Promise<Result<OrchestrationV2ThreadProjection>>,
-  purpose: "review" | "revision" = "review",
 ) {
   if (!props.task.threadId || props.task.contractReadout?.status !== "available") return null;
   const input = {
@@ -73,10 +72,26 @@ export async function readTaskResultReview(
     !sameRevisionProjection(a.value, b.value)
   )
     return null;
-  return (purpose === "review" ? taskResultReviewFacts : revisionRequestFacts)(
-    after,
-    props.environmentId,
-    last.value,
-    b.value,
-  );
+  return {
+    task: after,
+    environmentId: props.environmentId,
+    review: last.value,
+    projection: b.value,
+  };
+}
+export async function readTaskResultReview(
+  props: Parameters<typeof readTaskResultEvidence>[0],
+  readReview: Parameters<typeof readTaskResultEvidence>[1],
+  readProjection: Parameters<typeof readTaskResultEvidence>[2],
+  purpose: "review" | "revision" = "review",
+) {
+  const evidence = await readTaskResultEvidence(props, readReview, readProjection);
+  return evidence
+    ? (purpose === "review" ? taskResultReviewFacts : revisionRequestFacts)(
+        evidence.task,
+        evidence.environmentId,
+        evidence.review,
+        evidence.projection,
+      )
+    : null;
 }

@@ -1,3 +1,4 @@
+import { TaskResultComparison } from "./TaskResultComparison";
 import { TaskResultReviewScope, TaskResultReviewPanel } from "./TaskResultReview";
 import { TaskOutputHandoff, TaskResultHandoffReadout } from "./TaskResultHandoff";
 import { resultHandoffDeliveryMatches } from "@t3tools/shared/taskResultHandoff";
@@ -2029,6 +2030,16 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
                             />
                           ) : null}
                           <TaskResultReviewPanel />
+                          <TaskResultComparison
+                            task={task}
+                            environmentId={environmentId}
+                            stale={
+                              !connectionFresh || !supervision.live || error !== null || refreshing
+                            }
+                            readVersion={readVersion}
+                            readCollaboration={loadSnapshot}
+                            onOpen={() => openTask(task)}
+                          />
                           <TaskResultReadout
                             readout={task.resultReadout}
                             routing={task.routingReadout}
