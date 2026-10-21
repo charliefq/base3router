@@ -11,6 +11,8 @@ import * as Schema from "effect/Schema";
 import { digestCanonical } from "./actionCanonical.ts";
 import { taskResultReviewFacts, continuationResult } from "./taskRevisionRequest.ts";
 
+const validTask = Schema.is(CollaborationTask);
+const validProjection = Schema.is(OrchestrationV2ThreadProjection);
 const sameContract = Schema.toEquivalence(TaskContract);
 const sameModel = Schema.toEquivalence(ModelSelection);
 const unavailable = (reason: string) => ({ status: "unavailable" as const, reason });
@@ -24,10 +26,7 @@ export function taskResultComparison(
 ) {
   const facts = taskResultReviewFacts(task, environmentId, review, projection);
   if (!facts) {
-    if (
-      Schema.is(CollaborationTask)(task) &&
-      Schema.is(OrchestrationV2ThreadProjection)(projection)
-    ) {
+    if (validTask(task) && validProjection(projection)) {
       const result = task.resultReadout;
       if (
         result?.status === "available" &&

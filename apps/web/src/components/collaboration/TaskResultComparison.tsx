@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ThreadId,
   type CollaborationTask,
@@ -10,12 +10,13 @@ import {
   taskResultComparison,
   type TaskResultComparison as Comparison,
 } from "@t3tools/shared/taskResultComparison";
-import { revisionTaskKey, sameRevisionProjection } from "@t3tools/shared/taskRevisionRequest";
+import { revisionTaskKey } from "@t3tools/shared/taskRevisionRequest";
 import { usePreparedConnection } from "../../state/session";
 import { threadEnvironment, useEnvironmentThread } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { readTaskResultEvidence } from "./readTaskResultReview";
 import { Button } from "../ui/button";
+import { comparisonLiveEvidenceAgrees } from "./comparisonLiveEvidence";
 
 type Evidence = NonNullable<Awaited<ReturnType<typeof readTaskResultEvidence>>>;
 type View = {
@@ -94,9 +95,22 @@ export function TaskResultComparison(props: {
     props.environmentId,
     view.open && props.task.threadId ? ThreadId.make(props.task.threadId) : null,
   );
-  const live = Option.getOrNull(detail.data),
-    latestLive = useRef(live),
-    observedLive = useRef(live);
+  const live = Option.getOrNull(detail.data);
+  const detailError = Option.getOrNull(detail.error);
+  const hasLive = live !== null;
+  const detailFresh = detail.status === "live" && detailError === null && hasLive;
+  // Detail lifecycle identity retires callbacks even when cached data keeps the same object.
+  const observation = useMemo(
+    () => ({ status: detail.status, error: detailError, hasLive }),
+    [detail.status, detailError, hasLive],
+  );
+  const latestLive = useRef(live),
+    observedLive = useRef(live),
+    latestDetailFresh = useRef(detailFresh),
+    currentObservation = useRef(observation),
+    wasDetailFresh = useRef(false);
+  const detailNotice =
+    "Thread detail is not current. Reload the comparison after its live connection is restored.";
   const replace = useCallback(
     (
       open: boolean,
@@ -115,6 +129,8 @@ export function TaskResultComparison(props: {
   useLayoutEffect(() => {
     latest.current = props;
     latestLive.current = live;
+    latestDetailFresh.current = detailFresh;
+    currentObservation.current = observation;
   });
   useLayoutEffect(() => {
     mounted.current = true;
@@ -126,9 +142,24 @@ export function TaskResultComparison(props: {
     };
   }, [scope, replace]);
   useLayoutEffect(() => {
-    if (view.evidence && live && live !== observedLive.current) {
+    if (
+      view.open &&
+      !detailFresh &&
+      (wasDetailFresh.current || detailError !== null || detail.status === "deleted")
+    ) {
+      if (viewRef.current.notice !== detailNotice || owner.current || viewRef.current.evidence)
+        replace(true, null, null, detailNotice);
+    }
+    wasDetailFresh.current = view.open && detailFresh;
+    if (
+      view.evidence &&
+      view.result?.status === "available" &&
+      detailFresh &&
+      live &&
+      live !== observedLive.current
+    ) {
       observedLive.current = live;
-      if (!sameRevisionProjection(view.evidence.projection, live))
+      if (!comparisonLiveEvidenceAgrees(view.evidence.projection, live, view.result))
         replace(
           true,
           null,
@@ -136,13 +167,25 @@ export function TaskResultComparison(props: {
           "Recorded comparison evidence changed. Reload the pair before reviewing it.",
         );
     }
-  }, [live, view.evidence, replace]);
-  const current = () =>
+  }, [
+    detail.status,
+    detailError,
+    detailFresh,
+    live,
+    view.open,
+    view.evidence,
+    view.result,
+    replace,
+  ]);
+  const scopeCurrent = () =>
     mounted.current &&
     currentScope.current === scope &&
     viewRef.current === view &&
     !latest.current.stale &&
     session !== null;
+  const current = () =>
+    scopeCurrent() &&
+    (!view.open || (latestDetailFresh.current && currentObservation.current === observation));
   const load = async () => {
     if (!current() || owner.current) return;
     replace(true, null, null, null);
@@ -167,8 +210,21 @@ export function TaskResultComparison(props: {
         );
         return;
       }
+      if (!latestDetailFresh.current) {
+        replace(true, null, null, detailNotice);
+        return;
+      }
       const observed = latestLive.current;
-      if (observed && !sameRevisionProjection(evidence.projection, observed)) {
+      const result = taskResultComparison(
+        evidence.task,
+        evidence.environmentId,
+        evidence.review,
+        evidence.projection,
+      );
+      if (
+        result.status === "available" &&
+        (!observed || !comparisonLiveEvidenceAgrees(evidence.projection, observed, result))
+      ) {
         replace(
           true,
           null,
@@ -177,14 +233,8 @@ export function TaskResultComparison(props: {
         );
         return;
       }
-      const result = taskResultComparison(
-        evidence.task,
-        evidence.environmentId,
-        evidence.review,
-        evidence.projection,
-      );
       observedLive.current = observed;
-      replace(true, evidence, result, null);
+      replace(true, result.status === "available" ? evidence : null, result, null);
     } catch {
       if (mounted.current && currentScope.current === scope && owner.current === token)
         replace(
@@ -205,7 +255,7 @@ export function TaskResultComparison(props: {
         type="button"
         size="sm"
         variant="outline"
-        disabled={props.stale || !session || busy}
+        disabled={props.stale || !session || busy || (view.open && !detailFresh)}
         onClick={load}
       >
         {view.open ? "Reload result comparison" : "Compare revised result"}
@@ -251,7 +301,7 @@ export function TaskResultComparison(props: {
             size="sm"
             variant="outline"
             onClick={() => {
-              if (current()) replace(false, null, null, null);
+              if (scopeCurrent()) replace(false, null, null, null);
             }}
           >
             Close result comparison
@@ -266,7 +316,7 @@ export function TaskResultComparison(props: {
         variant="outline"
         disabled={props.stale || !session || !props.task.threadId}
         onClick={() => {
-          if (current()) props.onOpen();
+          if (scopeCurrent()) props.onOpen();
         }}
       >
         Open conversation for comparison context
