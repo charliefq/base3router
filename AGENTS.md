@@ -1,3 +1,35 @@
+## Before any work
+
+Before any work: read charliefq/charlie-brain AGENTS.md, then 10_core/, then 30_handoffs/base3router.md.
+
+## What this project does
+
+Charlie's fork of T3 Code (upstream `pingdotgg/t3code`): a minimal GUI for coding agents — a Node WebSocket server wrapping provider CLIs (Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity) serving web, desktop and mobile clients. Full detail in the upstream sections below.
+
+## Setup, run, test
+
+- Install: `vp i` (pnpm@11, Node ^24.13.1)
+- Run: `vp run dev` (server + web)
+- Test: `vp test run <files>` for touched tests; full suite only in CI (`.github/workflows/ci.yml`)
+- Typecheck: `pnpm typecheck`; lint: `pnpm lint`; format: `pnpm fmt`
+- See "Dev servers" and "Verifying" below.
+
+## Coding conventions
+
+- See "Taste", "Verifying" and "Pull requests" below (conventional commit titles, one concern per PR).
+- Wire types live in `packages/contracts`; shared client logic in `packages/client-runtime`.
+
+## What not to touch
+
+- Secrets: never commit API keys, tokens, or credentials; never print them in logs or PRs.
+- `.env` / `.env.local`: never commit; only `.env.example` (placeholder values) is tracked.
+- `main` (default branch): no direct pushes. All changes go through a PR.
+- This is a fork: open PRs against `charliefq/base3router` `main`, never upstream `pingdotgg/t3code`.
+- Never write to `~/.t3/userdata` (live install); see "The three ways to hurt yourself" below.
+- `.repos/` and `third-party` license files are generated (`pnpm sync:repos`, `pnpm licenses:sync`).
+
+---
+
 # T3 Code
 
 T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs and agents (Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity) and serves web, desktop, and mobile clients.
