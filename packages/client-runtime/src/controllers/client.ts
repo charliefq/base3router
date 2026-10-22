@@ -1,5 +1,5 @@
 /** Adapter contract v1. Reconcile this transport boundary with the bridge before integration. */
-export const CONTROLLER_CONTRACT_VERSION = 1 as const;
+const CONTROLLER_CONTRACT_VERSION = 1 as const;
 export const controllerActions = [
   "create_task",
   "start_task",
