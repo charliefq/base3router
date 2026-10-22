@@ -651,6 +651,12 @@ describe("Agents server conversation recovery", () => {
         .find((node) => node.children.includes("Connect your agent"))!
         .props.onClick(),
     );
+    await act(async () =>
+      renderer.root
+        .findAllByType("button")
+        .find((node) => node.children.includes("Configure execution provider"))!
+        .props.onClick(),
+    );
     expect(state.navigate).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "/settings/providers",
@@ -7874,6 +7880,12 @@ describe("mounted setup return scope", () => {
         .find((node) => node.children.includes("Connect your agent"))!
         .props.onClick(),
     );
+    await act(async () =>
+      renderer.root
+        .findAllByType("button")
+        .find((node) => node.children.includes("Configure execution provider"))!
+        .props.onClick(),
+    );
     expect(router.state.location.pathname).toBe("/settings/providers");
     await act(async () => {
       renderer.unmount();
@@ -8002,6 +8014,7 @@ describe("validated setup detours mounted with memory history", () => {
     await flow.press("Create agent");
     await flow.choose(0, "second");
     await flow.press("Connect your agent");
+    await flow.press("Configure execution provider");
     await flow.router.load();
     await flow.remount();
     await flow.press("Return to Agents");

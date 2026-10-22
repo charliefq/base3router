@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./controllers/client": {
+      "types": "./src/controllers/client.ts",
+      "default": "./src/controllers/client.ts"
+    },
+    "./controllers/onboarding": {
+      "types": "./src/controllers/onboarding.ts",
+      "default": "./src/controllers/onboarding.ts"
+    },
     "./composerThreadItems": {
       "types": "./src/composerThreadItems.ts",
       "default": "./src/composerThreadItems.ts"
