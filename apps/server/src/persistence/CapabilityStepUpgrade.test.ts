@@ -49,6 +49,7 @@ it.effect(
               [
                 { migration_id: "b3-075", name: "GovernedCapabilityStep" },
                 { migration_id: "b3-076", name: "WorkflowDispatchIdentity" },
+                { migration_id: "b3-077", name: "ExternalControllerBridge" },
               ],
             );
             assert.deepEqual(yield* sql`SELECT * FROM base3_capability_steps`, []);
