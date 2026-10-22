@@ -66,14 +66,14 @@ for a direct environment connection.
 
 Persistent directories, all owned by this user with private permissions:
 
-| Path under ROOT | Contents |
-| --- | --- |
-| `t3-home/` | Explicit T3 home: userdata SQLite, WAL/SHM, attachments, settings, environment identity/auth state and managed provider artifacts |
-| `provider-home/` | Runtime HOME, CLI state, config/cache and owner-approved executables in `.local/bin` |
-| `workspaces/` | Canonical project directories, repositories and Git worktrees |
-| `releases/<SHA>/` | Built code and dependencies; separate from data |
-| `current` | Atomically selected release pointer |
-| `backups/` | Private offline archives, requiring independent off-VM retention |
+| Path under ROOT   | Contents                                                                                                                          |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `t3-home/`        | Explicit T3 home: userdata SQLite, WAL/SHM, attachments, settings, environment identity/auth state and managed provider artifacts |
+| `provider-home/`  | Runtime HOME, CLI state, config/cache and owner-approved executables in `.local/bin`                                              |
+| `workspaces/`     | Canonical project directories, repositories and Git worktrees                                                                     |
+| `releases/<SHA>/` | Built code and dependencies; separate from data                                                                                   |
+| `current`         | Atomically selected release pointer                                                                                               |
+| `backups/`        | Private offline archives, requiring independent off-VM retention                                                                  |
 
 Edit `ROOT/config.json` to set the canonical **real** Node executable path (no symlink ancestors)
 and an unused loopback port. The generated config defaults to `/usr/bin/node` and 3773; these

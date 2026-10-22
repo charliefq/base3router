@@ -15,6 +15,7 @@ import {
   ControllerToolInputs,
   EnvironmentId,
   ThreadId,
+  RunId,
   AuthAccessReadScope,
   AuthAccessWriteScope,
 } from "@t3tools/contracts";
@@ -26,6 +27,7 @@ import { PolicyExecutionContext } from "../policy/executionContext.ts";
 import { taskResultFeedbackLayer } from "../collaboration/store.ts";
 import * as RouterEvaluation from "../routerEvaluation/RouterEvaluationService.ts";
 import * as Bridge from "./ControllerBridge.ts";
+import * as TaskRecords from "../orchestration-v2/TaskRecords.ts";
 import * as ControllerHttp from "./http.ts";
 import { HttpRouter } from "effect/unstable/http";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
@@ -164,6 +166,29 @@ it.live(
               const result = yield* bridge.call(token, "get_result", { taskId: created.taskId });
               assert.equal(result.terminal, true);
               assert.equal(result.result.status, "available");
+              // The Tasks page must read the same durable run admitted by the controller.
+              const record = yield* Effect.gen(function* () {
+                const records = yield* TaskRecords.TaskRecords;
+                const page = yield* records.list(0);
+                const listed = page.records.find(
+                  (entry) => entry.run.threadId === created.threadId,
+                );
+                assert.isDefined(listed);
+                return yield* records.detail(
+                  ThreadId.make(created.threadId),
+                  RunId.make(listed!.run.id),
+                );
+              }).pipe(
+                Effect.provide(
+                  TaskRecords.layer.pipe(Layer.provide(Layer.succeed(SqlClient.SqlClient, f.sql))),
+                ),
+              );
+              assert.equal(record?.record.run.status, "completed");
+              assert.equal(record?.record.run.id, result.run?.runId);
+              assert.equal(record?.record.governance, "required");
+              assert.equal(record?.record.goal, "Fix parser");
+              assert.equal(record?.record.run.modelSelection.model, "fake-model");
+              assert.isUndefined(record?.record.turns[0]?.turn.modelIdentity?.resolved);
               assert.equal((yield* Ref.get(f.started)).length, 1);
               const receipts = yield* f.sql`SELECT * FROM controller_receipts`;
               assert.equal(receipts.length, 2);

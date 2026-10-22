@@ -7,7 +7,7 @@ import {
   type TaskContractReviewInput,
 } from "@t3tools/contracts";
 
-import { TaskRevisionRequest } from "./TaskRevisionRequest";
+import { TaskRevisionRequest } from "./TaskRevisionRequest.tsx";
 import { completed as completedResult } from "./testkit/resultContinuationJourney";
 import { continuationStorageKey } from "./taskFirstLaunchAttempt";
 import { TaskFirstInstructions } from "./TaskFirstInstructions";

@@ -68,9 +68,9 @@ require('node:module').syncBuiltinESMExports();
       stdio: ["pipe", "pipe", "pipe"],
     },
   );
-  const closed = NodeEvents.once(child, "close");
+  const closed = NodeEvents.EventEmitter.once(child, "close");
   const lines = NodeReadline.createInterface({ input: child.stdout });
-  const reply = NodeEvents.once(lines, "line");
+  const reply = NodeEvents.EventEmitter.once(lines, "line");
   const errors: string[] = [];
   child.stderr.on("data", (chunk) => errors.push(String(chunk)));
   try {

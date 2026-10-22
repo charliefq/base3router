@@ -1,7 +1,7 @@
 import { act, useState } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
-import { TaskInbox } from "./TaskInbox";
+import { TaskInbox } from "./TaskInbox.tsx";
 import { TaskInboxDrafts, useTaskInboxDraft } from "./TaskInboxDrafts";
 import { inboxTask as task } from "./taskInbox.test-fixtures";
 import { inboxKeyText, type InboxKey } from "./taskInbox";

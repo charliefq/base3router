@@ -25,6 +25,12 @@
       }
     ]
   },
+  // Explicit roots prevent case-insensitive glob discovery from dropping the TSX
+  // components beside their lowercase .ts state helpers on macOS.
+  "files": [
+    "src/components/collaboration/TaskInbox.tsx",
+    "src/components/collaboration/TaskRevisionRequest.tsx"
+  ],
   "include": [
     "src",
     "vite",
