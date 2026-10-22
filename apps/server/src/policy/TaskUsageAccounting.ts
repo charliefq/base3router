@@ -330,9 +330,8 @@ export const recordTaskUsage = Effect.fn("TaskUsageAccounting.recordTaskUsage")(
           SELECT 1 FROM task_usage_events
           WHERE environment_id = ${environmentId} AND event_id = ${event.id}
         )
-        AND json_extract(thread.payload_json, '$.taskGovernance') = 'required'
-        AND json_type(thread.payload_json, '$.taskContract') = 'object'
-        AND typeof(json_extract(thread.payload_json, '$.taskContract.revision')) = 'integer'
+        -- Ordinary runs need the same idempotent usage ledger. Their contract revision
+        -- remains NULL; only governed roots have contracts evaluated by budget gates.
       ON CONFLICT(environment_id, provider_turn_id) DO UPDATE SET
         contract_revision = excluded.contract_revision,
         status = excluded.status,

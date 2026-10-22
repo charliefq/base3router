@@ -1,4 +1,7 @@
 export interface CollaborationScopeSearch {
+  recordEnvironmentId?: string | undefined;
+  recordThreadId?: string | undefined;
+  recordRunId?: string | undefined;
   scopeEnvironmentId?: string | undefined;
   scopeProjectId?: string | undefined;
   scopeProviderId?: string | undefined;
@@ -13,6 +16,10 @@ export function validateCollaborationScope(raw: Record<string, unknown>): Collab
     if (value === undefined) continue;
     if (typeof value !== "string" || !value.trim() || value.length > 256) scope.scopeInvalid = true;
     else scope[key] = value;
+  }
+  for (const key of ["recordEnvironmentId", "recordThreadId", "recordRunId"] as const) {
+    const value = raw[key];
+    if (typeof value === "string" && value.length > 0 && value.length <= 256) scope[key] = value;
   }
   if (raw.scopeInvalid === true) scope.scopeInvalid = true;
   if ((scope.scopeProjectId || scope.scopeProviderId) && !scope.scopeEnvironmentId)

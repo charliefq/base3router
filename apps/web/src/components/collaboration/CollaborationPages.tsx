@@ -1,3 +1,4 @@
+import { TaskRunRecords } from "./TaskRunRecords";
 import { TaskResultComparison } from "./TaskResultComparison";
 import { TaskResultReviewScope, TaskResultReviewPanel } from "./TaskResultReview";
 import { TaskOutputHandoff, TaskResultHandoffReadout } from "./TaskResultHandoff";
@@ -6,7 +7,7 @@ import { revisionTaskKey } from "@t3tools/shared/taskRevisionRequest";
 import type { TaskResultHandoff } from "@t3tools/contracts";
 import { taskInstructionDeliveryMatches } from "@t3tools/shared/taskInstructionSkills";
 import { taskReferenceDeliveryMatches } from "@t3tools/shared/taskReferenceFile";
-import { TaskInbox } from "./TaskInbox";
+import { TaskInbox } from "./TaskInbox.tsx";
 import { TaskInboxDrafts } from "./TaskInboxDrafts";
 import { resolveInboxSelection, type InboxKey } from "./taskInbox";
 import { TaskInstructionSkillReadout } from "./TaskInstructionSkillReadout";
@@ -57,7 +58,7 @@ import { useProjects } from "../../state/entities";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
-import { TaskRevisionRequest } from "./TaskRevisionRequest";
+import { TaskRevisionRequest } from "./TaskRevisionRequest.tsx";
 import { TaskFirstInstructions } from "./TaskFirstInstructions";
 import { TaskReviewControls } from "./TaskReviewControls";
 import { SavedTaskConfigurationLibrary } from "./SavedTaskConfigurationLibrary";
@@ -1640,12 +1641,11 @@ export function TasksPage(scopeProps: CollaborationScopeProps = {}) {
       <div className="min-h-0 flex-1">
         <ScrollArea radius="none">
           <WorkspacePageContainer width="wide">
+            <TaskRunRecords key={environmentId} environmentId={environmentId} />
+            <h2 className="text-base font-medium">Create & manage governed tasks</h2>
             <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
-              Find tasks with the read-only inbox filters below. Select a task for its existing
-              controls, or create a governed task and review its first instructions before starting.
-              Watch the linked run and result here, or explicitly request Stop for the displayed
-              run. Open conversation for the full history. Creating or watching a task starts no
-              work.
+              Drafts and governance controls are kept below. Ordinary conversation runs appear in
+              the records above without being enrolled as governed tasks.
             </p>
             <section
               aria-label="Reusable supervised workflows"

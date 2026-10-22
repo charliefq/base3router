@@ -56,6 +56,7 @@ import {
   OrchestrationV2TurnItem,
   CollaborationTask,
   CollaborationSnapshot,
+  TaskRunRecord,
   type CollaborationCommand,
   OrchestrationV2Command,
   type OrchestrationV2ThreadProjection,
@@ -150,6 +151,8 @@ const state = vi.hoisted(() => ({
   comparisonReports: [] as Array<(state: "ready" | "changed" | "unavailable") => void>,
   liveProjection: null as OrchestrationV2ThreadProjection | null,
   liveProjections: new Map<string, OrchestrationV2ThreadProjection>(),
+  recordList: vi.fn(),
+  recordDetail: vi.fn(),
   feedbackRead: vi.fn(),
   feedbackSubmit: vi.fn(),
 }));
@@ -172,6 +175,11 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-router")>();
   return {
     ...actual,
+    // Unit journeys render pages directly; routed journeys retain the real hooks.
+    useSearch: (options: Parameters<typeof actual.useSearch>[0]) => {
+      const router = actual.useRouter({ warn: false });
+      return router ? actual.useSearch(options) : {};
+    },
     useNavigate: () => {
       const router = actual.useRouter({ warn: false });
       return router ? actual.useNavigate() : state.navigate;
@@ -342,6 +350,10 @@ vi.mock("../../environments/primary/httpClient", async () => {
   const Effect = await import("effect/Effect");
   return {
     PrimaryEnvironmentHttpClient: Effect.succeed({
+      orchestration: {
+        taskRecords: (input: unknown) => Effect.promise(() => state.recordList(input)),
+        taskRecord: (input: unknown) => Effect.promise(() => state.recordDetail(input)),
+      },
       taskResultFeedback: {
         readTaskResultFeedback: ({
           payload,
@@ -556,6 +568,8 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ status: "unavailable", reason: "fixture-default" });
   state.feedbackSubmit.mockReset();
+  state.recordList.mockReset().mockResolvedValue({ records: [], nextOffset: null });
+  state.recordDetail.mockReset().mockRejectedValue(new Error("Unexpected detail request"));
   state.autoPreview.mockReset();
   state.sessionIdentity = {};
   state.streamLive = true;
@@ -9005,7 +9019,7 @@ it("isolates retained result drafts across environment A-B-A without restoring o
       value: await EffectForFixture.runPromise(f.readReview(input)),
     }));
     state.readProjection.mockImplementation(async () => ({ _tag: "Success", value: f.projection }));
-    const { TaskRevisionRequest } = await import("./TaskRevisionRequest");
+    const { TaskRevisionRequest } = await import("./TaskRevisionRequest.tsx");
     const props = {
       task: f.snapshot.tasks[0]!,
       environmentId: EnvironmentId.make("environment-a"),
@@ -13736,3 +13750,84 @@ it("result revision comparison local failure keeps Close and conversation naviga
     expect((await f.inspect()).starts).toHaveLength(2);
   });
 }, 30000);
+
+describe("mounted Tasks run-record routing", () => {
+  it("opens a record and restores its detail after a fresh router loads the saved URL", async () => {
+    const { createRootRoute, createRoute, createRouter, createMemoryHistory, RouterProvider } =
+      await import("@tanstack/react-router");
+    const record = SchemaForFixture.decodeUnknownSync(TaskRunRecord)({
+      title: "Run routing fixture",
+      projectId: "project-a",
+      governance: "chat",
+      revision: null,
+      goal: "Inspect this retained run",
+      attempts: [],
+      turns: [],
+      run: {
+        id: "record-run",
+        threadId: "record-thread",
+        ordinal: 1,
+        providerInstanceId: "codex",
+        modelSelection: { instanceId: "codex", model: "requested" },
+        providerThreadId: null,
+        userMessageId: "record-message",
+        rootNodeId: null,
+        activeAttemptId: null,
+        status: "completed",
+        requestedAt: "2026-10-22T00:00:00.000Z",
+        startedAt: "2026-10-22T00:00:00.000Z",
+        completedAt: "2026-10-22T00:01:00.000Z",
+        checkpointId: null,
+        contextHandoffId: null,
+      },
+    });
+    state.recordList.mockResolvedValue({ records: [record], nextOffset: null });
+    state.recordDetail.mockResolvedValue({ record, steps: [], hasMoreSteps: false });
+    const makeRouter = (entry: string) => {
+      const root = createRootRoute();
+      const tasks = createRoute({
+        getParentRoute: () => root,
+        path: "tasks",
+        validateSearch: validateCollaborationScope,
+        component: () => <CollaborationRoutePage page="tasks" />,
+      });
+      return createRouter({
+        routeTree: root.addChildren([tasks]),
+        history: createMemoryHistory({ initialEntries: [entry] }),
+      });
+    };
+    const router = makeRouter("/tasks");
+    await act(async () => {
+      await router.load();
+      renderer = create(<RouterProvider router={router} />);
+    });
+    expect(state.recordDetail).not.toHaveBeenCalled();
+    await act(async () => {
+      renderer.root
+        .findAllByType("button")
+        .find((node) => node.children.includes("Run routing fixture"))!
+        .props.onClick();
+      await router.load();
+    });
+    expect(router.state.location.search).toMatchObject({
+      recordEnvironmentId: "environment-a",
+      recordThreadId: "record-thread",
+      recordRunId: "record-run",
+    });
+    // This Node fixture uses server-mode routing. Load the saved URL into a fresh
+    // router to exercise the real search contract and detail selection after reload.
+    const reloaded = makeRouter(router.state.location.href);
+    await act(async () => {
+      renderer.unmount();
+      await reloaded.load();
+      renderer = create(<RouterProvider router={reloaded} />);
+    });
+    expect(text()).toContain("Run detail");
+    expect(text()).toContain("Inspect this retained run");
+    expect(state.recordDetail).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: "record-thread", runId: "record-run" } }),
+    );
+    expect(state.create).not.toHaveBeenCalled();
+    expect(state.startStep).not.toHaveBeenCalled();
+  });
+});
