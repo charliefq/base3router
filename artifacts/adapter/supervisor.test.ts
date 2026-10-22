@@ -78,6 +78,7 @@ function harness(product: Product, protocol: "http" | "mcp") {
   const id = `${product}-fixture`;
   let view = created(id);
   let failure: "lost" | "denied" | null = null;
+  let mutationView: ControllerTaskView | null = null;
   let journal: Checkpoint | null = null;
   const calls: { name: string; input: unknown }[] = [];
   const transport = async (name: string, input: unknown) => {
@@ -87,7 +88,9 @@ function harness(product: Product, protocol: "http" | "mcp") {
       if (failure === "lost") throw new Error("synthetic lost reply");
       if (failure === "denied") return { version: 1, error: "denied" };
     }
-    return structuredClone(view);
+    return structuredClone(
+      name === "get_task" || name === "get_result" ? view : (mutationView ?? view),
+    );
   };
   const options = {
     binding: { product, identity: identity(id) },
@@ -115,6 +118,9 @@ function harness(product: Product, protocol: "http" | "mcp") {
     adapter: createSupervisor(options),
     options,
     calls,
+    setMutationView: (next: ControllerTaskView) => {
+      mutationView = next;
+    },
     setView: (next: ControllerTaskView) => {
       view = next;
     },
@@ -253,6 +259,21 @@ describe("dot and Muse external supervisor adapters", () => {
       start,
     ]);
     expect(h.journal()).toBeNull();
+  });
+  it("settles accepted delivery while retaining unknown execution for later supervision", async () => {
+    const h = harness("dot", "http");
+    h.setMutationView({
+      ...running(h.view()),
+      admission: "unknown",
+      execution: "unknown",
+      receipt: { commandId: "fixture-command", status: "accepted" },
+    });
+    const accepted = await h.adapter.mutate("start_task", start);
+    expect(supervisionState(accepted)).toBe("unknown");
+    expect(h.journal()).toBeNull();
+    h.setView(running(h.view()));
+    await h.adapter.mutate("cancel_task", cancel);
+    expect(h.calls.at(-1)?.name).toBe("cancel_task");
   });
   it("preserves unknown admission and blocks new writes despite later read progress", async () => {
     const h = harness("muse", "mcp");

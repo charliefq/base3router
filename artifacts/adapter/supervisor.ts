@@ -137,7 +137,12 @@ export function createSupervisor(options: {
       throw error;
     }
     permit(checkpoint.action, view.projectId);
-    if (supervisionState(view) !== "unknown") {
+    // A saved accepted receipt settles delivery even when provider execution is unknown.
+    // Keeping that immutable accepted reply pending would block all later supervision forever.
+    if (
+      view.receipt?.status === "accepted" ||
+      (view.admission !== "unknown" && view.receipt?.status !== "unknown")
+    ) {
       await options.savePending(null);
       pending = null;
     }
