@@ -1,3 +1,4 @@
+import * as ControllerHttp from "./controller/http.ts";
 import * as RouterEvaluation from "./routerEvaluation/RouterEvaluationService.ts";
 import { routerPolicyHttpApiLayer } from "./routerEvaluation/http.ts";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
@@ -645,6 +646,7 @@ const makeRoutesLayer = Layer.mergeAll(
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),
+  ControllerHttp.layer,
   // The MCP session registry is provided globally (shared with V2 provider
   // sessions) rather than inline here. The orchestrator toolkit resolves
   // delegation targets through the same live adapter facade the V2

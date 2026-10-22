@@ -15,6 +15,25 @@ const scope = {
   scopeProviderId: "native-second",
 };
 describe("validated setup scope", () => {
+  it("retains bounded record identity across a Tasks URL reload without importing arbitrary state", () => {
+    expect(
+      validateCollaborationScope({
+        ...scope,
+        recordEnvironmentId: "a",
+        recordThreadId: "thread-a",
+        recordRunId: "run-a",
+        message: "private",
+      }),
+    ).toEqual({
+      ...scope,
+      recordEnvironmentId: "a",
+      recordThreadId: "thread-a",
+      recordRunId: "run-a",
+    });
+    expect(
+      validateCollaborationScope({ recordThreadId: [], recordRunId: "x".repeat(257) }),
+    ).toEqual({});
+  });
   it("keeps only minimal nonsecret identifiers and internal return destinations", () => {
     expect(
       validateSetupReturn({

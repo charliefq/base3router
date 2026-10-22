@@ -1464,7 +1464,7 @@ function savedBackendStatus(environment: EnvironmentPresentation): {
         tone: "error",
       };
     case "offline":
-      return { text: "Offline", tone: "muted" };
+      return { text: "Host offline — reconnect to resume", tone: "muted" };
     case "available":
       return { text: "Not connected", tone: "muted" };
   }
@@ -1551,7 +1551,7 @@ function SavedBackendListRow({
     versionMismatch !== null &&
     (serverUpdateState.status === "idle" || serverUpdateState.status === "failed");
 
-  const statusTooltip = `${
+  const statusTooltip = `Environment ID: ${environmentId}\n${
     unsupported
       ? (environment.connection.error ?? connectionStatusText(environment.connection))
       : enabled
@@ -1795,12 +1795,22 @@ function EmptyRemoteEnvironments({ cloudEnabled = true }: { readonly cloudEnable
         <ChevronsLeftRightEllipsisIcon />
       </EmptyMedia>
       <EmptyHeader>
-        <EmptyTitle>No saved remote environments</EmptyTitle>
+        <EmptyTitle>
+          {isLocalEnvironmentDisabled()
+            ? "Connect your personal cloud"
+            : "No saved remote environments"}
+        </EmptyTitle>
         <EmptyDescription>
           {cloudEnabled
             ? "Click “Add environment” to pair another environment, or connect one from T3 Connect."
             : "Click “Add environment” to pair another environment."}
         </EmptyDescription>
+        {isLocalEnvironmentDisabled() && (
+          <EmptyDescription>
+            Pair this Mac or Windows app to the same host. Its files, agents, and history remain on
+            that host. Keep it running and reachable to work.
+          </EmptyDescription>
+        )}
       </EmptyHeader>
     </Empty>
   );

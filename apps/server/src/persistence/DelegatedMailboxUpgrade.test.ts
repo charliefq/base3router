@@ -73,6 +73,7 @@ it.effect(
                 { migration_id: "b3-074", name: "DelegatedMailboxAuthority" },
                 { migration_id: "b3-075", name: "GovernedCapabilityStep" },
                 { migration_id: "b3-076", name: "WorkflowDispatchIdentity" },
+                { migration_id: "b3-077", name: "ExternalControllerBridge" },
               ],
             );
             assert.equal((yield* sql`SELECT * FROM base3_delegated_child_authorities`).length, 0);

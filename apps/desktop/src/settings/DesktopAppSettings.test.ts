@@ -39,7 +39,7 @@ const DesktopSettingsPatch = Schema.Struct({
 const decodeDesktopSettingsPatch = Schema.decodeEffect(Schema.fromJsonString(DesktopSettingsPatch));
 const encodeDesktopSettingsPatch = Schema.encodeEffect(Schema.fromJsonString(DesktopSettingsPatch));
 
-function makeEnvironmentLayer(baseDir: string, appVersion = "0.0.17") {
+function makeEnvironmentLayer(baseDir: string, appVersion = "0.0.17", personalCloud = false) {
   return DesktopEnvironment.layer({
     dirname: "/repo/apps/desktop/src",
     homeDirectory: baseDir,
@@ -52,7 +52,13 @@ function makeEnvironmentLayer(baseDir: string, appVersion = "0.0.17") {
     runningUnderArm64Translation: false,
   }).pipe(
     Layer.provide(
-      Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest({ T3CODE_HOME: baseDir })),
+      Layer.mergeAll(
+        NodeServices.layer,
+        DesktopConfig.layerTest({
+          T3CODE_HOME: baseDir,
+          B3R_DESKTOP_PERSONAL_CLOUD: String(personalCloud),
+        }),
+      ),
     ),
   );
 }
@@ -63,7 +69,7 @@ const withSettings = <A, E, R>(
     E,
     R | DesktopAppSettings.DesktopAppSettings | DesktopEnvironment.DesktopEnvironment
   >,
-  options?: { readonly appVersion?: string },
+  options?: { readonly appVersion?: string; readonly personalCloud?: boolean },
 ) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -73,7 +79,9 @@ const withSettings = <A, E, R>(
     return yield* effect.pipe(
       Effect.provide(
         DesktopAppSettings.layer.pipe(
-          Layer.provideMerge(makeEnvironmentLayer(baseDir, options?.appVersion)),
+          Layer.provideMerge(
+            makeEnvironmentLayer(baseDir, options?.appVersion, options?.personalCloud),
+          ),
           Layer.provideMerge(NodeServices.layer),
         ),
       ),
@@ -91,6 +99,25 @@ function writeSettingsPatch(patch: typeof DesktopSettingsPatch.Type) {
 }
 
 describe("DesktopSettings", () => {
+  it.effect("keeps the personal cloud remote-only after unrelated settings are saved", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        assert.isFalse((yield* settings.load).localEnvironmentEnabled);
+        yield* settings.setWslBackendEnabled(true);
+        assert.isFalse((yield* settings.load).localEnvironmentEnabled);
+        // Explicit local execution is reversible and stays in this separate profile.
+        yield* settings.setLocalEnvironmentEnabled(true);
+        assert.isTrue((yield* settings.load).localEnvironmentEnabled);
+        yield* settings.setLocalEnvironmentEnabled(false);
+        assert.isFalse((yield* settings.load).localEnvironmentEnabled);
+        yield* writeSettingsPatch({ mainWindowMaximized: false });
+        assert.isFalse((yield* settings.load).localEnvironmentEnabled);
+      }),
+      { personalCloud: true },
+    ),
+  );
+
   it.effect(
     "persists disabling and re-enabling local execution without clearing backend settings",
     () =>

@@ -86,3 +86,5 @@ export * from "./taskInstructionSkill.ts";
 export * from "./taskReferenceFile.ts";
 
 export * from "./taskResultHandoff.ts";
+export * from "./taskRecords.ts";
+export * from "./controllerBridge.ts";

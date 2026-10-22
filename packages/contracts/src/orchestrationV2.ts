@@ -2831,6 +2831,9 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("run.interrupt"),
+    expectedContractRevision: Schema.optionalKey(
+      Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+    ),
     commandId: CommandId,
     threadId: ThreadId,
     runId: RunId,

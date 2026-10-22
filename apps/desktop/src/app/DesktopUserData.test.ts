@@ -71,3 +71,25 @@ it.effect.each(["t3code", "T3 Code (Alpha)"])(
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect.each(["darwin", "win32"] as const)(
+  "uses an independent personal cloud Electron profile on %s without importing keys",
+  (platform) =>
+    Effect.gen(function* () {
+      const result = yield* resolveUserDataPath({
+        appDataDirectory: "/profiles",
+        isDevelopment: false,
+        personalCloud: true,
+        platform,
+      });
+      assert.equal(result, "/profiles/b3r-personal-cloud");
+    }).pipe(
+      Effect.provideService(
+        FileSystem.FileSystem,
+        FileSystem.makeNoop({
+          exists: () => Effect.die("must not inspect or migrate the local profile"),
+        }),
+      ),
+      Effect.provide(NodeServices.layer),
+    ),
+);

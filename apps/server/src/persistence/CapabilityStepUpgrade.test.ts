@@ -8,7 +8,7 @@ import { runMigrations } from "./Migrations.ts";
 import acceptedBase from "./testkit/fixtures/beforeCapabilityStep.json" with { type: "json" };
 
 it.effect(
-  "opens a saved exact accepted-base database and appends only capability migration075, retaining UNKNOWN on reopen",
+  "preserves accepted-base ledgers while appending core and capability migrations, retaining UNKNOWN on reopen",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -37,8 +37,12 @@ it.effect(
             const sql = yield* SqlClient.SqlClient;
             yield* runMigrations();
             assert.deepEqual(
-              yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`,
+              yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= 58 ORDER BY migration_id`,
               acceptedBase.coreLedger,
+            );
+            assert.deepEqual(
+              yield* sql`SELECT migration_id,name FROM effect_sql_migrations WHERE migration_id > 58 ORDER BY migration_id`,
+              [{ migration_id: 59, name: "TaskRunRecordIndex" }],
             );
             assert.deepEqual(
               yield* sql`SELECT * FROM base3_policy_migrations WHERE migration_id<='b3-074' ORDER BY migration_id`,
@@ -49,6 +53,7 @@ it.effect(
               [
                 { migration_id: "b3-075", name: "GovernedCapabilityStep" },
                 { migration_id: "b3-076", name: "WorkflowDispatchIdentity" },
+                { migration_id: "b3-077", name: "ExternalControllerBridge" },
               ],
             );
             assert.deepEqual(yield* sql`SELECT * FROM base3_capability_steps`, []);
@@ -68,6 +73,10 @@ it.effect(
               (yield* sql`SELECT migration_id FROM base3_policy_migrations WHERE migration_id='b3-075'`)
                 .length,
               1,
+            );
+            assert.deepEqual(
+              yield* sql`SELECT migration_id,name FROM effect_sql_migrations WHERE migration_id > 58 ORDER BY migration_id`,
+              [{ migration_id: 59, name: "TaskRunRecordIndex" }],
             );
             assert.deepEqual(yield* sql`SELECT * FROM base3_execution_grants`, []);
           }).pipe(Effect.provide(database)),

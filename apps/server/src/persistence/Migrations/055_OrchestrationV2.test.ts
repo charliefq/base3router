@@ -13,7 +13,7 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 58 }, (_, index) => index + 1),
+        Array.from({ length: 59 }, (_, index) => index + 1),
       );
     }),
   );
@@ -30,6 +30,7 @@ layer("055_OrchestrationV2", (it) => {
         [56, "RemoveRedundantProjectionIndexes"],
         [57, "AgentsTaskCreationRejections"],
         [58, "ScheduledTaskOccurrence"],
+        [59, "TaskRunRecordIndex"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 
@@ -54,6 +55,7 @@ layer("055_OrchestrationV2", (it) => {
         { migration_id: 56, name: "RemoveRedundantProjectionIndexes" },
         { migration_id: 57, name: "AgentsTaskCreationRejections" },
         { migration_id: 58, name: "ScheduledTaskOccurrence" },
+        { migration_id: 59, name: "TaskRunRecordIndex" },
       ]);
 
       const tables = yield* sql<{ readonly name: string }>`
@@ -88,6 +90,21 @@ layer("055_OrchestrationV2", (it) => {
         ],
       );
 
+      const recordIndex = yield* sql<{
+        readonly name: string;
+        readonly desc: number;
+        readonly key: number;
+      }>`PRAGMA index_xinfo(orchestration_v2_runs_record_order_idx)`;
+      assert.deepStrictEqual(
+        recordIndex
+          .filter((row) => row.key === 1)
+          .map((row) => ({ name: row.name, desc: row.desc })),
+        [
+          { name: "requested_at", desc: 1 },
+          { name: "run_id", desc: 1 },
+        ],
+      );
+
       const eventColumns = yield* sql<{ readonly name: string }>`
         PRAGMA table_info(orchestration_events)
       `;
@@ -113,7 +130,8 @@ layer("055_OrchestrationV2", (it) => {
           AND name IN (
             'idx_orchestration_events_application_high_water',
             'orchestration_events_v2_created_threads_idx',
-            'orchestration_v2_projection_turn_items_shell_pending_idx'
+            'orchestration_v2_projection_turn_items_shell_pending_idx',
+            'orchestration_v2_runs_record_order_idx'
           )
         ORDER BY name
       `;
@@ -123,6 +141,7 @@ layer("055_OrchestrationV2", (it) => {
           "idx_orchestration_events_application_high_water",
           "orchestration_events_v2_created_threads_idx",
           "orchestration_v2_projection_turn_items_shell_pending_idx",
+          "orchestration_v2_runs_record_order_idx",
         ],
       );
     }),

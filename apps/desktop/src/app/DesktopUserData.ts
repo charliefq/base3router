@@ -37,9 +37,13 @@ export const resolveUserDataPath = Effect.fn("desktop.userData.resolveUserDataPa
     readonly appDataDirectory: string;
     readonly isDevelopment: boolean;
     readonly platform: NodeJS.Platform;
+    readonly personalCloud?: boolean;
   }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    // Never migrate a local profile or its Windows encryption keys into this
+    // independent client. It pairs with the host using its own credentials.
+    if (input.personalCloud) return path.join(input.appDataDirectory, "b3r-personal-cloud");
     const names = input.isDevelopment
       ? { current: "t3code-dev", legacy: "T3 Code (Dev)" }
       : { current: "t3code-v2", legacy: "T3 Code (Alpha)" };
