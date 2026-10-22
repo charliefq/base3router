@@ -2,7 +2,7 @@ import type { TaskRunRecord } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
 const terminal = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
-export const runIsTerminal = (record: TaskRunRecord) => terminal.has(record.run.status);
+const runIsTerminal = (record: TaskRunRecord) => terminal.has(record.run.status);
 export function elapsedMs(record: TaskRunRecord, now: number) {
   const start = record.run.startedAt;
   if (!start) return null;
