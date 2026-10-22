@@ -1,0 +1,19 @@
+{
+  "format": "b3r-controller-handoff-v1",
+  "product": "muse",
+  "installation": "blocked_private_custom_mcp_flow_unconfirmed",
+  "controllerId": "OWNER_SELECT_DISTINCT_MUSE_ID",
+  "projectIds": ["OWNER_SELECT_PROJECT_ID"],
+  "requestedActions": [
+    "create_task",
+    "start_task",
+    "get_task",
+    "get_result",
+    "submit_feedback",
+    "cancel_task"
+  ],
+  "mcpEndpoint": "https://OWNER_APPROVED_HOST.invalid/api/controller/v1/mcp",
+  "credentialReference": "HOST_SECRET_STORE_REFERENCE_ONLY",
+  "identityBinding": "owner_metadata_required",
+  "liveLifecycle": "untested"
+}
