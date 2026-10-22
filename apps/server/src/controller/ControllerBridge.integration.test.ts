@@ -68,51 +68,49 @@ const withBridge = <A, E>(
     return yield* test(bridge);
   }).pipe(
     Effect.provide(
-      Bridge.layer.pipe(
-        Layer.provide(
-          taskResultFeedbackLayer.pipe(
-            Layer.provide(Layer.succeed(RouterEvaluation.RouterEvaluationService, f.evaluation)),
+      Layer.mergeAll(
+        Bridge.layer.pipe(
+          Layer.provide(
+            taskResultFeedbackLayer.pipe(
+              Layer.provide(Layer.succeed(RouterEvaluation.RouterEvaluationService, f.evaluation)),
+            ),
           ),
+          Layer.provide(
+            Layer.succeed(Orchestrator.OrchestratorV2, {
+              ...f.orchestrator,
+              dispatch: (command) =>
+                Effect.gen(function* () {
+                  const actor = yield* PolicyExecutionContext;
+                  const result = yield* f.dispatch(
+                    yield* decodeCommand(command).pipe(Effect.orDie),
+                    actor,
+                  );
+                  if (loseStartReply && !replyLost && command.type === "message.dispatch") {
+                    replyLost = true;
+                    return yield* new Orchestrator.OrchestratorDispatchError({
+                      commandId: command.commandId,
+                      commandType: command.type,
+                      cause: "Fixture lost response after durable admission",
+                    });
+                  }
+                  return result;
+                }),
+            }),
+          ),
+          Layer.provide(
+            Layer.mock(ServerEnvironment)({
+              getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-a")),
+            }),
+          ),
+          Layer.provide(Layer.succeed(SqlClient.SqlClient, f.sql)),
         ),
-        Layer.provide(
-          Layer.succeed(Orchestrator.OrchestratorV2, {
-            ...f.orchestrator,
-            dispatch: (command) =>
-              Effect.gen(function* () {
-                const actor = yield* PolicyExecutionContext;
-                const result = yield* f.dispatch(
-                  yield* decodeCommand(command).pipe(Effect.orDie),
-                  actor,
-                );
-                if (loseStartReply && !replyLost && command.type === "message.dispatch") {
-                  replyLost = true;
-                  return yield* new Orchestrator.OrchestratorDispatchError({
-                    commandId: command.commandId,
-                    commandType: command.type,
-                    cause: "Fixture lost response after durable admission",
-                  });
-                }
-                return result;
-              }),
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(ServerEnvironment)({
-            getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-a")),
-          }),
-        ),
-        Layer.provide(Layer.succeed(SqlClient.SqlClient, f.sql)),
+        Layer.mock(ServerEnvironment)({
+          getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-a")),
+        }),
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([agentsCreationProvider]) }),
+        Layer.succeed(SqlClient.SqlClient, f.sql),
       ),
     ),
-    Effect.provide(
-      Layer.mock(ServerEnvironment)({
-        getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-a")),
-      }),
-    ),
-    Effect.provide(
-      Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([agentsCreationProvider]) }),
-    ),
-    Effect.provideService(SqlClient.SqlClient, f.sql),
   );
 };
 const denied = <A>(
