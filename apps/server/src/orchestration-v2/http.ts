@@ -1,3 +1,5 @@
+import * as TaskRecords from "./TaskRecords.ts";
+import * as Layer from "effect/Layer";
 import {
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
@@ -68,6 +70,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   "orchestration",
   Effect.fnUntraced(function* (handlers) {
     const sql = yield* SqlClient.SqlClient;
+    const taskRecords = yield* TaskRecords.TaskRecords;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
     const projectStore = yield* ProjectStore.ProjectStoreV2;
@@ -169,6 +172,27 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
 
     return handlers
       .handle(
+        "taskRecords",
+        Effect.fn("environment.orchestration.taskRecords")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* taskRecords
+            .list(args.query.offset)
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("task_records_failed", cause)));
+        }),
+      )
+      .handle(
+        "taskRecord",
+        Effect.fn("environment.orchestration.taskRecord")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          const detail = yield* taskRecords
+            .detail(args.params.threadId, args.params.runId)
+            .pipe(Effect.catch((cause) => failEnvironmentInternal("task_record_failed", cause)));
+          return detail ?? (yield* failEnvironmentNotFound("run_not_found"));
+        }),
+      )
+      .handle(
         "shellSnapshot",
         Effect.fn("environment.orchestration.shellSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
@@ -258,4 +282,4 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         }),
       );
   }),
-);
+).pipe(Layer.provide(TaskRecords.layer));

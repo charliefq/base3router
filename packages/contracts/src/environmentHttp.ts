@@ -1,4 +1,10 @@
 import {
+  TaskRunRecordsPage,
+  TaskRunRecordDetail,
+  TaskRunRecordsQuery,
+  TaskRunRecordParams,
+} from "./taskRecords.ts";
+import {
   TaskResultFeedbackInput,
   TaskResultFeedbackSubmit,
   TaskResultFeedbackState,
@@ -122,6 +128,8 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "client_session_revoke_failed",
   "project_snapshot_failed",
   "project_mutation_failed",
+  "task_records_failed",
+  "task_record_failed",
   "orchestration_snapshot_failed",
   "orchestration_thread_snapshot_failed",
   "orchestration_thread_bounded_snapshot_failed",
@@ -222,7 +230,10 @@ export class EnvironmentInternalError extends Schema.TaggedError<EnvironmentInte
   }
 }
 
-export const EnvironmentResourceNotFoundReason = Schema.Literals(["thread_not_found"]);
+export const EnvironmentResourceNotFoundReason = Schema.Literals([
+  "thread_not_found",
+  "run_not_found",
+]);
 export type EnvironmentResourceNotFoundReason = typeof EnvironmentResourceNotFoundReason.Type;
 
 export class EnvironmentResourceNotFoundError extends Schema.TaggedError<EnvironmentResourceNotFoundError>()(
@@ -541,6 +552,22 @@ const EnvironmentOrchestrationThreadHistoryErrors = [
 ] as const;
 
 class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
+  .add(
+    HttpApiEndpoint.get("taskRecords", "/api/orchestration/task-records", {
+      headers: OrchestrationProtocolHeaders,
+      query: TaskRunRecordsQuery,
+      success: TaskRunRecordsPage,
+      error: EnvironmentOrchestrationSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("taskRecord", "/api/orchestration/task-records/:threadId/:runId", {
+      headers: OrchestrationProtocolHeaders,
+      params: TaskRunRecordParams,
+      success: TaskRunRecordDetail,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
   .add(
     HttpApiEndpoint.get("shellSnapshot", "/api/orchestration/shell", {
       headers: OrchestrationProtocolHeaders,
