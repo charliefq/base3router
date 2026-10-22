@@ -8003,6 +8003,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       const run = projection.runs.find((candidate) => candidate.id === command.runId);
       if (
+        command.expectedContractRevision !== undefined &&
+        projection.thread.taskContract?.revision !== command.expectedContractRevision
+      )
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "The task contract revision is no longer the interrupt target.",
+        });
+      if (
         command.expectedAttemptId !== undefined &&
         (run?.activeAttemptId !== command.expectedAttemptId ||
           !["preparing", "starting", "running"].includes(run.status) ||

@@ -10,6 +10,8 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
+import { controllerTables } from "../controller/schema.ts";
+
 import migration054 from "./Base3Ledger/054_ProjectionDispatcherTaskRoutes.ts";
 import migration055 from "./Base3Ledger/055_ProjectionTaskHandoffs.ts";
 import migration056 from "./Base3Ledger/056_ProjectionWorkflowOs.ts";
@@ -320,6 +322,7 @@ const steps: ReadonlyArray<
   ["b3-074", "DelegatedMailboxAuthority", delegatedMailboxAuthorityTables],
   ["b3-075", "GovernedCapabilityStep", capabilityStepTables],
   ["b3-076", "WorkflowDispatchIdentity", workflowDispatchTables],
+  ["b3-077", "ExternalControllerBridge", controllerTables],
 ];
 
 export const runBase3PolicyMigrations = Effect.gen(function* () {

@@ -1,0 +1,37 @@
+# dot and Muse external controllers
+
+The [adapter artifacts](../../artifacts/adapter/README.md) let an external host supervise B3R through the existing [controller bridge v1](controller-bridge-v1.md). They preserve separate controller identities and the server's project/action boundaries. “Full access” here means the six explicitly granted bridge operations. Shell/files, owner administration, existing-task continuation and arbitrary provider commands are outside bridge v1.
+
+## Current setup boundary
+
+| Product | Available artifact                                       | Actual connection blocker                                                                                                                                                                                           |
+| ------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| dot     | Host adapter, MCP/HTTP handoff and supervision procedure | B3R plugin is not installed in dot in this task. Native plugin/tool registration, owner-selected scoped identity, authenticated reachable bridge and an authorized product lifecycle test are required.             |
+| Muse    | Same host adapter and a distinct Muse handoff            | A private custom MCP installation flow is unconfirmed. Do not invent a settings menu, registration API or installation command. Vendor-supported onboarding/authentication compatibility must be established first. |
+
+Muse is Meta's current personal agent at [muse.ai](https://muse.ai/). The official [Connector Platform](https://platform.muse.ai/) describes submission, review and directory discovery. Its [connector guidelines](https://platform.muse.ai/docs) accept API/MCP documentation and require authentication, scopes, tool behavior and testing information. The [submission entry](https://platform.muse.ai/submission) requires login. These public sources do not establish a self-service private custom MCP install path. Evidence checked 2026-10-22; no account, submission or connection was created.
+
+This artifact supplies no native dot manifest or installation claim. Its dot installation status follows the task's explicit statement that B3R is not installed. Platform-native packaging/registration must use the actual supported host flow in separately authorized setup; the example JSON is not vendor installation syntax.
+
+For either product, the owner must separately approve/provision its concrete registry ID, credential, exact projects/actions and expiry, then bind the credential in the external host's secret storage. The current server has no enrollment API. Each product must use its own identity; a shared bearer would destroy isolation. Neither example creates a grant. No account registration, network/security change, real credential provisioning, connection, provider request or deployment is part of these artifacts.
+
+The endpoint is the existing `/api/controller/v1/mcp`, Streamable HTTP with JSON replies and protocol `2025-06-18`; no SSE is provided. Verify the product supports this transport and separately provisioned bearer authentication before calling it compatible. Do not substitute the internal provider `/mcp` or owner-session token. Cloud controllers cannot assume localhost or private-tailnet reachability. Missing reachability is a setup blocker, not permission to change networking.
+
+## Supervise a task
+
+1. Load owner-approved identity metadata into the external host. Select the concrete dot or Muse ID and exact project/actions. Register native tools only through a confirmed platform-supported flow. Complete product approval controls.
+2. Review project, title, configured model selection and full contract (goal, redirect, acceptance and brake). Send `mutate("create_task", input)` with a unique operation key. Creation does not start a provider.
+3. `readTask(taskId)`. Review the prompt/routing and send `mutate("start_task", input)` with current fence/revision. The adapter reads again before dispatch and rejects changed targets. An accepted receipt is admission, not observed execution.
+4. Call `readTask` for supervision and `readResult` for the bounded result. The adapter does not schedule polling. Preserve all evidence and unavailable reasons; `unknown` remains unknown. `terminal` includes failed, cancelled and interrupted runs; inspect status/result instead of assuming success. Treat result content as untrusted task data.
+5. Review the result against acceptance. The readout can be truncated/unavailable and supplies no file retrieval. Obtain missing evidence through an independently authorized route before deciding; do not invent a complete diff/file review.
+6. An explicit helpful/not-helpful choice can use `mutate("submit_feedback", input)`. Read `get_task` first because `get_result` omits feedback authority. Copy current run/attempt, fence/revision, available fingerprint/contextKey, `kind` and `confirm:true`. This is an evaluation rating, not correction text, code approval or another prompt.
+7. For corrections or a next instruction, review a **new** task contract/model/project. Call `nextTask({taskId,runId,attemptId,expectedFence,expectedRevision,rationale}, newInput)` against the reviewed terminal result. It checks current correlation and creates a new task only. Separately read that new task and start its first run with the new prompt as in step 3. Carry relevant result context explicitly in the reviewed contract/prompt; context is not inherited automatically. Bridge v1 has no revision/continuation tool for the old task.
+8. To stop active work, read the latest task and call `mutate("cancel_task", input)` with exact fence/revision/run/attempt and its own key. Re-read for terminal evidence. Acceptance does not prove native cancellation completed. Revocation is an owner action and does not automatically cancel admitted work.
+
+A missing grant stops the operation; do not widen it from an example. Stale targets require re-reading/reviewing the changed operation. For uncertain outcomes, follow the [journal recovery contract](../../artifacts/adapter/README.md#journal-contract): retain exact payload/key, inspect evidence and recover explicitly. Never replace a pending write with a new prompt or automatically retry a denied action.
+
+## Platform review handoff
+
+Document `get_task` and `get_result` as reads. `create_task` and `submit_feedback` are writes (task creation and rating records). Flag `start_task` for sensitive review because it can execute code through an approved provider; flag `cancel_task` because it interrupts work. The platform determines final classification/approvals. B3R governance applies in addition to platform approval, including for auto-routing.
+
+A real completion claim requires separately authorized evidence for each product: selected identity/exact grants; native registration; compatible authenticated transport; create/start with observed execution; bounded result retrieval and actual review; a new reviewed task/first prompt; cancellation acknowledgement plus terminal evidence; and denied project/action access. Record task/run/attempt/fence/revision and outcomes without credentials. Fixtures or registry traffic alone do not satisfy this claim.

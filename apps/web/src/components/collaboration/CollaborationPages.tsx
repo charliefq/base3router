@@ -1,4 +1,5 @@
-import { TaskRunRecords } from "./TaskRunRecords";
+import { TaskRunRecords } from "./TaskRunRecords.tsx";
+import { OwnerControllerConnect } from "./controllers/OwnerControllerConnect.tsx";
 import { TaskResultComparison } from "./TaskResultComparison";
 import { TaskResultReviewScope, TaskResultReviewPanel } from "./TaskResultReview";
 import { TaskOutputHandoff, TaskResultHandoffReadout } from "./TaskResultHandoff";
@@ -705,6 +706,7 @@ export function AgentsPage(scopeProps: CollaborationScopeProps = {}) {
   const retireConfiguration = useCallback(() => setConfigurationReadVersion((v) => v + 1), []);
   const [creating, setCreating] = useState(false);
   const [showAgentCreation, setShowAgentCreation] = useState(false);
+  const [showAgentConnection, setShowAgentConnection] = useState(false);
   const selection = useCollaborationScope(environmentId, scopeProps);
   const {
     project: selectedProject,
@@ -1055,7 +1057,12 @@ export function AgentsPage(scopeProps: CollaborationScopeProps = {}) {
                   <PlusIcon />
                   Create agent
                 </Button>
-                <Button variant="outline" onClick={openProviderSetup}>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowAgentConnection((visible) => !visible)}
+                  aria-expanded={showAgentConnection}
+                  aria-controls="connect-agent"
+                >
                   <PlugIcon />
                   Connect your agent
                 </Button>
@@ -1064,6 +1071,15 @@ export function AgentsPage(scopeProps: CollaborationScopeProps = {}) {
                 Runs use your configured provider and existing approval controls.
               </p>
             </section>
+            {showAgentConnection ? (
+              <OwnerControllerConnect
+                key={environmentId ?? "disconnected"}
+                environmentId={environmentId}
+                projects={projects}
+                onProviderSetup={openProviderSetup}
+                onClose={() => setShowAgentConnection(false)}
+              />
+            ) : null}
             {showAgentCreation ? (
               <section
                 id="create-agent"
