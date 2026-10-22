@@ -213,8 +213,8 @@ export function normalizeMainWindowBounds(value: unknown): DesktopWindowBounds |
 function normalizeDesktopSettingsDocument(
   parsed: DesktopSettingsDocument,
   appVersion: string,
+  defaultSettings = resolveDefaultDesktopSettings(appVersion),
 ): DesktopSettings {
-  const defaultSettings = resolveDefaultDesktopSettings(appVersion);
   const mainWindowBounds = normalizeMainWindowBounds(parsed.mainWindowBounds);
   const parsedUpdateChannel = Option.fromNullishOr(parsed.updateChannel);
   const isLegacySettings = parsed.updateChannelConfiguredByUser === undefined;
@@ -230,7 +230,8 @@ function normalizeDesktopSettingsDocument(
     (parsed.wslBackendEnabled === undefined && parsed.wslMode === "wsl");
 
   return {
-    localEnvironmentEnabled: parsed.localEnvironmentEnabled !== false,
+    localEnvironmentEnabled:
+      parsed.localEnvironmentEnabled ?? defaultSettings.localEnvironmentEnabled,
     linuxPasswordStore: normalizeLinuxPasswordStorePreference(parsed.linuxPasswordStore),
     mainWindowBounds,
     mainWindowMaximized: mainWindowBounds !== null && parsed.mainWindowMaximized === true,
@@ -395,9 +396,8 @@ function readSettings(
   fileSystem: FileSystem.FileSystem,
   settingsPath: string,
   appVersion: string,
+  defaultSettings: DesktopSettings,
 ): Effect.Effect<DesktopSettings> {
-  const defaultSettings = resolveDefaultDesktopSettings(appVersion);
-
   return fileSystem.readFileString(settingsPath).pipe(
     Effect.option,
     Effect.flatMap(
@@ -405,7 +405,9 @@ function readSettings(
         onNone: () => Effect.succeed(defaultSettings),
         onSome: (raw) =>
           decodeDesktopSettingsJson(raw).pipe(
-            Effect.map((parsed) => normalizeDesktopSettingsDocument(parsed, appVersion)),
+            Effect.map((parsed) =>
+              normalizeDesktopSettingsDocument(parsed, appVersion, defaultSettings),
+            ),
             Effect.orElseSucceed(() => defaultSettings),
           ),
       }),
@@ -521,6 +523,7 @@ export const make = Effect.gen(function* () {
         fileSystem,
         environment.desktopSettingsPath,
         environment.appVersion,
+        environment.defaultDesktopSettings,
       );
       return yield* SynchronizedRef.setAndGet(settingsRef, settings);
     }).pipe(Effect.withSpan("desktop.settings.load")),

@@ -3,6 +3,65 @@
 Connect a phone, browser, or another desktop app to T3 Code running on a different
 machine. That machine must stay running and reachable while you work.
 
+## B3R personal cloud desktop (Mac and Windows)
+
+Use one persistent cloud host as the environment for both desktop clients. The
+host owns the workspace files, agents, terminals, Tasks records, and conversation
+history. Each desktop is a client of that same environment. Its saved connection
+and UI preferences are device-local; there is no offline copy of the workspace
+and no dual-master sync. A normal local environment is a separate machine with
+separate data, even if a project has the same name.
+
+B3R's personal-cloud launch profile starts with **Local environment** off, so
+neither the native local backend nor the Windows WSL backend starts on first
+launch. It uses `~/.b3r/personal-cloud/userdata` for client state and a separate
+`b3r-personal-cloud` Electron profile. It does not import the regular desktop's
+browser databases or Windows encryption keys. Launch the built app with the
+non-secret environment setting `B3R_DESKTOP_PERSONAL_CLOUD=true`:
+
+```sh
+# macOS: use the executable inside your built B3R app bundle
+B3R_DESKTOP_PERSONAL_CLOUD=true '/path/to/B3R (Alpha).app/Contents/MacOS/B3R (Alpha)'
+```
+
+```powershell
+# Windows PowerShell: use your built B3R executable
+$env:B3R_DESKTOP_PERSONAL_CLOUD = 'true'
+& 'C:\path\to\B3R (Alpha).exe'
+```
+
+From a source build, `pnpm --filter @t3tools/desktop start:personal-cloud` selects
+this profile on either OS. Build the desktop assets first using the usual build
+process. `T3CODE_HOME` can override the client-state directory for fixture work;
+use an empty, dedicated directory, never a live local environment's directory.
+Keep the profile setting on every launch. A normal launch selects the normal
+local profile again. Turning **Local environment** on explicitly in the cloud
+profile creates a separate local environment; turn it off and restart to return
+to remote-only operation. Unrelated settings changes retain remote-only mode.
+
+In **Settings → Connections → Add environment**, paste a one-time pairing link
+from your already provisioned personal host. Pair each desktop separately to
+the same host. Compare its environment ID in the connection status tooltip;
+matching labels alone do not establish identity. Pairing uses the existing
+connection catalog and Electron encrypted credential storage. Do not put pairing
+links or tokens in launcher arguments, environment variables, config files,
+screenshots, or logs. If secure credential storage is unavailable, resolve that
+on the client rather than using a plaintext fallback.
+
+An enabled saved connection uses the existing automatic reconnect path after a
+network interruption or app restart. **Host offline — reconnect to resume** means
+the cloud host must become reachable again; keep the saved connection enabled.
+If it was switched off, switch it back on. If authorization was revoked, obtain a
+fresh one-time link and pair again. Do not start a second local environment to
+recover cloud data. The host must stay running and reachable, and agents on it
+use the host's provider configuration.
+
+This profile does not provision a host, grant access, change networking, deploy
+public endpoints, or configure providers. Mac and Windows fixture checks do not
+replace native packaging, secure-storage, pairing, restart, and host-outage tests
+against a real personal host. Those remain part of combined integration once a
+host exists.
+
 ## T3 Connect
 
 T3 Connect makes an environment available to your other devices without setting

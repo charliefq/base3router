@@ -44,7 +44,7 @@ export function LocalEnvironmentSetting() {
         description={
           enabled
             ? "Run agents on this computer. Turn off to use B3R only with remote environments."
-            : "Turned off. Agents only run in remote environments."
+            : "Remote-only: agents, files, and history stay on the connected host. Use Connections to pair your personal cloud. If the host is offline, reconnect to resume; this computer does not become a fallback server."
         }
         control={
           <Switch
@@ -71,7 +71,7 @@ export function LocalEnvironmentSetting() {
             <AlertDialogDescription>
               {enabled
                 ? "B3R will restart without running a server on this computer. Any agents and terminals running here will stop, and other devices will no longer be able to connect to this computer. Your projects, history, and remote environments are unaffected."
-                : "B3R will restart and start running a server on this computer again."}
+                : "B3R will restart and create a separate local environment on this computer. Cloud projects and history stay on the cloud host; they are not copied or synchronized here."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {error ? <p className="px-6 pb-4 text-sm text-destructive">{error}</p> : null}
