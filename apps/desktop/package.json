@@ -7,6 +7,7 @@
   "scripts": {
     "ensure:electron": "node scripts/ensure-electron-runtime.mjs",
     "start": "node scripts/start-electron.mjs",
+    "start:personal-cloud": "cross-env B3R_DESKTOP_PERSONAL_CLOUD=true node scripts/start-electron.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vp test run --passWithNoTests",
     "smoke-test": "node scripts/smoke-test.mjs"

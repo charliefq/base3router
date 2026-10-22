@@ -40,6 +40,29 @@ const makeEnvironment = (
   DesktopEnvironment.DesktopEnvironment.pipe(Effect.provide(makeEnvironmentLayer(overrides, env)));
 
 describe("DesktopEnvironment", () => {
+  it.effect.each(["darwin", "win32"] as const)(
+    "starts the %s personal cloud profile without a local backend or shared state",
+    (platform) =>
+      Effect.gen(function* () {
+        const environment = yield* makeEnvironment(
+          { platform, isPackaged: true },
+          { B3R_DESKTOP_PERSONAL_CLOUD: "true" },
+        );
+        assert.equal(environment.baseDir, "/Users/alice/.b3r/personal-cloud");
+        assert.equal(environment.stateDir, "/Users/alice/.b3r/personal-cloud/userdata");
+        assert.isFalse(environment.defaultDesktopSettings.localEnvironmentEnabled);
+        assert.isFalse(environment.defaultDesktopSettings.wslBackendEnabled);
+        assert.equal(environment.appUserModelId, "com.b3r.personal-cloud");
+        assert.equal(environment.displayName, "B3R (Alpha) — Personal Cloud");
+        const explicit = yield* makeEnvironment(
+          { platform },
+          { B3R_DESKTOP_PERSONAL_CLOUD: "true", T3CODE_HOME: "/tmp/cloud-fixture" },
+        );
+        assert.equal(explicit.stateDir, "/tmp/cloud-fixture/userdata");
+        assert.isFalse(explicit.defaultDesktopSettings.localEnvironmentEnabled);
+      }),
+  );
+
   it.effect("derives state paths and development identity inside Effect", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment(
