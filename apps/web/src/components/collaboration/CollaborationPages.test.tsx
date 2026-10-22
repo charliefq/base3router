@@ -179,6 +179,9 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
   };
 });
 vi.mock("../../state/primaryEnvironment", () => ({ primaryEnvironmentIdAtom: "environment" }));
+vi.mock("../../state/controllerOwner", () => ({
+  controllerOwnerCommand: { label: "fixture-controller-owner" },
+}));
 vi.mock("../../state/session", () => ({
   useEnvironmentSessionState: () => ({
     data: {

@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
+import { ControllerIdentityView, ControllerStatus } from "@t3tools/contracts";
 import {
   controllerActions,
+  ControllerClientError,
   type ControllerAction,
   type ControllerKind,
 } from "@t3tools/client-runtime/controllers/client";
 import {
   connectionLabel,
   onboardingHandoff,
-  type ControllerConnection,
   type ControllerManagement,
 } from "@t3tools/client-runtime/controllers/onboarding";
 import { Button } from "../../ui/button";
@@ -17,15 +18,13 @@ interface Props {
   projects: readonly { id: string; title: string }[];
   onProviderSetup: () => void;
   onClose: () => void;
-  /** Final integration injects the authenticated administrative bridge binding. */
   management?: ControllerManagement;
 }
 export function ControllerConnect(props: Props) {
   const [controller, setController] = useState<ControllerKind>("grokbot");
   const [binding, setBinding] = useState({ management: props.management, revision: 0 });
-  if (binding.management !== props.management) {
+  if (binding.management !== props.management)
     setBinding({ management: props.management, revision: binding.revision + 1 });
-  }
   return (
     <section
       id="connect-agent"
@@ -68,6 +67,29 @@ export function ControllerConnect(props: Props) {
     </section>
   );
 }
+function failureMessage(error: unknown) {
+  if (error instanceof ControllerClientError) {
+    switch (error.code) {
+      case "unauthorized":
+        return "Owner session unauthorized or expired. Reconnect this environment, then refresh.";
+      case "denied":
+        return "Owner session denied this operation. Required access permission is missing.";
+      case "stale":
+      case "conflict":
+        return "Bridge state changed. Read current status before reviewing a new operation.";
+      case "unavailable":
+        return "Controller bridge unavailable in this environment.";
+      case "invalid_input":
+      case "invalid_request":
+        return "Bridge rejected the request. Review the current identity and contract.";
+      case "incompatible_response":
+        return "Bridge evidence does not match this environment or identity.";
+      case "uncertain":
+        return "Operation outcome uncertain. The identity binding is retained. Refresh status before retrying the same operation.";
+    }
+  }
+  return "Bridge operation could not be confirmed. The identity binding is retained; refresh status before retrying.";
+}
 function ControllerSetup({
   controller,
   environmentId,
@@ -76,7 +98,10 @@ function ControllerSetup({
 }: Props & { controller: ControllerKind }) {
   const [projectIds, setProjectIds] = useState<string[]>([]);
   const [actions, setActions] = useState<ControllerAction[]>(["get_task", "get_result"]);
-  const [connection, setConnection] = useState<ControllerConnection | null>(null);
+  const [status, setStatus] = useState<typeof ControllerStatus.Type | null>(null);
+  const [identities, setIdentities] = useState<readonly (typeof ControllerIdentityView.Type)[]>([]);
+  const [listed, setListed] = useState(false);
+  const [controllerId, setControllerId] = useState("");
   const [handoff, setHandoff] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,46 +114,46 @@ function ControllerSetup({
     [],
   );
   const available = controller === "grokbot" && !!environmentId && !!management;
-  const operate = async (action: "read" | "revoke" | "disconnect") => {
-    if (!available || !management || busy.current) return;
+  const operate = async (action: "list" | "read" | "revoke" | "disconnect") => {
+    if (!available || !management || busy.current || (action !== "list" && !controllerId)) return;
     const owner = generation.current;
+    const target = controllerId;
     busy.current = true;
     setPending(true);
     setError(null);
-    // An old verification must not survive a failed refresh or uncertain revocation.
-    setConnection(null);
+    setStatus(null);
     try {
-      let next: ControllerConnection;
-      if (action === "read") {
-        next = await management.read(controller);
-        if (
-          next.version !== 1 ||
-          next.controller !== controller ||
-          next.environmentId !== environmentId ||
-          !next.callerId
-        ) {
-          throw new Error("Incompatible bridge evidence");
-        }
+      if (action === "list") {
+        const next = await management.list();
+        if (generation.current !== owner) return;
+        setIdentities(next);
+        setListed(true);
+      } else if (action === "read") {
+        const next = await management.read(target);
+        if (next.environmentId !== environmentId || (next.identity && next.identity.id !== target))
+          throw new ControllerClientError("incompatible_response");
+        if (generation.current === owner) setStatus(next);
       } else {
-        await management[action](controller);
-        next = {
-          version: 1,
-          controller,
-          environmentId: environmentId!,
-          callerId: "disconnected",
-          status: action === "revoke" ? "revoked" : "disconnected",
-          evidence: "bridge",
-          verifiedAt: null,
-          grant: { projectIds: [], actions: [] },
-          tasks: [],
-        };
+        // Both actions use the same idempotent server revocation. Forget only after
+        // its acknowledgement; a timeout/denial must retain the concrete binding.
+        await management.revoke(target);
+        if (generation.current !== owner) return;
+        if (action === "disconnect") {
+          setControllerId("");
+          setIdentities([]);
+          setListed(false);
+        } else
+          setStatus({
+            version: 1,
+            environmentId: environmentId!,
+            configuration: "revoked",
+            identity: null,
+            lastAuthenticatedAt: null,
+            tasks: [],
+          });
       }
-      if (generation.current === owner) setConnection(next);
-    } catch {
-      if (generation.current === owner)
-        setError(
-          "Bridge operation could not be confirmed. Refresh status before taking further action.",
-        );
+    } catch (cause) {
+      if (generation.current === owner) setError(failureMessage(cause));
     } finally {
       if (generation.current === owner) {
         busy.current = false;
@@ -139,11 +164,11 @@ function ControllerSetup({
   const visibleProjectIds = projectIds.filter((id) =>
     projects.some((project) => project.id === id),
   );
-  const activeConnection = connection?.status === "verified_connected" && !!connection.verifiedAt;
+  const boundIdentity = status?.identity;
   return (
     <div className="flex flex-col gap-4">
       <p role="status" className="text-sm font-medium">
-        {controller === "grokbot" ? connectionLabel(connection) : "Unavailable — future adapter"}
+        {controller === "grokbot" ? connectionLabel(status) : "Unavailable — future adapter"}
       </p>
       {controller !== "grokbot" ? (
         <p className="text-sm text-muted-foreground">
@@ -152,139 +177,66 @@ function ControllerSetup({
       ) : (
         <>
           <p className="text-sm text-muted-foreground">
-            Grok Bot supports MCP. The controller bridge and a reachable authenticated endpoint must
-            be configured before connecting. Private tailnet and localhost addresses cannot be
-            assumed reachable from its cloud.
+            Select an existing owner-provisioned identity for Grok Bot. This only binds its safe
+            metadata in this panel; it grants no access and does not test the external MCP
+            connection.
           </p>
-          <fieldset className="flex flex-col gap-2">
-            <legend className="mb-2 text-sm font-medium">Requested projects (draft only)</legend>
-            {projects.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Connect an environment with projects first.
-              </p>
-            ) : (
-              projects.map((project) => (
-                <label key={project.id} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={projectIds.includes(project.id)}
-                    onChange={(event) => {
-                      setProjectIds((ids) =>
-                        event.target.checked
-                          ? [...ids, project.id]
-                          : ids.filter((id) => id !== project.id),
-                      );
-                      setHandoff(false);
-                    }}
-                  />
-                  {project.title}
-                </label>
-              ))
-            )}
-          </fieldset>
-          <fieldset className="grid gap-2 sm:grid-cols-2">
-            <legend className="mb-2 text-sm font-medium">Requested actions (draft only)</legend>
-            {controllerActions.map((action) => (
-              <label key={action} className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={actions.includes(action)}
-                  onChange={(event) => {
-                    setActions((values) =>
-                      event.target.checked
-                        ? [...values, action]
-                        : values.filter((value) => value !== action),
-                    );
-                    setHandoff(false);
-                  }}
-                />
-                {action}
-              </label>
-            ))}
-          </fieldset>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              disabled={!environmentId || visibleProjectIds.length === 0 || actions.length === 0}
-              onClick={() => setHandoff(true)}
-            >
-              Prepare setup handoff
-            </Button>
+          <div>
             <Button
               variant="outline"
               disabled={!available || pending}
+              onClick={() => void operate("list")}
+            >
+              Load controller identities
+            </Button>
+          </div>
+          {listed && identities.length === 0 ? (
+            <p>
+              No controller identities configured. Owner credential and grant setup is required
+              separately.
+            </p>
+          ) : null}
+          <label className="flex flex-col gap-2 text-sm">
+            Controller identity
+            <select
+              aria-label="Controller identity"
+              value={controllerId}
+              disabled={!available || pending}
+              onChange={(event) => {
+                generation.current += 1;
+                setControllerId(event.target.value);
+                setStatus(null);
+                setError(null);
+              }}
+            >
+              <option value="">Select an identity explicitly</option>
+              {identities.map((identity) => (
+                <option key={identity.id} value={identity.id}>
+                  {identity.displayName} ({identity.id}){identity.revokedAt ? " — revoked" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Selection is limited to this environment session. Closing setup forgets the selection;
+            existing grants remain until Revoke or Disconnect. Never paste a controller token here.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              disabled={!available || pending || !controllerId}
               onClick={() => void operate("read")}
             >
               Check bridge status
             </Button>
-          </div>
-          {!management ? (
-            <p className="text-sm text-muted-foreground">
-              Bridge management is not wired in this build. Preparing a handoff does not grant
-              access or connect Grok Bot.
-            </p>
-          ) : null}
-          {handoff ? (
-            <pre
-              aria-label="Setup handoff"
-              className="max-h-80 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs"
-            >
-              {JSON.stringify(
-                onboardingHandoff(controller, { projectIds: visibleProjectIds, actions }),
-                null,
-                2,
-              )}
-            </pre>
-          ) : null}
-          {error ? (
-            <p role="alert" className="text-sm">
-              {error}
-            </p>
-          ) : null}
-          <div className="text-sm">
-            {activeConnection ? (
-              <p>
-                Caller: {connection.callerId} · Last verified: {connection.verifiedAt}
-              </p>
-            ) : null}
-            <h4 className="font-medium">Allowed projects / actions</h4>
-            <p>
-              {activeConnection
-                ? `${connection.grant.projectIds.join(", ") || "None"} / ${connection.grant.actions.join(", ") || "None"}`
-                : "No verified permissions."}
-            </p>
-            <h4 className="mt-3 font-medium">Current supervised tasks</h4>
-            {activeConnection ? (
-              <ul>
-                {connection.tasks
-                  .filter(
-                    (task) =>
-                      task.supervisorId === connection.callerId &&
-                      connection.grant.projectIds.includes(task.projectId),
-                  )
-                  .map((task) => (
-                    <li key={task.taskId}>
-                      {task.taskId} — {task.state}
-                      {task.runId ? ` · run ${task.runId}` : " · no run started"}
-                    </li>
-                  ))}
-              </ul>
-            ) : (
-              <p>Unavailable until the bridge confirms supervision.</p>
-            )}
-            {activeConnection && connection.tasks.length === 0 ? (
-              <p>No supervised tasks reported.</p>
-            ) : null}
-          </div>
-          <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
               disabled={
                 !available ||
                 pending ||
-                !connection ||
-                connection.status === "revoked" ||
-                connection.status === "disconnected"
+                !controllerId ||
+                !status ||
+                status.configuration === "revoked"
               }
               onClick={() => void operate("revoke")}
             >
@@ -292,17 +244,144 @@ function ControllerSetup({
             </Button>
             <Button
               variant="outline"
-              disabled={
-                !available || pending || !connection || connection.status === "disconnected"
-              }
+              disabled={!available || pending || !controllerId || !status}
               onClick={() => void operate("disconnect")}
             >
               Disconnect controller
             </Button>
           </div>
+          {!management ? (
+            <p className="text-sm text-muted-foreground">
+              Connect an authenticated environment owner session to read its controller registry.
+            </p>
+          ) : null}
+          {error ? (
+            <p role="alert" className="text-sm">
+              {error}
+            </p>
+          ) : null}
+          <div className="text-sm">
+            <h4 className="font-medium">Configured projects / actions</h4>
+            <p>
+              {boundIdentity
+                ? `${boundIdentity.projects.join(", ") || "None"} / ${boundIdentity.actions.join(", ") || "None"}`
+                : "No current permission evidence."}
+            </p>
+            {boundIdentity ? (
+              <p>
+                Identity: {boundIdentity.id} · Generation: {boundIdentity.generation} · Expires:{" "}
+                {boundIdentity.expiresAt}
+              </p>
+            ) : null}
+            <p>
+              Last authenticated controller traffic: {status?.lastAuthenticatedAt ?? "Not reported"}
+              . This does not prove a live Grok Bot connection.
+            </p>
+            <h4 className="mt-3 font-medium">Current supervised tasks</h4>
+            {status ? (
+              <ul>
+                {status.tasks
+                  .filter(
+                    (task) =>
+                      task.controllerId === controllerId &&
+                      boundIdentity?.projects.includes(task.projectId),
+                  )
+                  .map((task) => (
+                    <li key={task.taskId}>
+                      {task.taskId} · {task.run?.status ?? "no run"} · admission {task.admission} ·
+                      execution {task.execution} · revision {task.contractRevision} · fence{" "}
+                      {task.fence}
+                      {task.run ? ` · run ${task.run.runId} / attempt ${task.run.attemptId}` : ""}
+                    </li>
+                  ))}
+              </ul>
+            ) : (
+              <p>Refresh status to read current supervision evidence.</p>
+            )}
+            {status && status.tasks.length === 0 ? <p>No supervised tasks reported.</p> : null}
+          </div>
           <p className="text-xs text-muted-foreground">
-            Revocation blocks new controller actions; it does not claim to cancel a running task.
-            Disconnect must be confirmed by the bridge.
+            Revocation blocks further controller operations; it does not cancel existing admitted
+            work. Disconnect revokes before forgetting this panel's binding.
+          </p>
+          <details>
+            <summary className="text-sm font-medium">Prepare setup handoff (draft only)</summary>
+            <div className="mt-3 flex flex-col gap-3">
+              <fieldset className="flex flex-col gap-2">
+                <legend className="mb-2 text-sm font-medium">Requested projects</legend>
+                {projects.length === 0 ? (
+                  <p>No projects in this environment.</p>
+                ) : (
+                  projects.map((project) => (
+                    <label key={project.id} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={projectIds.includes(project.id)}
+                        onChange={(event) => {
+                          const checked = event.target.checked;
+                          setProjectIds((ids) =>
+                            checked ? [...ids, project.id] : ids.filter((id) => id !== project.id),
+                          );
+                          setHandoff(false);
+                        }}
+                      />
+                      {project.title}
+                    </label>
+                  ))
+                )}
+              </fieldset>
+              <fieldset className="grid gap-2 sm:grid-cols-2">
+                <legend className="mb-2 text-sm font-medium">Requested actions</legend>
+                {controllerActions.map((action) => (
+                  <label key={action} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={actions.includes(action)}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setActions((values) =>
+                          checked
+                            ? [...values, action]
+                            : values.filter((value) => value !== action),
+                        );
+                        setHandoff(false);
+                      }}
+                    />
+                    {action}
+                  </label>
+                ))}
+              </fieldset>
+              <div>
+                <Button
+                  variant="outline"
+                  disabled={!environmentId || !visibleProjectIds.length || !actions.length}
+                  onClick={() => setHandoff(true)}
+                >
+                  Prepare setup handoff
+                </Button>
+              </div>
+              {handoff ? (
+                <pre
+                  aria-label="Setup handoff"
+                  className="max-h-80 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs"
+                >
+                  {JSON.stringify(
+                    onboardingHandoff(controller, { projectIds: visibleProjectIds, actions }),
+                    null,
+                    2,
+                  )}
+                </pre>
+              ) : null}
+            </div>
+          </details>
+          <p className="text-sm text-muted-foreground">
+            Feedback is an explicit helpful/not-helpful rating, not a correction prompt. For a new
+            prompt through bridge v1, create a new reviewed task and start its first run.
+            Existing-task revision and continuation are not supported through this bridge version.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Grok Bot supports MCP. Its cloud cannot assume localhost or private tailnet
+            reachability. Owner-approved endpoint and credential setup remains separate.
           </p>
           <div className="flex flex-wrap gap-3 text-sm">
             <a href="https://x.ai/bot/guides/grok-bot-101" target="_blank" rel="noreferrer">

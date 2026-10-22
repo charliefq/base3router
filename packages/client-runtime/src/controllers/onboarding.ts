@@ -1,41 +1,22 @@
-import {
-  controllerActions,
-  type ControllerAction,
-  type ControllerKind,
-  type ControllerTask,
-} from "./client.ts";
+import { ControllerIdentityView, ControllerStatus } from "@t3tools/contracts";
+import { controllerActions, type ControllerAction, type ControllerKind } from "./client.ts";
 export interface ControllerGrant {
   projectIds: readonly string[];
   actions: readonly ControllerAction[];
 }
-export interface ControllerConnection {
-  version: 1;
-  controller: ControllerKind;
-  callerId: string;
-  environmentId: string;
-  status: "needs_setup" | "unavailable" | "verified_connected" | "revoked" | "disconnected";
-  evidence: "fixture" | "bridge";
-  verifiedAt: string | null;
-  grant: ControllerGrant;
-  tasks: readonly ControllerTask[];
-}
-/** Administrative bridge binding, separate from controller task tools. Never provision credentials here. */
 export interface ControllerManagement {
-  read(controller: ControllerKind): Promise<ControllerConnection>;
-  revoke(controller: ControllerKind): Promise<void>;
-  disconnect(controller: ControllerKind): Promise<void>;
+  list(): Promise<readonly (typeof ControllerIdentityView.Type)[]>;
+  read(controllerId: string): Promise<typeof ControllerStatus.Type>;
+  revoke(controllerId: string): Promise<void>;
 }
-export function connectionLabel(connection: ControllerConnection | null): string {
-  if (!connection) return "Needs setup";
-  if (connection.evidence === "fixture") return "Fixture preview — not live";
-  if (connection.status === "verified_connected" && !connection.verifiedAt) return "Needs setup";
+export function connectionLabel(status: typeof ControllerStatus.Type | null): string {
+  if (!status) return "Needs setup / status not checked";
   return {
-    needs_setup: "Needs setup",
-    unavailable: "Unavailable",
-    verified_connected: "Verified connected",
+    not_configured: "Needs setup",
+    configured: "Configured — live connection untested",
+    expired: "Expired — unavailable",
     revoked: "Revoked",
-    disconnected: "Disconnected",
-  }[connection.status];
+  }[status.configuration];
 }
 export function onboardingHandoff(controller: ControllerKind, grant: ControllerGrant) {
   return {
@@ -46,10 +27,13 @@ export function onboardingHandoff(controller: ControllerKind, grant: ControllerG
     tools: controllerActions,
     state: "needs_setup",
     prerequisites: [
-      "Deploy the governed controller bridge; bind a separately scoped caller identity.",
-      "Choose an authenticated endpoint reachable from the controller's computer. A private tailnet or localhost URL is not reachable from Grok Bot cloud.",
-      "Configure MCP in Grok Bot with the owner. This draft contains no URL, token, or credentials.",
-      "Verify identity, project/action grants, revocation, and one fixture lifecycle before an owner-authorized live run.",
+      "Owner separately provisions a scoped identity, then explicitly selects its ID in Connect agent. This draft grants nothing.",
+      "Configure the external product's MCP client with its separately provisioned credential and a reachable authenticated /api/controller/v1/mcp endpoint. Never enter a controller bearer in this browser.",
+      "Grok Bot cloud cannot assume localhost or private tailnet reachability. Network/credential setup requires separate approval.",
+      "Review model selection and the full governed contract before create_task. Retain reviewed text/routing choice for start_task and copy fresh fence/revision/run/attempt guards from get_task.",
+      "submit_feedback records an explicit helpful/not_helpful rating using current fingerprint/contextKey; it never delivers a correction prompt or starts another run.",
+      "For a new prompt through bridge v1, create a new reviewed task and start its first run. Existing-task revision/continuation is not supported by bridge v1.",
+      "Verify an authorized end-to-end lifecycle separately. Registry configuration or recent authenticated traffic alone is not a live connectivity test.",
     ],
   };
 }

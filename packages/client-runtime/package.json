@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./controllers/owner": {
+      "types": "./src/controllers/owner.ts",
+      "default": "./src/controllers/owner.ts"
+    },
     "./controllers/client": {
       "types": "./src/controllers/client.ts",
       "default": "./src/controllers/client.ts"

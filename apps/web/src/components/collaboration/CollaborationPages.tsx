@@ -1,4 +1,4 @@
-import { ControllerConnect } from "./controllers/ControllerConnect";
+import { OwnerControllerConnect } from "./controllers/OwnerControllerConnect";
 import { TaskResultComparison } from "./TaskResultComparison";
 import { TaskResultReviewScope, TaskResultReviewPanel } from "./TaskResultReview";
 import { TaskOutputHandoff, TaskResultHandoffReadout } from "./TaskResultHandoff";
@@ -1071,7 +1071,7 @@ export function AgentsPage(scopeProps: CollaborationScopeProps = {}) {
               </p>
             </section>
             {showAgentConnection ? (
-              <ControllerConnect
+              <OwnerControllerConnect
                 key={environmentId ?? "disconnected"}
                 environmentId={environmentId}
                 projects={projects}

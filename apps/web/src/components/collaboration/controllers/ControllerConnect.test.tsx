@@ -1,35 +1,47 @@
 import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import type {
-  ControllerConnection,
-  ControllerManagement,
-} from "@t3tools/client-runtime/controllers/onboarding";
+import type { ControllerStatus } from "@t3tools/contracts";
+import type { ControllerManagement } from "@t3tools/client-runtime/controllers/onboarding";
+import { ControllerClientError } from "@t3tools/client-runtime/controllers/client";
 import { ControllerConnect } from "./ControllerConnect";
-
 const props = {
   environmentId: "e1",
   projects: [{ id: "p1", title: "Project One" }],
   onProviderSetup: () => {},
   onClose: () => {},
 };
-const evidence: ControllerConnection = {
+const status: typeof ControllerStatus.Type = {
   version: 1,
-  controller: "grokbot",
-  callerId: "g1",
   environmentId: "e1",
-  status: "verified_connected",
-  evidence: "fixture",
-  verifiedAt: "2026-10-22T00:00:00Z",
-  grant: { projectIds: ["p1"], actions: ["get_task"] },
+  configuration: "configured",
+  lastAuthenticatedAt: "2026-10-22T01:00:00Z",
+  identity: {
+    id: "real-id-42",
+    displayName: "Owner Grok",
+    projects: ["p1"],
+    actions: ["get_task"],
+    generation: 1,
+    expiresAt: "2027-01-01T00:00:00Z",
+    revokedAt: null,
+    supervisedTasks: 1,
+  },
   tasks: [
-    { taskId: "task-one", projectId: "p1", supervisorId: "g1", state: "running", runId: "run-one" },
     {
-      taskId: "other-caller-task",
+      version: 1,
+      controllerId: "real-id-42",
+      taskId: "task-one",
+      threadId: "thread-1",
       projectId: "p1",
-      supervisorId: "other",
-      state: "running",
-      runId: "r2",
+      fence: 3,
+      contractRevision: 1,
+      admission: "admitted",
+      execution: "not_started",
+      terminal: false,
+      run: null,
+      receipt: { commandId: "command-1", status: "accepted" },
+      feedback: null,
+      result: { status: "unavailable", reason: "Not executed" },
     },
   ],
 };
@@ -54,88 +66,110 @@ async function press(label: string) {
     await button.props.onClick();
   });
 }
-describe("controller onboarding fixture flow", () => {
-  it("drafts permissions without connecting and preserves future unsupported states", async () => {
+async function bind() {
+  await press("Load controller identities");
+  await act(async () =>
+    renderer.root.findByType("select").props.onChange({ target: { value: "real-id-42" } }),
+  );
+  await press("Check bridge status");
+}
+const baseManagement: ControllerManagement = {
+  list: async () => [status.identity!],
+  read: async () => status,
+  revoke: async () => {},
+};
+describe("controller onboarding owner-session flow", () => {
+  it("prepares a draft without connecting and preserves future unsupported states", async () => {
     await mount();
     expect(text()).toContain("Needs setup");
-    expect(text()).not.toContain("Verified connected");
-    const project = renderer.root.findAllByType("input")[0]!;
-    await act(async () => project.props.onChange({ target: { checked: true } }));
+    await act(async () =>
+      renderer.root.findAllByType("input")[0]!.props.onChange({ target: { checked: true } }),
+    );
     await press("Prepare setup handoff");
     expect(text()).toContain("needs_setup");
-    expect(text()).toContain("p1");
-    expect(text()).toContain("No verified permissions.");
+    expect(text()).toContain("create a new reviewed task");
     await press("Muse (future)");
     expect(text()).toContain("Unavailable — future adapter");
     await press("dot (future)");
     expect(text()).toContain("Unavailable — future adapter");
   });
-  it("labels fixture evidence, scopes tasks, and confirms revoke then disconnect", async () => {
+  it("requires concrete identity selection, reports untested configuration and disconnects only after revocation", async () => {
     const calls: string[] = [];
+    let resolve!: () => void;
     await mount({
-      read: async () => evidence,
-      revoke: async () => {
-        calls.push("revoke");
+      ...baseManagement,
+      read: async (id) => {
+        calls.push(id);
+        return status;
       },
-      disconnect: async () => {
-        calls.push("disconnect");
+      revoke: (id) => {
+        calls.push(`revoke:${id}`);
+        return new Promise((done) => {
+          resolve = done;
+        });
       },
     });
-    await press("Check bridge status");
-    expect(text()).toContain("Fixture preview — not live");
+    await bind();
+    expect(calls).toEqual(["real-id-42"]);
+    expect(text()).toContain("Configured — live connection untested");
     expect(text()).toContain("task-one");
-    expect(text()).not.toContain("other-caller-task");
-    await press("Revoke controller access");
-    expect(text()).toContain("Revoked");
-    expect(text()).not.toContain("task-one");
-    await press("Disconnect controller");
-    expect(text()).toContain("Disconnected");
-    expect(calls).toEqual(["revoke", "disconnect"]);
-  });
-  it("clears verification after a failed refresh or mismatched environment", async () => {
-    let calls = 0;
-    await mount({
-      read: async () => {
-        if (++calls > 1) throw new Error("Unavailable");
-        return { ...evidence, evidence: "bridge" };
-      },
-      revoke: async () => {},
-      disconnect: async () => {},
-    });
-    await press("Check bridge status");
-    expect(text()).toContain("Verified connected");
-    await press("Check bridge status");
     expect(text()).not.toContain("Verified connected");
-    expect(text()).toContain("could not be confirmed");
+    await press("Disconnect controller");
+    expect(renderer.root.findByType("select").props.value).toBe("real-id-42");
+    await act(async () => resolve());
+    expect(renderer.root.findByType("select").props.value).toBe("");
+    expect(text()).not.toContain("task-one");
+    expect(calls).toContain("revoke:real-id-42");
+  });
+  it("retains the binding after uncertain revoke and reports expired/denied states truthfully", async () => {
+    let expired = false;
+    await mount({
+      ...baseManagement,
+      read: async () => ({ ...status, configuration: expired ? "expired" : "configured" }),
+      revoke: async () => {
+        throw new ControllerClientError("uncertain");
+      },
+    });
+    await bind();
+    await press("Disconnect controller");
+    expect(text()).toContain("outcome uncertain");
+    expect(renderer.root.findByType("select").props.value).toBe("real-id-42");
+    expired = true;
+    await press("Check bridge status");
+    expect(text()).toContain("Expired — unavailable");
     await act(async () =>
       renderer.update(
         <ControllerConnect
           {...props}
           management={{
-            read: async () => ({ ...evidence, environmentId: "other" }),
-            revoke: async () => {},
-            disconnect: async () => {},
+            ...baseManagement,
+            list: async () => {
+              throw new ControllerClientError("denied");
+            },
           }}
         />,
       ),
     );
-    await press("Check bridge status");
+    await press("Load controller identities");
+    expect(text()).toContain("Owner session denied");
     expect(text()).not.toContain("task-one");
   });
-  it("does not let a late status response reconnect a switched controller", async () => {
-    let resolve!: (value: ControllerConnection) => void;
-    await mount({
+  it("drops late status evidence after switching environment", async () => {
+    let resolve!: (value: typeof ControllerStatus.Type) => void;
+    const management = {
+      ...baseManagement,
       read: () =>
-        new Promise((done) => {
+        new Promise<typeof ControllerStatus.Type>((done) => {
           resolve = done;
         }),
-      revoke: async () => {},
-      disconnect: async () => {},
-    });
-    await press("Check bridge status");
-    await press("Muse (future)");
-    await act(async () => resolve(evidence));
-    expect(text()).toContain("Unavailable — future adapter");
+    };
+    await mount(management);
+    await bind();
+    await act(async () =>
+      renderer.update(<ControllerConnect {...props} environmentId="e2" management={management} />),
+    );
+    await act(async () => resolve(status));
     expect(text()).not.toContain("task-one");
+    expect(renderer.root.findByType("select").props.value).toBe("");
   });
 });
